@@ -73,6 +73,7 @@
     ]
   },
   "devDependencies": {
+    "@douyinfe/semi-theme-default": "^2.91.0",
     "@douyinfe/vite-plugin-semi": "^2.74.0-alpha.6",
     "@so1ve/prettier-config": "^3.1.0",
     "@vitejs/plugin-react": "^4.2.1",
