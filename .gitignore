@@ -9,6 +9,12 @@ build
 logs
 web/dist
 .env
+web/api
+web/api.zip
+web/api.zip-ssr
+gravitex_api.zip
+gravitex_api.zip-ssr
+gravitex_api
 one-api
 new-api
 /__debug_bin*
