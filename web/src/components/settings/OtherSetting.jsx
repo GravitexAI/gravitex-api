@@ -300,13 +300,8 @@ const OtherSetting = () => {
     getOptions();
   }, []);
 
-  // Function to open GitHub release page
-  const openGitHubRelease = () => {
-    window.open(
-      `https://github.com/Calcium-Ion/new-api/releases/tag/${updateData.tag_name}`,
-      '_blank',
-    );
-  };
+  // Function to open release page (disabled: no external git address)
+  const openGitHubRelease = () => {};
 
   const getStartTimeString = () => {
     const timestamp = statusState?.status?.start_time;

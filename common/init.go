@@ -82,6 +82,8 @@ func InitEnv() {
 	DebugEnabled = os.Getenv("DEBUG") == "true"
 	MemoryCacheEnabled = os.Getenv("MEMORY_CACHE_ENABLED") == "true"
 	IsMasterNode = os.Getenv("NODE_TYPE") != "slave"
+	RuoYiAuthEnabled = GetEnvOrDefaultBool("RUOYI_AUTH_ENABLED", false)
+	RuoYiJWTSecret = GetEnvOrDefaultString("RUOYI_JWT_SECRET", "")
 	TLSInsecureSkipVerify = GetEnvOrDefaultBool("TLS_INSECURE_SKIP_VERIFY", false)
 	if TLSInsecureSkipVerify {
 		if tr, ok := http.DefaultTransport.(*http.Transport); ok && tr != nil {

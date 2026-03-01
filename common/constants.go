@@ -51,6 +51,10 @@ var TelegramOAuthEnabled = false
 var TurnstileCheckEnabled = false
 var RegisterEnabled = true
 
+// RuoYi Auth integration
+var RuoYiAuthEnabled = false // 是否启用 RuoYi JWT 鉴权模式
+var RuoYiJWTSecret = ""      // RuoYi sa-token.jwt-secret-key
+
 var EmailDomainRestrictionEnabled = false // 是否启用邮箱域名限制
 var EmailAliasRestrictionEnabled = false  // 是否启用邮箱别名限制
 var EmailDomainWhitelist = []string{

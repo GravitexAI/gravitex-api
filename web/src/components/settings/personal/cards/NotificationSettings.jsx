@@ -605,16 +605,8 @@ const NotificationSettings = ({
                         </div>
                         <div className='mt-3 pt-3 border-t border-gray-200'>
                           <span className='text-gray-400'>
-                            {t('更多参数请参考')}
-                          </span>{' '}
-                          <a
-                            href='https://github.com/Finb/Bark'
-                            target='_blank'
-                            rel='noopener noreferrer'
-                            className='text-blue-500 hover:text-blue-600 font-medium'
-                          >
-                            Bark {t('官方文档')}
-                          </a>
+                            {t('更多参数请参考')} Bark {t('官方文档')}
+                          </span>
                         </div>
                       </div>
                     </div>
