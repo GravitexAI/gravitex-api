@@ -14,6 +14,8 @@ import (
 func SetApiRouter(router *gin.Engine) {
 	apiRouter := router.Group("/api")
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
+	// 跨域支持，供独立域名/端口的前端（如 web-antd）直接调用 /api/*
+	apiRouter.Use(middleware.CORS())
 	apiRouter.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	{
