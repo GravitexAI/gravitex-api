@@ -30,13 +30,14 @@ type TokenDetails struct {
 }
 
 type QuotaInfo struct {
-	InputDetails  TokenDetails
-	OutputDetails TokenDetails
-	ModelName     string
-	UsePrice      bool
-	ModelPrice    float64
-	ModelRatio    float64
-	GroupRatio    float64
+	InputDetails    TokenDetails
+	OutputDetails   TokenDetails
+	ModelName       string
+	UsePrice        bool
+	ModelPrice      float64
+	ModelRatio      float64
+	GroupRatio      float64
+	OemUserDiscount float64 // OEM 用户折扣（用于音频倍率）
 }
 
 func hasCustomModelRatio(modelName string, currentRatio float64) bool {
@@ -59,11 +60,13 @@ func calculateAudioQuota(info QuotaInfo) int {
 
 	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(info.ModelName))
 	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(info.ModelName))
-	audioCompletionRatio := decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(info.ModelName))
 
-	groupRatio := decimal.NewFromFloat(info.GroupRatio)
-	modelRatio := decimal.NewFromFloat(info.ModelRatio)
-	ratio := groupRatio.Mul(modelRatio)
+	// 音频输出倍率：优先音频输入倍率，无则用文本输入倍率（与图片输出逻辑一致）
+	effectiveAudioOutputRatio := ratio_setting.GetAudioRatio(info.ModelName)
+	if effectiveAudioOutputRatio <= 0 {
+		effectiveAudioOutputRatio = info.ModelRatio
+	}
+	dEffectiveAudioOutputRatio := decimal.NewFromFloat(effectiveAudioOutputRatio)
 
 	inputTextTokens := decimal.NewFromInt(int64(info.InputDetails.TextTokens))
 	outputTextTokens := decimal.NewFromInt(int64(info.OutputDetails.TextTokens))
@@ -71,15 +74,23 @@ func calculateAudioQuota(info QuotaInfo) int {
 	outputAudioTokens := decimal.NewFromInt(int64(info.OutputDetails.AudioTokens))
 
 	quota := decimal.Zero
-	quota = quota.Add(inputTextTokens)
-	quota = quota.Add(outputTextTokens.Mul(completionRatio))
-	quota = quota.Add(inputAudioTokens.Mul(audioRatio))
-	quota = quota.Add(outputAudioTokens.Mul(audioRatio).Mul(audioCompletionRatio))
+	// 文本部分：使用 modelRatio 作为基础倍率
+	groupRatio := decimal.NewFromFloat(info.GroupRatio)
+	modelRatio := decimal.NewFromFloat(info.ModelRatio)
+	textRatio := groupRatio.Mul(modelRatio)
+	quota = quota.Add(inputTextTokens.Mul(textRatio))
+	quota = quota.Add(outputTextTokens.Mul(completionRatio).Mul(textRatio))
 
-	quota = quota.Mul(ratio)
+	// 音频部分：输入用 audioRatio；输出用 effectiveAudioOutputRatio（优先音频输入倍率，否则文本输入倍率），并应用 OEM 用户折扣
+	dOemUserDiscount := decimal.NewFromFloat(info.OemUserDiscount)
+	if dOemUserDiscount.IsZero() {
+		dOemUserDiscount = decimal.NewFromInt(1)
+	}
+	quota = quota.Add(inputAudioTokens.Mul(audioRatio).Mul(groupRatio).Mul(dOemUserDiscount))
+	quota = quota.Add(outputAudioTokens.Mul(dEffectiveAudioOutputRatio).Mul(groupRatio).Mul(dOemUserDiscount))
 
-	// If ratio is not zero and quota is less than or equal to zero, set quota to 1
-	if !ratio.IsZero() && quota.LessThanOrEqual(decimal.Zero) {
+	// If quota is less than or equal to zero, set quota to 1
+	if quota.LessThanOrEqual(decimal.Zero) {
 		quota = decimal.NewFromInt(1)
 	}
 
@@ -121,6 +132,10 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		actualGroupRatio = userGroupRatio
 	}
 
+	// 获取 OEM 用户折扣并应用到 modelRatio
+	oemUserDiscount := GetOemUserDiscountForQuota(ctx, modelName)
+	discountedModelRatio := modelRatio * oemUserDiscount
+
 	quotaInfo := QuotaInfo{
 		InputDetails: TokenDetails{
 			TextTokens:  textInputTokens,
@@ -130,10 +145,11 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 			TextTokens:  textOutTokens,
 			AudioTokens: audioOutTokens,
 		},
-		ModelName:  modelName,
-		UsePrice:   relayInfo.UsePrice,
-		ModelRatio: modelRatio,
-		GroupRatio: actualGroupRatio,
+		ModelName:       modelName,
+		UsePrice:        relayInfo.UsePrice,
+		ModelRatio:      discountedModelRatio, // 文本倍率已应用 OEM 折扣
+		GroupRatio:      actualGroupRatio,
+		OemUserDiscount: oemUserDiscount, // 音频倍率使用该折扣
 	}
 
 	quota := calculateAudioQuota(quotaInfo)
@@ -166,8 +182,12 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 
 	tokenName := ctx.GetString("token_name")
 	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(modelName))
-	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(relayInfo.OriginModelName))
-	audioCompletionRatio := decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(modelName))
+	audioRatio := ratio_setting.GetAudioRatio(relayInfo.OriginModelName)
+	// 音频输出倍率：优先音频输入倍率，无则用文本输入倍率
+	effectiveAudioOutputRatio := audioRatio
+	if effectiveAudioOutputRatio <= 0 {
+		effectiveAudioOutputRatio = relayInfo.PriceData.ModelRatio
+	}
 
 	modelRatio := relayInfo.PriceData.ModelRatio
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
@@ -194,8 +214,12 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	totalTokens := usage.TotalTokens
 	var logContent string
 	if !usePrice {
-		logContent = fmt.Sprintf("模型倍率 %.2f，补全倍率 %.2f，音频倍率 %.2f，音频补全倍率 %.2f，分组倍率 %.2f",
-			modelRatio, completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), groupRatio)
+		audioOutputRatioSource := "音频输入倍率"
+		if audioRatio <= 0 {
+			audioOutputRatioSource = "文本输入倍率"
+		}
+		logContent = fmt.Sprintf("模型倍率 %.2f，补全倍率 %.2f，音频输入倍率 %.2f，音频输出倍率 %.2f（%s），分组倍率 %.2f",
+			modelRatio, completionRatio.InexactFloat64(), audioRatio, effectiveAudioOutputRatio, audioOutputRatioSource, groupRatio)
 	} else {
 		logContent = fmt.Sprintf("模型价格 %.2f，分组倍率 %.2f", modelPrice, groupRatio)
 	}
@@ -205,7 +229,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0
-		logContent += fmt.Sprintf("（可能是上游超时）")
+		logContent += "（可能是上游超时）"
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.FinalPreConsumedQuota))
 	} else {
@@ -218,7 +242,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		logContent += ", " + extraContent
 	}
 	other := GenerateWssOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
-		completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+		completionRatio.InexactFloat64(), audioRatio, effectiveAudioOutputRatio, modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     usage.InputTokens,
@@ -299,7 +323,7 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0
-		logContent += fmt.Sprintf("（可能是上游出错）")
+		logContent += "（可能是上游出错）"
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.FinalPreConsumedQuota))
 	} else {
@@ -366,13 +390,20 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 
 	tokenName := ctx.GetString("token_name")
 	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(relayInfo.OriginModelName))
-	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(relayInfo.OriginModelName))
-	audioCompletionRatio := decimal.NewFromFloat(ratio_setting.GetAudioCompletionRatio(relayInfo.OriginModelName))
+	audioRatioF := ratio_setting.GetAudioRatio(relayInfo.OriginModelName)
+	// 音频输出倍率：优先音频输入倍率，无则用文本输入倍率
+	effectiveAudioOutputRatio := audioRatioF
+	if effectiveAudioOutputRatio <= 0 {
+		effectiveAudioOutputRatio = relayInfo.PriceData.ModelRatio
+	}
 
 	modelRatio := relayInfo.PriceData.ModelRatio
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
 	modelPrice := relayInfo.PriceData.ModelPrice
 	usePrice := relayInfo.PriceData.UsePrice
+
+	// 获取 OEM 用户折扣
+	oemUserDiscount := GetOemUserDiscountForQuota(ctx, relayInfo.OriginModelName)
 
 	quotaInfo := QuotaInfo{
 		InputDetails: TokenDetails{
@@ -383,10 +414,11 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 			TextTokens:  textOutTokens,
 			AudioTokens: audioOutTokens,
 		},
-		ModelName:  relayInfo.OriginModelName,
-		UsePrice:   usePrice,
-		ModelRatio: modelRatio,
-		GroupRatio: groupRatio,
+		ModelName:       relayInfo.OriginModelName,
+		UsePrice:        usePrice,
+		ModelRatio:      modelRatio,
+		GroupRatio:      groupRatio,
+		OemUserDiscount: oemUserDiscount,
 	}
 
 	quota := calculateAudioQuota(quotaInfo)
@@ -394,8 +426,12 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	totalTokens := usage.TotalTokens
 	var logContent string
 	if !usePrice {
-		logContent = fmt.Sprintf("模型倍率 %.2f，补全倍率 %.2f，音频倍率 %.2f，音频补全倍率 %.2f，分组倍率 %.2f",
-			modelRatio, completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), groupRatio)
+		audioOutputRatioSource := "音频输入倍率"
+		if audioRatioF <= 0 {
+			audioOutputRatioSource = "文本输入倍率"
+		}
+		logContent = fmt.Sprintf("模型倍率 %.2f，补全倍率 %.2f，音频输入倍率 %.2f，音频输出倍率 %.2f（%s），分组倍率 %.2f",
+			modelRatio, completionRatio.InexactFloat64(), audioRatioF, effectiveAudioOutputRatio, audioOutputRatioSource, groupRatio)
 	} else {
 		logContent = fmt.Sprintf("模型价格 %.2f，分组倍率 %.2f", modelPrice, groupRatio)
 	}
@@ -405,7 +441,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0
-		logContent += fmt.Sprintf("（可能是上游超时）")
+		logContent += "（可能是上游超时）"
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
@@ -422,7 +458,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logContent += ", " + extraContent
 	}
 	other := GenerateAudioOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
-		completionRatio.InexactFloat64(), audioRatio.InexactFloat64(), audioCompletionRatio.InexactFloat64(), modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+		completionRatio.InexactFloat64(), audioRatioF, effectiveAudioOutputRatio, modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     usage.PromptTokens,

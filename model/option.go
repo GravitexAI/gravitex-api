@@ -19,6 +19,16 @@ type Option struct {
 	Value string `json:"value"`
 }
 
+// GetOption 根据key获取Option
+func GetOption(key string) (*Option, error) {
+	var option Option
+	err := DB.Where("`key` = ?", key).First(&option).Error
+	if err != nil {
+		return nil, err
+	}
+	return &option, nil
+}
+
 func AllOption() ([]*Option, error) {
 	var options []*Option
 	var err error

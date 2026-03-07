@@ -357,6 +357,16 @@ func TokenAuth() func(c *gin.Context) {
 
 		userCache.WriteContext(c)
 
+		// 请求头通常不再带 X-Oem-Code 时，按令牌对应用户的 oem_id 设置 OEM，供折扣/价格链使用
+		if userCache.OemId != nil && *userCache.OemId > 0 {
+			userOemConfig := model.GetOemConfigById(*userCache.OemId)
+			if userOemConfig != nil {
+				common.SetContextKey(c, constant.ContextKeyOemCode, userOemConfig.OemCode)
+				common.SetContextKey(c, constant.ContextKeyOemId, userOemConfig.Id)
+				common.SetContextKey(c, constant.ContextKeyOemConfig, userOemConfig)
+			}
+		}
+
 		userGroup := userCache.Group
 		tokenGroup := token.Group
 		if tokenGroup != "" {

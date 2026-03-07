@@ -249,9 +249,29 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 
 	tokenName := ctx.GetString("token_name")
 	completionRatio := relayInfo.PriceData.CompletionRatio
+	geminiImageOutputTokens := ctx.GetInt("gemini_image_output_tokens")
+	geminiTextOutputTokens := ctx.GetInt("gemini_text_output_tokens")
+	// 若 context 未设置（如部分响应路径），从 usage 回退
+	if usage != nil {
+		if geminiImageOutputTokens == 0 {
+			geminiImageOutputTokens = usage.CompletionTokenDetails.ImageTokens
+		}
+		if geminiTextOutputTokens == 0 {
+			geminiTextOutputTokens = usage.CompletionTokenDetails.TextTokens
+		}
+	}
+	reasoningTokens := 0
+	if usage != nil {
+		reasoningTokens = usage.CompletionTokenDetails.ReasoningTokens
+	}
 	cacheRatio := relayInfo.PriceData.CacheRatio
 	imageRatio := relayInfo.PriceData.ImageRatio
 	modelRatio := relayInfo.PriceData.ModelRatio
+	// 图片输出计费倍率：优先图片输入倍率，无则用文本输入倍率（无图片输入配置的图生模型）
+	effectiveImageOutputRatio := imageRatio
+	if effectiveImageOutputRatio <= 0 {
+		effectiveImageOutputRatio = modelRatio
+	}
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
 	modelPrice := relayInfo.PriceData.ModelPrice
 	cachedCreationRatio := relayInfo.PriceData.CacheCreationRatio
@@ -378,7 +398,23 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 			Add(imageTokensWithRatio).
 			Add(dCachedCreationTokensWithRatio)
 
-		completionQuota := dCompletionTokens.Mul(dCompletionRatio)
+		var completionQuota decimal.Decimal
+		if geminiImageOutputTokens > 0 && effectiveImageOutputRatio > 0 {
+			textOutputTokens := int64(reasoningTokens + geminiTextOutputTokens)
+			if textOutputTokens == 0 && completionTokens >= geminiImageOutputTokens {
+				textOutputTokens = int64(completionTokens - geminiImageOutputTokens)
+			}
+			if textOutputTokens < 0 {
+				textOutputTokens = 0
+			}
+			textCompletionQuota := decimal.NewFromInt(textOutputTokens).Mul(dCompletionRatio)
+			imageCompletionQuota := decimal.NewFromInt(int64(geminiImageOutputTokens)).Mul(decimal.NewFromFloat(effectiveImageOutputRatio))
+			completionQuota = textCompletionQuota.Add(imageCompletionQuota)
+			extraContent = append(extraContent, fmt.Sprintf("文本输出 %d tokens × %.2f + 图片输出 %d tokens × %.2f（%s）",
+				textOutputTokens, completionRatio, geminiImageOutputTokens, effectiveImageOutputRatio, map[bool]string{true: "图片输入倍率", false: "文本输入倍率"}[imageRatio > 0]))
+		} else {
+			completionQuota = dCompletionTokens.Mul(dCompletionRatio)
+		}
 
 		quotaCalculateDecimal = promptQuota.Add(completionQuota).Mul(ratio)
 
@@ -489,6 +525,37 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 	if !dImageGenerationCallQuota.IsZero() {
 		other["image_generation_call"] = true
 		other["image_generation_call_price"] = imageGenerationCallPrice
+	}
+	// 图片/音频倍率与 Gemini 输出细分：供 Expenses 计费展示与对账（与 nebula 记录方式一致）
+	if imageRatio > 0 {
+		other["image_ratio"] = imageRatio
+	}
+	audioRatio := relayInfo.PriceData.AudioRatio
+	if audioRatio > 0 {
+		other["audio_ratio"] = audioRatio
+	}
+	effectiveAudioOutputRatio := audioRatio
+	if effectiveAudioOutputRatio <= 0 {
+		effectiveAudioOutputRatio = modelRatio
+	}
+	if effectiveAudioOutputRatio > 0 {
+		other["audio_completion_ratio"] = effectiveAudioOutputRatio
+	}
+	if geminiImageOutputTokens > 0 || geminiTextOutputTokens > 0 || reasoningTokens > 0 {
+		other["image_output_tokens"] = geminiImageOutputTokens
+		other["text_output_tokens"] = geminiTextOutputTokens
+		other["reasoning_tokens"] = reasoningTokens
+		if effectiveImageOutputRatio > 0 {
+			other["image_completion_ratio"] = effectiveImageOutputRatio
+			other["effective_image_output_ratio"] = effectiveImageOutputRatio
+			if geminiImageOutputTokens > 0 {
+				if imageRatio > 0 {
+					other["image_output_ratio_source"] = "image_input"
+				} else {
+					other["image_output_ratio_source"] = "text_input"
+				}
+			}
+		}
 	}
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,

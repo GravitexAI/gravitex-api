@@ -90,6 +90,13 @@ func main() {
 	// 热更新配置
 	go model.SyncOptions(common.SyncFrequency)
 
+	// 初始化 OEM 系统配置缓存
+	model.InitOemConfig()
+	model.InitOemDiscount()
+	model.InitOemUserDiscount()
+	// 定时刷新 OEM 相关缓存（默认每 5 分钟）
+	go model.SyncOemConfigCache(300)
+
 	// 数据看板
 	go model.UpdateQuotaData()
 
@@ -143,7 +150,7 @@ func main() {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{
 				"message": fmt.Sprintf("Panic detected, error: %v. Please submit a issue here: https://github.com/Calcium-Ion/new-api", err),
-				"type":    "new_api_panic",
+				"type":    "gravitex_api_panic",
 			},
 		})
 	}))
@@ -152,6 +159,8 @@ func main() {
 	server.Use(middleware.RequestId())
 	server.Use(middleware.PoweredBy())
 	server.Use(middleware.I18n())
+	// OEM 系统识别（根据 Header / 域名 / 路径确定当前 OEM）
+	server.Use(middleware.SystemIdentify())
 	middleware.SetUpLogger(server)
 	// Initialize session store
 	store := cookie.NewStore([]byte(common.SessionSecret))

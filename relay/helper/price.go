@@ -4,7 +4,9 @@ import (
 	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -53,6 +55,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	var preConsumedQuota int
 	var modelRatio float64
 	var completionRatio float64
+	var imageCompletionRatio float64
 	var cacheRatio float64
 	var imageRatio float64
 	var cacheCreationRatio float64
@@ -79,6 +82,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 			}
 		}
 		completionRatio = ratio_setting.GetCompletionRatio(info.OriginModelName)
+		imageCompletionRatio = ratio_setting.GetImageCompletionRatio(info.OriginModelName)
 		cacheRatio, _ = ratio_setting.GetCacheRatio(info.OriginModelName)
 		cacheCreationRatio, _ = ratio_setting.GetCreateCacheRatio(info.OriginModelName)
 		cacheCreationRatio5m = cacheCreationRatio
@@ -90,10 +94,38 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		ratio := modelRatio * groupRatioInfo.GroupRatio
 		preConsumedQuota = int(float64(preConsumedTokens) * ratio)
 	} else {
+		completionRatio = ratio_setting.GetCompletionRatio(info.OriginModelName)
+		imageCompletionRatio = ratio_setting.GetImageCompletionRatio(info.OriginModelName)
 		if meta.ImagePriceRatio != 0 {
 			modelPrice = modelPrice * meta.ImagePriceRatio
 		}
+		// 按价格计费时后面会应用 OEM 折扣
 		preConsumedQuota = int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+	}
+
+	// 应用 OEM 用户折扣到 modelPrice / modelRatio
+	// 只对当前请求的 OEM 生效，不修改全局倍率配置
+	oemUserDiscount := 1.0
+	if c != nil {
+		oemCode := "gravitex"
+		if code, exists := c.Get(string(constant.ContextKeyOemCode)); exists {
+			if codeStr, ok := code.(string); ok && codeStr != "" {
+				oemCode = codeStr
+			}
+		}
+		// 这里只按 modelName 维度获取折扣，厂商维度折扣在价格链里单独处理
+		oemUserDiscount = model.GetOemUserDiscountByCode(oemCode, info.OriginModelName, "")
+		if oemUserDiscount <= 0 {
+			oemUserDiscount = 1.0
+		}
+	}
+
+	if !usePrice {
+		// Token 计费时，文本倍率使用 OEM 折扣
+		modelRatio = modelRatio * oemUserDiscount
+	} else {
+		// 按价格计费时，直接对价格打折
+		modelPrice = modelPrice * oemUserDiscount
 	}
 
 	// check if free model pre-consume is disabled
@@ -120,6 +152,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		ModelPrice:           modelPrice,
 		ModelRatio:           modelRatio,
 		CompletionRatio:      completionRatio,
+		ImageCompletionRatio: imageCompletionRatio,
 		GroupRatioInfo:       groupRatioInfo,
 		UsePrice:             usePrice,
 		CacheRatio:           cacheRatio,

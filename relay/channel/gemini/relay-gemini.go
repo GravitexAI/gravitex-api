@@ -1284,6 +1284,19 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 					usage.PromptTokensDetails.TextTokens = detail.TokenCount
 				}
 			}
+			// 流式最后一包：从 CandidatesTokensDetails 拆出图片/文本输出 token，供计费与日志使用
+			var imageOutputTokens, textOutputTokens int
+			for _, detail := range geminiResponse.UsageMetadata.CandidatesTokensDetails {
+				if detail.Modality == "IMAGE" {
+					imageOutputTokens += detail.TokenCount
+				} else if detail.Modality == "TEXT" {
+					textOutputTokens += detail.TokenCount
+				}
+			}
+			usage.CompletionTokenDetails.ImageTokens = imageOutputTokens
+			usage.CompletionTokenDetails.TextTokens = textOutputTokens
+			c.Set("gemini_image_output_tokens", imageOutputTokens)
+			c.Set("gemini_text_output_tokens", textOutputTokens)
 		}
 
 		return callback(data, &geminiResponse)
@@ -1468,13 +1481,12 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	fullTextResponse.Model = info.UpstreamModelName
 	usage := dto.Usage{
 		PromptTokens:     geminiResponse.UsageMetadata.PromptTokenCount,
-		CompletionTokens: geminiResponse.UsageMetadata.CandidatesTokenCount,
+		CompletionTokens: geminiResponse.UsageMetadata.CandidatesTokenCount + geminiResponse.UsageMetadata.ThoughtsTokenCount,
 		TotalTokens:      geminiResponse.UsageMetadata.TotalTokenCount,
 	}
 
 	usage.CompletionTokenDetails.ReasoningTokens = geminiResponse.UsageMetadata.ThoughtsTokenCount
 	usage.PromptTokensDetails.CachedTokens = geminiResponse.UsageMetadata.CachedContentTokenCount
-	usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
 
 	for _, detail := range geminiResponse.UsageMetadata.PromptTokensDetails {
 		if detail.Modality == "AUDIO" {
@@ -1483,6 +1495,20 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			usage.PromptTokensDetails.TextTokens = detail.TokenCount
 		}
 	}
+
+	// 从 CandidatesTokensDetails 拆出图片/文本输出 token，供计费与日志使用
+	var imageOutputTokens, textOutputTokens int
+	for _, detail := range geminiResponse.UsageMetadata.CandidatesTokensDetails {
+		if detail.Modality == "IMAGE" {
+			imageOutputTokens += detail.TokenCount
+		} else if detail.Modality == "TEXT" {
+			textOutputTokens += detail.TokenCount
+		}
+	}
+	usage.CompletionTokenDetails.ImageTokens = imageOutputTokens
+	usage.CompletionTokenDetails.TextTokens = textOutputTokens
+	c.Set("gemini_image_output_tokens", imageOutputTokens)
+	c.Set("gemini_text_output_tokens", textOutputTokens)
 
 	fullTextResponse.Usage = usage
 

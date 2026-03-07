@@ -47,6 +47,7 @@ type User struct {
 	Setting          string         `json:"setting" gorm:"type:text;column:setting"`
 	Remark           string         `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
 	StripeCustomer   string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
+	OemId            *int64         `json:"oem_id" gorm:"column:oem_id;index"` // OEM ID（外键关联 oem_config.id）
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -58,6 +59,7 @@ func (user *User) ToBaseUser() *UserBase {
 		Username: user.Username,
 		Setting:  user.Setting,
 		Email:    user.Email,
+		OemId:    user.OemId,
 	}
 	return cache
 }

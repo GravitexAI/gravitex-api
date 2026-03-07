@@ -13,7 +13,6 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 )
 
-// UserBase struct remains the same as it represents the cached data structure
 type UserBase struct {
 	Id       int    `json:"id"`
 	Group    string `json:"group"`
@@ -22,6 +21,7 @@ type UserBase struct {
 	Status   int    `json:"status"`
 	Username string `json:"username"`
 	Setting  string `json:"setting"`
+	OemId    *int64 `json:"oem_id"`
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
@@ -31,6 +31,9 @@ func (user *UserBase) WriteContext(c *gin.Context) {
 	common.SetContextKey(c, constant.ContextKeyUserEmail, user.Email)
 	common.SetContextKey(c, constant.ContextKeyUserName, user.Username)
 	common.SetContextKey(c, constant.ContextKeyUserSetting, user.GetSetting())
+	if user.OemId != nil {
+		common.SetContextKey(c, constant.ContextKeyUserOemId, *user.OemId)
+	}
 }
 
 func (user *UserBase) GetSetting() dto.UserSetting {
@@ -98,7 +101,7 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 		return nil, err // Return nil and error if DB lookup fails
 	}
 
-	// Create cache object from user data
+	// Create cache object from user data（含 OemId，供鉴权后按用户 OEM 取折扣）
 	userCache = &UserBase{
 		Id:       user.Id,
 		Group:    user.Group,
@@ -107,6 +110,7 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 		Username: user.Username,
 		Setting:  user.Setting,
 		Email:    user.Email,
+		OemId:    user.OemId,
 	}
 
 	return userCache, nil

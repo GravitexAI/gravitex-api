@@ -26,13 +26,13 @@ type ClaudeError struct {
 type ErrorType string
 
 const (
-	ErrorTypeNewAPIError     ErrorType = "new_api_error"
-	ErrorTypeOpenAIError     ErrorType = "openai_error"
-	ErrorTypeClaudeError     ErrorType = "claude_error"
-	ErrorTypeMidjourneyError ErrorType = "midjourney_error"
-	ErrorTypeGeminiError     ErrorType = "gemini_error"
-	ErrorTypeRerankError     ErrorType = "rerank_error"
-	ErrorTypeUpstreamError   ErrorType = "upstream_error"
+	ErrorTypeGravitexAPIError ErrorType = "gravitex_api_error"
+	ErrorTypeOpenAIError      ErrorType = "openai_error"
+	ErrorTypeClaudeError      ErrorType = "claude_error"
+	ErrorTypeMidjourneyError  ErrorType = "midjourney_error"
+	ErrorTypeGeminiError      ErrorType = "gemini_error"
+	ErrorTypeRerankError      ErrorType = "rerank_error"
+	ErrorTypeUpstreamError    ErrorType = "upstream_error"
 )
 
 type ErrorCode string
@@ -253,7 +253,7 @@ func NewError(err error, errorCode ErrorCode, ops ...NewAPIErrorOptions) *NewAPI
 	e := &NewAPIError{
 		Err:        err,
 		RelayError: nil,
-		errorType:  ErrorTypeNewAPIError,
+		errorType:  ErrorTypeGravitexAPIError,
 		StatusCode: http.StatusInternalServerError,
 		errorCode:  errorCode,
 	}
@@ -303,7 +303,7 @@ func NewErrorWithStatusCode(err error, errorCode ErrorCode, statusCode int, ops 
 			Message: err.Error(),
 			Type:    string(errorCode),
 		},
-		errorType:  ErrorTypeNewAPIError,
+		errorType:  ErrorTypeGravitexAPIError,
 		StatusCode: statusCode,
 		errorCode:  errorCode,
 	}

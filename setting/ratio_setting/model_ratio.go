@@ -605,6 +605,7 @@ var defaultImageRatio = map[string]float64{
 	"gpt-image-1": 2,
 }
 var imageRatioMap = types.NewRWMap[string, float64]()
+var imageCompletionRatioMap = types.NewRWMap[string, float64]()
 var audioRatioMap = types.NewRWMap[string, float64]()
 var audioCompletionRatioMap = types.NewRWMap[string, float64]()
 
@@ -622,6 +623,32 @@ func GetImageRatio(name string) (float64, bool) {
 		return 1, false // Default to 1 if not found
 	}
 	return ratio, true
+}
+
+// GetImageCompletionRatio 获取输出图片 token 的计费倍率，未配置时回退到 CompletionRatio
+func GetImageCompletionRatio(name string) float64 {
+	name = FormatMatchingModelName(name)
+	if strings.Contains(name, "/") {
+		if ratio, ok := imageCompletionRatioMap.Get(name); ok {
+			return ratio
+		}
+	}
+	if ratio, ok := imageCompletionRatioMap.Get(name); ok {
+		return ratio
+	}
+	return GetCompletionRatio(name)
+}
+
+func ImageCompletionRatio2JSONString() string {
+	return imageCompletionRatioMap.MarshalJSONString()
+}
+
+func UpdateImageCompletionRatioByJSONString(jsonStr string) error {
+	return types.LoadFromJsonStringWithCallback(imageCompletionRatioMap, jsonStr, InvalidateExposedDataCache)
+}
+
+func GetImageCompletionRatioCopy() map[string]float64 {
+	return imageCompletionRatioMap.ReadAll()
 }
 
 func AudioRatio2JSONString() string {

@@ -13,6 +13,7 @@ type PriceData struct {
 	ModelPrice           float64
 	ModelRatio           float64
 	CompletionRatio      float64
+	ImageCompletionRatio float64
 	CacheRatio           float64
 	CacheCreationRatio   float64
 	CacheCreation5mRatio float64
