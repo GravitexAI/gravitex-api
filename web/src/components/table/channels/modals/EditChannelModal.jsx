@@ -171,6 +171,8 @@ const EditChannelModal = (props) => {
     disable_store: false, // false = 允许透传（默认开启）
     allow_safety_identifier: false,
     claude_beta_query: false,
+    // Azure 模型特定 API/Responses 版本配置（存入 settings.azure_model_api_versions）
+    azure_model_api_versions: '',
   };
   const [batch, setBatch] = useState(false);
   const [multiToSingle, setMultiToSingle] = useState(false);
@@ -434,6 +436,30 @@ const EditChannelModal = (props) => {
     handleInputChange('settings', settingsJson);
   };
 
+  const handleAzureModelApiVersionsChange = (value) => {
+    setInputs((prev) => ({ ...prev, azure_model_api_versions: value }));
+    let settings = {};
+    if (inputs.settings) {
+      try {
+        settings = JSON.parse(inputs.settings);
+      } catch (error) {
+        console.error('解析设置失败:', error);
+      }
+    }
+    if (value && value.trim()) {
+      try {
+        settings.azure_model_api_versions = JSON.parse(value);
+      } catch (error) {
+        console.error('解析模型 API 版本配置失败:', error);
+        return;
+      }
+    } else {
+      delete settings.azure_model_api_versions;
+    }
+    const settingsJson = JSON.stringify(settings);
+    handleInputChange('settings', settingsJson);
+  };
+
   const isIonetLocked = isIonetChannel && isEdit;
 
   const handleInputChange = (name, value) => {
@@ -622,6 +648,13 @@ const EditChannelModal = (props) => {
           const parsedSettings = JSON.parse(data.settings);
           data.azure_responses_version =
             parsedSettings.azure_responses_version || '';
+          if (parsedSettings.azure_model_api_versions) {
+            data.azure_model_api_versions = JSON.stringify(
+              parsedSettings.azure_model_api_versions,
+              null,
+              2,
+            );
+          }
           // 读取 Vertex 密钥格式
           data.vertex_key_type = parsedSettings.vertex_key_type || 'json';
           // 读取 AWS 密钥格式和区域
@@ -638,6 +671,7 @@ const EditChannelModal = (props) => {
         } catch (error) {
           console.error('解析其他设置失败:', error);
           data.azure_responses_version = '';
+          data.azure_model_api_versions = '';
           data.region = '';
           data.vertex_key_type = 'json';
           data.aws_key_type = 'ak_sk';
@@ -649,6 +683,7 @@ const EditChannelModal = (props) => {
         }
       } else {
         // 兼容历史数据：老渠道没有 settings 时，默认按 json 展示
+        data.azure_model_api_versions = '';
         data.vertex_key_type = 'json';
         data.aws_key_type = 'ak_sk';
         data.is_enterprise_account = false;
@@ -1389,6 +1424,31 @@ const EditChannelModal = (props) => {
       delete settings.vertex_key_type;
     }
 
+    // type === 3 (Azure): 保留 Azure 相关设置
+    if (localInputs.type === 3) {
+      if (localInputs.azure_responses_version !== undefined && localInputs.azure_responses_version !== null) {
+        if (localInputs.azure_responses_version.trim() === '') {
+          delete settings.azure_responses_version;
+        } else {
+          settings.azure_responses_version = localInputs.azure_responses_version;
+        }
+      }
+      if (localInputs.azure_model_api_versions !== undefined && localInputs.azure_model_api_versions !== null) {
+        if (localInputs.azure_model_api_versions.trim() === '') {
+          delete settings.azure_model_api_versions;
+        } else {
+          try {
+            settings.azure_model_api_versions = JSON.parse(localInputs.azure_model_api_versions);
+          } catch (error) {
+            console.error('解析 azure_model_api_versions 失败:', error);
+            if (!settings.azure_model_api_versions) {
+              delete settings.azure_model_api_versions;
+            }
+          }
+        }
+      }
+    }
+
     // type === 1 (OpenAI) 或 type === 14 (Claude): 设置字段透传控制（显式保存布尔值）
     if (localInputs.type === 1 || localInputs.type === 14) {
       settings.allow_service_tier = localInputs.allow_service_tier === true;
@@ -1417,6 +1477,9 @@ const EditChannelModal = (props) => {
     delete localInputs.vertex_key_type;
     // 顶层的 aws_key_type 不应发送给后端
     delete localInputs.aws_key_type;
+    // Azure 相关字段已保存在 settings 中，不需要作为顶层字段发送
+    delete localInputs.azure_responses_version;
+    delete localInputs.azure_model_api_versions;
     // 清理字段透传控制的临时字段
     delete localInputs.allow_service_tier;
     delete localInputs.disable_store;
@@ -2575,6 +2638,35 @@ const EditChannelModal = (props) => {
                                 )
                               }
                               showClear
+                            />
+                          </div>
+                          <div>
+                            <JSONEditor
+                              key={`azure_model_api_versions-${isEdit ? channelId : 'new'}`}
+                              field='azure_model_api_versions'
+                              label={t('模型特定 Responses API 版本')}
+                              placeholder={
+                                t(
+                                  '可选，为不同模型配置不同的 API/Responses 版本。未配置的模型使用上方默认版本。例如：',
+                                ) +
+                                `\n${JSON.stringify(
+                                  { o1: '2024-02-15-preview', 'sora-2': 'preview' },
+                                  null,
+                                  2,
+                                )}`
+                              }
+                              value={inputs.azure_model_api_versions || ''}
+                              onChange={handleAzureModelApiVersionsChange}
+                              template={{
+                                o1: '2024-02-15-preview',
+                                'sora-2': 'preview',
+                              }}
+                              templateLabel={t('填入模板')}
+                              editorType='keyValue'
+                              formApi={formApiRef.current}
+                              extraText={t(
+                                '键为模型名称，值为对应的 API 版本（例如：2024-02-15-preview 或 preview）',
+                              )}
                             />
                           </div>
                         </>
