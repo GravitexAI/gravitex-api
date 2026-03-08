@@ -17,7 +17,10 @@ import (
 func GetAllModelsMeta(c *gin.Context) {
 
 	pageInfo := common.GetPageQuery(c)
-	statusFilter, _ := strconv.Atoi(c.DefaultQuery("status", "0"))
+	statusFilter := -1
+	if s := c.Query("status"); s != "" {
+		statusFilter, _ = strconv.Atoi(s)
+	}
 	modelsMeta, err := model.GetAllModels(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), statusFilter)
 	if err != nil {
 		common.ApiError(c, err)
@@ -27,7 +30,7 @@ func GetAllModelsMeta(c *gin.Context) {
 	enrichModels(modelsMeta)
 	var total int64
 	db := model.DB.Model(&model.Model{})
-	if statusFilter > 0 {
+	if statusFilter >= 0 {
 		db = db.Where("status = ?", statusFilter)
 	}
 	db.Count(&total)
@@ -51,7 +54,10 @@ func SearchModelsMeta(c *gin.Context) {
 
 	keyword := c.Query("keyword")
 	vendor := c.Query("vendor")
-	statusFilter, _ := strconv.Atoi(c.DefaultQuery("status", "0"))
+	statusFilter := -1
+	if s := c.Query("status"); s != "" {
+		statusFilter, _ = strconv.Atoi(s)
+	}
 	pageInfo := common.GetPageQuery(c)
 
 	modelsMeta, total, err := model.SearchModels(keyword, vendor, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), statusFilter)

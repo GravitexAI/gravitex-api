@@ -95,7 +95,7 @@ func GetVendorModelCounts(statusFilter int) (map[int64]int64, error) {
 		Count    int64
 	}
 	db := DB.Model(&Model{})
-	if statusFilter > 0 {
+	if statusFilter >= 0 {
 		db = db.Where("status = ?", statusFilter)
 	}
 	if err := db.
@@ -114,7 +114,7 @@ func GetVendorModelCounts(statusFilter int) (map[int64]int64, error) {
 func GetAllModels(offset int, limit int, statusFilter int) ([]*Model, error) {
 	var models []*Model
 	db := DB.Model(&Model{})
-	if statusFilter > 0 {
+	if statusFilter >= 0 {
 		db = db.Where("status = ?", statusFilter)
 	}
 	err := db.Order("id DESC").Offset(offset).Limit(limit).Find(&models).Error
@@ -150,7 +150,7 @@ func GetBoundChannelsByModelsMap(modelNames []string) (map[string][]BoundChannel
 func SearchModels(keyword string, vendor string, offset int, limit int, statusFilter int) ([]*Model, int64, error) {
 	var models []*Model
 	db := DB.Model(&Model{})
-	if statusFilter > 0 {
+	if statusFilter >= 0 {
 		db = db.Where("status = ?", statusFilter)
 	}
 	if keyword != "" {
