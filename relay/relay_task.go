@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -136,6 +137,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		return
 	}
 
+	// 打印用户请求体（供调试）
+	if bodyStorage, bodyErr := common.GetBodyStorage(c); bodyErr == nil {
+		if rawBody, readErr := io.ReadAll(common.ReaderOnly(bodyStorage)); readErr == nil {
+			common.SysLog(fmt.Sprintf("[TaskSubmit] client request body: %s", truncateTaskLogContent(string(rawBody))))
+		}
+	}
+
 	modelName := info.OriginModelName
 	if modelName == "" {
 		modelName = service.CoverTaskActionToModelName(platform, info.Action)
@@ -195,15 +203,25 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		taskErr = service.TaskErrorWrapper(err, "build_request_failed", http.StatusInternalServerError)
 		return
 	}
+
+	// 打印发送给上游的请求体（截断base64内容防止日志过大）
+	if bodyBytes, readErr := io.ReadAll(requestBody); readErr == nil {
+		common.SysLog(fmt.Sprintf("[TaskSubmit] upstream request body: %s", truncateTaskLogContent(string(bodyBytes))))
+		requestBody = bytes.NewReader(bodyBytes)
+	}
+
 	// do request
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
+		logger.LogError(c, fmt.Sprintf("[TaskSubmit] do_request_failed: %s", err.Error()))
 		taskErr = service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 		return
 	}
-	// handle response
+
+	// handle response — only log on failure; success is recorded after task completes
 	if resp != nil && resp.StatusCode != http.StatusOK {
 		responseBody, _ := io.ReadAll(resp.Body)
+		logger.LogError(c, fmt.Sprintf("[TaskSubmit] upstream error (status=%d): %s", resp.StatusCode, string(responseBody)))
 		taskErr = service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
 		return
 	}
@@ -511,4 +529,21 @@ func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 		Progress:   task.Progress,
 		Data:       task.Data,
 	}
+}
+
+// truncateTaskLogContent truncates base64 content and very long strings to keep logs readable.
+func truncateTaskLogContent(s string) string {
+	const maxLen = 2000
+	// Truncate inline base64 data URIs
+	if idx := strings.Index(s, ";base64,"); idx >= 0 {
+		end := idx + len(";base64,") + 64 // keep first 64 chars of data
+		if end > len(s) {
+			end = len(s)
+		}
+		s = s[:end] + "...[truncated]"
+	}
+	if len(s) > maxLen {
+		return s[:maxLen] + "...[truncated]"
+	}
+	return s
 }

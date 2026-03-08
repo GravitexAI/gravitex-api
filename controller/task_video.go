@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -15,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
@@ -50,7 +52,10 @@ func updateVideoTaskAll(ctx context.Context, platform constant.TaskPlatform, cha
 	}
 	info := &relaycommon.RelayInfo{}
 	info.ChannelMeta = &relaycommon.ChannelMeta{
-		ChannelBaseUrl: cacheGetChannel.GetBaseURL(),
+		ChannelType:          cacheGetChannel.Type,
+		ChannelBaseUrl:       cacheGetChannel.GetBaseURL(),
+		ApiVersion:           cacheGetChannel.Other,
+		ChannelOtherSettings: cacheGetChannel.GetOtherSettings(),
 	}
 	info.ApiKey = cacheGetChannel.Key
 	adaptor.Init(info)
@@ -80,6 +85,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	if privateData.Key != "" {
 		key = privateData.Key
 	}
+	logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] fetching task=%s baseURL=%s platform=%s", taskId, baseURL, task.Platform))
 	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
 		"task_id": taskId,
 		"action":  task.Action,
@@ -96,7 +102,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		return fmt.Errorf("readAll failed for task %s: %w", taskId, err)
 	}
 
-	logger.LogDebug(ctx, fmt.Sprintf("UpdateVideoSingleTask response: %s", string(responseBody)))
+	logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s channel=%d status=%d body=%s",
+		taskId, channel.Id, resp.StatusCode, truncateForLog(string(responseBody))))
 
 	taskResult := &relaycommon.TaskInfo{}
 	// try parse as New API response format
@@ -145,8 +152,44 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		if task.FinishTime == 0 {
 			task.FinishTime = now
 		}
-		if !(len(taskResult.Url) > 5 && taskResult.Url[:5] == "data:") {
+		// Attempt to upload the generated video to OSS and store the permanent URL.
+		// Falls back gracefully (logs a warning, keeps the original URL/data) if OSS is not configured.
+		if ossURL := uploadVideoToOSS(ctx, channel, task, taskResult); ossURL != "" {
+			task.FailReason = ossURL
+		} else if !(len(taskResult.Url) > 5 && taskResult.Url[:5] == "data:") {
+			// OSS disabled or upload failed: store the original URL (skip raw base64 — too large for DB)
 			task.FailReason = taskResult.Url
+		}
+
+		// 记录消费日志（固定价格按次/按秒计费，TotalTokens==0 时直接用预扣额度）
+		if taskResult.TotalTokens == 0 && task.Quota > 0 {
+			modelName := task.Properties.OriginModelName
+			if modelName == "" {
+				modelName = task.Properties.UpstreamModelName
+			}
+			useTime := 0
+			if task.FinishTime > 0 && task.StartTime > 0 {
+				useTime = int(task.FinishTime - task.StartTime)
+			}
+			logContent := fmt.Sprintf("视频任务成功，模型 %s，耗时 %ds，扣费 %s", modelName, useTime, logger.LogQuota(task.Quota))
+			consumeLog := &model.Log{
+				UserId:    task.UserId,
+				CreatedAt: common.GetTimestamp(),
+				Type:      model.LogTypeConsume,
+				Content:   logContent,
+				ChannelId: task.ChannelId,
+				ModelName: modelName,
+				Quota:     task.Quota,
+				UseTime:   useTime,
+				Group:     task.Group,
+			}
+			if err := model.LOG_DB.Create(consumeLog).Error; err != nil {
+				logger.LogError(ctx, fmt.Sprintf("Failed to insert consume log for task %s: %v", task.TaskID, err))
+			} else {
+				logger.LogInfo(ctx, fmt.Sprintf("Task %s succeeded, quota=%d, model=%s", task.TaskID, task.Quota, modelName))
+			}
+			model.UpdateUserUsedQuotaAndRequestCount(task.UserId, task.Quota)
+			model.UpdateChannelUsedQuota(task.ChannelId, task.Quota)
 		}
 
 		// 如果返回了 total_tokens 并且配置了模型倍率(非固定价格),则重新计费
@@ -239,14 +282,12 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			}
 		}
 	case model.TaskStatusFailure:
-		logger.LogJson(ctx, fmt.Sprintf("Task %s failed", taskId), task)
 		task.Status = model.TaskStatusFailure
 		task.Progress = "100%"
 		if task.FinishTime == 0 {
 			task.FinishTime = now
 		}
 		task.FailReason = taskResult.Reason
-		logger.LogInfo(ctx, fmt.Sprintf("Task %s failed: %s", task.TaskID, task.FailReason))
 		taskResult.Progress = "100%"
 		if quota != 0 {
 			if preStatus != model.TaskStatusFailure {
@@ -255,6 +296,24 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 				logger.LogWarn(ctx, fmt.Sprintf("Task %s already in failure status, skip refund", task.TaskID))
 			}
 		}
+		// 记录失败日志
+		modelName := task.Properties.OriginModelName
+		if modelName == "" {
+			modelName = task.Properties.UpstreamModelName
+		}
+		failLog := &model.Log{
+			UserId:    task.UserId,
+			CreatedAt: common.GetTimestamp(),
+			Type:      model.LogTypeError,
+			Content:   fmt.Sprintf("视频任务失败，模型 %s，原因：%s", modelName, task.FailReason),
+			ChannelId: task.ChannelId,
+			ModelName: modelName,
+			Group:     task.Group,
+		}
+		if err := model.LOG_DB.Create(failLog).Error; err != nil {
+			logger.LogError(ctx, fmt.Sprintf("Failed to insert error log for task %s: %v", task.TaskID, err))
+		}
+		logger.LogInfo(ctx, fmt.Sprintf("Task %s failed: %s", task.TaskID, task.FailReason))
 	default:
 		return fmt.Errorf("unknown task status %s for task %s", taskResult.Status, taskId)
 	}
@@ -278,11 +337,100 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	return nil
 }
 
+// uploadVideoToOSS uploads the generated video to OSS via the Java backend and returns the permanent URL.
+// Returns an empty string if OSS is disabled or if the upload fails.
+//
+// The Go backend is always responsible for downloading (it can inject channel auth headers),
+// then uploads to OSS via the Java backend's base64 endpoint (OSS_BASE64_ENDPOINT).
+//
+// Channel-specific logic:
+//   - AzureVideo / Azure / Sora: taskResult.RemoteUrl is a pre-signed Azure CDN URL (no extra auth needed).
+//   - Gemini Veo:                taskResult.RemoteUrl is a GCS URL requiring x-goog-api-key.
+//   - Vertex AI Veo:             taskResult.Url is an inline base64 data URI — upload directly.
+func uploadVideoToOSS(ctx context.Context, ch *model.Channel, task *model.Task, taskResult *relaycommon.TaskInfo) string {
+	if !service.IsVideoOSSEnabled() {
+		return ""
+	}
+
+	switch ch.Type {
+	case constant.ChannelTypeAzureVideo, constant.ChannelTypeAzure, constant.ChannelTypeSora:
+		// When /content returns 302: RemoteUrl is a pre-signed CDN URL (download without auth).
+		// When /content returns 200: Url is a base64 data URI (bytes already in memory).
+		if taskResult.RemoteUrl != "" {
+			ossURL, err := service.UploadVideoFromURL(ctx, taskResult.RemoteUrl, nil, "mp4")
+			if err != nil {
+				logger.LogWarn(ctx, fmt.Sprintf("OSS upload failed for task %s (azure cdn url): %s", task.TaskID, err.Error()))
+				return ""
+			}
+			logger.LogInfo(ctx, fmt.Sprintf("Task %s video uploaded to OSS: %s", task.TaskID, ossURL))
+			return ossURL
+		}
+		if strings.HasPrefix(taskResult.Url, "data:") {
+			ossURL, err := service.UploadBase64ToOSS(ctx, taskResult.Url, "", "mp4")
+			if err != nil {
+				logger.LogWarn(ctx, fmt.Sprintf("OSS upload failed for task %s (azure direct download): %s", task.TaskID, err.Error()))
+				return ""
+			}
+			logger.LogInfo(ctx, fmt.Sprintf("Task %s video uploaded to OSS: %s", task.TaskID, ossURL))
+			return ossURL
+		}
+		return ""
+
+	case constant.ChannelTypeGemini:
+		remoteURL := taskResult.RemoteUrl
+		if remoteURL == "" {
+			return ""
+		}
+		// Gemini GCS URL requires api-key header; Go backend injects it during download
+		apiKey := task.PrivateData.Key
+		if apiKey == "" {
+			apiKey = ch.Key
+		}
+		headers := map[string]string{}
+		if apiKey != "" {
+			headers["x-goog-api-key"] = apiKey
+		}
+		ossURL, err := service.UploadVideoFromURL(ctx, remoteURL, headers, "mp4")
+		if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("OSS upload failed for task %s (gemini gcs url): %s", task.TaskID, err.Error()))
+			return ""
+		}
+		logger.LogInfo(ctx, fmt.Sprintf("Task %s video uploaded to OSS: %s", task.TaskID, ossURL))
+		return ossURL
+
+	case constant.ChannelTypeVertexAi:
+		// Vertex AI Veo: inline base64 data URI
+		dataURI := taskResult.Url
+		if !strings.HasPrefix(dataURI, "data:") {
+			return ""
+		}
+		ossURL, err := service.UploadBase64ToOSS(ctx, dataURI, "", "mp4")
+		if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("OSS upload failed for task %s (vertex base64): %s", task.TaskID, err.Error()))
+			return ""
+		}
+		logger.LogInfo(ctx, fmt.Sprintf("Task %s video uploaded to OSS: %s", task.TaskID, ossURL))
+		return ossURL
+	}
+
+	return ""
+}
+
+// sanitizeFileName replaces characters that are unsafe in file names with underscores.
+func sanitizeFileName(s string) string {
+	replacer := strings.NewReplacer(
+		"/", "_", "\\", "_", ":", "_", "*", "_",
+		"?", "_", "\"", "_", "<", "_", ">", "_", "|", "_",
+	)
+	return replacer.Replace(s)
+}
+
 func redactVideoResponseBody(body []byte) []byte {
 	var m map[string]any
 	if err := json.Unmarshal(body, &m); err != nil {
 		return body
 	}
+	// Vertex AI: remove embedded base64 video bytes
 	resp, _ := m["response"].(map[string]any)
 	if resp != nil {
 		delete(resp, "bytesBase64Encoded")
@@ -297,6 +445,11 @@ func redactVideoResponseBody(body []byte) []byte {
 			}
 		}
 	}
+	// Azure Video: if we injected a base64 data URI into "url", strip the data to keep DB small.
+	// The OSS URL will be stored in task.FailReason — ConvertToOpenAIVideo will prefer that.
+	if urlVal, ok := m["url"].(string); ok && strings.HasPrefix(urlVal, "data:") {
+		m["url"] = "" // clear large base64 blob; OSS URL in FailReason takes precedence
+	}
 	b, err := json.Marshal(m)
 	if err != nil {
 		return body
@@ -310,4 +463,20 @@ func truncateBase64(s string) string {
 		return s
 	}
 	return s[:maxKeep] + "..."
+}
+
+// truncateForLog truncates base64 data URIs and long strings to keep logs readable.
+func truncateForLog(s string) string {
+	const maxLen = 1000
+	if idx := strings.Index(s, ";base64,"); idx >= 0 {
+		end := idx + len(";base64,") + 64
+		if end > len(s) {
+			end = len(s)
+		}
+		s = s[:end] + "...[base64 truncated]"
+	}
+	if len(s) > maxLen {
+		return s[:maxLen] + "...[truncated]"
+	}
+	return s
 }
