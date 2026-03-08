@@ -116,13 +116,23 @@ func main() {
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
 
-	if common.IsMasterNode && constant.UpdateTask {
+	// Task polling goroutines (MJ / async video tasks).
+	// Enabled by default; can be disabled via ENABLE_TASK_POLLING=false|0.
+	// Also requires UPDATE_TASK=true (default) and this being the master node.
+	taskPollingEnabled := true
+	switch strings.ToLower(os.Getenv("ENABLE_TASK_POLLING")) {
+	case "false", "0":
+		taskPollingEnabled = false
+	}
+	if taskPollingEnabled && common.IsMasterNode && constant.UpdateTask {
 		gopool.Go(func() {
 			controller.UpdateMidjourneyTaskBulk()
 		})
 		gopool.Go(func() {
 			controller.UpdateTaskBulk()
 		})
+	} else if !taskPollingEnabled {
+		common.SysLog("task polling disabled by ENABLE_TASK_POLLING")
 	}
 	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {
 		common.BatchUpdateEnabled = true

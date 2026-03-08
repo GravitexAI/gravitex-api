@@ -375,7 +375,7 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 
 	// TODO: api_version统一
 	switch channel.Type {
-	case constant.ChannelTypeAzure:
+	case constant.ChannelTypeAzure, constant.ChannelTypeAzureVideo:
 		c.Set("api_version", channel.Other)
 	case constant.ChannelTypeVertexAi:
 		c.Set("region", channel.Other)
