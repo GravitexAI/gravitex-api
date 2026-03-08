@@ -148,15 +148,6 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	if modelName == "" {
 		modelName = service.CoverTaskActionToModelName(platform, info.Action)
 	}
-	modelPrice, success := ratio_setting.GetModelPrice(modelName, true)
-	if !success {
-		defaultPrice, ok := ratio_setting.GetDefaultModelPriceMap()[modelName]
-		if !ok {
-			modelPrice = float64(common.PreConsumedQuota) / common.QuotaPerUnit
-		} else {
-			modelPrice = defaultPrice
-		}
-	}
 
 	// 处理 auto 分组：从 context 获取实际选中的分组
 	// 当使用 auto 分组时，Distribute 中间件会将实际选中的分组存储在 ContextKeyAutoGroup 中
@@ -166,32 +157,65 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		}
 	}
 
-	// 预扣
 	groupRatio := ratio_setting.GetGroupRatio(info.UsingGroup)
-	var ratio float64
 	userGroupRatio, hasUserGroupRatio := ratio_setting.GetGroupGroupRatio(info.UserGroup, info.UsingGroup)
+	effectiveGroupRatio := groupRatio
 	if hasUserGroupRatio {
-		ratio = modelPrice * userGroupRatio
-	} else {
-		ratio = modelPrice * groupRatio
+		effectiveGroupRatio = userGroupRatio
 	}
-	// FIXME: 临时修补，支持任务仅按次计费
-	if !common.StringsContains(constant.TaskPricePatches, modelName) {
-		if len(info.PriceData.OtherRatios) > 0 {
+
+	// isSora2VideoModel 判断是否为按秒计费的视频模型（提交时不预扣费，轮询成功后计费）
+	isSora2VideoModel := isVideoPerSecondModel(modelName)
+
+	// 计算余额检查用的估算quota（仅用于校验，不实际扣费）
+	var quota int
+	var modelPrice float64
+	if isSora2VideoModel {
+		// 按秒计费模型：估算 quota = videoPrice × 预期秒数 × groupRatio × oemDiscount
+		videoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecond(modelName)
+		oemUserDiscount := service.GetOemUserDiscountForQuota(c, modelName)
+		if oemUserDiscount <= 0 {
+			oemUserDiscount = 1.0
+		}
+		videoSeconds := parseVideoSeconds(c)
+		if videoSeconds <= 0 {
+			videoSeconds = 4 // 最短视频
+		}
+		if hasVideoPrice && videoPrice > 0 {
+			quota = int(videoPrice * float64(videoSeconds) * common.QuotaPerUnit * effectiveGroupRatio * oemUserDiscount)
+		} else {
+			quota = int(0.4 * common.QuotaPerUnit) // 兜底：4秒 × $0.1/秒
+		}
+	} else {
+		modelPrice, _ = ratio_setting.GetModelPrice(modelName, true)
+		if modelPrice <= 0 {
+			defaultPrice, ok := ratio_setting.GetDefaultModelPriceMap()[modelName]
+			if !ok {
+				modelPrice = float64(common.PreConsumedQuota) / common.QuotaPerUnit
+			} else {
+				modelPrice = defaultPrice
+			}
+		}
+		ratio := modelPrice * effectiveGroupRatio
+		// FIXME: 临时修补，支持任务仅按次计费
+		if !common.StringsContains(constant.TaskPricePatches, modelName) {
 			for _, ra := range info.PriceData.OtherRatios {
-				if 1.0 != ra {
+				if ra != 1.0 {
 					ratio *= ra
 				}
 			}
 		}
+		quota = int(ratio * common.QuotaPerUnit)
 	}
-	println(fmt.Sprintf("model: %s, model_price: %.4f, group: %s, group_ratio: %.4f, final_ratio: %.4f", modelName, modelPrice, info.UsingGroup, groupRatio, ratio))
+
+	common.SysLog(fmt.Sprintf("[TaskSubmit] model=%s group=%s groupRatio=%.4f quota=%d isSora2=%v",
+		modelName, info.UsingGroup, effectiveGroupRatio, quota, isSora2VideoModel))
+
 	userQuota, err := model.GetUserQuota(info.UserId, false)
 	if err != nil {
 		taskErr = service.TaskErrorWrapper(err, "get_user_quota_failed", http.StatusInternalServerError)
 		return
 	}
-	quota := int(ratio * common.QuotaPerUnit)
 	if userQuota-quota < 0 {
 		taskErr = service.TaskErrorWrapperLocal(errors.New("user quota is not enough"), "quota_not_enough", http.StatusForbidden)
 		return
@@ -226,29 +250,23 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		return
 	}
 
-	defer func() {
-		// release quota
-		if info.ConsumeQuota && taskErr == nil {
-
-			err := service.PostConsumeQuota(info, quota, 0, true)
-			if err != nil {
-				common.SysLog("error consuming token remain quota: " + err.Error())
-			}
-			if quota != 0 {
-				tokenName := c.GetString("token_name")
-				//gRatio := groupRatio
-				//if hasUserGroupRatio {
-				//	gRatio = userGroupRatio
-				//}
-				logContent := fmt.Sprintf("操作 %s", info.Action)
-				// FIXME: 临时修补，支持任务仅按次计费
-				if common.StringsContains(constant.TaskPricePatches, modelName) {
-					logContent = fmt.Sprintf("%s，按次计费", logContent)
-				} else {
-					if len(info.PriceData.OtherRatios) > 0 {
+	// 非按秒计费模型：提交成功即预扣费并记录日志
+	if !isSora2VideoModel {
+		defer func() {
+			if info.ConsumeQuota && taskErr == nil {
+				err := service.PostConsumeQuota(info, quota, 0, true)
+				if err != nil {
+					common.SysLog("error consuming token remain quota: " + err.Error())
+				}
+				if quota != 0 {
+					tokenName := c.GetString("token_name")
+					logContent := fmt.Sprintf("操作 %s", info.Action)
+					if common.StringsContains(constant.TaskPricePatches, modelName) {
+						logContent = fmt.Sprintf("%s，按次计费", logContent)
+					} else if len(info.PriceData.OtherRatios) > 0 {
 						var contents []string
 						for key, ra := range info.PriceData.OtherRatios {
-							if 1.0 != ra {
+							if ra != 1.0 {
 								contents = append(contents, fmt.Sprintf("%s: %.2f", key, ra))
 							}
 						}
@@ -256,41 +274,52 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 							logContent = fmt.Sprintf("%s, 计算参数：%s", logContent, strings.Join(contents, ", "))
 						}
 					}
+					other := make(map[string]interface{})
+					if c != nil && c.Request != nil && c.Request.URL != nil {
+						other["request_path"] = c.Request.URL.Path
+					}
+					other["model_price"] = modelPrice
+					other["group_ratio"] = groupRatio
+					if hasUserGroupRatio {
+						other["user_group_ratio"] = userGroupRatio
+					}
+					model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
+						ChannelId: info.ChannelId,
+						ModelName: modelName,
+						TokenName: tokenName,
+						Quota:     quota,
+						Content:   logContent,
+						TokenId:   info.TokenId,
+						Group:     info.UsingGroup,
+						Other:     other,
+					})
+					model.UpdateUserUsedQuotaAndRequestCount(info.UserId, quota)
+					model.UpdateChannelUsedQuota(info.ChannelId, quota)
 				}
-				other := make(map[string]interface{})
-				if c != nil && c.Request != nil && c.Request.URL != nil {
-					other["request_path"] = c.Request.URL.Path
-				}
-				other["model_price"] = modelPrice
-				other["group_ratio"] = groupRatio
-				if hasUserGroupRatio {
-					other["user_group_ratio"] = userGroupRatio
-				}
-				model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
-					ChannelId: info.ChannelId,
-					ModelName: modelName,
-					TokenName: tokenName,
-					Quota:     quota,
-					Content:   logContent,
-					TokenId:   info.TokenId,
-					Group:     info.UsingGroup,
-					Other:     other,
-				})
-				model.UpdateUserUsedQuotaAndRequestCount(info.UserId, quota)
-				model.UpdateChannelUsedQuota(info.ChannelId, quota)
 			}
-		}
-	}()
+		}()
+	}
 
 	taskID, taskData, taskErr := adaptor.DoResponse(c, resp, info)
 	if taskErr != nil {
 		return
 	}
 	info.ConsumeQuota = true
+
+	// 按秒计费模型：将扣费所需信息合并到 task.Data，轮询成功后再计费
+	if isSora2VideoModel {
+		taskData = mergeVideoTaskBillingData(c, taskData, modelName, info.UsingGroup)
+	}
+
 	// insert task
 	task := model.InitTask(platform, info)
 	task.TaskID = taskID
-	task.Quota = quota
+	// 按秒计费模型：task.Quota=0（轮询后实际计费），其他模型保持估算的预扣quota
+	if isSora2VideoModel {
+		task.Quota = 0
+	} else {
+		task.Quota = quota
+	}
 	task.Data = taskData
 	task.Action = info.Action
 	err = task.Insert()
@@ -299,6 +328,75 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		return
 	}
 	return nil
+}
+
+// isVideoPerSecondModel 判断是否为按秒计费的视频模型（提交时不预扣费）
+func isVideoPerSecondModel(modelName string) bool {
+	_, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecond(modelName)
+	return hasVideoPrice
+}
+
+// parseVideoSeconds 从请求参数中解析视频秒数
+func parseVideoSeconds(c *gin.Context) int {
+	for _, key := range []string{"n_seconds", "seconds"} {
+		if v := c.PostForm(key); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+// mergeVideoTaskBillingData 将扣费所需字段合并到 task.Data（轮询成功后使用）
+func mergeVideoTaskBillingData(c *gin.Context, taskData []byte, modelName, usingGroup string) []byte {
+	var dataMap map[string]interface{}
+	if len(taskData) > 0 {
+		_ = common.Unmarshal(taskData, &dataMap)
+	}
+	if dataMap == nil {
+		dataMap = make(map[string]interface{})
+	}
+
+	// 获取 OEM 信息
+	oemCode := "gravitex"
+	if code, exists := c.Get(string(constant.ContextKeyOemCode)); exists {
+		if codeStr, ok := code.(string); ok && codeStr != "" {
+			oemCode = codeStr
+		}
+	}
+	oemUserDiscount := service.GetOemUserDiscountForQuota(c, modelName)
+	if oemUserDiscount <= 0 {
+		oemUserDiscount = 1.0
+	}
+
+	tokenName := c.GetString("token_name")
+	tokenIdVal, _ := c.Get(string(constant.ContextKeyTokenId))
+	tokenId := 0
+	if tid, ok := tokenIdVal.(int); ok {
+		tokenId = tid
+	}
+
+	videoSeconds := parseVideoSeconds(c)
+	if videoSeconds <= 0 {
+		videoSeconds = 4
+	}
+
+	dataMap["billing_model_name"] = modelName
+	dataMap["billing_group"] = usingGroup
+	dataMap["billing_oem_code"] = oemCode
+	dataMap["billing_oem_user_discount"] = oemUserDiscount
+	dataMap["billing_token_name"] = tokenName
+	dataMap["billing_token_id"] = tokenId
+	dataMap["billing_requested_seconds"] = videoSeconds
+	dataMap["billing_processed"] = false
+
+	merged, err := common.Marshal(dataMap)
+	if err != nil {
+		common.SysLog("[mergeVideoTaskBillingData] failed to marshal: " + err.Error())
+		return taskData
+	}
+	return merged
 }
 
 var fetchRespBuilders = map[int]func(c *gin.Context) (respBody []byte, taskResp *dto.TaskError){
@@ -504,7 +602,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 			respBody = openAIVideoData
 			return
 		}
-		taskResp = service.TaskErrorWrapperLocal(errors.New(fmt.Sprintf("not_implemented:%s", originTask.Platform)), "not_implemented", http.StatusNotImplemented)
+		taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("not_implemented:%s", originTask.Platform), "not_implemented", http.StatusNotImplemented)
 		return
 	}
 	respBody, err = json.Marshal(dto.TaskResponse[any]{

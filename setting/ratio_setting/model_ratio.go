@@ -2,6 +2,9 @@ package ratio_setting
 
 import (
 	"strings"
+	"sync"
+
+	"encoding/json"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -339,6 +342,7 @@ func InitRatioSettings() {
 	imageRatioMap.AddAll(defaultImageRatio)
 	audioRatioMap.AddAll(defaultAudioRatio)
 	audioCompletionRatioMap.AddAll(defaultAudioCompletionRatio)
+	loadVideoModelPricePerSecondFromDatabase()
 }
 
 func GetModelPriceMap() map[string]float64 {
@@ -710,4 +714,215 @@ func GetModelRatioOrPrice(model string) (float64, bool, bool) { // price or rati
 		return modelRatio, false, true
 	}
 	return 37.5, false, false
+}
+
+// ==================== VideoModelPricePerSecond ====================
+
+var defaultVideoModelPricePerSecond = map[string]float64{
+	"sora-2":     0.1,  // $0.1/秒
+	"sora-2-pro": 0.15, // $0.15/秒
+}
+
+// VideoAudioPricing 带音频/无音频的视频定价结构
+type VideoAudioPricing struct {
+	NoAudio float64 `json:"noAudio,omitempty"`
+	Audio   float64 `json:"audio,omitempty"`
+}
+
+var defaultVideoAudioPricing = map[string]VideoAudioPricing{}
+
+var (
+	videoModelPricePerSecondMap      map[string]float64 = nil
+	videoModelPricePerSecondMapMutex                    = sync.RWMutex{}
+)
+
+var (
+	videoModelAudioPricePerSecondMap      map[string]VideoAudioPricing = nil
+	videoModelAudioPricePerSecondMapMutex                              = sync.RWMutex{}
+)
+
+var (
+	videoModelPricePerSecondRawMap      map[string]interface{} = nil
+	videoModelPricePerSecondRawMapMutex                        = sync.RWMutex{}
+)
+
+// GetVideoModelPricePerSecond 获取视频模型每秒价格
+func GetVideoModelPricePerSecond(name string) (float64, bool) {
+	name = FormatMatchingModelName(name)
+	price, ok := getVideoPerSecondPriceFromPrimaryMap(name)
+	if ok && price > 0 {
+		return price, true
+	}
+
+	if audioPricing, ok := getVideoAudioPricing(name); ok {
+		if audioPricing.NoAudio > 0 {
+			return audioPricing.NoAudio, true
+		}
+		if audioPricing.Audio > 0 {
+			return audioPricing.Audio, true
+		}
+	}
+
+	return -1, false
+}
+
+func getVideoPerSecondPriceFromPrimaryMap(name string) (float64, bool) {
+	videoModelPricePerSecondMapMutex.RLock()
+	defer videoModelPricePerSecondMapMutex.RUnlock()
+	price, ok := videoModelPricePerSecondMap[name]
+	return price, ok
+}
+
+func getVideoAudioPricing(name string) (VideoAudioPricing, bool) {
+	videoModelAudioPricePerSecondMapMutex.RLock()
+	defer videoModelAudioPricePerSecondMapMutex.RUnlock()
+	pricing, ok := videoModelAudioPricePerSecondMap[name]
+	return pricing, ok
+}
+
+func buildVideoModelPriceCaches(rawMap map[string]interface{}) (map[string]float64, map[string]VideoAudioPricing) {
+	priceMap := make(map[string]float64, len(rawMap))
+	audioMap := make(map[string]VideoAudioPricing)
+
+	for modelName, value := range rawMap {
+		targetKeys := []string{modelName}
+		formatted := FormatMatchingModelName(modelName)
+		if formatted != modelName {
+			targetKeys = append(targetKeys, formatted)
+		}
+
+		switch v := value.(type) {
+		case map[string]interface{}:
+			pricing := VideoAudioPricing{}
+			if noAudio, ok := extractFloatFromMap(v, "noAudio", "no_audio"); ok {
+				pricing.NoAudio = noAudio
+			}
+			if audio, ok := extractFloatFromMap(v, "audio", "withAudio", "with_audio"); ok {
+				pricing.Audio = audio
+			}
+			if pricing.NoAudio > 0 || pricing.Audio > 0 {
+				for _, key := range targetKeys {
+					audioMap[key] = pricing
+				}
+			}
+			if def, ok := extractFloatFromMap(v, "default"); ok {
+				for _, key := range targetKeys {
+					priceMap[key] = def
+				}
+			} else if pricing.NoAudio > 0 {
+				for _, key := range targetKeys {
+					priceMap[key] = pricing.NoAudio
+				}
+			} else if pricing.Audio > 0 {
+				for _, key := range targetKeys {
+					priceMap[key] = pricing.Audio
+				}
+			}
+		default:
+			if f, ok := extractFloat(v); ok {
+				for _, key := range targetKeys {
+					priceMap[key] = f
+				}
+			}
+		}
+	}
+
+	return priceMap, audioMap
+}
+
+func extractFloatFromMap(m map[string]interface{}, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		if val, exists := m[key]; exists {
+			if f, ok := extractFloat(val); ok {
+				return f, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func extractFloat(value interface{}) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case uint:
+		return float64(v), true
+	case uint64:
+		return float64(v), true
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return f, true
+		}
+	}
+	return 0, false
+}
+
+// loadVideoModelPricePerSecondFromDatabase 从数据库加载视频按秒价格配置
+func loadVideoModelPricePerSecondFromDatabase() {
+	videoModelPricePerSecondMapMutex.Lock()
+	defer videoModelPricePerSecondMapMutex.Unlock()
+	videoModelAudioPricePerSecondMapMutex.Lock()
+	defer videoModelAudioPricePerSecondMapMutex.Unlock()
+	videoModelPricePerSecondRawMapMutex.Lock()
+	defer videoModelPricePerSecondRawMapMutex.Unlock()
+
+	if videoStr, exists := common.OptionMap["VideoModelPricePerSecond"]; exists && videoStr != "" {
+		var rawMap map[string]interface{}
+		if err := common.Unmarshal([]byte(videoStr), &rawMap); err == nil {
+			videoModelPricePerSecondRawMap = rawMap
+			videoModelPricePerSecondMap, videoModelAudioPricePerSecondMap = buildVideoModelPriceCaches(rawMap)
+			common.SysLog("Loaded video model price per second configuration from database")
+			return
+		}
+	}
+
+	// Fallback to defaults
+	videoModelPricePerSecondMap = make(map[string]float64, len(defaultVideoModelPricePerSecond))
+	for k, v := range defaultVideoModelPricePerSecond {
+		videoModelPricePerSecondMap[k] = v
+	}
+	videoModelAudioPricePerSecondMap = make(map[string]VideoAudioPricing, len(defaultVideoAudioPricing))
+	videoModelPricePerSecondRawMap = make(map[string]interface{})
+	for k, v := range defaultVideoAudioPricing {
+		videoModelAudioPricePerSecondMap[k] = v
+		videoModelPricePerSecondMap[k] = v.NoAudio
+		videoModelPricePerSecondRawMap[k] = map[string]float64{
+			"noAudio": v.NoAudio,
+			"audio":   v.Audio,
+		}
+	}
+	for k, v := range defaultVideoModelPricePerSecond {
+		if _, exists := videoModelPricePerSecondRawMap[k]; !exists {
+			videoModelPricePerSecondRawMap[k] = v
+		}
+	}
+	common.SysLog("Using default video model price per second configuration")
+}
+
+// UpdateVideoModelPricePerSecondByJSONString 更新视频按秒价格（由后台配置变更触发）
+func UpdateVideoModelPricePerSecondByJSONString(jsonStr string) error {
+	var rawMap map[string]interface{}
+	if err := common.Unmarshal([]byte(jsonStr), &rawMap); err != nil {
+		return err
+	}
+
+	videoModelPricePerSecondMapMutex.Lock()
+	defer videoModelPricePerSecondMapMutex.Unlock()
+	videoModelAudioPricePerSecondMapMutex.Lock()
+	defer videoModelAudioPricePerSecondMapMutex.Unlock()
+	videoModelPricePerSecondRawMapMutex.Lock()
+	defer videoModelPricePerSecondRawMapMutex.Unlock()
+
+	videoModelPricePerSecondRawMap = rawMap
+	videoModelPricePerSecondMap, videoModelAudioPricePerSecondMap = buildVideoModelPriceCaches(rawMap)
+	InvalidateExposedDataCache()
+	return nil
 }

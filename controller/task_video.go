@@ -153,126 +153,83 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			task.FinishTime = now
 		}
 		// Attempt to upload the generated video to OSS and store the permanent URL.
-		// Falls back gracefully (logs a warning, keeps the original URL/data) if OSS is not configured.
+		// When OSS is not configured (OSS_BASE64_ENDPOINT unset), fall back to storing
+		// the video directly in fail_reason (base64 data URI or CDN URL).
 		if ossURL := uploadVideoToOSS(ctx, channel, task, taskResult); ossURL != "" {
 			task.FailReason = ossURL
-		} else if !(len(taskResult.Url) > 5 && taskResult.Url[:5] == "data:") {
-			// OSS disabled or upload failed: store the original URL (skip raw base64 — too large for DB)
-			task.FailReason = taskResult.Url
+		} else {
+			// OSS disabled or upload failed — store whatever URL/data we have.
+			if taskResult.RemoteUrl != "" {
+				task.FailReason = taskResult.RemoteUrl
+			} else if taskResult.Url != "" {
+				task.FailReason = taskResult.Url
+			}
 		}
 
-		// 记录消费日志（固定价格按次/按秒计费，TotalTokens==0 时直接用预扣额度）
-		if taskResult.TotalTokens == 0 && task.Quota > 0 {
-			modelName := task.Properties.OriginModelName
-			if modelName == "" {
-				modelName = task.Properties.UpstreamModelName
-			}
-			useTime := 0
-			if task.FinishTime > 0 && task.StartTime > 0 {
-				useTime = int(task.FinishTime - task.StartTime)
-			}
-			logContent := fmt.Sprintf("视频任务成功，模型 %s，耗时 %ds，扣费 %s", modelName, useTime, logger.LogQuota(task.Quota))
-			consumeLog := &model.Log{
-				UserId:    task.UserId,
-				CreatedAt: common.GetTimestamp(),
-				Type:      model.LogTypeConsume,
-				Content:   logContent,
-				ChannelId: task.ChannelId,
-				ModelName: modelName,
-				Quota:     task.Quota,
-				UseTime:   useTime,
-				Group:     task.Group,
-			}
-			if err := model.LOG_DB.Create(consumeLog).Error; err != nil {
-				logger.LogError(ctx, fmt.Sprintf("Failed to insert consume log for task %s: %v", task.TaskID, err))
-			} else {
-				logger.LogInfo(ctx, fmt.Sprintf("Task %s succeeded, quota=%d, model=%s", task.TaskID, task.Quota, modelName))
-			}
-			model.UpdateUserUsedQuotaAndRequestCount(task.UserId, task.Quota)
-			model.UpdateChannelUsedQuota(task.ChannelId, task.Quota)
+		// 计费路由：按秒计费模型（Sora-2 等）使用独立计费函数，其他沿用预扣费差额结算
+		taskModelName := task.Properties.OriginModelName
+		if taskModelName == "" {
+			taskModelName = task.Properties.UpstreamModelName
 		}
 
-		// 如果返回了 total_tokens 并且配置了模型倍率(非固定价格),则重新计费
-		if taskResult.TotalTokens > 0 {
-			// 获取模型名称
+		if isSora2VideoModel(taskModelName) {
+			// 按秒计费：轮询成功后根据 task.Data 中保存的信息计费并写消费日志
+			if err := handleSora2TaskBilling(ctx, task); err != nil {
+				logger.LogError(ctx, fmt.Sprintf("[Sora2Billing] Failed for task %s: %v", task.TaskID, err))
+			}
+		} else if taskResult.TotalTokens > 0 {
+			// 按 token 计费模型（如 Doubao）：根据实际 token 数结算差额
 			var taskData map[string]interface{}
 			if err := json.Unmarshal(task.Data, &taskData); err == nil {
 				if modelName, ok := taskData["model"].(string); ok && modelName != "" {
-					// 获取模型价格和倍率
 					modelRatio, hasRatioSetting, _ := ratio_setting.GetModelRatio(modelName)
-					// 只有配置了倍率(非固定价格)时才按 token 重新计费
 					if hasRatioSetting && modelRatio > 0 {
-						// 获取用户和组的倍率信息
 						group := task.Group
 						if group == "" {
-							user, err := model.GetUserById(task.UserId, false)
-							if err == nil {
+							if user, err := model.GetUserById(task.UserId, false); err == nil {
 								group = user.Group
 							}
 						}
 						if group != "" {
 							groupRatio := ratio_setting.GetGroupRatio(group)
 							userGroupRatio, hasUserGroupRatio := ratio_setting.GetGroupGroupRatio(group, group)
-
-							var finalGroupRatio float64
+							finalGroupRatio := groupRatio
 							if hasUserGroupRatio {
 								finalGroupRatio = userGroupRatio
-							} else {
-								finalGroupRatio = groupRatio
 							}
-
-							// 计算实际应扣费额度: totalTokens * modelRatio * groupRatio
 							actualQuota := int(float64(taskResult.TotalTokens) * modelRatio * finalGroupRatio)
-
-							// 计算差额
 							preConsumedQuota := task.Quota
 							quotaDelta := actualQuota - preConsumedQuota
-
 							if quotaDelta > 0 {
-								// 需要补扣费
-								logger.LogInfo(ctx, fmt.Sprintf("视频任务 %s 预扣费后补扣费：%s（实际消耗：%s，预扣费：%s，tokens：%d）",
-									task.TaskID,
-									logger.LogQuota(quotaDelta),
-									logger.LogQuota(actualQuota),
-									logger.LogQuota(preConsumedQuota),
-									taskResult.TotalTokens,
-								))
+								logger.LogInfo(ctx, fmt.Sprintf("视频任务 %s 补扣费：%s（实际：%s，预扣：%s，tokens：%d）",
+									task.TaskID, logger.LogQuota(quotaDelta), logger.LogQuota(actualQuota),
+									logger.LogQuota(preConsumedQuota), taskResult.TotalTokens))
 								if err := model.DecreaseUserQuota(task.UserId, quotaDelta); err != nil {
 									logger.LogError(ctx, fmt.Sprintf("补扣费失败: %s", err.Error()))
 								} else {
 									model.UpdateUserUsedQuotaAndRequestCount(task.UserId, quotaDelta)
 									model.UpdateChannelUsedQuota(task.ChannelId, quotaDelta)
-									task.Quota = actualQuota // 更新任务记录的实际扣费额度
-
-									// 记录消费日志
+									task.Quota = actualQuota
 									logContent := fmt.Sprintf("视频任务成功补扣费，模型倍率 %.2f，分组倍率 %.2f，tokens %d，预扣费 %s，实际扣费 %s，补扣费 %s",
 										modelRatio, finalGroupRatio, taskResult.TotalTokens,
 										logger.LogQuota(preConsumedQuota), logger.LogQuota(actualQuota), logger.LogQuota(quotaDelta))
 									model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
 								}
 							} else if quotaDelta < 0 {
-								// 需要退还多扣的费用
 								refundQuota := -quotaDelta
-								logger.LogInfo(ctx, fmt.Sprintf("视频任务 %s 预扣费后返还：%s（实际消耗：%s，预扣费：%s，tokens：%d）",
-									task.TaskID,
-									logger.LogQuota(refundQuota),
-									logger.LogQuota(actualQuota),
-									logger.LogQuota(preConsumedQuota),
-									taskResult.TotalTokens,
-								))
+								logger.LogInfo(ctx, fmt.Sprintf("视频任务 %s 退还多扣：%s（实际：%s，预扣：%s，tokens：%d）",
+									task.TaskID, logger.LogQuota(refundQuota), logger.LogQuota(actualQuota),
+									logger.LogQuota(preConsumedQuota), taskResult.TotalTokens))
 								if err := model.IncreaseUserQuota(task.UserId, refundQuota, false); err != nil {
 									logger.LogError(ctx, fmt.Sprintf("退还预扣费失败: %s", err.Error()))
 								} else {
-									task.Quota = actualQuota // 更新任务记录的实际扣费额度
-
-									// 记录退款日志
+									task.Quota = actualQuota
 									logContent := fmt.Sprintf("视频任务成功退还多扣费用，模型倍率 %.2f，分组倍率 %.2f，tokens %d，预扣费 %s，实际扣费 %s，退还 %s",
 										modelRatio, finalGroupRatio, taskResult.TotalTokens,
 										logger.LogQuota(preConsumedQuota), logger.LogQuota(actualQuota), logger.LogQuota(refundQuota))
 									model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
 								}
 							} else {
-								// quotaDelta == 0, 预扣费刚好准确
 								logger.LogInfo(ctx, fmt.Sprintf("视频任务 %s 预扣费准确（%s，tokens：%d）",
 									task.TaskID, logger.LogQuota(actualQuota), taskResult.TotalTokens))
 							}
@@ -479,4 +436,165 @@ func truncateForLog(s string) string {
 		return s[:maxLen] + "...[truncated]"
 	}
 	return s
+}
+
+// isSora2VideoModel 判断是否为按秒计费的视频模型
+func isSora2VideoModel(name string) bool {
+	_, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecond(name)
+	return hasVideoPrice
+}
+
+// handleSora2TaskBilling 处理按秒计费视频模型的轮询成功计费逻辑（Sora-2 等）
+// 计费公式: actualQuota = videoPrice × requestedSeconds × QuotaPerUnit × groupRatio × oemUserDiscount
+func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
+	modelName := task.Properties.OriginModelName
+	if modelName == "" {
+		modelName = task.Properties.UpstreamModelName
+	}
+
+	// 从 task.Data 读取提交时保存的计费信息
+	var taskData map[string]interface{}
+	if len(task.Data) > 0 {
+		if err := common.Unmarshal(task.Data, &taskData); err != nil {
+			return fmt.Errorf("handleSora2TaskBilling: unmarshal task.Data failed: %w", err)
+		}
+	}
+	if taskData == nil {
+		taskData = make(map[string]interface{})
+	}
+
+	// 防重复计费
+	if processed, ok := taskData["billing_processed"].(bool); ok && processed {
+		logger.LogInfo(ctx, fmt.Sprintf("[Sora2Billing] Task %s already billed, skip", task.TaskID))
+		return nil
+	}
+
+	// 读取关键字段
+	requestedSeconds := 0
+	if v, ok := taskData["billing_requested_seconds"].(float64); ok {
+		requestedSeconds = int(v)
+	}
+	if requestedSeconds <= 0 {
+		requestedSeconds = 4
+	}
+
+	oemCode := "gravitex"
+	if v, ok := taskData["billing_oem_code"].(string); ok && v != "" {
+		oemCode = v
+	}
+	oemUserDiscount := 1.0
+	if v, ok := taskData["billing_oem_user_discount"].(float64); ok && v > 0 {
+		oemUserDiscount = v
+	}
+	tokenName := ""
+	if v, ok := taskData["billing_token_name"].(string); ok {
+		tokenName = v
+	}
+	tokenId := 0
+	if v, ok := taskData["billing_token_id"].(float64); ok {
+		tokenId = int(v)
+	}
+	billingGroup := task.Group
+	if v, ok := taskData["billing_group"].(string); ok && v != "" {
+		billingGroup = v
+	}
+
+	// 获取 groupRatio（OEM 专属 GroupRatio 或全局 GroupRatio）
+	groupRatio := service.GetGroupRatioByOem(oemCode, billingGroup)
+	if groupRatio <= 0 {
+		groupRatio = ratio_setting.GetGroupRatio(billingGroup)
+	}
+	if groupRatio <= 0 {
+		groupRatio = 1.0
+	}
+
+	// 获取官方单秒价格
+	officialVideoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecond(modelName)
+	if !hasVideoPrice || officialVideoPrice <= 0 {
+		return fmt.Errorf("handleSora2TaskBilling: video price per second not configured for model: %s", modelName)
+	}
+
+	// 计算实际扣费 quota
+	// actualQuota = officialVideoPrice × requestedSeconds × QuotaPerUnit × groupRatio × oemUserDiscount
+	actualQuota := int(officialVideoPrice * float64(requestedSeconds) * common.QuotaPerUnit * groupRatio * oemUserDiscount)
+	if actualQuota < 0 {
+		actualQuota = 0
+	}
+
+	logger.LogInfo(ctx, fmt.Sprintf("[Sora2Billing] task=%s model=%s seconds=%d officialPrice=%.4f groupRatio=%.4f oemDiscount=%.4f actualQuota=%d",
+		task.TaskID, modelName, requestedSeconds, officialVideoPrice, groupRatio, oemUserDiscount, actualQuota))
+
+	// 执行扣费
+	if actualQuota > 0 {
+		if err := model.DecreaseUserQuota(task.UserId, actualQuota); err != nil {
+			return fmt.Errorf("handleSora2TaskBilling: DecreaseUserQuota failed: %w", err)
+		}
+	}
+
+	// 获取 OEM 销售折扣（用于日志价格链）
+	oemDiscount := model.GetOemDiscountByCode(oemCode, modelName, "")
+	if oemDiscount <= 0 {
+		oemDiscount = 1.0
+	}
+	oemVideoPrice := officialVideoPrice * oemDiscount
+
+	// 获取用户名（用于日志）
+	username := ""
+	if user, err := model.GetUserById(task.UserId, false); err == nil && user != nil {
+		username = user.Username
+	}
+
+	useTime := 0
+	if task.FinishTime > 0 && task.StartTime > 0 {
+		useTime = int(task.FinishTime - task.StartTime)
+	}
+
+	logContent := fmt.Sprintf("Sora-2视频任务成功，模型 %s，时长 %d 秒，耗时 %ds，扣费 %s",
+		modelName, requestedSeconds, useTime, logger.LogQuota(actualQuota))
+
+	otherMap := map[string]interface{}{
+		"billing_type":                    "per_second",
+		"requested_seconds":               requestedSeconds,
+		"official_video_price_per_second": officialVideoPrice,
+		"oem_video_price_per_second":      oemVideoPrice,
+		"video_price_per_second":          officialVideoPrice * oemUserDiscount,
+		"group_ratio":                     groupRatio,
+		"oem_user_discount":               oemUserDiscount,
+		"oem_code":                        oemCode,
+		"oem_discount":                    oemDiscount,
+	}
+	otherBytes, _ := common.Marshal(otherMap)
+
+	consumeLog := &model.Log{
+		UserId:           task.UserId,
+		Username:         username,
+		CreatedAt:        common.GetTimestamp(),
+		Type:             model.LogTypeConsume,
+		Content:          logContent,
+		ChannelId:        task.ChannelId,
+		ModelName:        modelName,
+		Quota:            actualQuota,
+		CompletionTokens: requestedSeconds, // 用秒数存储
+		TokenName:        tokenName,
+		TokenId:          tokenId,
+		UseTime:          useTime,
+		Group:            billingGroup,
+		Other:            string(otherBytes),
+	}
+	if err := model.LOG_DB.Create(consumeLog).Error; err != nil {
+		logger.LogError(ctx, fmt.Sprintf("[Sora2Billing] Failed to insert consume log for task %s: %v", task.TaskID, err))
+	}
+
+	// 更新用量统计
+	model.UpdateUserUsedQuotaAndRequestCount(task.UserId, actualQuota)
+	model.UpdateChannelUsedQuota(task.ChannelId, actualQuota)
+
+	// 更新 task.Quota 为实际扣费额度，标记 billing_processed=true
+	task.Quota = actualQuota
+	taskData["billing_processed"] = true
+	if merged, err := common.Marshal(taskData); err == nil {
+		task.Data = merged
+	}
+
+	return nil
 }
