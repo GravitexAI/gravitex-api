@@ -260,6 +260,16 @@ func (channel *Channel) SaveWithoutKey() error {
 	return DB.Omit("key").Save(channel).Error
 }
 
+// ChannelTable returns the fully qualified channels table name based on region.
+// Empty region uses the default "channels" table in the current database.
+// Non-empty region (e.g. "gravitex_api2") returns "gravitex_api2.channels".
+func ChannelTable(region string) string {
+	if region != "" {
+		return region + ".channels"
+	}
+	return "channels"
+}
+
 func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool) ([]*Channel, error) {
 	var channels []*Channel
 	var err error
@@ -275,13 +285,13 @@ func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool) ([]*Chan
 	return channels, err
 }
 
-func GetChannelsByTag(tag string, idSort bool, selectAll bool) ([]*Channel, error) {
+func GetChannelsByTag(tag string, idSort bool, selectAll bool, region string) ([]*Channel, error) {
 	var channels []*Channel
 	order := "priority desc"
 	if idSort {
 		order = "id desc"
 	}
-	query := DB.Where("tag = ?", tag).Order(order)
+	query := DB.Table(ChannelTable(region)).Where("tag = ?", tag).Order(order)
 	if !selectAll {
 		query = query.Omit("key")
 	}
@@ -289,7 +299,7 @@ func GetChannelsByTag(tag string, idSort bool, selectAll bool) ([]*Channel, erro
 	return channels, err
 }
 
-func SearchChannels(keyword string, group string, model string, idSort bool) ([]*Channel, error) {
+func SearchChannels(keyword string, group string, model string, idSort bool, region string) ([]*Channel, error) {
 	var channels []*Channel
 	modelsCol := "`models`"
 
@@ -310,7 +320,7 @@ func SearchChannels(keyword string, group string, model string, idSort bool) ([]
 	}
 
 	// 构造基础查询
-	baseQuery := DB.Model(&Channel{}).Omit("key")
+	baseQuery := DB.Table(ChannelTable(region)).Omit("key")
 
 	// 构造WHERE子句
 	var whereClause string
@@ -735,7 +745,7 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 		return err
 	}
 	if shouldReCreateAbilities {
-		channels, err := GetChannelsByTag(updatedTag, false, false)
+		channels, err := GetChannelsByTag(updatedTag, false, false, "")
 		if err == nil {
 			for _, channel := range channels {
 				err = channel.UpdateAbilities(nil)
@@ -778,13 +788,13 @@ func DeleteDisabledChannel() (int64, error) {
 	return result.RowsAffected, result.Error
 }
 
-func GetPaginatedTags(offset int, limit int) ([]*string, error) {
+func GetPaginatedTags(offset int, limit int, region string) ([]*string, error) {
 	var tags []*string
-	err := DB.Model(&Channel{}).Select("DISTINCT tag").Where("tag != ''").Offset(offset).Limit(limit).Find(&tags).Error
+	err := DB.Table(ChannelTable(region)).Select("DISTINCT tag").Where("tag != ''").Offset(offset).Limit(limit).Find(&tags).Error
 	return tags, err
 }
 
-func SearchTags(keyword string, group string, model string, idSort bool) ([]*string, error) {
+func SearchTags(keyword string, group string, model string, idSort bool, region string) ([]*string, error) {
 	var tags []*string
 	modelsCol := "`models`"
 
@@ -805,7 +815,7 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 	}
 
 	// 构造基础查询
-	baseQuery := DB.Model(&Channel{}).Omit("key")
+	baseQuery := DB.Table(ChannelTable(region)).Omit("key")
 
 	// 构造WHERE子句
 	var whereClause string
@@ -965,9 +975,9 @@ func CountAllChannels() (int64, error) {
 }
 
 // CountAllTags returns number of non-empty distinct tags
-func CountAllTags() (int64, error) {
+func CountAllTags(region string) (int64, error) {
 	var total int64
-	err := DB.Model(&Channel{}).Where("tag is not null AND tag != ''").Distinct("tag").Count(&total).Error
+	err := DB.Table(ChannelTable(region)).Where("tag is not null AND tag != ''").Distinct("tag").Count(&total).Error
 	return total, err
 }
 
