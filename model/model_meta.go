@@ -89,12 +89,16 @@ func (mi *Model) Delete() error {
 	return DB.Delete(mi).Error
 }
 
-func GetVendorModelCounts() (map[int64]int64, error) {
+func GetVendorModelCounts(statusFilter int) (map[int64]int64, error) {
 	var stats []struct {
 		VendorID int64
 		Count    int64
 	}
-	if err := DB.Model(&Model{}).
+	db := DB.Model(&Model{})
+	if statusFilter > 0 {
+		db = db.Where("status = ?", statusFilter)
+	}
+	if err := db.
 		Select("vendor_id as vendor_id, count(*) as count").
 		Group("vendor_id").
 		Scan(&stats).Error; err != nil {
@@ -107,9 +111,13 @@ func GetVendorModelCounts() (map[int64]int64, error) {
 	return m, nil
 }
 
-func GetAllModels(offset int, limit int) ([]*Model, error) {
+func GetAllModels(offset int, limit int, statusFilter int) ([]*Model, error) {
 	var models []*Model
-	err := DB.Order("id DESC").Offset(offset).Limit(limit).Find(&models).Error
+	db := DB.Model(&Model{})
+	if statusFilter > 0 {
+		db = db.Where("status = ?", statusFilter)
+	}
+	err := db.Order("id DESC").Offset(offset).Limit(limit).Find(&models).Error
 	return models, err
 }
 
@@ -139,9 +147,12 @@ func GetBoundChannelsByModelsMap(modelNames []string) (map[string][]BoundChannel
 	return result, nil
 }
 
-func SearchModels(keyword string, vendor string, offset int, limit int) ([]*Model, int64, error) {
+func SearchModels(keyword string, vendor string, offset int, limit int, statusFilter int) ([]*Model, int64, error) {
 	var models []*Model
 	db := DB.Model(&Model{})
+	if statusFilter > 0 {
+		db = db.Where("status = ?", statusFilter)
+	}
 	if keyword != "" {
 		like := "%" + keyword + "%"
 		db = db.Where("model_name LIKE ? OR description LIKE ? OR tags LIKE ?", like, like, like)

@@ -17,7 +17,8 @@ import (
 func GetAllModelsMeta(c *gin.Context) {
 
 	pageInfo := common.GetPageQuery(c)
-	modelsMeta, err := model.GetAllModels(pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	statusFilter, _ := strconv.Atoi(c.DefaultQuery("status", "0"))
+	modelsMeta, err := model.GetAllModels(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), statusFilter)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -25,10 +26,14 @@ func GetAllModelsMeta(c *gin.Context) {
 	// 批量填充附加字段，提升列表接口性能
 	enrichModels(modelsMeta)
 	var total int64
-	model.DB.Model(&model.Model{}).Count(&total)
+	db := model.DB.Model(&model.Model{})
+	if statusFilter > 0 {
+		db = db.Where("status = ?", statusFilter)
+	}
+	db.Count(&total)
 
 	// 统计供应商计数（全部数据，不受分页影响）
-	vendorCounts, _ := model.GetVendorModelCounts()
+	vendorCounts, _ := model.GetVendorModelCounts(statusFilter)
 
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(modelsMeta)
@@ -46,9 +51,10 @@ func SearchModelsMeta(c *gin.Context) {
 
 	keyword := c.Query("keyword")
 	vendor := c.Query("vendor")
+	statusFilter, _ := strconv.Atoi(c.DefaultQuery("status", "0"))
 	pageInfo := common.GetPageQuery(c)
 
-	modelsMeta, total, err := model.SearchModels(keyword, vendor, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	modelsMeta, total, err := model.SearchModels(keyword, vendor, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), statusFilter)
 	if err != nil {
 		common.ApiError(c, err)
 		return
