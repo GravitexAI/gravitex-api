@@ -491,16 +491,26 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		tokenName = v
 	}
 	tokenId := 0
-	if v, ok := taskData["billing_token_id"].(float64); ok {
+	switch v := taskData["billing_token_id"].(type) {
+	case float64:
 		tokenId = int(v)
+	case int:
+		tokenId = v
 	}
 	billingGroup := task.Group
 	if v, ok := taskData["billing_group"].(string); ok && v != "" {
 		billingGroup = v
 	}
 
-	// 获取 groupRatio（OEM 专属 GroupRatio 或全局 GroupRatio）
-	groupRatio := service.GetGroupRatioByOem(oemCode, billingGroup)
+	// 使用提交时存储的 effectiveGroupRatio（已包含用户组倍率），与提交时估算保持完全一致
+	// 若不存在（旧数据兼容），则回退到全局 groupRatio
+	groupRatio := 0.0
+	if v, ok := taskData["billing_effective_group_ratio"].(float64); ok && v > 0 {
+		groupRatio = v
+	}
+	if groupRatio <= 0 {
+		groupRatio = service.GetGroupRatioByOem(oemCode, billingGroup)
+	}
 	if groupRatio <= 0 {
 		groupRatio = ratio_setting.GetGroupRatio(billingGroup)
 	}
@@ -514,8 +524,8 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		return fmt.Errorf("handleSora2TaskBilling: video price per second not configured for model: %s", modelName)
 	}
 
-	// 计算实际扣费 quota
-	// actualQuota = officialVideoPrice × requestedSeconds × QuotaPerUnit × groupRatio × oemUserDiscount
+	// 计算实际扣费 quota（与提交时估算公式完全一致）
+	// actualQuota = officialVideoPrice × requestedSeconds × QuotaPerUnit × effectiveGroupRatio × oemUserDiscount
 	actualQuota := int(officialVideoPrice * float64(requestedSeconds) * common.QuotaPerUnit * groupRatio * oemUserDiscount)
 	if actualQuota < 0 {
 		actualQuota = 0
@@ -559,6 +569,7 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		"oem_video_price_per_second":      oemVideoPrice,
 		"video_price_per_second":          officialVideoPrice * oemUserDiscount,
 		"group_ratio":                     groupRatio,
+		"user_group_ratio":                groupRatio,
 		"oem_user_discount":               oemUserDiscount,
 		"oem_code":                        oemCode,
 		"oem_discount":                    oemDiscount,

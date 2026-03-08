@@ -228,8 +228,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		return
 	}
 
-	// 打印发送给上游的请求体（截断base64内容防止日志过大）
+	// 打印发送给上游的请求体（截断base64内容防止日志过大），并保存用于计费解析
+	var upstreamBodyBytes []byte
 	if bodyBytes, readErr := io.ReadAll(requestBody); readErr == nil {
+		upstreamBodyBytes = bodyBytes
 		common.SysLog(fmt.Sprintf("[TaskSubmit] upstream request body: %s", truncateTaskLogContent(string(bodyBytes))))
 		requestBody = bytes.NewReader(bodyBytes)
 	}
@@ -306,9 +308,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	}
 	info.ConsumeQuota = true
 
-	// 按秒计费模型：将扣费所需信息合并到 task.Data，轮询成功后再计费
+	// 按秒计费模型：将扣费所需信息合并到 task.Data，轮询成功后再计费（含 token 信息供轮询完成后写日志）
 	if isSora2VideoModel {
-		taskData = mergeVideoTaskBillingData(c, taskData, modelName, info.UsingGroup)
+		taskData = mergeVideoTaskBillingData(c, info, taskData, modelName, info.UsingGroup, upstreamBodyBytes)
 	}
 
 	// insert task
@@ -337,7 +339,19 @@ func isVideoPerSecondModel(modelName string) bool {
 }
 
 // parseVideoSeconds 从请求参数中解析视频秒数
+// 优先读取 adaptor 在 context 中存储的已校验秒数（如 AzureVideo），
+// 回退到 multipart form 字段 n_seconds / seconds，
+// 最后尝试从上游请求体（JSON 或 multipart）解析。
 func parseVideoSeconds(c *gin.Context) int {
+	// 1. Adaptor may store validated seconds in context after BuildRequestBody runs
+	if v, exists := c.Get("azure_video_seconds"); exists {
+		if s, ok := v.(string); ok {
+			if n, err := strconv.Atoi(s); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	// 2. Fall back to reading multipart form fields
 	for _, key := range []string{"n_seconds", "seconds"} {
 		if v := c.PostForm(key); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -348,8 +362,50 @@ func parseVideoSeconds(c *gin.Context) int {
 	return 0
 }
 
+// parseVideoSecondsFromBody 从上游请求体解析视频秒数（JSON 或 multipart 格式）
+func parseVideoSecondsFromBody(body []byte) int {
+	if len(body) == 0 {
+		return 0
+	}
+	// 1. 尝试 JSON 解析
+	var m map[string]interface{}
+	if err := common.Unmarshal(body, &m); err == nil {
+		for _, key := range []string{"seconds", "n_seconds"} {
+			if v, ok := m[key]; ok {
+				switch val := v.(type) {
+				case string:
+					if n, err := strconv.Atoi(val); err == nil && n > 0 {
+						return n
+					}
+				case float64:
+					if n := int(val); n > 0 {
+						return n
+					}
+				}
+			}
+		}
+	}
+	// 2. 尝试从 multipart 中提取：name="n_seconds"\r\n\r\n12 或 name="seconds"\r\n\r\n12
+	s := string(body)
+	for _, name := range []string{`name="n_seconds"`, `name="seconds"`} {
+		if idx := strings.Index(s, name); idx >= 0 {
+			rest := s[idx+len(name):]
+			if idx2 := strings.Index(rest, "\r\n\r\n"); idx2 >= 0 {
+				valPart := rest[idx2+4:]
+				if idx3 := strings.Index(valPart, "\r\n"); idx3 >= 0 {
+					valPart = valPart[:idx3]
+				}
+				if n, err := strconv.Atoi(strings.TrimSpace(valPart)); err == nil && n > 0 {
+					return n
+				}
+			}
+		}
+	}
+	return 0
+}
+
 // mergeVideoTaskBillingData 将扣费所需字段合并到 task.Data（轮询成功后使用）
-func mergeVideoTaskBillingData(c *gin.Context, taskData []byte, modelName, usingGroup string) []byte {
+func mergeVideoTaskBillingData(c *gin.Context, info *relaycommon.RelayInfo, taskData []byte, modelName, usingGroup string, upstreamBody []byte) []byte {
 	var dataMap map[string]interface{}
 	if len(taskData) > 0 {
 		_ = common.Unmarshal(taskData, &dataMap)
@@ -370,14 +426,35 @@ func mergeVideoTaskBillingData(c *gin.Context, taskData []byte, modelName, using
 		oemUserDiscount = 1.0
 	}
 
+	// 计算实际 groupRatio（与提交时保持一致：优先用用户组倍率）
+	effectiveGroupRatio := ratio_setting.GetGroupRatio(usingGroup)
+	if info != nil && info.UserGroup != "" {
+		if ugr, hasUGR := ratio_setting.GetGroupGroupRatio(info.UserGroup, usingGroup); hasUGR {
+			effectiveGroupRatio = ugr
+		}
+	}
+	if effectiveGroupRatio <= 0 {
+		effectiveGroupRatio = 1.0
+	}
+
 	tokenName := c.GetString("token_name")
-	tokenIdVal, _ := c.Get(string(constant.ContextKeyTokenId))
 	tokenId := 0
-	if tid, ok := tokenIdVal.(int); ok {
-		tokenId = tid
+	if tid, ok := c.Get(string(constant.ContextKeyTokenId)); ok {
+		switch v := tid.(type) {
+		case int:
+			tokenId = v
+		case float64:
+			tokenId = int(v)
+		}
+	}
+	if tokenId == 0 && info != nil && info.TokenId > 0 {
+		tokenId = info.TokenId
 	}
 
 	videoSeconds := parseVideoSeconds(c)
+	if videoSeconds <= 0 && len(upstreamBody) > 0 {
+		videoSeconds = parseVideoSecondsFromBody(upstreamBody)
+	}
 	if videoSeconds <= 0 {
 		videoSeconds = 4
 	}
@@ -386,6 +463,7 @@ func mergeVideoTaskBillingData(c *gin.Context, taskData []byte, modelName, using
 	dataMap["billing_group"] = usingGroup
 	dataMap["billing_oem_code"] = oemCode
 	dataMap["billing_oem_user_discount"] = oemUserDiscount
+	dataMap["billing_effective_group_ratio"] = effectiveGroupRatio
 	dataMap["billing_token_name"] = tokenName
 	dataMap["billing_token_id"] = tokenId
 	dataMap["billing_requested_seconds"] = videoSeconds

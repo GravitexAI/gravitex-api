@@ -14,7 +14,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -195,10 +197,32 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		}
 	}
 
-	common.SysLog(fmt.Sprintf("[AzureVideo] final params: model=%v prompt=%v size=%v seconds=%v",
-		filtered["model"], filtered["prompt"], filtered["size"], filtered["seconds"]))
+	// Store validated seconds in context for billing (before potentially returning multipart body).
+	if sec, ok := filtered["seconds"].(string); ok {
+		c.Set("azure_video_seconds", sec)
+	}
 
-	// Store content-type so BuildRequestHeader can pick it up.
+	common.SysLog(fmt.Sprintf("[AzureVideo] final params: model=%v prompt=%v size=%v seconds=%v has_input_reference=%v",
+		filtered["model"], filtered["prompt"], filtered["size"], filtered["seconds"], filtered["input_reference"] != nil))
+
+	// --- 5. Handle input_reference: Azure requires it as a file upload (multipart), not a JSON string ---
+	if inputRef, exists := filtered["input_reference"]; exists && inputRef != nil {
+		inputRefStr, ok := inputRef.(string)
+		if ok && inputRefStr != "" {
+			imageBytes, mimeType, err := convertImageToBytes(inputRefStr)
+			if err != nil {
+				common.SysLog(fmt.Sprintf("[AzureVideo] input_reference conversion failed: %v, sending without image", err))
+				delete(filtered, "input_reference")
+			} else {
+				common.SysLog(fmt.Sprintf("[AzureVideo] input_reference converted (%d bytes, %s), using multipart", len(imageBytes), mimeType))
+				return buildMultipartRequest(c, filtered, imageBytes, mimeType)
+			}
+		} else {
+			delete(filtered, "input_reference")
+		}
+	}
+
+	// No image — use JSON body.
 	c.Set("azure_video_content_type", "application/json")
 
 	body, err := common.Marshal(filtered)
@@ -206,6 +230,126 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, errors.Wrap(err, "marshal_request_body_failed")
 	}
 	return bytes.NewReader(body), nil
+}
+
+// convertImageToBytes converts a URL or base64 data URI to raw image bytes + MIME type.
+func convertImageToBytes(imageInput string) ([]byte, string, error) {
+	// base64 data URI: data:image/xxx;base64,...
+	if strings.HasPrefix(imageInput, "data:image/") {
+		mimeType := "image/jpeg"
+		if strings.Contains(imageInput, "image/png") {
+			mimeType = "image/png"
+		} else if strings.Contains(imageInput, "image/webp") {
+			mimeType = "image/webp"
+		}
+		parts := strings.Split(imageInput, ",")
+		if len(parts) != 2 {
+			return nil, "", fmt.Errorf("invalid base64 data URI")
+		}
+		imageBytes, err := base64.StdEncoding.DecodeString(parts[1])
+		if err != nil {
+			return nil, "", fmt.Errorf("base64 decode failed: %w", err)
+		}
+		return imageBytes, mimeType, nil
+	}
+
+	// HTTP/HTTPS URL — download the image.
+	if strings.HasPrefix(imageInput, "http://") || strings.HasPrefix(imageInput, "https://") {
+		resp, err := http.Get(imageInput) //nolint:noctx
+		if err != nil {
+			return nil, "", fmt.Errorf("download image failed: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, "", fmt.Errorf("download image non-200: %d", resp.StatusCode)
+		}
+		imageBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, "", fmt.Errorf("read image body failed: %w", err)
+		}
+		mimeType := resp.Header.Get("Content-Type")
+		if mimeType == "" {
+			mimeType = "image/jpeg"
+		}
+		// Strip charset/params from content-type if present
+		if idx := strings.Index(mimeType, ";"); idx != -1 {
+			mimeType = strings.TrimSpace(mimeType[:idx])
+		}
+		return imageBytes, mimeType, nil
+	}
+
+	// Bare base64 string (no data: prefix) — attempt to decode.
+	imageBytes, err := base64.StdEncoding.DecodeString(imageInput)
+	if err != nil {
+		return nil, "", fmt.Errorf("unsupported image format: not a URL or valid base64")
+	}
+	return imageBytes, "image/jpeg", nil
+}
+
+// buildMultipartRequest builds a multipart/form-data request body with the image as a file part.
+func buildMultipartRequest(c *gin.Context, params map[string]interface{}, imageBytes []byte, mimeType string) (io.Reader, error) {
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	// Write all non-image fields as form fields.
+	for key, value := range params {
+		if key == "input_reference" {
+			continue
+		}
+		var valueStr string
+		switch v := value.(type) {
+		case string:
+			valueStr = v
+		case float64:
+			valueStr = fmt.Sprintf("%.0f", v)
+		case int:
+			valueStr = fmt.Sprintf("%d", v)
+		default:
+			jsonBytes, _ := common.Marshal(v)
+			valueStr = string(jsonBytes)
+		}
+		if err := writer.WriteField(key, valueStr); err != nil {
+			return nil, fmt.Errorf("write field %s failed: %w", key, err)
+		}
+	}
+
+	// Write the image as a file part with correct MIME type.
+	ext := mimeTypeToExt(mimeType)
+	fileName := "reference_image" + ext
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="input_reference"; filename="%s"`, fileName))
+	h.Set("Content-Type", mimeType)
+	part, err := writer.CreatePart(h)
+	if err != nil {
+		return nil, fmt.Errorf("create file part failed: %w", err)
+	}
+	if _, err := part.Write(imageBytes); err != nil {
+		return nil, fmt.Errorf("write image bytes failed: %w", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("close multipart writer failed: %w", err)
+	}
+
+	// Store boundary in context so BuildRequestHeader sets the correct Content-Type.
+	c.Set("azure_video_multipart_boundary", writer.Boundary())
+	c.Set("azure_video_content_type", "multipart/form-data; boundary="+writer.Boundary())
+
+	common.SysLog(fmt.Sprintf("[AzureVideo] multipart body built: %d bytes, image=%s (%d bytes)", body.Len(), fileName, len(imageBytes)))
+	return body, nil
+}
+
+func mimeTypeToExt(mimeType string) string {
+	switch mimeType {
+	case "image/png":
+		return ".png"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	default:
+		return ".jpg"
+	}
 }
 
 func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*http.Response, error) {

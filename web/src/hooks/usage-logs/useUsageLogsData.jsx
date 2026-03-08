@@ -458,7 +458,17 @@ export const useLogsData = () => {
 
         let content = '';
         if (!isViolationFeeLog) {
-          if (other?.ws || other?.audio) {
+          if (other?.billing_type === 'per_second') {
+            const pricePerSec = other?.official_video_price_per_second || 0;
+            const seconds = other?.requested_seconds || logs[i].completion_tokens || 0;
+            const groupRatio = other?.group_ratio || 1;
+            const oemDiscount = other?.oem_user_discount || 1;
+            content =
+              `单价 $${pricePerSec.toFixed(4)}/秒 × ${seconds}秒` +
+              ` × 分组倍率 ${groupRatio.toFixed(2)}` +
+              (oemDiscount !== 1 ? ` × 用户折扣 ${oemDiscount.toFixed(4)}` : '') +
+              ` = ${renderQuota(logs[i].quota)}`;
+          } else if (other?.ws || other?.audio) {
             content = renderAudioModelPrice(
               other?.text_input,
               other?.text_output,
