@@ -36,27 +36,30 @@ type BillingSession struct {
 // Settle 根据实际消耗额度进行结算。
 // 资金来源和令牌额度分两步提交：若资金来源已提交但令牌调整失败，
 // 会标记 fundingSettled 防止 Refund 对已提交的资金来源执行退款。
-func (s *BillingSession) Settle(actualQuota int) error {
+// skipFunding 为 true 时跳过资金来源调整（用户额度已由 handler 通过 model.ConsumeUserQuotaSettle 一次更新，与 nebula 对齐减少 SLOW SQL）。
+func (s *BillingSession) Settle(actualQuota int, skipFunding bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.settled {
 		return nil
 	}
 	delta := actualQuota - s.preConsumedQuota
-	if delta == 0 {
+	if delta == 0 && skipFunding {
 		s.settled = true
 		return nil
 	}
-	// 1) 调整资金来源（仅在尚未提交时执行，防止重复调用）
-	if !s.fundingSettled {
+	// 1) 调整资金来源（仅在尚未提交且未跳过时执行，防止重复调用）
+	if !s.fundingSettled && !skipFunding && delta != 0 {
 		if err := s.funding.Settle(delta); err != nil {
 			return err
 		}
 		s.fundingSettled = true
+	} else if skipFunding {
+		s.fundingSettled = true
 	}
-	// 2) 调整令牌额度
+	// 2) 调整令牌额度（delta==0 时无需调整）
 	var tokenErr error
-	if !s.relayInfo.IsPlayground {
+	if !s.relayInfo.IsPlayground && delta != 0 {
 		if delta > 0 {
 			tokenErr = model.DecreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, delta)
 		} else {

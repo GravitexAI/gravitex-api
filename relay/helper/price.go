@@ -4,10 +4,9 @@ import (
 	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -103,18 +102,10 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		preConsumedQuota = int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 	}
 
-	// 应用 OEM 用户折扣到 modelPrice / modelRatio
-	// 只对当前请求的 OEM 生效，不修改全局倍率配置
+	// 应用 OEM 用户折扣：优先使用扣费用户的 oemId 取折扣，没有则用默认 gravitex
 	oemUserDiscount := 1.0
 	if c != nil {
-		oemCode := "gravitex"
-		if code, exists := c.Get(string(constant.ContextKeyOemCode)); exists {
-			if codeStr, ok := code.(string); ok && codeStr != "" {
-				oemCode = codeStr
-			}
-		}
-		// 这里只按 modelName 维度获取折扣，厂商维度折扣在价格链里单独处理
-		oemUserDiscount = model.GetOemUserDiscountByCode(oemCode, info.OriginModelName, "")
+		oemUserDiscount = service.GetOemUserDiscountForQuota(c, info.OriginModelName)
 		if oemUserDiscount <= 0 {
 			oemUserDiscount = 1.0
 		}
@@ -186,7 +177,14 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) types.
 			modelPrice = defaultPrice
 		}
 	}
-	quota := int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+	oemUserDiscount := 1.0
+	if c != nil {
+		oemUserDiscount = service.GetOemUserDiscountForQuota(c, info.OriginModelName)
+		if oemUserDiscount <= 0 {
+			oemUserDiscount = 1.0
+		}
+	}
+	quota := int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio * oemUserDiscount)
 	priceData := types.PerCallPriceData{
 		ModelPrice:     modelPrice,
 		Quota:          quota,

@@ -1284,14 +1284,20 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 					usage.PromptTokensDetails.TextTokens = detail.TokenCount
 				}
 			}
-			// 流式最后一包：从 CandidatesTokensDetails 拆出图片/文本输出 token，供计费与日志使用
+			// 流式最后一包：从 CandidatesTokensDetails 拆出图片/文本输出 token，供计费与日志使用（modality 大小写不敏感）
 			var imageOutputTokens, textOutputTokens int
 			for _, detail := range geminiResponse.UsageMetadata.CandidatesTokensDetails {
-				if detail.Modality == "IMAGE" {
+				mod := strings.TrimSpace(detail.Modality)
+				if strings.EqualFold(mod, "IMAGE") {
 					imageOutputTokens += detail.TokenCount
-				} else if detail.Modality == "TEXT" {
+				} else if strings.EqualFold(mod, "TEXT") {
 					textOutputTokens += detail.TokenCount
 				}
+			}
+			if imageOutputTokens == 0 && geminiResponse.UsageMetadata.CandidatesTokenCount > 0 &&
+				strings.Contains(strings.ToLower(info.OriginModelName), "image") {
+				imageOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
+				textOutputTokens = 0
 			}
 			usage.CompletionTokenDetails.ImageTokens = imageOutputTokens
 			usage.CompletionTokenDetails.TextTokens = textOutputTokens
@@ -1489,21 +1495,29 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	usage.PromptTokensDetails.CachedTokens = geminiResponse.UsageMetadata.CachedContentTokenCount
 
 	for _, detail := range geminiResponse.UsageMetadata.PromptTokensDetails {
-		if detail.Modality == "AUDIO" {
+		mod := strings.TrimSpace(detail.Modality)
+		if strings.EqualFold(mod, "AUDIO") {
 			usage.PromptTokensDetails.AudioTokens = detail.TokenCount
-		} else if detail.Modality == "TEXT" {
+		} else if strings.EqualFold(mod, "TEXT") {
 			usage.PromptTokensDetails.TextTokens = detail.TokenCount
 		}
 	}
 
-	// 从 CandidatesTokensDetails 拆出图片/文本输出 token，供计费与日志使用
+	// 从 CandidatesTokensDetails 拆出图片/文本输出 token，供计费与日志使用（modality 大小写不敏感）
 	var imageOutputTokens, textOutputTokens int
 	for _, detail := range geminiResponse.UsageMetadata.CandidatesTokensDetails {
-		if detail.Modality == "IMAGE" {
+		mod := strings.TrimSpace(detail.Modality)
+		if strings.EqualFold(mod, "IMAGE") {
 			imageOutputTokens += detail.TokenCount
-		} else if detail.Modality == "TEXT" {
+		} else if strings.EqualFold(mod, "TEXT") {
 			textOutputTokens += detail.TokenCount
 		}
+	}
+	// 图片模型若未从 candidatesTokensDetails 解析出 IMAGE，用 candidatesTokenCount 作为图片 token 回退（与 usageMetadata 一致）
+	if imageOutputTokens == 0 && geminiResponse.UsageMetadata.CandidatesTokenCount > 0 &&
+		strings.Contains(strings.ToLower(info.OriginModelName), "image") {
+		imageOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
+		textOutputTokens = 0
 	}
 	usage.CompletionTokenDetails.ImageTokens = imageOutputTokens
 	usage.CompletionTokenDetails.TextTokens = textOutputTokens

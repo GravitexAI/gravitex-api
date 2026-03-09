@@ -332,7 +332,19 @@ var defaultCompletionRatio = map[string]float64{
 	"gpt-image-1":    8,
 }
 
-// InitRatioSettings initializes all model related settings maps
+// InitRatioSettings initializes all model related settings maps with code defaults.
+// 优先使用 options 表：model.InitOptionMap() 会从 DB 加载 options 并覆盖对应 key（如 ImageCompletionRatio），
+// 表里没有的 key 则保持此处默认值。
+// 各倍率/价格语义（计费时）：
+//   - ModelRatio: 模型倍率，对应文本输入
+//   - CompletionRatio: 模型补全倍率，对应文本输出
+//   - AudioRatio: 音频倍率，对应音频输入
+//   - AudioCompletionRatio: 音频补全倍率，对应音频输出（与音频倍率成倍数关系；未配置时用模型倍率）
+//   - ImageRatio: 图片倍率，对应图片输入
+//   - ImageCompletionRatio: 图片补全倍率，对应图片输出（与图片倍率成倍数关系；未配置时用模型倍率）
+//   - CacheRatio: 缓存倍率，与模型倍率成倍数关系
+//
+// 其它：ImageModelPricePerImage 按张计费在 operation_setting；VideoModelPricePerSecond 在 loadVideoModelPricePerSecondFromDatabase
 func InitRatioSettings() {
 	modelPriceMap.AddAll(defaultModelPrice)
 	modelRatioMap.AddAll(defaultModelRatio)
@@ -340,6 +352,7 @@ func InitRatioSettings() {
 	cacheRatioMap.AddAll(defaultCacheRatio)
 	createCacheRatioMap.AddAll(defaultCreateCacheRatio)
 	imageRatioMap.AddAll(defaultImageRatio)
+	imageCompletionRatioMap.AddAll(defaultImageCompletionRatio)
 	audioRatioMap.AddAll(defaultAudioRatio)
 	audioCompletionRatioMap.AddAll(defaultAudioCompletionRatio)
 	loadVideoModelPricePerSecondFromDatabase()
@@ -608,6 +621,13 @@ func ModelRatio2JSONString() string {
 var defaultImageRatio = map[string]float64{
 	"gpt-image-1": 2,
 }
+
+// defaultImageCompletionRatio 图片输出 token 计费倍率，未配置时 GetImageCompletionRatio 回退到 CompletionRatio
+var defaultImageCompletionRatio = map[string]float64{
+	"gpt-image-1":                8, // 与文本补全倍率一致
+	"gemini-3-pro-image-preview": 6, // Gemini 图片模型输出
+}
+
 var imageRatioMap = types.NewRWMap[string, float64]()
 var imageCompletionRatioMap = types.NewRWMap[string, float64]()
 var audioRatioMap = types.NewRWMap[string, float64]()

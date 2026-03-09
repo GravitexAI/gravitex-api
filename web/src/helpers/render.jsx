@@ -1189,6 +1189,9 @@ export function renderModelPrice(
   audioInputPrice = 0,
   imageGenerationCall = false,
   imageGenerationCallPrice = 0,
+  geminiImageOutputTokens = 0,
+  geminiTextOutputTokens = 0,
+  effectiveImageOutputRatio = 0,
 ) {
   const { ratio: effectiveGroupRatio, label: ratioLabel } = getEffectiveRatio(
     groupRatio,
@@ -1232,13 +1235,29 @@ export function renderModelPrice(
     if (audioInputTokens > 0) {
       effectiveInputTokens -= audioInputTokens;
     }
+    const hasGeminiOutputSplit =
+      (geminiImageOutputTokens > 0 || geminiTextOutputTokens > 0) &&
+      (geminiImageOutputTokens === 0 || effectiveImageOutputRatio > 0);
+    const imageOutputRatioPrice =
+      effectiveImageOutputRatio > 0
+        ? modelRatio * 2.0 * effectiveImageOutputRatio
+        : 0;
     let price =
       (effectiveInputTokens / 1000000) * inputRatioPrice * groupRatio +
       (audioInputTokens / 1000000) * audioInputPrice * groupRatio +
-      (completionTokens / 1000000) * completionRatioPrice * groupRatio +
       (webSearchCallCount / 1000) * webSearchPrice * groupRatio +
       (fileSearchCallCount / 1000) * fileSearchPrice * groupRatio +
       imageGenerationCallPrice * groupRatio;
+    if (hasGeminiOutputSplit) {
+      price +=
+        (geminiTextOutputTokens / 1000000) * completionRatioPrice * groupRatio +
+        (geminiImageOutputTokens / 1000000) *
+          imageOutputRatioPrice *
+          groupRatio;
+    } else {
+      price +=
+        (completionTokens / 1000000) * completionRatioPrice * groupRatio;
+    }
 
     return (
       <>
@@ -1255,17 +1274,43 @@ export function renderModelPrice(
               },
             )}
           </p>
-          <p>
-            {i18next.t(
-              '输出价格：{{symbol}}{{price}} * {{completionRatio}} = {{symbol}}{{total}} / 1M tokens (补全倍率: {{completionRatio}})',
-              {
-                symbol: symbol,
-                price: (inputRatioPrice * rate).toFixed(6),
-                total: (completionRatioPrice * rate).toFixed(6),
-                completionRatio: completionRatio,
-              },
-            )}
-          </p>
+          {!hasGeminiOutputSplit && (
+            <p>
+              {i18next.t(
+                '输出价格：{{symbol}}{{price}} * {{completionRatio}} = {{symbol}}{{total}} / 1M tokens (补全倍率: {{completionRatio}})',
+                {
+                  symbol: symbol,
+                  price: (inputRatioPrice * rate).toFixed(6),
+                  total: (completionRatioPrice * rate).toFixed(6),
+                  completionRatio: completionRatio,
+                },
+              )}
+            </p>
+          )}
+          {hasGeminiOutputSplit && geminiTextOutputTokens > 0 && (
+            <p>
+              {i18next.t(
+                '文本输出价格：{{symbol}}{{price}} * {{completionRatio}} = {{symbol}}{{total}} / 1M tokens (补全倍率: {{completionRatio}})',
+                {
+                  symbol: symbol,
+                  price: (inputRatioPrice * rate).toFixed(6),
+                  total: (completionRatioPrice * rate).toFixed(6),
+                  completionRatio: completionRatio,
+                },
+              )}
+            </p>
+          )}
+          {hasGeminiOutputSplit && geminiImageOutputTokens > 0 && (
+            <p>
+              {i18next.t(
+                '图片输出价格：{{symbol}}{{price}} / 1M tokens',
+                {
+                  symbol: symbol,
+                  price: (imageOutputRatioPrice * rate).toFixed(6),
+                },
+              )}
+            </p>
+          )}
           {cacheTokens > 0 && (
             <p>
               {i18next.t(
@@ -1365,17 +1410,53 @@ export function renderModelPrice(
                 );
               }
 
-              // 构建输出部分描述
-              const outputDesc = i18next.t(
-                '输出 {{completion}} tokens / 1M tokens * {{symbol}}{{compPrice}}) * {{ratioType}} {{ratio}}',
-                {
-                  completion: completionTokens,
-                  symbol: symbol,
-                  compPrice: (completionRatioPrice * rate).toFixed(6),
-                  ratio: groupRatio,
-                  ratioType: ratioLabel,
-                },
-              );
+              // 构建输出部分描述（Gemini 拆分为文本输出 + 图片输出时单独展示）
+              let outputDesc = '';
+              if (hasGeminiOutputSplit) {
+                const parts = [];
+                if (geminiTextOutputTokens > 0) {
+                  parts.push(
+                    i18next.t(
+                      '文本输出 {{text}} tokens / 1M tokens * {{symbol}}{{compPrice}}',
+                      {
+                        text: geminiTextOutputTokens,
+                        symbol: symbol,
+                        compPrice: (
+                          completionRatioPrice * rate
+                        ).toFixed(6),
+                      },
+                    ),
+                  );
+                }
+                if (geminiImageOutputTokens > 0) {
+                  parts.push(
+                    i18next.t(
+                      '图片输出 {{image}} tokens / 1M tokens * {{symbol}}{{imagePrice}}',
+                      {
+                        image: geminiImageOutputTokens,
+                        symbol: symbol,
+                        imagePrice: (
+                          imageOutputRatioPrice * rate
+                        ).toFixed(6),
+                      },
+                    ),
+                  );
+                }
+                outputDesc =
+                  parts.join(' + ') +
+                  `) * ${ratioLabel} ${groupRatio}`;
+              } else {
+                outputDesc = i18next.t(
+                  '输出 {{completion}} tokens / 1M tokens * {{symbol}}{{compPrice}}) * {{ratioType}} {{ratio}}',
+                  {
+                    completion: completionTokens,
+                    symbol: symbol,
+                    compPrice: (completionRatioPrice * rate).toFixed(6),
+                    ratio: groupRatio,
+                    ratioType: ratioLabel,
+                  },
+                );
+              }
 
               // 构建额外服务描述
               const extraServices = [

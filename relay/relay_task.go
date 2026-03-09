@@ -140,7 +140,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	// 打印用户请求体（供调试）
 	if bodyStorage, bodyErr := common.GetBodyStorage(c); bodyErr == nil {
 		if rawBody, readErr := io.ReadAll(common.ReaderOnly(bodyStorage)); readErr == nil {
-			common.SysLog(fmt.Sprintf("[TaskSubmit] client request body: %s", truncateTaskLogContent(string(rawBody))))
+			common.SysLog(fmt.Sprintf("[TaskSubmit] client request body: %s", common.TruncateJsonValues(string(rawBody))))
 		}
 	}
 
@@ -232,7 +232,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	var upstreamBodyBytes []byte
 	if bodyBytes, readErr := io.ReadAll(requestBody); readErr == nil {
 		upstreamBodyBytes = bodyBytes
-		common.SysLog(fmt.Sprintf("[TaskSubmit] upstream request body: %s", truncateTaskLogContent(string(bodyBytes))))
+		common.SysLog(fmt.Sprintf("[TaskSubmit] upstream request body: %s", common.TruncateJsonValues(string(bodyBytes))))
 		requestBody = bytes.NewReader(bodyBytes)
 	}
 
@@ -247,7 +247,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	// handle response — only log on failure; success is recorded after task completes
 	if resp != nil && resp.StatusCode != http.StatusOK {
 		responseBody, _ := io.ReadAll(resp.Body)
-		logger.LogError(c, fmt.Sprintf("[TaskSubmit] upstream error (status=%d): %s", resp.StatusCode, string(responseBody)))
+		logger.LogError(c, fmt.Sprintf("[TaskSubmit] upstream error (status=%d): %s", resp.StatusCode, common.TruncateJsonValues(string(responseBody))))
 		taskErr = service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
 		return
 	}
@@ -285,15 +285,17 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 					if hasUserGroupRatio {
 						other["user_group_ratio"] = userGroupRatio
 					}
+					priceChain := service.CalculatePriceChainForLog(c, modelName, 0, 0, quota)
 					model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
-						ChannelId: info.ChannelId,
-						ModelName: modelName,
-						TokenName: tokenName,
-						Quota:     quota,
-						Content:   logContent,
-						TokenId:   info.TokenId,
-						Group:     info.UsingGroup,
-						Other:     other,
+						ChannelId:  info.ChannelId,
+						ModelName:  modelName,
+						TokenName:  tokenName,
+						Quota:      quota,
+						Content:    logContent,
+						TokenId:    info.TokenId,
+						Group:      info.UsingGroup,
+						Other:      other,
+						PriceChain: priceChain,
 					})
 					model.UpdateUserUsedQuotaAndRequestCount(info.UserId, quota)
 					model.UpdateChannelUsedQuota(info.ChannelId, quota)
@@ -705,21 +707,4 @@ func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 		Progress:   task.Progress,
 		Data:       task.Data,
 	}
-}
-
-// truncateTaskLogContent truncates base64 content and very long strings to keep logs readable.
-func truncateTaskLogContent(s string) string {
-	const maxLen = 2000
-	// Truncate inline base64 data URIs
-	if idx := strings.Index(s, ";base64,"); idx >= 0 {
-		end := idx + len(";base64,") + 64 // keep first 64 chars of data
-		if end > len(s) {
-			end = len(s)
-		}
-		s = s[:end] + "...[truncated]"
-	}
-	if len(s) > maxLen {
-		return s[:maxLen] + "...[truncated]"
-	}
-	return s
 }

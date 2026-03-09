@@ -37,6 +37,14 @@ type Log struct {
 	Ip               string `json:"ip" gorm:"index;default:''"`
 	RequestId        string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
 	Other            string `json:"other"`
+	// OEM 价格链条（与 Nebula 一致，供日志列表与 Expenses 展示）
+	OemId          *int64 `json:"oem_id" gorm:"column:oem_id;index"`
+	OfficialQuota  int64  `json:"official_quota" gorm:"default:0"`
+	CostQuota      int64  `json:"cost_quota" gorm:"default:0"`
+	SystemQuota    int64  `json:"system_quota" gorm:"default:0"`
+	UserQuota      int64  `json:"user_quota" gorm:"default:0"`
+	PlatformProfit int64  `json:"platform_profit" gorm:"default:0"`
+	OemSubsidy     int64  `json:"oem_subsidy" gorm:"default:0"`
 }
 
 // don't use iota, avoid change log type value
@@ -133,6 +141,19 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	}
 }
 
+// PriceChainParams 价格链条参数（与 Nebula 一致，供日志与 Expenses 展示）
+type PriceChainParams struct {
+	OemId          *int64 `json:"oem_id"`
+	OemCode        string `json:"oem_code"`
+	OfficialQuota  int64  `json:"official_quota"`
+	CostQuota      int64  `json:"cost_quota"`
+	SystemQuota    int64  `json:"system_quota"`
+	UserQuota      int64  `json:"user_quota"`
+	PlatformProfit int64  `json:"platform_profit"`
+	OemSubsidy     int64  `json:"oem_subsidy"`
+	VendorId       *int64 `json:"vendor_id,omitempty"`
+}
+
 type RecordConsumeLogParams struct {
 	ChannelId        int                    `json:"channel_id"`
 	PromptTokens     int                    `json:"prompt_tokens"`
@@ -146,6 +167,7 @@ type RecordConsumeLogParams struct {
 	IsStream         bool                   `json:"is_stream"`
 	Group            string                 `json:"group"`
 	Other            map[string]interface{} `json:"other"`
+	PriceChain       *PriceChainParams      `json:"price_chain,omitempty"`
 }
 
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
@@ -155,7 +177,17 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
-	otherStr := common.MapToJsonStr(params.Other)
+	// 合并 other 与 vendor_id（来自 PriceChain），与 Nebula 一致
+	other := make(map[string]interface{})
+	if params.Other != nil {
+		for k, v := range params.Other {
+			other[k] = v
+		}
+	}
+	if params.PriceChain != nil && params.PriceChain.VendorId != nil {
+		other["vendor_id"] = *params.PriceChain.VendorId
+	}
+	otherStr := common.MapToJsonStr(other)
 	// 判断是否需要记录 IP
 	needRecordIp := false
 	if settingMap, err := GetUserSetting(userId, false); err == nil {
@@ -187,6 +219,15 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		}(),
 		RequestId: requestId,
 		Other:     otherStr,
+	}
+	if params.PriceChain != nil {
+		log.OemId = params.PriceChain.OemId
+		log.OfficialQuota = params.PriceChain.OfficialQuota
+		log.CostQuota = params.PriceChain.CostQuota
+		log.SystemQuota = params.PriceChain.SystemQuota
+		log.UserQuota = params.PriceChain.UserQuota
+		log.PlatformProfit = params.PriceChain.PlatformProfit
+		log.OemSubsidy = params.PriceChain.OemSubsidy
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {

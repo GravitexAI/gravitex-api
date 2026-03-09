@@ -531,6 +531,11 @@ export const useLogsData = () => {
               other?.audio_input_price || 0,
               other?.image_generation_call || false,
               other?.image_generation_call_price || 0,
+              other?.image_output_tokens || 0,
+              (other?.text_output_tokens || 0) + (other?.reasoning_tokens || 0),
+              other?.effective_image_output_ratio ??
+                other?.image_completion_ratio ??
+                0,
             );
           }
           expandDataLocal.push({

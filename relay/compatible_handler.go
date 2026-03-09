@@ -106,7 +106,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		}
 		if common.DebugEnabled {
 			if debugBytes, bErr := storage.Bytes(); bErr == nil {
-				println("requestBody: ", string(debugBytes))
+				println("requestBody: ", common.TruncateJsonValues(string(debugBytes)))
 			}
 		}
 		requestBody = common.ReaderOnly(storage)
@@ -178,7 +178,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			}
 		}
 
-		logger.LogDebug(c, fmt.Sprintf("text request body: %s", string(jsonData)))
+		logger.LogDebug(c, fmt.Sprintf("text request body: %s", common.TruncateJsonValues(string(jsonData))))
 
 		requestBody = bytes.NewBuffer(jsonData)
 	}
@@ -266,9 +266,13 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 	}
 	cacheRatio := relayInfo.PriceData.CacheRatio
 	imageRatio := relayInfo.PriceData.ImageRatio
+	imageCompletionRatio := relayInfo.PriceData.ImageCompletionRatio
 	modelRatio := relayInfo.PriceData.ModelRatio
-	// 图片输出计费倍率：优先图片输入倍率，无则用文本输入倍率（无图片输入配置的图生模型）
-	effectiveImageOutputRatio := imageRatio
+	// 图片输出倍率优先级：ImageCompletionRatio → ImageRatio → ModelRatio
+	effectiveImageOutputRatio := imageCompletionRatio
+	if effectiveImageOutputRatio <= 0 {
+		effectiveImageOutputRatio = imageRatio
+	}
 	if effectiveImageOutputRatio <= 0 {
 		effectiveImageOutputRatio = modelRatio
 	}
@@ -457,7 +461,16 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 		if !ratio.IsZero() && quota == 0 {
 			quota = 1
 		}
-		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
+		// 与 nebula 一致：有 BillingSession 时用一次 UPDATE 完成 quota/used_quota/request_count，减少 SLOW SQL
+		if relayInfo.Billing != nil {
+			preConsumed := relayInfo.Billing.GetPreConsumedQuota()
+			delta := quota - preConsumed
+			if err := model.ConsumeUserQuotaSettle(relayInfo.UserId, quota, delta); err != nil {
+				logger.LogError(ctx, "error consume user quota settle: "+err.Error())
+			}
+		} else {
+			model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
+		}
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
@@ -530,17 +543,21 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 	if imageRatio > 0 {
 		other["image_ratio"] = imageRatio
 	}
+	// 只有配置了音频倍率才写入，避免普通文本请求产生噪声字段
 	audioRatio := relayInfo.PriceData.AudioRatio
 	if audioRatio > 0 {
 		other["audio_ratio"] = audioRatio
+		other["audio_completion_ratio"] = relayInfo.PriceData.AudioCompletionRatio
 	}
-	effectiveAudioOutputRatio := audioRatio
-	if effectiveAudioOutputRatio <= 0 {
-		effectiveAudioOutputRatio = modelRatio
+	// OEM 信息：扣费已按该折扣计算，写入日志便于对账与计费展示
+	oemCode := "gravitex"
+	if code, exists := ctx.Get(string(constant.ContextKeyOemCode)); exists {
+		if codeStr, ok := code.(string); ok && codeStr != "" {
+			oemCode = codeStr
+		}
 	}
-	if effectiveAudioOutputRatio > 0 {
-		other["audio_completion_ratio"] = effectiveAudioOutputRatio
-	}
+	other["oem_code"] = oemCode
+	other["oem_user_discount"] = service.GetOemUserDiscountForQuota(ctx, modelName)
 	if geminiImageOutputTokens > 0 || geminiTextOutputTokens > 0 || reasoningTokens > 0 {
 		other["image_output_tokens"] = geminiImageOutputTokens
 		other["text_output_tokens"] = geminiTextOutputTokens
@@ -557,6 +574,8 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 			}
 		}
 	}
+	// 价格链条（与 Nebula 一致）：官方价→成本价→系统销售价→用户实付，供日志表与 Expenses 展示
+	priceChain := service.CalculatePriceChainForLog(ctx, logModel, promptTokens, completionTokens, quota)
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     promptTokens,
@@ -570,5 +589,6 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 		IsStream:         relayInfo.IsStream,
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
+		PriceChain:       priceChain,
 	})
 }

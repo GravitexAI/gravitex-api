@@ -926,6 +926,27 @@ func UpdateUserUsedQuotaAndRequestCount(id int, quota int) {
 	updateUserUsedQuotaAndRequestCount(id, quota, 1)
 }
 
+// ConsumeUserQuotaSettle 单次 UPDATE 完成结算：quota 扣减 quotaDelta，used_quota 增加 actualQuota，request_count +1。
+// 与 nebula 逻辑一致，用于减少对 users 表的多次写入（缓解 SLOW SQL）。
+// 当 BillingSession 存在时由 compatible_handler 先调用本函数，再调用 Billing.Settle(actualQuota, true) 仅处理 token/邮件。
+func ConsumeUserQuotaSettle(userId, actualQuota, quotaDelta int) error {
+	if common.BatchUpdateEnabled {
+		addNewRecord(BatchUpdateTypeUsedQuota, userId, actualQuota)
+		addNewRecord(BatchUpdateTypeRequestCount, userId, 1)
+		if quotaDelta != 0 {
+			addNewRecord(BatchUpdateTypeUserQuota, userId, -quotaDelta)
+		}
+		return nil
+	}
+	return DB.Model(&User{}).Where("id = ?", userId).Updates(
+		map[string]interface{}{
+			"quota":         gorm.Expr("quota - ?", quotaDelta),
+			"used_quota":    gorm.Expr("used_quota + ?", actualQuota),
+			"request_count": gorm.Expr("request_count + ?", 1),
+		},
+	).Error
+}
+
 func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {
 	err := DB.Model(&User{}).Where("id = ?", id).Updates(
 		map[string]interface{}{

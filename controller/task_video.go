@@ -103,7 +103,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	}
 
 	logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s channel=%d status=%d body=%s",
-		taskId, channel.Id, resp.StatusCode, truncateForLog(string(responseBody))))
+		taskId, channel.Id, resp.StatusCode, common.TruncateJsonValues(string(responseBody))))
 
 	taskResult := &relaycommon.TaskInfo{}
 	// try parse as New API response format
@@ -197,7 +197,11 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 							if hasUserGroupRatio {
 								finalGroupRatio = userGroupRatio
 							}
-							actualQuota := int(float64(taskResult.TotalTokens) * modelRatio * finalGroupRatio)
+							oemUserDiscount := service.GetOemUserDiscountForUserId(int64(task.UserId), modelName)
+							if oemUserDiscount <= 0 {
+								oemUserDiscount = 1.0
+							}
+							actualQuota := int(float64(taskResult.TotalTokens) * modelRatio * finalGroupRatio * oemUserDiscount)
 							preConsumedQuota := task.Quota
 							quotaDelta := actualQuota - preConsumedQuota
 							if quotaDelta > 0 {
@@ -422,22 +426,6 @@ func truncateBase64(s string) string {
 	return s[:maxKeep] + "..."
 }
 
-// truncateForLog truncates base64 data URIs and long strings to keep logs readable.
-func truncateForLog(s string) string {
-	const maxLen = 1000
-	if idx := strings.Index(s, ";base64,"); idx >= 0 {
-		end := idx + len(";base64,") + 64
-		if end > len(s) {
-			end = len(s)
-		}
-		s = s[:end] + "...[base64 truncated]"
-	}
-	if len(s) > maxLen {
-		return s[:maxLen] + "...[truncated]"
-	}
-	return s
-}
-
 // isSora2VideoModel 判断是否为按秒计费的视频模型
 func isSora2VideoModel(name string) bool {
 	_, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecond(name)
@@ -485,6 +473,12 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	oemUserDiscount := 1.0
 	if v, ok := taskData["billing_oem_user_discount"].(float64); ok && v > 0 {
 		oemUserDiscount = v
+	} else {
+		// 无存储值时按扣费用户 oemId 取折扣（与提交时逻辑一致）
+		oemUserDiscount = service.GetOemUserDiscountForUserId(int64(task.UserId), modelName)
+		if oemUserDiscount <= 0 {
+			oemUserDiscount = 1.0
+		}
 	}
 	tokenName := ""
 	if v, ok := taskData["billing_token_name"].(string); ok {
@@ -562,6 +556,7 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	logContent := fmt.Sprintf("Sora-2视频任务成功，模型 %s，时长 %d 秒，耗时 %ds，扣费 %s",
 		modelName, requestedSeconds, useTime, logger.LogQuota(actualQuota))
 
+	priceChain := service.CalculatePriceChainForLogFromParams(oemCode, modelName, actualQuota, oemUserDiscount, groupRatio)
 	otherMap := map[string]interface{}{
 		"billing_type":                    "per_second",
 		"requested_seconds":               requestedSeconds,
@@ -573,6 +568,9 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		"oem_user_discount":               oemUserDiscount,
 		"oem_code":                        oemCode,
 		"oem_discount":                    oemDiscount,
+	}
+	if priceChain != nil && priceChain.VendorId != nil {
+		otherMap["vendor_id"] = *priceChain.VendorId
 	}
 	otherBytes, _ := common.Marshal(otherMap)
 
@@ -591,6 +589,15 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		UseTime:          useTime,
 		Group:            billingGroup,
 		Other:            string(otherBytes),
+	}
+	if priceChain != nil {
+		consumeLog.OemId = priceChain.OemId
+		consumeLog.OfficialQuota = priceChain.OfficialQuota
+		consumeLog.CostQuota = priceChain.CostQuota
+		consumeLog.SystemQuota = priceChain.SystemQuota
+		consumeLog.UserQuota = priceChain.UserQuota
+		consumeLog.PlatformProfit = priceChain.PlatformProfit
+		consumeLog.OemSubsidy = priceChain.OemSubsidy
 	}
 	if err := model.LOG_DB.Create(consumeLog).Error; err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[Sora2Billing] Failed to insert consume log for task %s: %v", task.TaskID, err))

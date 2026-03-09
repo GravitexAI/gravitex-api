@@ -173,3 +173,26 @@ func SearchModels(keyword string, vendor string, offset int, limit int, statusFi
 	}
 	return models, total, nil
 }
+
+// GetVendorNameFromModel 从模型名称获取厂商名称（用于价格链条日志）
+func GetVendorNameFromModel(modelName string) string {
+	var m Model
+	if err := DB.Where("model_name = ?", modelName).First(&m).Error; err != nil || m.VendorID == 0 {
+		return ""
+	}
+	v, err := GetVendorByID(m.VendorID)
+	if err != nil {
+		return ""
+	}
+	return v.Name
+}
+
+// GetVendorIdFromModel 从模型名称获取厂商 ID（用于日志 other 与账单导出）
+func GetVendorIdFromModel(modelName string) *int64 {
+	var m Model
+	if err := DB.Where("model_name = ?", modelName).First(&m).Error; err != nil || m.VendorID == 0 {
+		return nil
+	}
+	id := int64(m.VendorID)
+	return &id
+}

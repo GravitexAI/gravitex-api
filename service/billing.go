@@ -54,7 +54,8 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 			))
 		}
 
-		if err := relayInfo.Billing.Settle(actualQuota); err != nil {
+		// skipFunding=true：用户额度已在 compatible_handler 中通过 model.ConsumeUserQuotaSettle 一次更新
+		if err := relayInfo.Billing.Settle(actualQuota, true); err != nil {
 			return err
 		}
 
