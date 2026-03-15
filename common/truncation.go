@@ -208,11 +208,13 @@ func truncateDataImageBase64(content string, maxLength int) string {
 			result.WriteString("...[base64数据已截断，长度:")
 			result.WriteString(fmt.Sprintf("%d", base64DataLength))
 			result.WriteString("]")
-			// 如果base64数据到字符串末尾，不需要添加引号
+			// 补回 JSON 字符串值的结束引号，并跳过原内容中的该引号，避免与后面的 content[startIndex:] 重复
 			if base64EndIndex < len(content) {
 				result.WriteString("\"")
+				startIndex = base64EndIndex + 1
+			} else {
+				startIndex = base64EndIndex
 			}
-			startIndex = base64EndIndex
 		} else {
 			// 短数据保持原样
 			if base64EndIndex < len(content) {
@@ -274,9 +276,10 @@ func truncateRawBase64Content(content string) string {
 			} else {
 				result.WriteString(quotedContent)
 			}
+			result.WriteString("\"") // 补回结束引号
 		} else {
-			// 不是base64数据，保持原样
-			result.WriteString(quotedContent)
+			// 不是base64数据，保持原样（含结束引号，避免破坏 JSON 键值对）
+			result.WriteString(content[quoteIndex+1 : nextQuoteIndex+1])
 		}
 
 		startIndex = nextQuoteIndex + 1

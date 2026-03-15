@@ -378,6 +378,12 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, _ *relayco
 		return
 	}
 
+	if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
+		if body, err := common.Marshal(dResp); err == nil {
+			c.Set(relaycommon.TaskSubmitResponseBody, body)
+		}
+		return dResp.ID, responseBody, nil
+	}
 	c.JSON(http.StatusOK, dResp)
 	return dResp.ID, responseBody, nil
 }

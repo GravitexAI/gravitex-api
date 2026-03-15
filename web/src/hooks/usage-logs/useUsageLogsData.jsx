@@ -459,15 +459,16 @@ export const useLogsData = () => {
         let content = '';
         if (!isViolationFeeLog) {
           if (other?.billing_type === 'per_second') {
-            const pricePerSec = other?.official_video_price_per_second || 0;
+            // 优先使用最终用户单价，其次 OEM 单价，最后官方单价
+            const pricePerSec =
+              other?.video_price_per_second ??
+              other?.oem_video_price_per_second ??
+              other?.official_video_price_per_second ??
+              0;
             const seconds = other?.requested_seconds || logs[i].completion_tokens || 0;
-            const groupRatio = other?.group_ratio || 1;
-            const oemDiscount = other?.oem_user_discount || 1;
             content =
-              `单价 $${pricePerSec.toFixed(4)}/秒 × ${seconds}秒` +
-              ` × 分组倍率 ${groupRatio.toFixed(2)}` +
-              (oemDiscount !== 1 ? ` × 用户折扣 ${oemDiscount.toFixed(4)}` : '') +
-              ` = ${renderQuota(logs[i].quota)}`;
+              `单价 $${pricePerSec.toFixed(4)}/秒\n` +
+              `$${pricePerSec.toFixed(4)} × ${seconds}秒 = ${renderQuota(logs[i].quota)}`;
           } else if (other?.ws || other?.audio) {
             content = renderAudioModelPrice(
               other?.text_input,

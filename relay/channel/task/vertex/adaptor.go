@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -45,12 +46,13 @@ type operationResponse struct {
 	Name     string `json:"name"`
 	Done     bool   `json:"done"`
 	Response struct {
-		Type                  string           `json:"@type"`
-		RaiMediaFilteredCount int              `json:"raiMediaFilteredCount"`
-		Videos                []operationVideo `json:"videos"`
-		BytesBase64Encoded    string           `json:"bytesBase64Encoded"`
-		Encoding              string           `json:"encoding"`
-		Video                 string           `json:"video"`
+		Type                    string           `json:"@type"`
+		RaiMediaFilteredCount   int              `json:"raiMediaFilteredCount"`
+		RaiMediaFilteredReasons []string         `json:"raiMediaFilteredReasons"`
+		Videos                  []operationVideo `json:"videos"`
+		BytesBase64Encoded      string           `json:"bytesBase64Encoded"`
+		Encoding                string           `json:"encoding"`
+		Video                   string           `json:"video"`
 	} `json:"response"`
 	Error struct {
 		Message string `json:"message"`
@@ -74,9 +76,50 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
+// Extracts Veo params from raw body into Metadata and sets video_seconds for billing (same as Gemini).
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.TaskError) {
-	// Use the standard validation method for TaskSubmitReq
-	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionTextGenerate)
+	taskErr = relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionTextGenerate)
+	if taskErr != nil {
+		return taskErr
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return nil
+	}
+	rawBody, err := storage.Bytes()
+	if err != nil || len(rawBody) == 0 {
+		return nil
+	}
+	var requestMap map[string]interface{}
+	if err := common.Unmarshal(rawBody, &requestMap); err != nil {
+		return nil
+	}
+	metaData := extractVeoParamsFromRequest(requestMap)
+	if len(metaData) == 0 {
+		return nil
+	}
+	if durationSec, ok := metaData["durationSeconds"]; ok {
+		if n, ok := vertexToInt(durationSec); ok && n > 0 {
+			c.Set("video_seconds", n)
+		}
+	}
+	v, ok := c.Get("task_request")
+	if !ok {
+		return nil
+	}
+	req, ok := v.(relaycommon.TaskSubmitReq)
+	if !ok {
+		return nil
+	}
+	if req.Metadata == nil {
+		req.Metadata = metaData
+	} else {
+		for k, v := range metaData {
+			req.Metadata[k] = v
+		}
+	}
+	c.Set("task_request", req)
+	return nil
 }
 
 // BuildRequestURL constructs the upstream URL.
@@ -134,6 +177,7 @@ func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info
 }
 
 // BuildRequestBody converts request into Vertex specific format.
+// Supports text-to-video (prompt only), first-frame (image), and first+last-frame (image + lastFrame) per Veo API.
 func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
 	v, ok := c.Get("task_request")
 	if !ok {
@@ -141,50 +185,55 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	}
 	req := v.(relaycommon.TaskSubmitReq)
 
+	instance := map[string]any{"prompt": req.Prompt}
+	metadata := req.Metadata
+	if metadata == nil {
+		metadata = make(map[string]interface{})
+	}
+	// 首帧图片：文生视频不传；首帧/首尾帧生视频需传到上游
+	if imageVal, ok := metadata["image"]; ok {
+		if imageStr, ok := imageVal.(string); ok && strings.TrimSpace(imageStr) != "" {
+			instance["image"] = map[string]any{
+				"bytesBase64Encoded": vertexConvertToBase64(imageStr),
+				"mimeType":           vertexDetectImageMimeType(imageStr),
+			}
+		}
+	}
+	// 尾帧图片：首尾帧生视频
+	if lastFrameVal, ok := metadata["lastFrame"]; ok {
+		if lastFrameStr, ok := lastFrameVal.(string); ok && strings.TrimSpace(lastFrameStr) != "" {
+			instance["lastFrame"] = map[string]any{
+				"bytesBase64Encoded": vertexConvertToBase64(lastFrameStr),
+				"mimeType":           vertexDetectImageMimeType(lastFrameStr),
+			}
+		}
+	}
+
 	body := requestPayload{
-		Instances:  []map[string]any{{"prompt": req.Prompt}},
+		Instances:  []map[string]any{instance},
 		Parameters: map[string]any{},
 	}
-	if req.Metadata != nil {
-		if v, ok := req.Metadata["storageUri"]; ok {
-			body.Parameters["storageUri"] = v
-		}
-		if v, ok := req.Metadata["sampleCount"]; ok {
-			if i, ok := v.(int); ok {
-				body.Parameters["sampleCount"] = i
-			}
-			if f, ok := v.(float64); ok {
-				body.Parameters["sampleCount"] = int(f)
-			}
-		}
+	if v, ok := metadata["storageUri"]; ok {
+		body.Parameters["storageUri"] = v
 	}
-	if _, ok := body.Parameters["sampleCount"]; !ok {
-		body.Parameters["sampleCount"] = 1
-	}
-
-	if body.Parameters["sampleCount"].(int) <= 0 {
+	sampleCount := vertexSanitizeSampleCount(metadata)
+	body.Parameters["sampleCount"] = sampleCount
+	if sampleCount <= 0 {
 		return nil, fmt.Errorf("sampleCount must be greater than 0")
 	}
-
-	// if req.Duration > 0 {
-	// 	body.Parameters["durationSeconds"] = req.Duration
-	// } else if req.Seconds != "" {
-	// 	seconds, err := strconv.Atoi(req.Seconds)
-	// 	if err != nil {
-	// 		return nil, errors.Wrap(err, "convert seconds to int failed")
-	// 	}
-	// 	body.Parameters["durationSeconds"] = seconds
-	// }
+	durationSeconds := vertexSanitizeDurationSeconds(metadata)
+	body.Parameters["durationSeconds"] = durationSeconds
+	body.Parameters["aspectRatio"] = vertexSanitizeAspectRatio(metadata)
+	body.Parameters["resolution"] = vertexSanitizeResolution(metadata)
+	includeAudio := vertexSanitizeGenerateAudio(metadata, req.GenerateAudio)
+	body.Parameters["generateAudio"] = includeAudio
 
 	info.PriceData.OtherRatios = map[string]float64{
-		"sampleCount": float64(body.Parameters["sampleCount"].(int)),
+		"sampleCount":     float64(sampleCount),
+		"durationSeconds": float64(durationSeconds),
 	}
 
-	// if v, ok := body.Parameters["durationSeconds"]; ok {
-	// 	info.PriceData.OtherRatios["durationSeconds"] = float64(v.(int))
-	// }
-
-	data, err := json.Marshal(body)
+	data, err := common.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
@@ -212,6 +261,12 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return "", nil, service.TaskErrorWrapper(fmt.Errorf("missing operation name"), "invalid_response", http.StatusInternalServerError)
 	}
 	localID := encodeLocalTaskID(s.Name)
+	if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
+		if body, err := common.Marshal(gin.H{"task_id": localID}); err == nil {
+			c.Set(relaycommon.TaskSubmitResponseBody, body)
+		}
+		return localID, responseBody, nil
+	}
 	c.JSON(http.StatusOK, gin.H{"task_id": localID})
 	return localID, responseBody, nil
 }
@@ -289,6 +344,17 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		ti.Progress = "50%"
 		return ti, nil
 	}
+	// done=true 但视频被 RAI 过滤（无成片），视为失败，fail_reason 填 raiMediaFilteredReasons
+	if op.Response.RaiMediaFilteredCount > 0 {
+		ti.Status = model.TaskStatusFailure
+		ti.Progress = "100%"
+		reason := strings.Join(op.Response.RaiMediaFilteredReasons, "; ")
+		if reason == "" {
+			reason = fmt.Sprintf("Vertex AI filtered %d video(s) (usage guidelines)", op.Response.RaiMediaFilteredCount)
+		}
+		ti.Reason = reason
+		return ti, nil
+	}
 	ti.Status = model.TaskStatusSuccess
 	ti.Progress = "100%"
 	if len(op.Response.Videos) > 0 {
@@ -353,16 +419,268 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	v.SetProgressStr(task.Progress)
 	v.CreatedAt = task.CreatedAt
 	v.CompletedAt = task.UpdatedAt
-	if strings.HasPrefix(task.FailReason, "data:") && len(task.FailReason) > 0 {
-		v.SetMetadata("url", task.FailReason)
+
+	// 失败时把上游错误（如 Google RAI）写入 error 和 fail_reason，便于前端轮询展示
+	failReason := strings.TrimSpace(task.FailReason)
+	if task.Status == model.TaskStatusFailure && failReason != "" {
+		v.Error = &dto.OpenAIVideoError{Message: failReason, Code: "upstream_error"}
 	}
 
-	return common.Marshal(v)
+	// 在顶层返回 url（成功时为视频地址）或 fail_reason（失败时为错误说明），与 TaskDto 对齐
+	type openAIVideoExtra struct {
+		*dto.OpenAIVideo
+		Url        string `json:"url,omitempty"`
+		FailReason string `json:"fail_reason,omitempty"`
+	}
+	extra := openAIVideoExtra{OpenAIVideo: v}
+	if failReason != "" {
+		if strings.HasPrefix(failReason, "http") || strings.HasPrefix(failReason, "data:") {
+			extra.Url = failReason
+		} else {
+			extra.FailReason = failReason
+		}
+	}
+	return common.Marshal(extra)
 }
 
 // ============================
 // helpers
 // ============================
+
+func vertexToInt(value interface{}) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case float32:
+		return int(v), true
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+func extractVeoParamsFromRequest(m map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{})
+	if m == nil {
+		return out
+	}
+	for _, key := range []string{"durationSeconds", "duration_seconds"} {
+		if v, ok := m[key]; ok {
+			if n, ok := vertexToInt(v); ok && n > 0 {
+				out["durationSeconds"] = n
+				break
+			}
+		}
+	}
+	for _, key := range []string{"aspectRatio", "aspect_ratio"} {
+		if v, ok := m[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				out["aspectRatio"] = s
+				break
+			}
+		}
+	}
+	for _, key := range []string{"resolution"} {
+		if v, ok := m[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				out["resolution"] = s
+				break
+			}
+		}
+	}
+	for _, key := range []string{"generate_audio", "generateAudio"} {
+		if v, ok := m[key]; ok {
+			out["generate_audio"] = v
+			out["generateAudio"] = v
+			break
+		}
+	}
+	for _, key := range []string{"sampleCount", "sample_count"} {
+		if v, ok := m[key]; ok {
+			if n, ok := vertexToInt(v); ok && n > 0 {
+				out["sampleCount"] = n
+				break
+			}
+		}
+	}
+	// 首帧图片（文生视频不传；首帧/首尾帧生视频需传到上游）
+	if v, ok := m["image"]; ok {
+		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+			out["image"] = s
+		}
+	}
+	// 尾帧图片（首尾帧生视频）
+	for _, key := range []string{"lastFrame", "last_frame"} {
+		if v, ok := m[key]; ok {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				out["lastFrame"] = s
+				break
+			}
+		}
+	}
+	return out
+}
+
+func vertexExtractInt(metadata map[string]interface{}, keys ...string) int {
+	for _, key := range keys {
+		if val, ok := metadata[key]; ok {
+			if n, ok := vertexToInt(val); ok {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+func vertexExtractString(metadata map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if val, ok := metadata[key]; ok {
+			if s, ok := val.(string); ok && strings.TrimSpace(s) != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+func vertexSanitizeDurationSeconds(metadata map[string]interface{}) int {
+	seconds := vertexExtractInt(metadata, "durationSeconds", "duration_seconds")
+	switch seconds {
+	case 4, 6, 8, 12:
+		return seconds
+	}
+	if seconds > 0 {
+		return seconds
+	}
+	return 4
+}
+
+func vertexSanitizeSampleCount(metadata map[string]interface{}) int {
+	count := vertexExtractInt(metadata, "sampleCount", "sample_count")
+	if count <= 0 {
+		return 1
+	}
+	if count > 4 {
+		return 4
+	}
+	return count
+}
+
+func vertexSanitizeAspectRatio(metadata map[string]interface{}) string {
+	ratio := strings.ReplaceAll(vertexExtractString(metadata, "aspectRatio", "aspect_ratio"), " ", "")
+	ratio = strings.ToLower(ratio)
+	switch ratio {
+	case "9:16", "9/16", "9-16":
+		return "9:16"
+	case "16:9", "16/9", "16-9":
+		return "16:9"
+	default:
+		return "16:9"
+	}
+}
+
+func vertexSanitizeResolution(metadata map[string]interface{}) string {
+	res := strings.ToLower(strings.TrimSpace(vertexExtractString(metadata, "resolution")))
+	switch {
+	case strings.Contains(res, "720"):
+		return "720p"
+	case strings.Contains(res, "1080"):
+		return "1080p"
+	default:
+		return "1080p"
+	}
+}
+
+func vertexToBool(value interface{}) (bool, bool) {
+	switch v := value.(type) {
+	case bool:
+		return v, true
+	case string:
+		s := strings.TrimSpace(strings.ToLower(v))
+		if s == "true" || s == "1" || s == "yes" {
+			return true, true
+		}
+		if s == "false" || s == "0" || s == "no" {
+			return false, true
+		}
+	case float64:
+		return v != 0, true
+	case int:
+		return v != 0, true
+	}
+	return false, false
+}
+
+func vertexSanitizeGenerateAudio(metadata map[string]interface{}, fallback *bool) bool {
+	for _, key := range []string{"generateAudio", "generate_audio"} {
+		if val, ok := metadata[key]; ok {
+			if b, ok := vertexToBool(val); ok {
+				return b
+			}
+		}
+	}
+	if fallback != nil {
+		return *fallback
+	}
+	return true
+}
+
+// vertexConvertToBase64 将 data URI 或 URL 转为纯 base64，供 Vertex instances.image/lastFrame 使用
+func vertexConvertToBase64(input string) string {
+	if strings.HasPrefix(input, "data:") {
+		parts := strings.SplitN(input, ",", 2)
+		if len(parts) == 2 {
+			return parts[1]
+		}
+	}
+	if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
+		resp, err := http.Get(input)
+		if err != nil {
+			return input
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return input
+		}
+		imageData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return input
+		}
+		return base64.StdEncoding.EncodeToString(imageData)
+	}
+	return input
+}
+
+// vertexDetectImageMimeType 从 data URI 或 base64 魔数检测 MIME 类型
+func vertexDetectImageMimeType(input string) string {
+	if strings.HasPrefix(input, "data:") {
+		parts := strings.Split(input, ";")
+		if len(parts) >= 1 {
+			mimeType := strings.TrimPrefix(parts[0], "data:")
+			if mimeType != "" {
+				return mimeType
+			}
+		}
+	}
+	if len(input) > 10 {
+		if strings.HasPrefix(input, "/9j/") || strings.HasPrefix(input, "/9j4") {
+			return "image/jpeg"
+		}
+		if strings.HasPrefix(input, "iVBORw0KGgo") {
+			return "image/png"
+		}
+		if strings.HasPrefix(input, "UklGR") {
+			return "image/webp"
+		}
+	}
+	return "image/jpeg"
+}
 
 func encodeLocalTaskID(name string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(name))

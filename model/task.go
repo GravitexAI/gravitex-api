@@ -40,24 +40,26 @@ const (
 )
 
 type Task struct {
-	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
-	CreatedAt  int64                 `json:"created_at" gorm:"index"`
-	UpdatedAt  int64                 `json:"updated_at"`
-	TaskID     string                `json:"task_id" gorm:"type:varchar(191);index"` // 第三方id，不一定有/ song id\ Task id
-	Platform   constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
-	UserId     int                   `json:"user_id" gorm:"index"`
-	Group      string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
-	ChannelId  int                   `json:"channel_id" gorm:"index"`
-	Quota      int                   `json:"quota"`
-	Action     string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
-	Status     TaskStatus            `json:"status" gorm:"type:varchar(20);index"` // 任务状态
-	FailReason string                `json:"fail_reason"`
-	SubmitTime int64                 `json:"submit_time" gorm:"index"`
-	StartTime  int64                 `json:"start_time" gorm:"index"`
-	FinishTime int64                 `json:"finish_time" gorm:"index"`
-	Progress   string                `json:"progress" gorm:"type:varchar(20);index"`
-	Properties Properties            `json:"properties" gorm:"type:json"`
-	Username   string                `json:"username,omitempty" gorm:"-"`
+	ID                  int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
+	CreatedAt           int64                 `json:"created_at" gorm:"index"`
+	UpdatedAt           int64                 `json:"updated_at"`
+	TaskID              string                `json:"task_id" gorm:"type:varchar(512);index"` // 第三方 id（Veo/Vertex 为 base64 的 operation name，超 191）
+	Platform            constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
+	UserId              int                   `json:"user_id" gorm:"index"`
+	Group               string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
+	ChannelId           int                   `json:"channel_id" gorm:"index"`
+	Quota               int                   `json:"quota"`
+	Action              string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
+	Status              TaskStatus            `json:"status" gorm:"type:varchar(20);index"` // 任务状态
+	FailReason          string                `json:"fail_reason"`
+	SubmitTime          int64                 `json:"submit_time" gorm:"index"`
+	StartTime           int64                 `json:"start_time" gorm:"index"`
+	FinishTime          int64                 `json:"finish_time" gorm:"index"`
+	Progress            string                `json:"progress" gorm:"type:varchar(20);index"`
+	Properties          Properties            `json:"properties" gorm:"type:json"`
+	UserRequestBody     json.RawMessage       `json:"-" gorm:"column:user_request_body;type:json"`
+	UpstreamRequestBody json.RawMessage       `json:"-" gorm:"column:upstream_request_body;type:json"`
+	Username            string                `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
@@ -77,6 +79,7 @@ type Properties struct {
 	Input             string `json:"input"`
 	UpstreamModelName string `json:"upstream_model_name,omitempty"`
 	OriginModelName   string `json:"origin_model_name,omitempty"`
+	RequestedSeconds  int    `json:"requested_seconds,omitempty"` // 视频请求时长（秒），用于按秒计费，存 properties 避免被 task.Data 覆盖
 }
 
 func (m *Properties) Scan(val interface{}) error {
@@ -299,6 +302,12 @@ func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
 
 func TaskUpdateProgress(id int64, progress string) error {
 	return DB.Model(&Task{}).Where("id = ?", id).Update("progress", progress).Error
+}
+
+// TaskUpdateFailReason 仅更新 fail_reason 字段（用于前端轮询时保存视频 URL，不更新 status/progress 以避免抢占后台计费）
+// 仅在 fail_reason 为空时更新，避免并发覆盖已有值
+func TaskUpdateFailReason(id int64, failReason string) error {
+	return DB.Model(&Task{}).Where("id = ? AND (fail_reason = '' OR fail_reason IS NULL)", id).Update("fail_reason", failReason).Error
 }
 
 func (Task *Task) Insert() error {

@@ -250,6 +250,8 @@ func InitLogDB() (err error) {
 func migrateDB() error {
 	// Migrate price_amount column from float/double to decimal for existing tables
 	migrateSubscriptionPlanPriceAmount()
+	// 扩展 tasks.task_id 长度以支持 Veo/Vertex base64 operation name（>191）
+	migrateTaskIDColumnLength()
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -507,6 +509,35 @@ func migrateSubscriptionPlanPriceAmount() {
 		} else {
 			common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to decimal(10,6)", tableName, columnName))
 		}
+	}
+}
+
+// migrateTaskIDColumnLength 将 tasks.task_id 从 varchar(191) 扩为 varchar(512)，以支持 Veo/Vertex 的 base64 operation name
+func migrateTaskIDColumnLength() {
+	if common.UsingSQLite {
+		return // SQLite 不强制 varchar 长度，新表由 AutoMigrate 建为 512
+	}
+	tableName := "tasks"
+	columnName := "task_id"
+	if !DB.Migrator().HasTable(tableName) {
+		return
+	}
+	if !DB.Migrator().HasColumn(&Task{}, columnName) {
+		return
+	}
+	var alterSQL string
+	if common.UsingPostgreSQL {
+		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE varchar(512)`, tableName, columnName)
+	} else if common.UsingMySQL {
+		// 保持原索引，仅扩展长度
+		alterSQL = fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` varchar(512) NOT NULL DEFAULT ''", tableName, columnName)
+	} else {
+		return
+	}
+	if err := DB.Exec(alterSQL).Error; err != nil {
+		common.SysLog(fmt.Sprintf("Warning: failed to migrate %s.%s to varchar(512): %v", tableName, columnName, err))
+	} else {
+		common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to varchar(512)", tableName, columnName))
 	}
 }
 

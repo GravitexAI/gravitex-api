@@ -3,11 +3,11 @@ package gemini
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,7 +21,6 @@ import (
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
-	"github.com/pkg/errors"
 )
 
 // ============================
@@ -36,6 +35,7 @@ type GeminiVideoGenerationConfig struct {
 	NegativePrompt   string  `json:"negativePrompt,omitempty"`   // unwanted elements
 	PersonGeneration string  `json:"personGeneration,omitempty"` // "allow_all" for text-to-video, "allow_adult" for image-to-video
 	Resolution       string  `json:"resolution,omitempty"`       // video resolution
+	IncludeAudio     *bool   `json:"includeAudio,omitempty"`     // Google Gemini API audio flag (assuming 'includeAudio')
 }
 
 // GeminiVideoRequest represents a single video generation instance
@@ -63,13 +63,14 @@ type operationResponse struct {
 	Name     string `json:"name"`
 	Done     bool   `json:"done"`
 	Response struct {
-		Type                  string           `json:"@type"`
-		RaiMediaFilteredCount int              `json:"raiMediaFilteredCount"`
-		Videos                []operationVideo `json:"videos"`
-		BytesBase64Encoded    string           `json:"bytesBase64Encoded"`
-		Encoding              string           `json:"encoding"`
-		Video                 string           `json:"video"`
-		GenerateVideoResponse struct {
+		Type                    string           `json:"@type"`
+		RaiMediaFilteredCount   int              `json:"raiMediaFilteredCount"`
+		RaiMediaFilteredReasons []string         `json:"raiMediaFilteredReasons"`
+		Videos                  []operationVideo `json:"videos"`
+		BytesBase64Encoded      string           `json:"bytesBase64Encoded"`
+		Encoding                string           `json:"encoding"`
+		Video                   string           `json:"video"`
+		GenerateVideoResponse   struct {
 			GeneratedSamples []struct {
 				Video struct {
 					URI string `json:"uri"`
@@ -99,9 +100,52 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 }
 
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
+// Extracts Veo params (durationSeconds, aspectRatio, resolution, etc.) from raw body into Metadata
+// so BuildRequestBody can send them upstream; also sets video_seconds for billing.
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.TaskError) {
-	// Use the standard validation method for TaskSubmitReq
-	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionTextGenerate)
+	taskErr = relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionTextGenerate)
+	if taskErr != nil {
+		return taskErr
+	}
+	// Extract Veo params from raw body (not in TaskSubmitReq fields) and inject into task_request.Metadata
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return nil
+	}
+	rawBody, err := storage.Bytes()
+	if err != nil || len(rawBody) == 0 {
+		return nil
+	}
+	var requestMap map[string]interface{}
+	if err := common.Unmarshal(rawBody, &requestMap); err != nil {
+		return nil
+	}
+	metaData := extractVeoParamsFromRequest(requestMap)
+	if len(metaData) == 0 {
+		return nil
+	}
+	if durationSec, ok := metaData["durationSeconds"]; ok {
+		if n, ok := toInt(durationSec); ok && n > 0 {
+			c.Set("video_seconds", n)
+		}
+	}
+	v, ok := c.Get("task_request")
+	if !ok {
+		return nil
+	}
+	req, ok := v.(relaycommon.TaskSubmitReq)
+	if !ok {
+		return nil
+	}
+	if req.Metadata == nil {
+		req.Metadata = metaData
+	} else {
+		for k, v := range metaData {
+			req.Metadata[k] = v
+		}
+	}
+	c.Set("task_request", req)
+	return nil
 }
 
 // BuildRequestURL constructs the upstream URL.
@@ -136,7 +180,6 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, fmt.Errorf("unexpected task_request type")
 	}
 
-	// Create structured video generation request
 	body := GeminiVideoPayload{
 		Instances: []GeminiVideoRequest{
 			{Prompt: req.Prompt},
@@ -145,16 +188,20 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	}
 
 	metadata := req.Metadata
-	medaBytes, err := json.Marshal(metadata)
-	if err != nil {
-		return nil, errors.Wrap(err, "metadata marshal metadata failed")
-	}
-	err = json.Unmarshal(medaBytes, &body.Parameters)
-	if err != nil {
-		return nil, errors.Wrap(err, "unmarshal metadata failed")
+	if metadata == nil {
+		metadata = make(map[string]interface{})
 	}
 
-	data, err := json.Marshal(body)
+	body.Parameters.DurationSeconds = float64(sanitizeDurationSecondsFromMetadata(metadata))
+	body.Parameters.AspectRatio = sanitizeAspectRatioFromMetadata(metadata)
+	body.Parameters.Resolution = sanitizeResolutionFromMetadata(metadata)
+	body.Parameters.NegativePrompt = extractStringFromMetadata(metadata, "negativePrompt", "negative_prompt")
+	body.Parameters.PersonGeneration = sanitizePersonGenerationFromMetadata(metadata)
+
+	includeAudio := sanitizeGenerateAudio(metadata, req.GenerateAudio)
+	body.Parameters.IncludeAudio = &includeAudio
+
+	data, err := common.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +222,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	_ = resp.Body.Close()
 
 	var s submitResponse
-	if err := json.Unmarshal(responseBody, &s); err != nil {
+	if err := common.Unmarshal(responseBody, &s); err != nil {
 		return "", nil, service.TaskErrorWrapper(err, "unmarshal_response_failed", http.StatusInternalServerError)
 	}
 	if strings.TrimSpace(s.Name) == "" {
@@ -187,6 +234,12 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	ov.TaskID = taskID
 	ov.CreatedAt = time.Now().Unix()
 	ov.Model = info.OriginModelName
+	if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
+		if body, err := common.Marshal(ov); err == nil {
+			c.Set(relaycommon.TaskSubmitResponseBody, body)
+		}
+		return taskID, responseBody, nil
+	}
 	c.JSON(http.StatusOK, ov)
 	return taskID, responseBody, nil
 }
@@ -232,7 +285,7 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
 	var op operationResponse
-	if err := json.Unmarshal(respBody, &op); err != nil {
+	if err := common.Unmarshal(respBody, &op); err != nil {
 		return nil, fmt.Errorf("unmarshal operation response failed: %w", err)
 	}
 
@@ -251,18 +304,44 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		return ti, nil
 	}
 
+	// done=true 但视频被 RAI 过滤（无成片），视为官方报错，记入 fail_reason
+	if op.Response.RaiMediaFilteredCount > 0 {
+		ti.Status = model.TaskStatusFailure
+		ti.Progress = "100%"
+		reason := strings.Join(op.Response.RaiMediaFilteredReasons, "; ")
+		if reason == "" {
+			reason = fmt.Sprintf("Vertex AI filtered %d video(s) (usage guidelines)", op.Response.RaiMediaFilteredCount)
+		}
+		ti.Reason = reason
+		return ti, nil
+	}
+
 	ti.Status = model.TaskStatusSuccess
 	ti.Progress = "100%"
 
 	taskID := encodeLocalTaskID(op.Name)
 	ti.TaskID = taskID
-	ti.Url = fmt.Sprintf("%s/v1/videos/%s/content", system_setting.ServerAddress, taskID)
+	contentURL := fmt.Sprintf("%s/v1/videos/%s/content", system_setting.ServerAddress, taskID)
 
-	// Extract URL from generateVideoResponse if available
+	// 优先用上游返回的视频地址或 base64，写入 fail_reason 供前端展示；否则用 content 代理 URL
 	if len(op.Response.GenerateVideoResponse.GeneratedSamples) > 0 {
 		if uri := op.Response.GenerateVideoResponse.GeneratedSamples[0].Video.URI; uri != "" {
 			ti.RemoteUrl = uri
 		}
+	}
+	if ti.RemoteUrl == "" && len(op.Response.Videos) > 0 {
+		if op.Response.Videos[0].BytesBase64Encoded != "" {
+			ti.Url = "data:video/mp4;base64," + op.Response.Videos[0].BytesBase64Encoded
+		}
+	}
+	if ti.Url == "" && ti.RemoteUrl == "" && op.Response.BytesBase64Encoded != "" {
+		ti.Url = "data:video/mp4;base64," + op.Response.BytesBase64Encoded
+	}
+	if ti.Url == "" && ti.RemoteUrl == "" && op.Response.Video != "" {
+		ti.Url = op.Response.Video
+	}
+	if ti.Url == "" && ti.RemoteUrl == "" {
+		ti.Url = contentURL
 	}
 
 	return ti, nil
@@ -290,12 +369,219 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 		video.CompletedAt = task.UpdatedAt
 	}
 
-	return common.Marshal(video)
+	// 失败时把上游错误写入 error 和 fail_reason，便于前端轮询展示
+	failReason := strings.TrimSpace(task.FailReason)
+	if task.Status == model.TaskStatusFailure && failReason != "" {
+		video.Error = &dto.OpenAIVideoError{Message: failReason, Code: "upstream_error"}
+	}
+
+	// 成功时 FailReason 存视频地址（OSS/GCS/data URI），在顶层返回 url；失败时返回 fail_reason
+	type openAIVideoExtra struct {
+		*dto.OpenAIVideo
+		Url        string `json:"url,omitempty"`
+		FailReason string `json:"fail_reason,omitempty"`
+	}
+	extra := openAIVideoExtra{OpenAIVideo: video}
+	if failReason != "" {
+		if strings.HasPrefix(failReason, "http") || strings.HasPrefix(failReason, "data:") {
+			extra.Url = failReason
+		} else {
+			extra.FailReason = failReason
+		}
+	}
+	return common.Marshal(extra)
 }
 
 // ============================
 // helpers
 // ============================
+
+// extractVeoParamsFromRequest extracts Veo-related fields from raw request map into metadata.
+func extractVeoParamsFromRequest(m map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{})
+	if m == nil {
+		return out
+	}
+	for _, key := range []string{"durationSeconds", "duration_seconds"} {
+		if v, ok := m[key]; ok {
+			if n, ok := toInt(v); ok && n > 0 {
+				out["durationSeconds"] = n
+				break
+			}
+		}
+	}
+	for _, key := range []string{"aspectRatio", "aspect_ratio"} {
+		if v, ok := m[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				out["aspectRatio"] = s
+				break
+			}
+		}
+	}
+	for _, key := range []string{"resolution"} {
+		if v, ok := m[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				out["resolution"] = s
+				break
+			}
+		}
+	}
+	for _, key := range []string{"generate_audio", "generateAudio"} {
+		if v, ok := m[key]; ok {
+			out["generate_audio"] = v
+			out["generateAudio"] = v
+			break
+		}
+	}
+	for _, key := range []string{"sampleCount", "sample_count"} {
+		if v, ok := m[key]; ok {
+			if n, ok := toInt(v); ok && n > 0 {
+				out["sampleCount"] = n
+				break
+			}
+		}
+	}
+	if v, ok := m["image"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			out["image"] = s
+		}
+	}
+	if v, ok := m["negativePrompt"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			out["negativePrompt"] = s
+		}
+	}
+	if v, ok := m["personGeneration"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			out["personGeneration"] = s
+		}
+	}
+	return out
+}
+
+func toInt(value interface{}) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case float32:
+		return int(v), true
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+func toBool(value interface{}) (bool, bool) {
+	switch v := value.(type) {
+	case bool:
+		return v, true
+	case string:
+		s := strings.TrimSpace(strings.ToLower(v))
+		if s == "true" || s == "1" || s == "yes" {
+			return true, true
+		}
+		if s == "false" || s == "0" || s == "no" {
+			return false, true
+		}
+	case float64:
+		return v != 0, true
+	case int:
+		return v != 0, true
+	}
+	return false, false
+}
+
+func extractStringFromMetadata(metadata map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if val, ok := metadata[key]; ok {
+			switch v := val.(type) {
+			case string:
+				if strings.TrimSpace(v) != "" {
+					return v
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func extractIntFromMetadata(metadata map[string]interface{}, keys ...string) int {
+	for _, key := range keys {
+		if val, ok := metadata[key]; ok {
+			if n, ok := toInt(val); ok {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+func sanitizeDurationSecondsFromMetadata(metadata map[string]interface{}) int {
+	seconds := extractIntFromMetadata(metadata, "durationSeconds", "duration_seconds")
+	switch seconds {
+	case 4, 6, 8, 12:
+		return seconds
+	}
+	if seconds > 0 {
+		return seconds
+	}
+	return 4
+}
+
+func sanitizeAspectRatioFromMetadata(metadata map[string]interface{}) string {
+	ratio := strings.ReplaceAll(extractStringFromMetadata(metadata, "aspectRatio", "aspect_ratio"), " ", "")
+	ratio = strings.ToLower(ratio)
+	switch ratio {
+	case "9:16", "9/16", "9-16":
+		return "9:16"
+	case "16:9", "16/9", "16-9":
+		return "16:9"
+	default:
+		return "16:9"
+	}
+}
+
+func sanitizeResolutionFromMetadata(metadata map[string]interface{}) string {
+	res := strings.ToLower(strings.TrimSpace(extractStringFromMetadata(metadata, "resolution")))
+	switch {
+	case strings.Contains(res, "720"):
+		return "720p"
+	case strings.Contains(res, "1080"):
+		return "1080p"
+	default:
+		return "1080p"
+	}
+}
+
+func sanitizeGenerateAudio(metadata map[string]interface{}, fallback *bool) bool {
+	for _, key := range []string{"generateAudio", "generate_audio"} {
+		if val, ok := metadata[key]; ok {
+			if b, ok := toBool(val); ok {
+				return b
+			}
+		}
+	}
+	if fallback != nil {
+		return *fallback
+	}
+	return true
+}
+
+func sanitizePersonGenerationFromMetadata(metadata map[string]interface{}) string {
+	value := strings.ToLower(strings.TrimSpace(extractStringFromMetadata(metadata, "personGeneration", "person_generation")))
+	switch value {
+	case "allow_adult", "dont_allow":
+		return value
+	default:
+		return "allow_all"
+	}
+}
 
 func encodeLocalTaskID(name string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(name))

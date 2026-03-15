@@ -29,6 +29,10 @@ const (
 	LastMessageTypeText     = "text"
 	LastMessageTypeTools    = "tools"
 	LastMessageTypeThinking = "thinking"
+
+	// TaskSubmitDelayResponse：任务提交时设为 true，DoResponse 不直接写响应，由 RelayTaskSubmit 在 task.Insert() 成功后写入，避免重试时响应体被写两次导致前端 JSON 解析错误
+	TaskSubmitDelayResponse = "task_submit_delay_response"
+	TaskSubmitResponseBody  = "task_submit_response_body"
 )
 
 type ClaudeConvertInfo struct {
@@ -622,6 +626,7 @@ type TaskSubmitReq struct {
 	Duration       int                    `json:"duration,omitempty"`
 	Seconds        string                 `json:"seconds,omitempty"`
 	InputReference string                 `json:"input_reference,omitempty"`
+	GenerateAudio  *bool                  `json:"generate_audio,omitempty"`
 	Metadata       map[string]interface{} `json:"metadata,omitempty"`
 }
 

@@ -737,19 +737,26 @@ func GetModelRatioOrPrice(model string) (float64, bool, bool) { // price or rati
 }
 
 // ==================== VideoModelPricePerSecond ====================
+// 优先级：先读数据库 OptionMap["VideoModelPricePerSecond"]，仅当无配置或解析失败时才用下方默认值兜底。
 
 var defaultVideoModelPricePerSecond = map[string]float64{
 	"sora-2":     0.1,  // $0.1/秒
 	"sora-2-pro": 0.15, // $0.15/秒
 }
 
-// VideoAudioPricing 带音频/无音频的视频定价结构
+// VideoAudioPricing 带音频/无音频的视频定价结构（Veo：generateAudio true 用 audio，否则用 noAudio）
 type VideoAudioPricing struct {
 	NoAudio float64 `json:"noAudio,omitempty"`
 	Audio   float64 `json:"audio,omitempty"`
 }
 
-var defaultVideoAudioPricing = map[string]VideoAudioPricing{}
+// Veo 模型（含 generate / fast）：按 parameters.generateAudio 选 noAudio 或 audio 价
+var defaultVideoAudioPricing = map[string]VideoAudioPricing{
+	"veo-3.0-generate-preview":      {NoAudio: 0.2, Audio: 0.4},
+	"veo-3.1-generate-preview":      {NoAudio: 0.2, Audio: 0.4},
+	"veo-3.0-fast-generate-001":     {NoAudio: 0.1, Audio: 0.15},
+	"veo-3.1-fast-generate-preview": {NoAudio: 0.1, Audio: 0.15},
+}
 
 var (
 	videoModelPricePerSecondMap      map[string]float64 = nil
@@ -783,6 +790,32 @@ func GetVideoModelPricePerSecond(name string) (float64, bool) {
 		}
 	}
 
+	return -1, false
+}
+
+// GetVideoModelPricePerSecondForBilling 按是否生成音频返回每秒价格（用于 Veo 等 noAudio/audio 分离定价）
+// 优先用 noAudio/audio 配置（按 generateAudio 选价），无该配置时再用单一数字价
+func GetVideoModelPricePerSecondForBilling(name string, generateAudio bool) (float64, bool) {
+	name = FormatMatchingModelName(name)
+	// 优先：有 noAudio/audio 时按 generateAudio 取价，保证带音频按 0.4、不带按 0.2
+	if audioPricing, ok := getVideoAudioPricing(name); ok {
+		if generateAudio && audioPricing.Audio > 0 {
+			return audioPricing.Audio, true
+		}
+		if !generateAudio && audioPricing.NoAudio > 0 {
+			return audioPricing.NoAudio, true
+		}
+		if audioPricing.NoAudio > 0 {
+			return audioPricing.NoAudio, true
+		}
+		if audioPricing.Audio > 0 {
+			return audioPricing.Audio, true
+		}
+	}
+	price, ok := getVideoPerSecondPriceFromPrimaryMap(name)
+	if ok && price > 0 {
+		return price, true
+	}
 	return -1, false
 }
 
@@ -904,7 +937,7 @@ func loadVideoModelPricePerSecondFromDatabase() {
 		}
 	}
 
-	// Fallback to defaults
+	// 无数据库配置或解析失败时，使用代码中的默认价格兜底
 	videoModelPricePerSecondMap = make(map[string]float64, len(defaultVideoModelPricePerSecond))
 	for k, v := range defaultVideoModelPricePerSecond {
 		videoModelPricePerSecondMap[k] = v

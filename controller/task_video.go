@@ -2,9 +2,9 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -85,7 +85,12 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	if privateData.Key != "" {
 		key = privateData.Key
 	}
-	logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] fetching task=%s baseURL=%s platform=%s", taskId, baseURL, task.Platform))
+	dataLen := 0
+	if len(task.Data) > 0 {
+		dataLen = len(task.Data)
+	}
+	logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s data_len=%d properties.requested_seconds=%d",
+		taskId, dataLen, task.Properties.RequestedSeconds))
 	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
 		"task_id": taskId,
 		"action":  task.Action,
@@ -102,13 +107,20 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		return fmt.Errorf("readAll failed for task %s: %w", taskId, err)
 	}
 
-	logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s channel=%d status=%d body=%s",
+	logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s channel=%d status=%d 上游返回数据 body=%s",
 		taskId, channel.Id, resp.StatusCode, common.TruncateJsonValues(string(responseBody))))
 
 	taskResult := &relaycommon.TaskInfo{}
-	// try parse as New API response format
+	// 仅当确认为本系统 New API 格式（code=success 且 data 含 task_id）时才走 New API 分支，避免 Vertex/Gemini 原始响应 {"name":"..."} 被误判导致 task.Data 计费字段丢失（与 nebula-new-api 对齐）
 	var responseItems dto.TaskResponse[model.Task]
+	_isNewAPIFormat := false
 	if err = common.Unmarshal(responseBody, &responseItems); err == nil && responseItems.IsSuccess() {
+		if responseItems.Data.TaskID != "" {
+			_isNewAPIFormat = true
+		}
+	}
+	if _isNewAPIFormat {
+		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s branch=newAPI", taskId))
 		logger.LogDebug(ctx, fmt.Sprintf("UpdateVideoSingleTask parsed as new api response format: %+v", responseItems))
 		t := responseItems.Data
 		taskResult.TaskID = t.TaskID
@@ -116,14 +128,116 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		taskResult.Url = t.FailReason
 		taskResult.Progress = t.Progress
 		taskResult.Reason = t.FailReason
-		task.Data = t.Data
+		task.Data = mergeBillingFieldsIntoTaskData(task.Data, t.Data)
 	} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
 		return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
 	} else {
-		task.Data = redactVideoResponseBody(responseBody)
+		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s branch=parseResult", taskId))
+		// 与 nebula-new-api 对齐：合并新的响应数据，但保留计费所需的关键字段
+		var existingData map[string]interface{}
+		var newData map[string]interface{}
+
+		if len(task.Data) > 0 {
+			if err := common.Unmarshal(task.Data, &existingData); err != nil {
+				logger.LogWarn(ctx, fmt.Sprintf("UpdateVideoSingleTask: failed to unmarshal existing task.Data: %v", err))
+				existingData = make(map[string]interface{})
+			}
+		} else {
+			existingData = make(map[string]interface{})
+		}
+
+		// 调试日志：打印旧 task.Data 中的计费关键字段（INFO 便于排查）
+		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s existingData: requested_seconds=%v billing_processed=%v generate_audio=%v",
+			taskId, existingData["requested_seconds"], existingData["billing_processed"], existingData["generate_audio"]))
+
+		// 计费所需字段，合并时从 existingData 保留到 newData，避免被上游响应覆盖
+		preservedFields := []string{
+			"requested_seconds", "billing_requested_seconds",
+			"billing_model_name", "billing_group", "billing_oem_code",
+			"billing_oem_user_discount", "billing_effective_group_ratio",
+			"billing_token_name", "billing_token_id", "billing_processed",
+			"generate_audio", "generateAudio",
+		}
+
+		// 合并后若仍缺 generate_audio，从 upstream_request_body 补全（与计费逻辑一致，保证 task.Data 完整）
+		ensureGenerateAudioInMap := func(data map[string]interface{}) {
+			if _, hasAudio := data["generate_audio"]; hasAudio {
+				return
+			}
+			if _, hasAudio := data["generateAudio"]; hasAudio {
+				return
+			}
+			if parseGenerateAudioFromUpstreamBody(task.UpstreamRequestBody) {
+				data["generate_audio"] = true
+				data["generateAudio"] = true
+			}
+		}
+
+		redactedBody := redactVideoResponseBody(responseBody)
+		if err := common.Unmarshal(redactedBody, &newData); err != nil {
+			// 解析失败时仍保留计费字段，将上游响应放入 _upstream_response（与 nebula-new-api 对齐，不直接用 redactedBody 覆盖）
+			logger.LogWarn(ctx, fmt.Sprintf("UpdateVideoSingleTask: failed to unmarshal video response body: %v", err))
+			newData = make(map[string]interface{})
+			for _, field := range preservedFields {
+				if value, exists := existingData[field]; exists {
+					newData[field] = value
+				}
+			}
+			ensureGenerateAudioInMap(newData)
+			newData["_upstream_response"] = string(redactedBody)
+			if merged, err := common.Marshal(newData); err == nil {
+				task.Data = merged
+			} else {
+				// Marshal 失败时也不覆盖为纯 redactedBody，保留计费字段
+				fallback := make(map[string]interface{})
+				for _, f := range preservedFields {
+					if v, ok := existingData[f]; ok {
+						fallback[f] = v
+					}
+				}
+				ensureGenerateAudioInMap(fallback)
+				fallback["_upstream_response"] = string(redactedBody)
+				if fb, _ := common.Marshal(fallback); len(fb) > 0 {
+					task.Data = fb
+				} else {
+					task.Data = redactedBody
+				}
+			}
+		} else {
+			for _, field := range preservedFields {
+				if value, exists := existingData[field]; exists {
+					newData[field] = value
+				}
+			}
+			ensureGenerateAudioInMap(newData)
+
+			if merged, err := common.Marshal(newData); err == nil {
+				task.Data = merged
+			} else {
+				logger.LogError(ctx, fmt.Sprintf("UpdateVideoSingleTask: failed to marshal merged task.Data: %v", err))
+				// 不直接覆盖为 redactedBody，避免丢失计费字段；退化为仅保留计费字段 + 上游响应
+				fallback := make(map[string]interface{})
+				for _, field := range preservedFields {
+					if value, exists := existingData[field]; exists {
+						fallback[field] = value
+					}
+				}
+				ensureGenerateAudioInMap(fallback)
+				fallback["_upstream_response"] = string(redactedBody)
+				if fb, _ := common.Marshal(fallback); len(fb) > 0 {
+					task.Data = fb
+				} else {
+					task.Data = redactedBody
+				}
+			}
+		}
 	}
 
-	logger.LogDebug(ctx, fmt.Sprintf("UpdateVideoSingleTask taskResult: %+v", taskResult))
+	safeTaskResult := *taskResult
+	safeTaskResult.Url = truncateBase64(safeTaskResult.Url)
+	safeTaskResult.RemoteUrl = truncateBase64(safeTaskResult.RemoteUrl)
+	safeTaskResult.Reason = truncateBase64(safeTaskResult.Reason)
+	logger.LogDebug(ctx, fmt.Sprintf("UpdateVideoSingleTask taskResult: %+v", safeTaskResult))
 
 	now := time.Now().Unix()
 	if taskResult.Status == "" {
@@ -152,35 +266,47 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		if task.FinishTime == 0 {
 			task.FinishTime = now
 		}
-		// Attempt to upload the generated video to OSS and store the permanent URL.
-		// When OSS is not configured (OSS_BASE64_ENDPOINT unset), fall back to storing
-		// the video directly in fail_reason (base64 data URI or CDN URL).
-		if ossURL := uploadVideoToOSS(ctx, channel, task, taskResult); ossURL != "" {
-			task.FailReason = ossURL
-		} else {
-			// OSS disabled or upload failed — store whatever URL/data we have.
-			if taskResult.RemoteUrl != "" {
-				task.FailReason = taskResult.RemoteUrl
-			} else if taskResult.Url != "" {
-				task.FailReason = taskResult.Url
-			}
-		}
-
 		// 计费路由：按秒计费模型（Sora-2 等）使用独立计费函数，其他沿用预扣费差额结算
 		taskModelName := task.Properties.OriginModelName
 		if taskModelName == "" {
 			taskModelName = task.Properties.UpstreamModelName
 		}
 
-		if isSora2VideoModel(taskModelName) {
+		// 对于 Veo 模型，跳过 OSS 上传逻辑（使用前缀匹配避免误匹配其他含 "veo" 的模型名）
+		if strings.HasPrefix(strings.ToLower(taskModelName), "veo-") {
+			if taskResult.RemoteUrl != "" {
+				task.FailReason = taskResult.RemoteUrl
+			} else if taskResult.Url != "" {
+				task.FailReason = taskResult.Url
+			}
+		} else {
+			// Attempt to upload the generated video to OSS and store the permanent URL.
+			// When OSS is not configured (OSS_BASE64_ENDPOINT unset), fall back to storing
+			// the video directly in fail_reason (base64 data URI or CDN URL).
+			if ossURL := uploadVideoToOSS(ctx, channel, task, taskResult); ossURL != "" {
+				task.FailReason = ossURL
+			} else {
+				// OSS disabled or upload failed — store whatever URL/data we have.
+				if taskResult.RemoteUrl != "" {
+					task.FailReason = taskResult.RemoteUrl
+				} else if taskResult.Url != "" {
+					task.FailReason = taskResult.Url
+				}
+			}
+		}
+
+		if isVideoPerSecondModel(taskModelName) {
 			// 按秒计费：轮询成功后根据 task.Data 中保存的信息计费并写消费日志
 			if err := handleSora2TaskBilling(ctx, task); err != nil {
-				logger.LogError(ctx, fmt.Sprintf("[Sora2Billing] Failed for task %s: %v", task.TaskID, err))
+				logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed: %v", taskModelName, task.TaskID, err))
+				// 计费失败时将任务标记为 FAILURE，防止用户免费获得视频
+				task.Status = model.TaskStatusFailure
+				task.FailReason = fmt.Sprintf("billing_failed: %v", err)
 			}
 		} else if taskResult.TotalTokens > 0 {
 			// 按 token 计费模型（如 Doubao）：根据实际 token 数结算差额
 			var taskData map[string]interface{}
-			if err := json.Unmarshal(task.Data, &taskData); err == nil {
+			if err := common.Unmarshal(task.Data, &taskData); err == nil {
 				if modelName, ok := taskData["model"].(string); ok && modelName != "" {
 					modelRatio, hasRatioSetting, _ := ratio_setting.GetModelRatio(modelName)
 					if hasRatioSetting && modelRatio > 0 {
@@ -386,9 +512,72 @@ func sanitizeFileName(s string) string {
 	return replacer.Replace(s)
 }
 
+// parseGenerateAudioFromUpstreamBody 从 upstream_request_body 解析 parameters.generateAudio / 顶层 generateAudio，用于计费与合并补全
+func parseGenerateAudioFromUpstreamBody(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	var m map[string]interface{}
+	if err := common.Unmarshal(body, &m); err != nil {
+		return false
+	}
+	parseBool := func(v interface{}) bool {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+		return false
+	}
+	for _, key := range []string{"generateAudio", "generate_audio"} {
+		if parseBool(m[key]) {
+			return true
+		}
+	}
+	if params, _ := m["parameters"].(map[string]interface{}); params != nil {
+		for _, key := range []string{"generateAudio", "generate_audio"} {
+			if parseBool(params[key]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// mergeBillingFieldsIntoTaskData 将 existingData 中的计费字段合并进 newData，返回合并后的 JSON；用于 New API 格式分支避免覆盖导致计费失败。
+// 与 nebula-new-api 对齐：当上游响应非 New API（如 Vertex 仅返回 {"name":"..."}）时不要用空数据覆盖，保留 existingData。
+func mergeBillingFieldsIntoTaskData(existingData, newData []byte) []byte {
+	preserved := []string{
+		"requested_seconds", "billing_requested_seconds",
+		"billing_model_name", "billing_group", "billing_oem_code",
+		"billing_oem_user_discount", "billing_effective_group_ratio",
+		"billing_token_name", "billing_token_id", "billing_processed",
+		"generate_audio", "generateAudio",
+	}
+	var existMap, newMap map[string]interface{}
+	if len(existingData) > 0 {
+		_ = common.Unmarshal(existingData, &existMap)
+	}
+	if len(newData) > 0 {
+		_ = common.Unmarshal(newData, &newMap)
+	}
+	// 两者都空时不要用 nil 覆盖，保留原 existingData
+	if existMap == nil && newMap == nil {
+		return existingData
+	}
+	if newMap == nil {
+		newMap = make(map[string]interface{})
+	}
+	for _, field := range preserved {
+		if value, exists := existMap[field]; exists {
+			newMap[field] = value
+		}
+	}
+	merged, _ := common.Marshal(newMap)
+	return merged
+}
+
 func redactVideoResponseBody(body []byte) []byte {
 	var m map[string]any
-	if err := json.Unmarshal(body, &m); err != nil {
+	if err := common.Unmarshal(body, &m); err != nil {
 		return body
 	}
 	// Vertex AI: remove embedded base64 video bytes
@@ -411,7 +600,7 @@ func redactVideoResponseBody(body []byte) []byte {
 	if urlVal, ok := m["url"].(string); ok && strings.HasPrefix(urlVal, "data:") {
 		m["url"] = "" // clear large base64 blob; OSS URL in FailReason takes precedence
 	}
-	b, err := json.Marshal(m)
+	b, err := common.Marshal(m)
 	if err != nil {
 		return body
 	}
@@ -426,10 +615,121 @@ func truncateBase64(s string) string {
 	return s[:maxKeep] + "..."
 }
 
-// isSora2VideoModel 判断是否为按秒计费的视频模型
-func isSora2VideoModel(name string) bool {
+// isVideoPerSecondModel 判断是否为按秒计费的视频模型（如 Veo、Sora 等，配置了每秒单价）
+func isVideoPerSecondModel(name string) bool {
 	_, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecond(name)
 	return hasVideoPrice
+}
+
+// mergeVideoTaskDataWithUpstreamResponse 将上游响应合并进 task.Data，保留计费字段；供轮询与 GET 终态分支共用
+func mergeVideoTaskDataWithUpstreamResponse(task *model.Task, responseBody []byte) {
+	preservedFields := []string{
+		"requested_seconds", "billing_requested_seconds",
+		"billing_model_name", "billing_group", "billing_oem_code",
+		"billing_oem_user_discount", "billing_effective_group_ratio",
+		"billing_token_name", "billing_token_id", "billing_processed",
+		"generate_audio", "generateAudio",
+	}
+	var existingData, newData map[string]interface{}
+	if len(task.Data) > 0 {
+		_ = common.Unmarshal(task.Data, &existingData)
+	}
+	if existingData == nil {
+		existingData = make(map[string]interface{})
+	}
+	ensureGenerateAudioInMap := func(data map[string]interface{}) {
+		if _, has := data["generate_audio"]; has {
+			return
+		}
+		if _, has := data["generateAudio"]; has {
+			return
+		}
+		if parseGenerateAudioFromUpstreamBody(task.UpstreamRequestBody) {
+			data["generate_audio"] = true
+			data["generateAudio"] = true
+		}
+	}
+	redacted := redactVideoResponseBody(responseBody)
+	if err := common.Unmarshal(redacted, &newData); err != nil {
+		newData = make(map[string]interface{})
+		for _, f := range preservedFields {
+			if v, ok := existingData[f]; ok {
+				newData[f] = v
+			}
+		}
+		ensureGenerateAudioInMap(newData)
+		newData["_upstream_response"] = string(redacted)
+	} else {
+		for _, f := range preservedFields {
+			if v, ok := existingData[f]; ok {
+				newData[f] = v
+			}
+		}
+		ensureGenerateAudioInMap(newData)
+	}
+	if merged, err := common.Marshal(newData); err == nil {
+		task.Data = merged
+	}
+}
+
+// CompleteVideoTaskOnUpstreamSuccess 在 GET /v1/videos 收到上游终态（SUCCESS/FAILURE）时落库并计费，与轮询路径一致，避免仅轮询返回 {"name":"..."} 时任务永不完成
+func CompleteVideoTaskOnUpstreamSuccess(ctx context.Context, task *model.Task, channel *model.Channel, taskResult *relaycommon.TaskInfo, responseBody []byte) error {
+	mergeVideoTaskDataWithUpstreamResponse(task, responseBody)
+	now := time.Now().Unix()
+	task.Status = model.TaskStatus(taskResult.Status)
+	task.Progress = taskResult.Progress
+	if taskResult.Progress == "" {
+		if taskResult.Status == model.TaskStatusSuccess || taskResult.Status == model.TaskStatusFailure {
+			task.Progress = "100%"
+		}
+	}
+	if taskResult.Status == model.TaskStatusSuccess {
+		if task.FinishTime == 0 {
+			task.FinishTime = now
+		}
+		taskModelName := task.Properties.OriginModelName
+		if taskModelName == "" {
+			taskModelName = task.Properties.UpstreamModelName
+		}
+		if strings.HasPrefix(strings.ToLower(taskModelName), "veo-") {
+			if taskResult.RemoteUrl != "" {
+				task.FailReason = taskResult.RemoteUrl
+			} else if taskResult.Url != "" {
+				task.FailReason = taskResult.Url
+			}
+		} else {
+			if taskResult.RemoteUrl != "" {
+				task.FailReason = taskResult.RemoteUrl
+			} else if taskResult.Url != "" {
+				task.FailReason = taskResult.Url
+			}
+		}
+	}
+	if taskResult.Status == model.TaskStatusFailure {
+		if task.FinishTime == 0 {
+			task.FinishTime = now
+		}
+		if strings.TrimSpace(taskResult.Reason) != "" {
+			task.FailReason = strings.TrimSpace(taskResult.Reason)
+		}
+	}
+	if err := task.Update(); err != nil {
+		return err
+	}
+	taskModelName := task.Properties.OriginModelName
+	if taskModelName == "" {
+		taskModelName = task.Properties.UpstreamModelName
+	}
+	if taskResult.Status == model.TaskStatusSuccess && isVideoPerSecondModel(taskModelName) {
+		if err := handleSora2TaskBilling(ctx, task); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("[VideoBilling] GET path model=%s task=%s failed: %v", taskModelName, task.TaskID, err))
+			task.Status = model.TaskStatusFailure
+			task.FailReason = fmt.Sprintf("billing_failed: %v", err)
+			_ = task.Update()
+			return err
+		}
+	}
+	return nil
 }
 
 // handleSora2TaskBilling 处理按秒计费视频模型的轮询成功计费逻辑（Sora-2 等）
@@ -453,17 +753,77 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 
 	// 防重复计费
 	if processed, ok := taskData["billing_processed"].(bool); ok && processed {
-		logger.LogInfo(ctx, fmt.Sprintf("[Sora2Billing] Task %s already billed, skip", task.TaskID))
+		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s already billed, skip", modelName, task.TaskID))
 		return nil
 	}
 
-	// 读取关键字段
+	// 读取关键字段：requested_seconds（最高优先级 upstream_request_body，再 task.Data，再 Properties）
+	// Gemini/Veo 上游体结构：顶层无 durationSeconds 时在 parameters 或 instances[0] 中
 	requestedSeconds := 0
-	if v, ok := taskData["billing_requested_seconds"].(float64); ok {
-		requestedSeconds = int(v)
+	if len(task.UpstreamRequestBody) > 0 {
+		var upstreamReq map[string]interface{}
+		if err := common.Unmarshal(task.UpstreamRequestBody, &upstreamReq); err == nil {
+			if v, ok := upstreamReq["durationSeconds"].(float64); ok && v > 0 {
+				requestedSeconds = int(v)
+			} else if v, ok := upstreamReq["durationSeconds"].(int); ok && v > 0 {
+				requestedSeconds = v
+			}
+			if requestedSeconds <= 0 {
+				if instances, ok := upstreamReq["instances"].([]interface{}); ok && len(instances) > 0 {
+					if inst, ok := instances[0].(map[string]interface{}); ok {
+						if v, ok := inst["durationSeconds"].(float64); ok && v > 0 {
+							requestedSeconds = int(v)
+						} else if v, ok := inst["durationSeconds"].(int); ok && v > 0 {
+							requestedSeconds = v
+						}
+					}
+				}
+			}
+			// Gemini Veo 请求体把 durationSeconds 放在 parameters 中
+			if requestedSeconds <= 0 {
+				if params, ok := upstreamReq["parameters"].(map[string]interface{}); ok && params != nil {
+					if v, ok := params["durationSeconds"].(float64); ok && v > 0 {
+						requestedSeconds = int(v)
+					} else if v, ok := params["durationSeconds"].(int); ok && v > 0 {
+						requestedSeconds = v
+					}
+				}
+			}
+		}
 	}
 	if requestedSeconds <= 0 {
+		if v, ok := taskData["requested_seconds"].(float64); ok {
+			requestedSeconds = int(v)
+		} else if v, ok := taskData["requested_seconds"].(int); ok {
+			requestedSeconds = v
+		}
+	}
+	if requestedSeconds <= 0 {
+		if v, ok := taskData["billing_requested_seconds"].(float64); ok {
+			requestedSeconds = int(v)
+		} else if v, ok := taskData["billing_requested_seconds"].(int); ok {
+			requestedSeconds = v
+		}
+	}
+	if requestedSeconds <= 0 {
+		if secondsStr, ok := taskData["seconds"].(string); ok && secondsStr != "" {
+			if sec, err := strconv.Atoi(secondsStr); err == nil && sec > 0 {
+				requestedSeconds = sec
+			}
+		}
+	}
+	if requestedSeconds <= 0 && task.Properties.RequestedSeconds > 0 {
+		requestedSeconds = task.Properties.RequestedSeconds
+	}
+	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s requested_seconds=%d", task.TaskID, requestedSeconds))
+	// 最后兜底：Veo 等按秒计费模型若仍为 0（历史数据或入库异常），按 4 秒计费，避免计费失败导致任务标 FAILURE
+	if requestedSeconds <= 0 && modelName != "" && strings.HasPrefix(strings.ToLower(modelName), "veo-") {
+		logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s requested_seconds=0, fallback to 4s for billing", modelName, task.TaskID))
 		requestedSeconds = 4
+	}
+	if requestedSeconds <= 0 {
+		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s invalid requested_seconds: %d", modelName, task.TaskID, requestedSeconds))
+		return fmt.Errorf("invalid requested_seconds: %d", requestedSeconds)
 	}
 
 	oemCode := "gravitex"
@@ -512,35 +872,59 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		groupRatio = 1.0
 	}
 
-	// 获取官方单秒价格
-	officialVideoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecond(modelName)
+	// 是否生成音频（Veo 非 fast：generateAudio true 用 audio 0.4/秒，否则 noAudio 0.2/秒）
+	// 优先从 upstream_request_body 读（与 requested_seconds 一致，来源可靠），再兜底 task.Data
+	generateAudioFromUpstream := parseGenerateAudioFromUpstreamBody(task.UpstreamRequestBody)
+	generateAudio := generateAudioFromUpstream
+	if !generateAudio {
+		if v, ok := taskData["generate_audio"].(bool); ok {
+			generateAudio = v
+		} else if v, ok := taskData["generateAudio"].(bool); ok {
+			generateAudio = v
+		} else if s, ok := taskData["generate_audio"].(string); ok {
+			generateAudio = strings.EqualFold(strings.TrimSpace(s), "true") || s == "1"
+		} else if s, ok := taskData["generateAudio"].(string); ok {
+			generateAudio = strings.EqualFold(strings.TrimSpace(s), "true") || s == "1"
+		}
+	}
+	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s generate_audio=%v (from_upstream=%v)", task.TaskID, generateAudio, generateAudioFromUpstream))
+	// 获取官方单秒价格（支持 noAudio/audio 分离定价；优先 noAudio/audio 配置再单一数字）
+	officialVideoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecondForBilling(modelName, generateAudio)
 	if !hasVideoPrice || officialVideoPrice <= 0 {
 		return fmt.Errorf("handleSora2TaskBilling: video price per second not configured for model: %s", modelName)
 	}
 
-	// 计算实际扣费 quota（与提交时估算公式完全一致）
-	// actualQuota = officialVideoPrice × requestedSeconds × QuotaPerUnit × effectiveGroupRatio × oemUserDiscount
-	actualQuota := int(officialVideoPrice * float64(requestedSeconds) * common.QuotaPerUnit * groupRatio * oemUserDiscount)
+	// 获取 OEM 销售折扣（用于 OEM 侧成本与日志价格链）
+	oemDiscount := model.GetOemDiscountByCode(oemCode, modelName, service.GetVendorNameFromModel(modelName))
+	if oemDiscount <= 0 {
+		oemDiscount = 1.0
+	}
+	oemVideoPrice := officialVideoPrice * oemDiscount
+
+	// 计算实际扣费 quota（与全局价格链公式保持一致）
+	// 实际用户单价 = officialVideoPrice × oemUserDiscount
+	// actualQuota = 实际用户单价 × requestedSeconds × QuotaPerUnit × effectiveGroupRatio
+	effectiveVideoPrice := officialVideoPrice * oemUserDiscount
+
+	actualQuotaFloat := effectiveVideoPrice * float64(requestedSeconds) * common.QuotaPerUnit * groupRatio
+
+	actualQuota := int(actualQuotaFloat)
 	if actualQuota < 0 {
 		actualQuota = 0
 	}
 
-	logger.LogInfo(ctx, fmt.Sprintf("[Sora2Billing] task=%s model=%s seconds=%d officialPrice=%.4f groupRatio=%.4f oemDiscount=%.4f actualQuota=%d",
-		task.TaskID, modelName, requestedSeconds, officialVideoPrice, groupRatio, oemUserDiscount, actualQuota))
+	// 计费过程日志：公式与各因子，便于排查
+	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s seconds=%d generate_audio=%v officialPrice=%.4f oemUserDiscount=%.4f groupRatio=%.4f effectiveUserPrice=%.4f actualQuota=%d",
+		modelName, task.TaskID, requestedSeconds, generateAudio, officialVideoPrice, oemUserDiscount, groupRatio, effectiveVideoPrice, actualQuota))
+	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] formula: effectivePrice(%.4f) × seconds(%d) × QuotaPerUnit(%.0f) × groupRatio(%.4f) = %d",
+		effectiveVideoPrice, requestedSeconds, common.QuotaPerUnit, groupRatio, actualQuota))
 
-	// 执行扣费
+	// 执行扣费（已包含 OEM 用户折扣）
 	if actualQuota > 0 {
 		if err := model.DecreaseUserQuota(task.UserId, actualQuota); err != nil {
 			return fmt.Errorf("handleSora2TaskBilling: DecreaseUserQuota failed: %w", err)
 		}
 	}
-
-	// 获取 OEM 销售折扣（用于日志价格链）
-	oemDiscount := model.GetOemDiscountByCode(oemCode, modelName, "")
-	if oemDiscount <= 0 {
-		oemDiscount = 1.0
-	}
-	oemVideoPrice := officialVideoPrice * oemDiscount
 
 	// 获取用户名（用于日志）
 	username := ""
@@ -553,7 +937,7 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		useTime = int(task.FinishTime - task.StartTime)
 	}
 
-	logContent := fmt.Sprintf("Sora-2视频任务成功，模型 %s，时长 %d 秒，耗时 %ds，扣费 %s",
+	logContent := fmt.Sprintf("视频任务成功，模型 %s，时长 %d 秒，耗时 %ds，扣费 %s",
 		modelName, requestedSeconds, useTime, logger.LogQuota(actualQuota))
 
 	priceChain := service.CalculatePriceChainForLogFromParams(oemCode, modelName, actualQuota, oemUserDiscount, groupRatio)
@@ -562,12 +946,13 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		"requested_seconds":               requestedSeconds,
 		"official_video_price_per_second": officialVideoPrice,
 		"oem_video_price_per_second":      oemVideoPrice,
-		"video_price_per_second":          officialVideoPrice * oemUserDiscount,
-		"group_ratio":                     groupRatio,
-		"user_group_ratio":                groupRatio,
-		"oem_user_discount":               oemUserDiscount,
-		"oem_code":                        oemCode,
-		"oem_discount":                    oemDiscount,
+		// 最终用户每秒价格：官方价 × OEM 用户折扣
+		"video_price_per_second": effectiveVideoPrice,
+		"group_ratio":            groupRatio,
+		"user_group_ratio":       groupRatio,
+		"oem_user_discount":      oemUserDiscount,
+		"oem_code":               oemCode,
+		"oem_discount":           oemDiscount,
 	}
 	if priceChain != nil && priceChain.VendorId != nil {
 		otherMap["vendor_id"] = *priceChain.VendorId
@@ -600,7 +985,7 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		consumeLog.OemSubsidy = priceChain.OemSubsidy
 	}
 	if err := model.LOG_DB.Create(consumeLog).Error; err != nil {
-		logger.LogError(ctx, fmt.Sprintf("[Sora2Billing] Failed to insert consume log for task %s: %v", task.TaskID, err))
+		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed to insert consume log: %v", modelName, task.TaskID, err))
 	}
 
 	// 更新用量统计

@@ -2,7 +2,7 @@ package relay
 
 import (
 	"bytes"
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -23,6 +23,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// CompleteVideoTaskOnUpstreamSuccessFn 由 main/router 注入，在 GET /v1/videos 收到上游终态时落库并计费，避免 relay 依赖 controller 产生 import cycle
+var CompleteVideoTaskOnUpstreamSuccessFn func(context.Context, *model.Task, *model.Channel, *relaycommon.TaskInfo, []byte) error
 
 /*
 Task 任务通过平台、Action 区分任务
@@ -67,7 +70,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 				info.OriginModelName = originTask.Properties.UpstreamModelName
 			} else {
 				var taskData map[string]interface{}
-				_ = json.Unmarshal(originTask.Data, &taskData)
+				_ = common.Unmarshal(originTask.Data, &taskData)
 				if m, ok := taskData["model"].(string); ok && m != "" {
 					info.OriginModelName = m
 					platform = originTask.Platform
@@ -104,7 +107,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		// 使用原始任务的参数
 		if info.Action == constant.TaskActionRemix {
 			var taskData map[string]interface{}
-			_ = json.Unmarshal(originTask.Data, &taskData)
+			_ = common.Unmarshal(originTask.Data, &taskData)
 			secondsStr, _ := taskData["seconds"].(string)
 			seconds, _ := strconv.Atoi(secondsStr)
 			if seconds <= 0 {
@@ -137,10 +140,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		return
 	}
 
-	// 打印用户请求体（供调试）
+	// 打印用户请求体（供调试，写入文件日志，截断大字段）
 	if bodyStorage, bodyErr := common.GetBodyStorage(c); bodyErr == nil {
 		if rawBody, readErr := io.ReadAll(common.ReaderOnly(bodyStorage)); readErr == nil {
-			common.SysLog(fmt.Sprintf("[TaskSubmit] client request body: %s", common.TruncateJsonValues(string(rawBody))))
+			logger.LogInfo(c, fmt.Sprintf("[TaskSubmit] client request body: %s", common.TruncateJsonValues(string(rawBody))))
 		}
 	}
 
@@ -164,15 +167,16 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		effectiveGroupRatio = userGroupRatio
 	}
 
-	// isSora2VideoModel 判断是否为按秒计费的视频模型（提交时不预扣费，轮询成功后计费）
-	isSora2VideoModel := isVideoPerSecondModel(modelName)
+	// isPerSecondBilling 是否为按秒计费的视频模型（提交时不预扣费，轮询成功后计费）
+	isPerSecondBilling := isVideoPerSecondModel(modelName)
 
 	// 计算余额检查用的估算quota（仅用于校验，不实际扣费）
 	var quota int
 	var modelPrice float64
-	if isSora2VideoModel {
-		// 按秒计费模型：估算 quota = videoPrice × 预期秒数 × groupRatio × oemDiscount
-		videoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecond(modelName)
+	if isPerSecondBilling {
+		// 按秒计费模型（Veo 等）：按是否生成音频取价，估算 quota = videoPrice × 预期秒数 × groupRatio × oemDiscount
+		generateAudio := parseGenerateAudioForQuota(c)
+		videoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecondForBilling(modelName, generateAudio)
 		oemUserDiscount := service.GetOemUserDiscountForQuota(c, modelName)
 		if oemUserDiscount <= 0 {
 			oemUserDiscount = 1.0
@@ -208,8 +212,8 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		quota = int(ratio * common.QuotaPerUnit)
 	}
 
-	common.SysLog(fmt.Sprintf("[TaskSubmit] model=%s group=%s groupRatio=%.4f quota=%d isSora2=%v",
-		modelName, info.UsingGroup, effectiveGroupRatio, quota, isSora2VideoModel))
+	logger.LogInfo(c, fmt.Sprintf("[TaskSubmit] model=%s group=%s groupRatio=%.4f quota=%d perSecondBilling=%v",
+		modelName, info.UsingGroup, effectiveGroupRatio, quota, isPerSecondBilling))
 
 	userQuota, err := model.GetUserQuota(info.UserId, false)
 	if err != nil {
@@ -232,7 +236,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	var upstreamBodyBytes []byte
 	if bodyBytes, readErr := io.ReadAll(requestBody); readErr == nil {
 		upstreamBodyBytes = bodyBytes
-		common.SysLog(fmt.Sprintf("[TaskSubmit] upstream request body: %s", common.TruncateJsonValues(string(bodyBytes))))
+		logger.LogInfo(c, fmt.Sprintf("[TaskSubmit] upstream request body: %s", common.TruncateJsonValues(string(bodyBytes))))
 		requestBody = bytes.NewReader(bodyBytes)
 	}
 
@@ -253,7 +257,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	}
 
 	// 非按秒计费模型：提交成功即预扣费并记录日志
-	if !isSora2VideoModel {
+	if !isPerSecondBilling {
 		defer func() {
 			if info.ConsumeQuota && taskErr == nil {
 				err := service.PostConsumeQuota(info, quota, 0, true)
@@ -304,6 +308,16 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		}()
 	}
 
+	// 提交任务：打印上游返回数据（截断 base64 等大字段）
+	if resp != nil && resp.Body != nil {
+		submitResponseBody, _ := io.ReadAll(resp.Body)
+		if len(submitResponseBody) > 0 {
+			logger.LogInfo(c, fmt.Sprintf("[TaskSubmit] upstream response body: %s", common.TruncateJsonValues(string(submitResponseBody))))
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(submitResponseBody))
+	}
+	// 延迟写入响应：DoResponse 将响应体存入 context，等 task.Insert() 成功后再写，避免重试时多次写响应导致前端收到多段 JSON 解析报错
+	c.Set(relaycommon.TaskSubmitDelayResponse, true)
 	taskID, taskData, taskErr := adaptor.DoResponse(c, resp, info)
 	if taskErr != nil {
 		return
@@ -311,7 +325,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	info.ConsumeQuota = true
 
 	// 按秒计费模型：将扣费所需信息合并到 task.Data，轮询成功后再计费（含 token 信息供轮询完成后写日志）
-	if isSora2VideoModel {
+	if isPerSecondBilling {
 		taskData = mergeVideoTaskBillingData(c, info, taskData, modelName, info.UsingGroup, upstreamBodyBytes)
 	}
 
@@ -319,17 +333,45 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	task := model.InitTask(platform, info)
 	task.TaskID = taskID
 	// 按秒计费模型：task.Quota=0（轮询后实际计费），其他模型保持估算的预扣quota
-	if isSora2VideoModel {
+	if isPerSecondBilling {
 		task.Quota = 0
+		sec := resolveRequestedSeconds(c, upstreamBodyBytes)
+		task.Properties.RequestedSeconds = sec
 	} else {
 		task.Quota = quota
 	}
 	task.Data = taskData
 	task.Action = info.Action
+	// 插入前再次保证按秒计费模型的 RequestedSeconds 已写入（防止 context/body 解析异常导致入库为 0）
+	if isPerSecondBilling && task.Properties.RequestedSeconds <= 0 {
+		sec := resolveRequestedSeconds(c, upstreamBodyBytes)
+		if sec <= 0 {
+			sec = 4
+		}
+		task.Properties.RequestedSeconds = sec
+	}
+	// 持久化用户原始请求体与上游请求体，轮询线程不覆盖，计费时从 upstream_request_body 读取 durationSeconds
+	// 仅截断 base64 字符串，其它属性不截断，避免大图/视频 base64 撑爆存储
+	if userBodyBytes := getUserRequestBody(c); len(userBodyBytes) > 0 {
+		task.UserRequestBody = []byte(common.TruncateBase64Content(string(userBodyBytes)))
+	}
+	if len(upstreamBodyBytes) > 0 {
+		task.UpstreamRequestBody = []byte(common.TruncateBase64Content(string(upstreamBodyBytes)))
+	}
+	if isPerSecondBilling {
+		logger.LogInfo(c, fmt.Sprintf("[VideoTaskInsert] task_id=%s requested_seconds=%d",
+			taskID, task.Properties.RequestedSeconds))
+	}
 	err = task.Insert()
 	if err != nil {
 		taskErr = service.TaskErrorWrapper(err, "insert_task_failed", http.StatusInternalServerError)
 		return
+	}
+	// 任务入库成功后再写响应，保证只写一次，避免与重试逻辑叠加导致响应体被写两段
+	if v, exists := c.Get(relaycommon.TaskSubmitResponseBody); exists && v != nil {
+		if body, ok := v.([]byte); ok && len(body) > 0 {
+			c.Data(http.StatusOK, "application/json", body)
+		}
 	}
 	return nil
 }
@@ -340,12 +382,81 @@ func isVideoPerSecondModel(modelName string) bool {
 	return hasVideoPrice
 }
 
+// getUserRequestBody 获取用户原始请求体（用于持久化到 task.UserRequestBody，轮询不覆盖）
+func getUserRequestBody(c *gin.Context) []byte {
+	if c == nil {
+		return nil
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return nil
+	}
+	b, _ := storage.Bytes()
+	return b
+}
+
+// resolveRequestedSeconds 解析视频请求秒数，用于入库 Properties.RequestedSeconds（不依赖单一来源）
+func resolveRequestedSeconds(c *gin.Context, upstreamBodyBytes []byte) int {
+	if c != nil {
+		if v, exists := c.Get("video_seconds"); exists {
+			if n, ok := v.(int); ok && n > 0 {
+				return n
+			}
+			if f, ok := v.(float64); ok && f > 0 {
+				return int(f)
+			}
+		}
+		if n := parseVideoSeconds(c); n > 0 {
+			return n
+		}
+	}
+	if len(upstreamBodyBytes) > 0 {
+		if n := parseVideoSecondsFromBody(upstreamBodyBytes); n > 0 {
+			return n
+		}
+	}
+	return 4
+}
+
+// parseGenerateAudioForQuota 从 task_request.Metadata 解析是否生成音频，用于按秒计费模型的预扣价（Veo 含音频/不含音频价格不同）。未指定时默认 true（按含音频价预留）。
+func parseGenerateAudioForQuota(c *gin.Context) bool {
+	if v, exists := c.Get("task_request"); exists {
+		if req, ok := v.(relaycommon.TaskSubmitReq); ok && req.Metadata != nil {
+			for _, key := range []string{"generateAudio", "generate_audio"} {
+				if val, ok := req.Metadata[key]; ok {
+					switch b := val.(type) {
+					case bool:
+						return b
+					case string:
+						s := strings.TrimSpace(strings.ToLower(b))
+						if s == "false" || s == "0" || s == "no" {
+							return false
+						}
+						if s == "true" || s == "1" || s == "yes" {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+	return true
+}
+
 // parseVideoSeconds 从请求参数中解析视频秒数
-// 优先读取 adaptor 在 context 中存储的已校验秒数（如 AzureVideo），
-// 回退到 multipart form 字段 n_seconds / seconds，
-// 最后尝试从上游请求体（JSON 或 multipart）解析。
+// 优先读取 adaptor 在 ValidateRequestAndSetAction 中存入的 video_seconds（Veo/Gemini/Vertex），
+// 再读 azure_video_seconds，最后回退到 multipart 或上游请求体。
 func parseVideoSeconds(c *gin.Context) int {
-	// 1. Adaptor may store validated seconds in context after BuildRequestBody runs
+	// 1. Veo/Gemini/Vertex adaptor 在 ValidateRequestAndSetAction 中存入的秒数（用于计费）
+	if v, exists := c.Get("video_seconds"); exists {
+		if n, ok := v.(int); ok && n > 0 {
+			return n
+		}
+		if f, ok := v.(float64); ok && f > 0 {
+			return int(f)
+		}
+	}
+	// 2. Adaptor may store validated seconds in context (e.g. AzureVideo)
 	if v, exists := c.Get("azure_video_seconds"); exists {
 		if s, ok := v.(string); ok {
 			if n, err := strconv.Atoi(s); err == nil && n > 0 {
@@ -353,7 +464,7 @@ func parseVideoSeconds(c *gin.Context) int {
 			}
 		}
 	}
-	// 2. Fall back to reading multipart form fields
+	// 3. Fall back to reading multipart form fields
 	for _, key := range []string{"n_seconds", "seconds"} {
 		if v := c.PostForm(key); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -369,10 +480,10 @@ func parseVideoSecondsFromBody(body []byte) int {
 	if len(body) == 0 {
 		return 0
 	}
-	// 1. 尝试 JSON 解析
+	// 1. 尝试 JSON 解析（含 parameters.durationSeconds 与顶层 seconds/n_seconds）
 	var m map[string]interface{}
 	if err := common.Unmarshal(body, &m); err == nil {
-		for _, key := range []string{"seconds", "n_seconds"} {
+		for _, key := range []string{"durationSeconds", "seconds", "n_seconds"} {
 			if v, ok := m[key]; ok {
 				switch val := v.(type) {
 				case string:
@@ -382,6 +493,24 @@ func parseVideoSecondsFromBody(body []byte) int {
 				case float64:
 					if n := int(val); n > 0 {
 						return n
+					}
+				case int:
+					if val > 0 {
+						return val
+					}
+				}
+			}
+		}
+		if params, _ := m["parameters"].(map[string]interface{}); params != nil {
+			if v, ok := params["durationSeconds"]; ok {
+				switch val := v.(type) {
+				case float64:
+					if n := int(val); n > 0 {
+						return n
+					}
+				case int:
+					if val > 0 {
+						return val
 					}
 				}
 			}
@@ -461,6 +590,9 @@ func mergeVideoTaskBillingData(c *gin.Context, info *relaycommon.RelayInfo, task
 		videoSeconds = 4
 	}
 
+	// 与 nebula-new-api 对齐：在 context 中缓存最终用于计费的秒数
+	c.Set("video_seconds", videoSeconds)
+
 	dataMap["billing_model_name"] = modelName
 	dataMap["billing_group"] = usingGroup
 	dataMap["billing_oem_code"] = oemCode
@@ -468,7 +600,14 @@ func mergeVideoTaskBillingData(c *gin.Context, info *relaycommon.RelayInfo, task
 	dataMap["billing_effective_group_ratio"] = effectiveGroupRatio
 	dataMap["billing_token_name"] = tokenName
 	dataMap["billing_token_id"] = tokenId
-	dataMap["billing_requested_seconds"] = videoSeconds
+	// 与 nebula-new-api 对齐：使用 requested_seconds 作为通用字段名
+	dataMap["requested_seconds"] = videoSeconds
+
+	// 从请求中提取并保存音频生成标志（提交时落库，轮询计费时用）。优先 req.GenerateAudio，否则从 Metadata 取（客户端可能放在 metadata 里）
+	generateAudio := parseGenerateAudioForQuota(c)
+	dataMap["generate_audio"] = generateAudio
+	dataMap["generateAudio"] = generateAudio
+
 	dataMap["billing_processed"] = false
 
 	merged, err := common.Marshal(dataMap)
@@ -532,7 +671,7 @@ func sunoFetchRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dto.Ta
 	} else {
 		tasks = make([]any, 0)
 	}
-	respBody, err = json.Marshal(dto.TaskResponse[[]any]{
+	respBody, err = common.Marshal(dto.TaskResponse[[]any]{
 		Code: "success",
 		Data: tasks,
 	})
@@ -553,7 +692,7 @@ func sunoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *dt
 		return
 	}
 
-	respBody, err = json.Marshal(dto.TaskResponse[any]{
+	respBody, err = common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
 		Data: TaskModel2Dto(originTask),
 	})
@@ -608,21 +747,43 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		}
 		ti, err2 := adaptor.ParseTaskResult(body)
 		if err2 == nil && ti != nil {
+			// 保存之前的状态，用于判断是否需要更新数据库
+			prevStatus := originTask.Status
 			if ti.Status != "" {
 				originTask.Status = model.TaskStatus(ti.Status)
 			}
 			if ti.Progress != "" {
 				originTask.Progress = ti.Progress
 			}
-			if ti.Url != "" {
-				if strings.HasPrefix(ti.Url, "data:") {
+			// 失败时用 Reason（上游 error.message，如 Veo 敏感词等）；成功时用 Url/RemoteUrl（视频地址），必须入库供前端 GET /v1/videos/{id} 使用
+			if ti.Status == model.TaskStatusFailure && strings.TrimSpace(ti.Reason) != "" {
+				originTask.FailReason = strings.TrimSpace(ti.Reason)
+			} else if ti.Url != "" {
+				originTask.FailReason = ti.Url
+			} else if ti.RemoteUrl != "" {
+				originTask.FailReason = ti.RemoteUrl
+			}
+			// 当上游返回终态且当前任务尚未终态时：落库（data/status/progress/fail_reason）并执行计费，与后台轮询逻辑一致，避免 Vertex 轮询只返回 {"name":"..."} 导致任务永不完成、不扣费
+			if prevStatus != model.TaskStatusSuccess && prevStatus != model.TaskStatusFailure {
+				if originTask.Status == model.TaskStatusSuccess || originTask.Status == model.TaskStatusFailure {
+					if CompleteVideoTaskOnUpstreamSuccessFn != nil {
+						if errComplete := CompleteVideoTaskOnUpstreamSuccessFn(c.Request.Context(), originTask, channelModel, ti, body); errComplete != nil {
+							logger.LogError(c.Request.Context(), fmt.Sprintf("[GET /v1/videos] CompleteVideoTaskOnUpstreamSuccess task=%s: %v", originTask.TaskID, errComplete))
+						}
+					} else {
+						_ = model.TaskUpdateFailReason(originTask.ID, originTask.FailReason)
+					}
 				} else {
-					originTask.FailReason = ti.Url
+					_ = originTask.Update()
+				}
+			} else {
+				// 后台轮询已处理过终态，使用 DB 中已有的 fail_reason（可能是 OSS URL）
+				if dbTask, _, dbErr := model.GetByOnlyTaskId(originTask.TaskID); dbErr == nil && dbTask != nil && dbTask.FailReason != "" {
+					originTask.FailReason = dbTask.FailReason
 				}
 			}
-			_ = originTask.Update()
 			var raw map[string]any
-			_ = json.Unmarshal(body, &raw)
+			_ = common.Unmarshal(body, &raw)
 			format := "mp4"
 			if respObj, ok := raw["response"].(map[string]any); ok {
 				if vids, ok := respObj["videos"].([]any); ok && len(vids) > 0 {
@@ -655,7 +816,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 					"task_id":  originTask.TaskID,
 					"url":      originTask.FailReason,
 				}
-				respBody, _ = json.Marshal(dto.TaskResponse[any]{
+				respBody, _ = common.Marshal(dto.TaskResponse[any]{
 					Code: "success",
 					Data: out,
 				})
@@ -685,7 +846,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("not_implemented:%s", originTask.Platform), "not_implemented", http.StatusNotImplemented)
 		return
 	}
-	respBody, err = json.Marshal(dto.TaskResponse[any]{
+	respBody, err = common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
 		Data: TaskModel2Dto(originTask),
 	})
