@@ -344,7 +344,7 @@ var defaultCompletionRatio = map[string]float64{
 //   - ImageCompletionRatio: 图片补全倍率，对应图片输出（与图片倍率成倍数关系；未配置时用模型倍率）
 //   - CacheRatio: 缓存倍率，与模型倍率成倍数关系
 //
-// 其它：ImageModelPricePerImage 按张计费在 operation_setting；VideoModelPricePerSecond 在 loadVideoModelPricePerSecondFromDatabase
+// 其它：ImageModelPricePerImage 按张计费从 OptionMap 加载；VideoModelPricePerSecond 在 loadVideoModelPricePerSecondFromDatabase
 func InitRatioSettings() {
 	modelPriceMap.AddAll(defaultModelPrice)
 	modelRatioMap.AddAll(defaultModelRatio)
@@ -387,6 +387,14 @@ func GetModelPrice(name string, printErr bool) (float64, bool) {
 
 	price, ok := modelPriceMap.Get(name)
 	if !ok {
+		// 按张计费：若 options 中配置了 ImageModelPricePerImage，则视为已配置价格（兼容 seedream-* 与 doubao-seedream-* 两种 key）
+		if perImage, okImage := GetImageModelPricePerImage(name); okImage && perImage >= 0 {
+			return perImage, true
+		}
+		// 兜底：直接读 OptionMap 并查找（避免懒加载时 OptionMap 尚未就绪）
+		if p, ok2 := getImageModelPricePerImageFromOptionMap(name); ok2 && p >= 0 {
+			return p, true
+		}
 		if printErr {
 			common.SysError("model price not found: " + name)
 		}
@@ -763,6 +771,13 @@ var (
 	videoModelPricePerSecondMapMutex                    = sync.RWMutex{}
 )
 
+// ImageModelPricePerImage：按张计费，从 options 表 key=ImageModelPricePerImage 的 JSON 加载；懒加载（因 InitRatioSettings 早于 InitOptionMap）
+var (
+	imageModelPricePerImageMap      map[string]float64
+	imageModelPricePerImageMapMutex = sync.RWMutex{}
+	imageModelPricePerImageLoadOnce sync.Once
+)
+
 var (
 	videoModelAudioPricePerSecondMap      map[string]VideoAudioPricing = nil
 	videoModelAudioPricePerSecondMapMutex                              = sync.RWMutex{}
@@ -772,6 +787,78 @@ var (
 	videoModelPricePerSecondRawMap      map[string]interface{} = nil
 	videoModelPricePerSecondRawMapMutex                        = sync.RWMutex{}
 )
+
+// GetImageModelPricePerImageFromOptionMap 直接从 OptionMap 读并按 name 查找（供 relay 兜底），兼容 seedream-* / doubao-seedream-*
+func GetImageModelPricePerImageFromOptionMap(name string) (float64, bool) {
+	return getImageModelPricePerImageFromOptionMap(name)
+}
+
+func getImageModelPricePerImageFromOptionMap(name string) (float64, bool) {
+	common.OptionMapRWMutex.RLock()
+	priceStr := common.OptionMap["ImageModelPricePerImage"]
+	common.OptionMapRWMutex.RUnlock()
+	if priceStr == "" {
+		return -1, false
+	}
+	var m map[string]float64
+	if err := common.Unmarshal([]byte(priceStr), &m); err != nil {
+		return -1, false
+	}
+	if p, ok := m[name]; ok && p >= 0 {
+		return p, true
+	}
+	if !strings.HasPrefix(name, "doubao-") {
+		if p, ok := m["doubao-"+name]; ok && p >= 0 {
+			return p, true
+		}
+	} else {
+		if p, ok := m[strings.TrimPrefix(name, "doubao-")]; ok && p >= 0 {
+			return p, true
+		}
+	}
+	return -1, false
+}
+
+// loadImageModelPricePerImageFromDatabase 从 OptionMap["ImageModelPricePerImage"] 加载按张计费价格（需在 InitOptionMap 之后生效，通过 Get 时懒加载）
+func loadImageModelPricePerImageFromDatabase() {
+	imageModelPricePerImageMapMutex.Lock()
+	defer imageModelPricePerImageMapMutex.Unlock()
+	imageModelPricePerImageMap = make(map[string]float64)
+	common.OptionMapRWMutex.RLock()
+	priceStr, exists := common.OptionMap["ImageModelPricePerImage"]
+	common.OptionMapRWMutex.RUnlock()
+	if exists && priceStr != "" {
+		var priceMap map[string]float64
+		if err := common.Unmarshal([]byte(priceStr), &priceMap); err == nil {
+			imageModelPricePerImageMap = priceMap
+		}
+	}
+}
+
+// GetImageModelPricePerImage 获取按张计费价格；兼容 key 为 seedream-* 或 doubao-seedream-*（先查 name，再查 doubao-+name，再查去掉 doubao- 的 name）
+// 优先从 OptionMap 实时读取，与 nebula 行为一致
+func GetImageModelPricePerImage(name string) (float64, bool) {
+	if p, ok := getImageModelPricePerImageFromOptionMap(name); ok {
+		return p, true
+	}
+	imageModelPricePerImageLoadOnce.Do(loadImageModelPricePerImageFromDatabase)
+	imageModelPricePerImageMapMutex.RLock()
+	defer imageModelPricePerImageMapMutex.RUnlock()
+	if price, ok := imageModelPricePerImageMap[name]; ok {
+		return price, true
+	}
+	if !strings.HasPrefix(name, "doubao-") {
+		if price, ok := imageModelPricePerImageMap["doubao-"+name]; ok {
+			return price, true
+		}
+	} else {
+		alt := strings.TrimPrefix(name, "doubao-")
+		if price, ok := imageModelPricePerImageMap[alt]; ok {
+			return price, true
+		}
+	}
+	return -1, false
+}
 
 // GetVideoModelPricePerSecond 获取视频模型每秒价格
 func GetVideoModelPricePerSecond(name string) (float64, bool) {

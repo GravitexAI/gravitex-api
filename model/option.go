@@ -171,7 +171,11 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
-	options, _ := AllOption()
+	options, err := AllOption()
+	if err != nil {
+		common.SysLog("load options from database failed: " + err.Error())
+		return
+	}
 	for _, option := range options {
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {

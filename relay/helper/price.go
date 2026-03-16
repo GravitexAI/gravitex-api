@@ -47,6 +47,43 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 }
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
+	// 与 nebula 一致：优先按张计费（ImageModelPricePerImage），在 GetModelPrice 之前检查
+	imageModelPrice, hasImageModelPrice := ratio_setting.GetImageModelPricePerImage(info.OriginModelName)
+	if hasImageModelPrice && imageModelPrice > 0 {
+		groupRatioInfo := HandleGroupRatio(c, info)
+		oemUserDiscount := 1.0
+		if c != nil {
+			oemUserDiscount = service.GetOemUserDiscountForQuota(c, info.OriginModelName)
+			if oemUserDiscount <= 0 {
+				oemUserDiscount = 1.0
+			}
+		}
+		modelPrice := imageModelPrice * oemUserDiscount
+		if meta != nil && meta.ImagePriceRatio != 0 {
+			modelPrice = modelPrice * meta.ImagePriceRatio
+		}
+		preConsumedQuota := int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		completionRatio := ratio_setting.GetCompletionRatio(info.OriginModelName)
+		imageCompletionRatio := ratio_setting.GetImageCompletionRatio(info.OriginModelName)
+		priceData := types.PriceData{
+			UsePrice:             true,
+			ModelPrice:           modelPrice,
+			CompletionRatio:      completionRatio,
+			ImageCompletionRatio: imageCompletionRatio,
+			GroupRatioInfo:       groupRatioInfo,
+			QuotaToPreConsume:    preConsumedQuota,
+		}
+		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && groupRatioInfo.GroupRatio == 0 {
+			priceData.FreeModel = true
+			priceData.QuotaToPreConsume = 0
+		} else if operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && modelPrice == 0 {
+			priceData.FreeModel = true
+			priceData.QuotaToPreConsume = 0
+		}
+		info.PriceData = priceData
+		return priceData, nil
+	}
+
 	modelPrice, usePrice := ratio_setting.GetModelPrice(info.OriginModelName, false)
 
 	groupRatioInfo := HandleGroupRatio(c, info)
