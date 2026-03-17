@@ -77,7 +77,12 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			}
 
 			if common.DebugEnabled {
-				logger.LogDebug(c, fmt.Sprintf("image request body: %s", string(jsonData)))
+				const maxLogLen = 2000
+				bodyStr := string(jsonData)
+				if len(bodyStr) > maxLogLen {
+					bodyStr = bodyStr[:maxLogLen] + "...(truncated)"
+				}
+				logger.LogDebug(c, fmt.Sprintf("image request body: %s", bodyStr))
 			}
 			requestBody = bytes.NewBuffer(jsonData)
 		}

@@ -249,8 +249,8 @@ var defaultModelRatio = map[string]float64{
 	// Perplexity online 模型对搜索额外收费，有需要应自行调整，此处不计入搜索费用
 	"llama-3-sonar-small-32k-chat":   0.2 / 1000 * USD,
 	"llama-3-sonar-small-32k-online": 0.2 / 1000 * USD,
-	"llama-3-sonar-large-32k-chat":   1 / 1000 * USD,
-	"llama-3-sonar-large-32k-online": 1 / 1000 * USD,
+	"llama-3-sonar-large-32k-chat":   1.0 / 1000 * USD,
+	"llama-3-sonar-large-32k-online": 1.0 / 1000 * USD,
 	// grok
 	"grok-3-beta":           1.5,
 	"grok-3-mini-beta":      0.15,
@@ -355,6 +355,8 @@ func InitRatioSettings() {
 	imageCompletionRatioMap.AddAll(defaultImageCompletionRatio)
 	audioRatioMap.AddAll(defaultAudioRatio)
 	audioCompletionRatioMap.AddAll(defaultAudioCompletionRatio)
+	loadVideoRatioFromDatabase()
+	loadVideoCompletionRatioFromDatabase()
 	loadVideoModelPricePerSecondFromDatabase()
 }
 
@@ -714,6 +716,12 @@ func GetCompletionRatioCopy() map[string]float64 {
 // 转换模型名，减少渠道必须配置各种带参数模型
 func FormatMatchingModelName(name string) string {
 
+	// 一些业务侧会把模型做成别名后缀（例如 "-nsfw" 用于走不同 endpoint），
+	// 但定价/倍率通常与基础模型一致；这里做归一化以复用配置。
+	if strings.HasSuffix(name, "-nsfw") {
+		name = strings.TrimSuffix(name, "-nsfw")
+	}
+
 	if strings.HasPrefix(name, "gemini-2.5-flash-lite") {
 		name = handleThinkingBudgetModel(name, "gemini-2.5-flash-lite", "gemini-2.5-flash-lite-thinking-*")
 	} else if strings.HasPrefix(name, "gemini-2.5-flash") {
@@ -742,6 +750,245 @@ func GetModelRatioOrPrice(model string) (float64, bool, bool) { // price or rati
 		return modelRatio, false, true
 	}
 	return 37.5, false, false
+}
+
+// ==================== VideoRatio / VideoCompletionRatio ====================
+//
+// VideoRatio: 视频倍率（与 ModelRatio 语义一致，倍率以系统基准 $2/M tokens 为基准），用于视频按量计费模型的「输入价格」。
+// VideoCompletionRatio: 视频补全倍率/价格。
+//   - 当 VideoRatio 存在且 != 0：VideoCompletionRatio 作为倍率（相对 VideoRatio）
+//   - 当 VideoRatio 不存在或 == 0：VideoCompletionRatio 作为价格（$/M tokens），直接用于计费
+//
+// VideoCompletionRatio 支持两种格式：
+//   - 数字：价格或倍率（取决于 VideoRatio 是否有效）
+//   - 带音频分档：{"noAudio": 1.2, "audio": 2.4}（价格或倍率，按 generate_audio 取值）
+
+var (
+	videoRatioMap      map[string]float64 = nil
+	videoRatioMapMutex                    = sync.RWMutex{}
+)
+
+var (
+	videoCompletionRatioPrimaryMap    map[string]float64           = nil
+	videoCompletionRatioAudioMap      map[string]VideoAudioPricing = nil
+	videoCompletionRatioRawMap        map[string]interface{}       = nil
+	videoCompletionRatioMapMutex                                   = sync.RWMutex{}
+	videoCompletionRatioAudioMapMutex                              = sync.RWMutex{}
+	videoCompletionRatioRawMapMutex                                = sync.RWMutex{}
+)
+
+func GetVideoRatio(name string) (float64, bool) {
+	name = FormatMatchingModelName(name)
+	videoRatioMapMutex.RLock()
+	defer videoRatioMapMutex.RUnlock()
+	if videoRatioMap == nil {
+		return 0, false
+	}
+	v, ok := videoRatioMap[name]
+	return v, ok
+}
+
+func GetVideoCompletionRatioPricing(name string, generateAudio bool) (float64, bool) {
+	name = FormatMatchingModelName(name)
+
+	// 1) 优先取 VideoCompletionRatio 的分档（noAudio/audio）
+	if audioPricing, ok := getVideoCompletionAudioPricing(name); ok {
+		value := 0.0
+		if generateAudio && audioPricing.Audio > 0 {
+			value = audioPricing.Audio
+		} else if !generateAudio && audioPricing.NoAudio > 0 {
+			value = audioPricing.NoAudio
+		} else if audioPricing.NoAudio > 0 {
+			value = audioPricing.NoAudio
+		} else if audioPricing.Audio > 0 {
+			value = audioPricing.Audio
+		}
+		if value > 0 {
+			if vr, hasVR := GetVideoRatio(name); hasVR && vr != 0 {
+				return vr * value, true
+			}
+			return value, true
+		}
+	}
+
+	// 2) 再取 VideoCompletionRatio 的数字值
+	if v, ok := getVideoCompletionPrimaryValue(name); ok && v > 0 {
+		if vr, hasVR := GetVideoRatio(name); hasVR && vr != 0 {
+			return vr * v, true
+		}
+		return v, true
+	}
+
+	return 0, false
+}
+
+func getVideoCompletionPrimaryValue(name string) (float64, bool) {
+	videoCompletionRatioMapMutex.RLock()
+	defer videoCompletionRatioMapMutex.RUnlock()
+	if videoCompletionRatioPrimaryMap == nil {
+		return 0, false
+	}
+	v, ok := videoCompletionRatioPrimaryMap[name]
+	return v, ok
+}
+
+func getVideoCompletionAudioPricing(name string) (VideoAudioPricing, bool) {
+	videoCompletionRatioAudioMapMutex.RLock()
+	defer videoCompletionRatioAudioMapMutex.RUnlock()
+	if videoCompletionRatioAudioMap == nil {
+		return VideoAudioPricing{}, false
+	}
+	v, ok := videoCompletionRatioAudioMap[name]
+	return v, ok
+}
+
+// loadVideoRatioFromDatabase 从数据库加载视频倍率配置（OptionMap["VideoRatio"]）
+func loadVideoRatioFromDatabase() {
+	videoRatioMapMutex.Lock()
+	defer videoRatioMapMutex.Unlock()
+
+	common.OptionMapRWMutex.RLock()
+	videoStr, exists := common.OptionMap["VideoRatio"]
+	common.OptionMapRWMutex.RUnlock()
+
+	m := make(map[string]float64)
+	if exists && videoStr != "" {
+		var raw map[string]float64
+		if err := common.Unmarshal([]byte(videoStr), &raw); err == nil {
+			for k, v := range raw {
+				m[k] = v
+				formatted := FormatMatchingModelName(k)
+				if formatted != k {
+					m[formatted] = v
+				}
+			}
+			videoRatioMap = m
+			common.SysLog("Loaded VideoRatio configuration from database")
+			return
+		}
+	}
+
+	// 默认无配置：保持空 map，表示没有启用 VideoRatio 体系
+	videoRatioMap = m
+}
+
+// loadVideoCompletionRatioFromDatabase 从数据库加载视频补全倍率/价格（OptionMap["VideoCompletionRatio"]）
+func loadVideoCompletionRatioFromDatabase() {
+	videoCompletionRatioMapMutex.Lock()
+	defer videoCompletionRatioMapMutex.Unlock()
+	videoCompletionRatioAudioMapMutex.Lock()
+	defer videoCompletionRatioAudioMapMutex.Unlock()
+	videoCompletionRatioRawMapMutex.Lock()
+	defer videoCompletionRatioRawMapMutex.Unlock()
+
+	common.OptionMapRWMutex.RLock()
+	videoStr, exists := common.OptionMap["VideoCompletionRatio"]
+	common.OptionMapRWMutex.RUnlock()
+
+	if exists && videoStr != "" {
+		var rawMap map[string]interface{}
+		if err := common.Unmarshal([]byte(videoStr), &rawMap); err == nil {
+			videoCompletionRatioRawMap = rawMap
+			videoCompletionRatioPrimaryMap, videoCompletionRatioAudioMap = buildVideoCompletionRatioCaches(rawMap)
+			common.SysLog("Loaded VideoCompletionRatio configuration from database")
+			return
+		}
+	}
+
+	videoCompletionRatioRawMap = make(map[string]interface{})
+	videoCompletionRatioPrimaryMap = make(map[string]float64)
+	videoCompletionRatioAudioMap = make(map[string]VideoAudioPricing)
+}
+
+func buildVideoCompletionRatioCaches(rawMap map[string]interface{}) (map[string]float64, map[string]VideoAudioPricing) {
+	primary := make(map[string]float64, len(rawMap))
+	audio := make(map[string]VideoAudioPricing)
+
+	for modelName, value := range rawMap {
+		targetKeys := []string{modelName}
+		formatted := FormatMatchingModelName(modelName)
+		if formatted != modelName {
+			targetKeys = append(targetKeys, formatted)
+		}
+
+		switch v := value.(type) {
+		case map[string]interface{}:
+			pricing := VideoAudioPricing{}
+			if noAudio, ok := extractFloatFromMap(v, "noAudio", "no_audio"); ok {
+				pricing.NoAudio = noAudio
+			}
+			if audioVal, ok := extractFloatFromMap(v, "audio", "withAudio", "with_audio"); ok {
+				pricing.Audio = audioVal
+			}
+			if pricing.NoAudio > 0 || pricing.Audio > 0 {
+				for _, key := range targetKeys {
+					audio[key] = pricing
+				}
+			}
+
+			// 支持 default 字段作为数字回退
+			if def, ok := extractFloatFromMap(v, "default"); ok && def > 0 {
+				for _, key := range targetKeys {
+					primary[key] = def
+				}
+			}
+		default:
+			if f, ok := extractFloat(value); ok && f > 0 {
+				for _, key := range targetKeys {
+					primary[key] = f
+				}
+			}
+		}
+	}
+
+	return primary, audio
+}
+
+func UpdateVideoRatioByJSONString(jsonStr string) error {
+	var raw map[string]float64
+	if err := common.Unmarshal([]byte(jsonStr), &raw); err != nil {
+		return err
+	}
+
+	m := make(map[string]float64, len(raw))
+	for k, v := range raw {
+		m[k] = v
+		formatted := FormatMatchingModelName(k)
+		if formatted != k {
+			m[formatted] = v
+		}
+	}
+
+	videoRatioMapMutex.Lock()
+	videoRatioMap = m
+	videoRatioMapMutex.Unlock()
+
+	InvalidateExposedDataCache()
+	return nil
+}
+
+func UpdateVideoCompletionRatioByJSONString(jsonStr string) error {
+	var rawMap map[string]interface{}
+	if err := common.Unmarshal([]byte(jsonStr), &rawMap); err != nil {
+		return err
+	}
+
+	primary, audio := buildVideoCompletionRatioCaches(rawMap)
+
+	videoCompletionRatioMapMutex.Lock()
+	videoCompletionRatioPrimaryMap = primary
+	videoCompletionRatioMapMutex.Unlock()
+
+	videoCompletionRatioAudioMapMutex.Lock()
+	videoCompletionRatioAudioMap = audio
+	videoCompletionRatioAudioMapMutex.Unlock()
+
+	videoCompletionRatioRawMapMutex.Lock()
+	videoCompletionRatioRawMap = rawMap
+	videoCompletionRatioRawMapMutex.Unlock()
+
+	InvalidateExposedDataCache()
+	return nil
 }
 
 // ==================== VideoModelPricePerSecond ====================

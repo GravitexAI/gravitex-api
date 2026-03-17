@@ -617,17 +617,28 @@ type TaskRelayInfo struct {
 }
 
 type TaskSubmitReq struct {
-	Prompt         string                 `json:"prompt"`
-	Model          string                 `json:"model,omitempty"`
-	Mode           string                 `json:"mode,omitempty"`
-	Image          string                 `json:"image,omitempty"`
-	Images         []string               `json:"images,omitempty"`
-	Size           string                 `json:"size,omitempty"`
-	Duration       int                    `json:"duration,omitempty"`
-	Seconds        string                 `json:"seconds,omitempty"`
-	InputReference string                 `json:"input_reference,omitempty"`
-	GenerateAudio  *bool                  `json:"generate_audio,omitempty"`
-	Metadata       map[string]interface{} `json:"metadata,omitempty"`
+	Prompt string `json:"prompt"`
+	Model  string `json:"model,omitempty"`
+	// Content 用于视频/多模态任务的 OpenAI 风格 content 数组（seedance 等会用到 role: first_frame/last_frame/reference_image）
+	// 注意：历史上仅靠 Images 会丢失 role 信息，这里保留原始结构供 channel adaptor 解析。
+	Content []map[string]interface{} `json:"content,omitempty"`
+	// 以下字段用于 seedance/doubao 视频任务的直传参数（客户端当前以顶层字段提交，而不是放进 metadata）
+	CallbackURL     string                 `json:"callback_url,omitempty"`
+	Resolution      string                 `json:"resolution,omitempty"`
+	Ratio           string                 `json:"ratio,omitempty"`
+	Watermark       *bool                  `json:"watermark,omitempty"`
+	CameraFixed     *bool                  `json:"camera_fixed,omitempty"`
+	Seed            *int                   `json:"seed,omitempty"`
+	ReturnLastFrame *bool                  `json:"return_last_frame,omitempty"`
+	Mode            string                 `json:"mode,omitempty"`
+	Image           string                 `json:"image,omitempty"`
+	Images          []string               `json:"images,omitempty"`
+	Size            string                 `json:"size,omitempty"`
+	Duration        int                    `json:"duration,omitempty"`
+	Seconds         string                 `json:"seconds,omitempty"`
+	InputReference  string                 `json:"input_reference,omitempty"`
+	GenerateAudio   *bool                  `json:"generate_audio,omitempty"`
+	Metadata        map[string]interface{} `json:"metadata,omitempty"`
 }
 
 func (t *TaskSubmitReq) GetPrompt() string {
@@ -716,23 +727,17 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 
 	// 默认移除 service_tier，除非明确允许（避免额外计费风险）
 	if !channelOtherSettings.AllowServiceTier {
-		if _, exists := data["service_tier"]; exists {
-			delete(data, "service_tier")
-		}
+		delete(data, "service_tier")
 	}
 
 	// 默认允许 store 透传，除非明确禁用（禁用可能影响 Codex 使用）
 	if channelOtherSettings.DisableStore {
-		if _, exists := data["store"]; exists {
-			delete(data, "store")
-		}
+		delete(data, "store")
 	}
 
 	// 默认移除 safety_identifier，除非明确允许（保护用户隐私，避免向 OpenAI 报告用户信息）
 	if !channelOtherSettings.AllowSafetyIdentifier {
-		if _, exists := data["safety_identifier"]; exists {
-			delete(data, "safety_identifier")
-		}
+		delete(data, "safety_identifier")
 	}
 
 	jsonDataAfter, err := common.Marshal(data)

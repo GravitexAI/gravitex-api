@@ -126,6 +126,12 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, err
 	}
 
+	// 渠道 model_mapping：允许将客户端 model 重定向到上游模型/endpoint（例如 ep-xxxx）
+	// 统一以 RelayInfo.UpstreamModelName 为准（若未映射则保持原样）
+	if info != nil && info.UpstreamModelName != "" {
+		req.Model = info.UpstreamModelName
+	}
+
 	body, err := a.convertToRequestPayload(&req)
 	if err != nil {
 		return nil, errors.Wrap(err, "convert request payload failed")
@@ -213,24 +219,116 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 		Content: []ContentItem{},
 	}
 
-	// Add text prompt
-	if req.Prompt != "" {
-		r.Content = append(r.Content, ContentItem{
-			Type: "text",
-			Text: req.Prompt,
-		})
+	// 1) 优先使用客户端直传的 OpenAI 风格 content（保留 role: first_frame/last_frame/reference_image）
+	if len(req.Content) > 0 {
+		for _, item := range req.Content {
+			if item == nil {
+				continue
+			}
+			typ, _ := item["type"].(string)
+			role, _ := item["role"].(string)
+
+			switch typ {
+			case "text":
+				text, _ := item["text"].(string)
+				if text == "" {
+					continue
+				}
+				r.Content = append(r.Content, ContentItem{
+					Type: "text",
+					Text: text,
+					Role: role,
+				})
+			case "image_url":
+				var url string
+				if m, ok := item["image_url"].(map[string]interface{}); ok && m != nil {
+					if u, ok := m["url"].(string); ok {
+						url = u
+					}
+				}
+				if url == "" {
+					continue
+				}
+				r.Content = append(r.Content, ContentItem{
+					Type:     "image_url",
+					ImageURL: &ImageURL{URL: url},
+					Role:     role,
+				})
+			case "video":
+				// 预留：若未来支持 video reference，保持透传结构
+				var url string
+				if m, ok := item["video"].(map[string]interface{}); ok && m != nil {
+					if u, ok := m["url"].(string); ok {
+						url = u
+					}
+				}
+				if url == "" {
+					continue
+				}
+				r.Content = append(r.Content, ContentItem{
+					Type:  "video",
+					Video: &VideoReference{URL: url},
+					Role:  role,
+				})
+			default:
+				// unknown type: skip
+			}
+		}
 	}
 
-	// Add images if present
-	if req.HasImage() {
-		for _, imgURL := range req.Images {
+	// 2) 兼容旧客户端：若没有 content，则按旧逻辑由 prompt/images 构建
+	if len(r.Content) == 0 {
+		// Add text prompt
+		if req.Prompt != "" {
 			r.Content = append(r.Content, ContentItem{
-				Type: "image_url",
-				ImageURL: &ImageURL{
-					URL: imgURL,
-				},
+				Type: "text",
+				Text: req.Prompt,
 			})
 		}
+		// Add images if present
+		if req.HasImage() {
+			for _, imgURL := range req.Images {
+				r.Content = append(r.Content, ContentItem{
+					Type: "image_url",
+					ImageURL: &ImageURL{
+						URL: imgURL,
+					},
+				})
+			}
+		}
+	}
+
+	// 3) 将客户端顶层字段映射到上游请求体（seedance/doubao 常用字段）
+	if req.CallbackURL != "" {
+		r.CallbackURL = req.CallbackURL
+	}
+	if req.Resolution != "" {
+		r.Resolution = req.Resolution
+	}
+	if req.Ratio != "" {
+		r.Ratio = req.Ratio
+	}
+	if req.Duration > 0 {
+		r.Duration = dto.IntValue(req.Duration)
+	}
+	if req.GenerateAudio != nil {
+		b := dto.BoolValue(*req.GenerateAudio)
+		r.GenerateAudio = &b
+	}
+	if req.CameraFixed != nil {
+		b := dto.BoolValue(*req.CameraFixed)
+		r.CameraFixed = &b
+	}
+	if req.Watermark != nil {
+		b := dto.BoolValue(*req.Watermark)
+		r.Watermark = &b
+	}
+	if req.Seed != nil {
+		r.Seed = dto.IntValue(*req.Seed)
+	}
+	if req.ReturnLastFrame != nil {
+		b := dto.BoolValue(*req.ReturnLastFrame)
+		r.ReturnLastFrame = &b
 	}
 
 	metadata := req.Metadata
@@ -295,7 +393,28 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	openAIVideo.TaskID = originTask.TaskID
 	openAIVideo.Status = originTask.Status.ToVideoStatus()
 	openAIVideo.SetProgressStr(originTask.Progress)
-	openAIVideo.SetMetadata("url", dResp.Content.VideoURL)
+	finalURL := dResp.Content.VideoURL
+	// 兼容前端轮询：优先顶层 video_url / url，其次 metadata.url
+	openAIVideo.VideoURL = finalURL
+	openAIVideo.URL = finalURL
+	openAIVideo.SetMetadata("url", finalURL)
+	openAIVideo.SetMetadata("video_url", finalURL)
+	// 将 seedance 相关字段透传进 metadata，便于前端/控制台查看完整信息
+	openAIVideo.SetMetadata("id", dResp.ID)
+	openAIVideo.SetMetadata("model", dResp.Model)
+	openAIVideo.SetMetadata("status", dResp.Status)
+	openAIVideo.SetMetadata("seed", dResp.Seed)
+	openAIVideo.SetMetadata("resolution", dResp.Resolution)
+	openAIVideo.SetMetadata("duration", dResp.Duration)
+	openAIVideo.SetMetadata("ratio", dResp.Ratio)
+	openAIVideo.SetMetadata("framespersecond", dResp.FramesPerSecond)
+	openAIVideo.SetMetadata("service_tier", dResp.ServiceTier)
+	openAIVideo.SetMetadata("created_at", dResp.CreatedAt)
+	openAIVideo.SetMetadata("updated_at", dResp.UpdatedAt)
+	openAIVideo.SetMetadata("usage", map[string]any{
+		"completion_tokens": dResp.Usage.CompletionTokens,
+		"total_tokens":      dResp.Usage.TotalTokens,
+	})
 	openAIVideo.CreatedAt = originTask.CreatedAt
 	openAIVideo.CompletedAt = originTask.UpdatedAt
 	openAIVideo.Model = originTask.Properties.OriginModelName

@@ -441,6 +441,10 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateCompletionRatioByJSONString(value)
 	case "ModelPrice":
 		err = ratio_setting.UpdateModelPriceByJSONString(value)
+	case "VideoRatio":
+		err = ratio_setting.UpdateVideoRatioByJSONString(value)
+	case "VideoCompletionRatio":
+		err = ratio_setting.UpdateVideoCompletionRatioByJSONString(value)
 	case "VideoModelPricePerSecond":
 		err = ratio_setting.UpdateVideoModelPricePerSecondByJSONString(value)
 	case "CacheRatio":

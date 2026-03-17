@@ -303,6 +303,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 				task.Status = model.TaskStatusFailure
 				task.FailReason = fmt.Sprintf("billing_failed: %v", err)
 			}
+		} else if isVideoTokenRatioModel(taskModelName) {
+			// VideoRatio/VideoCompletionRatio：轮询成功后根据 task.Data + usage.tokens 计费并写消费日志
+			if err := handleVideoTokenRatioBilling(ctx, task, taskResult); err != nil {
+				logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed: %v", taskModelName, task.TaskID, err))
+				task.Status = model.TaskStatusFailure
+				task.FailReason = fmt.Sprintf("billing_failed: %v", err)
+			}
 		} else if taskResult.TotalTokens > 0 {
 			// 按 token 计费模型（如 Doubao）：根据实际 token 数结算差额
 			var taskData map[string]interface{}
@@ -621,6 +628,19 @@ func isVideoPerSecondModel(name string) bool {
 	return hasVideoPrice
 }
 
+func isVideoTokenRatioModel(name string) bool {
+	if _, ok := ratio_setting.GetVideoRatio(name); ok {
+		return true
+	}
+	if _, ok := ratio_setting.GetVideoCompletionRatioPricing(name, true); ok {
+		return true
+	}
+	if _, ok := ratio_setting.GetVideoCompletionRatioPricing(name, false); ok {
+		return true
+	}
+	return false
+}
+
 // mergeVideoTaskDataWithUpstreamResponse 将上游响应合并进 task.Data，保留计费字段；供轮询与 GET 终态分支共用
 func mergeVideoTaskDataWithUpstreamResponse(task *model.Task, responseBody []byte) {
 	preservedFields := []string{
@@ -723,6 +743,15 @@ func CompleteVideoTaskOnUpstreamSuccess(ctx context.Context, task *model.Task, c
 	if taskResult.Status == model.TaskStatusSuccess && isVideoPerSecondModel(taskModelName) {
 		if err := handleSora2TaskBilling(ctx, task); err != nil {
 			logger.LogError(ctx, fmt.Sprintf("[VideoBilling] GET path model=%s task=%s failed: %v", taskModelName, task.TaskID, err))
+			task.Status = model.TaskStatusFailure
+			task.FailReason = fmt.Sprintf("billing_failed: %v", err)
+			_ = task.Update()
+			return err
+		}
+	}
+	if taskResult.Status == model.TaskStatusSuccess && isVideoTokenRatioModel(taskModelName) {
+		if err := handleVideoTokenRatioBilling(ctx, task, taskResult); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("[VideoBilling] GET path token_ratio model=%s task=%s failed: %v", taskModelName, task.TaskID, err))
 			task.Status = model.TaskStatusFailure
 			task.FailReason = fmt.Sprintf("billing_failed: %v", err)
 			_ = task.Update()
@@ -999,5 +1028,217 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		task.Data = merged
 	}
 
+	return nil
+}
+
+// handleVideoTokenRatioBilling 处理 VideoRatio/VideoCompletionRatio 按量计费视频模型的轮询成功计费逻辑（如 seedance）
+// 计费公式：
+//   - 若 VideoRatio 存在且 !=0：actualQuota = tokens × (VideoRatio×VideoCompletionRatio) × groupRatio × oemUserDiscount
+//   - 否则（VideoRatio 不存在/为0）：actualQuota = tokens × ($/M tokens)/1e6 × QuotaPerUnit × groupRatio × oemUserDiscount
+func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskResult *relaycommon.TaskInfo) error {
+	modelName := task.Properties.OriginModelName
+	if modelName == "" {
+		modelName = task.Properties.UpstreamModelName
+	}
+
+	// 从 task.Data 读取提交时保存的计费信息
+	var taskData map[string]interface{}
+	if len(task.Data) > 0 {
+		if err := common.Unmarshal(task.Data, &taskData); err != nil {
+			return fmt.Errorf("handleVideoTokenRatioBilling: unmarshal task.Data failed: %w", err)
+		}
+	}
+	if taskData == nil {
+		taskData = make(map[string]interface{})
+	}
+
+	// 防重复计费
+	if processed, ok := taskData["billing_processed"].(bool); ok && processed {
+		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s already billed, skip", modelName, task.TaskID))
+		return nil
+	}
+
+	if taskResult == nil {
+		return fmt.Errorf("handleVideoTokenRatioBilling: taskResult is nil")
+	}
+
+	// tokens：优先 completion_tokens，其次 total_tokens
+	tokens := 0
+	if taskResult.CompletionTokens > 0 {
+		tokens = taskResult.CompletionTokens
+	} else if taskResult.TotalTokens > 0 {
+		tokens = taskResult.TotalTokens
+	}
+	if tokens <= 0 {
+		return fmt.Errorf("handleVideoTokenRatioBilling: invalid tokens=%d (completion=%d total=%d)", tokens, taskResult.CompletionTokens, taskResult.TotalTokens)
+	}
+
+	oemCode := "gravitex"
+	if v, ok := taskData["billing_oem_code"].(string); ok && v != "" {
+		oemCode = v
+	}
+	oemUserDiscount := 1.0
+	if v, ok := taskData["billing_oem_user_discount"].(float64); ok && v > 0 {
+		oemUserDiscount = v
+	} else {
+		oemUserDiscount = service.GetOemUserDiscountForUserId(int64(task.UserId), modelName)
+		if oemUserDiscount <= 0 {
+			oemUserDiscount = 1.0
+		}
+	}
+	tokenName := ""
+	if v, ok := taskData["billing_token_name"].(string); ok {
+		tokenName = v
+	}
+	tokenId := 0
+	switch v := taskData["billing_token_id"].(type) {
+	case float64:
+		tokenId = int(v)
+	case int:
+		tokenId = v
+	}
+	billingGroup := task.Group
+	if v, ok := taskData["billing_group"].(string); ok && v != "" {
+		billingGroup = v
+	}
+
+	groupRatio := 0.0
+	if v, ok := taskData["billing_effective_group_ratio"].(float64); ok && v > 0 {
+		groupRatio = v
+	}
+	if groupRatio <= 0 {
+		groupRatio = service.GetGroupRatioByOem(oemCode, billingGroup)
+	}
+	if groupRatio <= 0 {
+		groupRatio = ratio_setting.GetGroupRatio(billingGroup)
+	}
+	if groupRatio <= 0 {
+		groupRatio = 1.0
+	}
+
+	// 是否生成音频：优先从 upstream_request_body 读，再兜底 task.Data
+	generateAudioFromUpstream := parseGenerateAudioFromUpstreamBody(task.UpstreamRequestBody)
+	generateAudio := generateAudioFromUpstream
+	if !generateAudio {
+		if v, ok := taskData["generate_audio"].(bool); ok {
+			generateAudio = v
+		} else if v, ok := taskData["generateAudio"].(bool); ok {
+			generateAudio = v
+		} else if s, ok := taskData["generate_audio"].(string); ok {
+			generateAudio = strings.EqualFold(strings.TrimSpace(s), "true") || s == "1"
+		} else if s, ok := taskData["generateAudio"].(string); ok {
+			generateAudio = strings.EqualFold(strings.TrimSpace(s), "true") || s == "1"
+		}
+	}
+
+	// 读取配置：GetVideoCompletionRatioPricing 返回「有效值」：
+	// - VideoRatio!=0 时：返回倍率（VideoRatio×VideoCompletionRatio）
+	// - VideoRatio==0/无时：返回 $/M tokens
+	cfgVal, ok := ratio_setting.GetVideoCompletionRatioPricing(modelName, generateAudio)
+	if !ok || cfgVal <= 0 {
+		return fmt.Errorf("handleVideoTokenRatioBilling: video completion ratio not configured for model=%s", modelName)
+	}
+
+	vr, hasVR := ratio_setting.GetVideoRatio(modelName)
+	ratioMode := hasVR && vr != 0
+
+	actualQuota := 0
+	otherMap := map[string]interface{}{
+		"billing_type":               "video_token_ratio",
+		"tokens":                     tokens,
+		"generate_audio":             generateAudio,
+		"group_ratio":                groupRatio,
+		"oem_user_discount":          oemUserDiscount,
+		"oem_code":                   oemCode,
+		"video_ratio":                vr,
+		"video_completion_ratio_val": cfgVal,
+		"ratio_mode":                 ratioMode,
+	}
+
+	if ratioMode {
+		// 走倍率体系：与 ModelRatio 计费一致，quota = tokens * ratio * groupRatio * discount
+		actualQuotaFloat := float64(tokens) * cfgVal * groupRatio * oemUserDiscount
+		actualQuota = int(actualQuotaFloat)
+		otherMap["effective_video_ratio"] = cfgVal
+	} else {
+		// 走价格体系：cfgVal 为 $/M tokens
+		pricePerMillion := cfgVal
+		pricePerToken := pricePerMillion / 1000000.0
+		actualQuotaFloat := pricePerToken * float64(tokens) * common.QuotaPerUnit * groupRatio * oemUserDiscount
+		actualQuota = int(actualQuotaFloat)
+		otherMap["video_price_per_million_tokens"] = pricePerMillion
+		otherMap["video_price_per_token"] = pricePerToken
+	}
+	if actualQuota < 0 {
+		actualQuota = 0
+	}
+
+	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s tokens=%d generate_audio=%v cfgVal=%.6f ratioMode=%v groupRatio=%.4f oemUserDiscount=%.4f actualQuota=%d",
+		modelName, task.TaskID, tokens, generateAudio, cfgVal, ratioMode, groupRatio, oemUserDiscount, actualQuota))
+
+	// 执行扣费
+	if actualQuota > 0 {
+		if err := model.DecreaseUserQuota(task.UserId, actualQuota); err != nil {
+			return fmt.Errorf("handleVideoTokenRatioBilling: DecreaseUserQuota failed: %w", err)
+		}
+	}
+
+	// 获取用户名（用于日志）
+	username := ""
+	if user, err := model.GetUserById(task.UserId, false); err == nil && user != nil {
+		username = user.Username
+	}
+
+	useTime := 0
+	if task.FinishTime > 0 && task.StartTime > 0 {
+		useTime = int(task.FinishTime - task.StartTime)
+	}
+
+	logContent := fmt.Sprintf("视频任务成功，模型 %s，tokens %d，耗时 %ds，扣费 %s",
+		modelName, tokens, useTime, logger.LogQuota(actualQuota))
+
+	priceChain := service.CalculatePriceChainForLogFromParams(oemCode, modelName, actualQuota, oemUserDiscount, groupRatio)
+	otherBytes, _ := common.Marshal(otherMap)
+
+	consumeLog := &model.Log{
+		UserId:           task.UserId,
+		Username:         username,
+		CreatedAt:        common.GetTimestamp(),
+		Type:             model.LogTypeConsume,
+		Content:          logContent,
+		ChannelId:        task.ChannelId,
+		ModelName:        modelName,
+		Quota:            actualQuota,
+		CompletionTokens: tokens,
+		TokenName:        tokenName,
+		TokenId:          tokenId,
+		UseTime:          useTime,
+		Group:            billingGroup,
+		Other:            string(otherBytes),
+	}
+	if priceChain != nil {
+		consumeLog.OemId = priceChain.OemId
+		consumeLog.OfficialQuota = priceChain.OfficialQuota
+		consumeLog.CostQuota = priceChain.CostQuota
+		consumeLog.SystemQuota = priceChain.SystemQuota
+		consumeLog.UserQuota = priceChain.UserQuota
+		consumeLog.PlatformProfit = priceChain.PlatformProfit
+		consumeLog.OemSubsidy = priceChain.OemSubsidy
+		if priceChain.VendorId != nil {
+			otherMap["vendor_id"] = *priceChain.VendorId
+		}
+	}
+	if err := model.LOG_DB.Create(consumeLog).Error; err != nil {
+		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to insert consume log: %v", modelName, task.TaskID, err))
+	}
+
+	model.UpdateUserUsedQuotaAndRequestCount(task.UserId, actualQuota)
+	model.UpdateChannelUsedQuota(task.ChannelId, actualQuota)
+
+	task.Quota = actualQuota
+	taskData["billing_processed"] = true
+	if merged, err := common.Marshal(taskData); err == nil {
+		task.Data = merged
+	}
 	return nil
 }

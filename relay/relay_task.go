@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -35,6 +36,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	// ensure TaskRelayInfo is initialized to avoid nil dereference when accessing embedded fields
 	if info.TaskRelayInfo == nil {
 		info.TaskRelayInfo = &relaycommon.TaskRelayInfo{}
+	}
+	// 任务链路中 info.OriginModelName 可能尚未填充，优先用 distributor 写入的 original_model
+	// 否则 ModelMappedHelper 无法命中映射表（会看到上游请求仍使用原模型名）
+	if info.OriginModelName == "" && info.ChannelMeta != nil && info.ChannelMeta.UpstreamModelName != "" {
+		info.OriginModelName = info.ChannelMeta.UpstreamModelName
 	}
 	path := c.Request.URL.Path
 	if strings.Contains(path, "/v1/videos/") && strings.HasSuffix(path, "/remix") {
@@ -129,6 +135,16 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	}
 
 	info.InitChannelMeta(c)
+	// 注意：上面再次 InitChannelMeta 会重置 ChannelMeta.UpstreamModelName 为 original_model，
+	// 因此需要在这里（最终一次 InitChannelMeta 之后）再做 model_mapping，确保发往上游的 model 是映射后的值。
+	if info.OriginModelName == "" && info.ChannelMeta != nil && info.ChannelMeta.UpstreamModelName != "" {
+		info.OriginModelName = info.ChannelMeta.UpstreamModelName
+	}
+	if err := helper.ModelMappedHelper(c, info, nil); err != nil {
+		// 不直接中断请求，但必须打日志便于排查：通常是 model_mapping JSON 格式错误
+		logger.LogWarn(c, fmt.Sprintf("[TaskSubmit] model_mapping apply failed: %v (model_mapping=%q origin_model=%q)",
+			err, c.GetString(string(constant.ContextKeyChannelModelMapping)), info.OriginModelName))
+	}
 	adaptor := GetTaskAdaptor(platform)
 	if adaptor == nil {
 		return service.TaskErrorWrapperLocal(fmt.Errorf("invalid api platform: %s", platform), "invalid_api_platform", http.StatusBadRequest)
@@ -167,6 +183,8 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		effectiveGroupRatio = userGroupRatio
 	}
 
+	// isVideoTokenRatioBilling 是否为按量计费的视频模型（VideoRatio/VideoCompletionRatio，提交时不预扣费，轮询成功后按 usage 扣费）
+	isVideoTokenRatioBilling := isVideoTokenRatioModel(modelName)
 	// isPerSecondBilling 是否为按秒计费的视频模型（提交时不预扣费，轮询成功后计费）
 	isPerSecondBilling := isVideoPerSecondModel(modelName)
 
@@ -190,6 +208,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		} else {
 			quota = int(0.4 * common.QuotaPerUnit) // 兜底：4秒 × $0.1/秒
 		}
+	} else if isVideoTokenRatioBilling {
+		// VideoRatio/VideoCompletionRatio：按量计费，usage 仅在轮询成功后返回，提交阶段不预扣费
+		quota = 0
 	} else {
 		modelPrice, _ = ratio_setting.GetModelPrice(modelName, true)
 		if modelPrice <= 0 {
@@ -212,8 +233,8 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		quota = int(ratio * common.QuotaPerUnit)
 	}
 
-	logger.LogInfo(c, fmt.Sprintf("[TaskSubmit] model=%s group=%s groupRatio=%.4f quota=%d perSecondBilling=%v",
-		modelName, info.UsingGroup, effectiveGroupRatio, quota, isPerSecondBilling))
+	logger.LogInfo(c, fmt.Sprintf("[TaskSubmit] model=%s group=%s groupRatio=%.4f quota=%d perSecondBilling=%v videoTokenRatioBilling=%v",
+		modelName, info.UsingGroup, effectiveGroupRatio, quota, isPerSecondBilling, isVideoTokenRatioBilling))
 
 	userQuota, err := model.GetUserQuota(info.UserId, false)
 	if err != nil {
@@ -256,8 +277,8 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 		return
 	}
 
-	// 非按秒计费模型：提交成功即预扣费并记录日志
-	if !isPerSecondBilling {
+	// 非按秒/按量视频计费模型：提交成功即预扣费并记录日志
+	if !isPerSecondBilling && !isVideoTokenRatioBilling {
 		defer func() {
 			if info.ConsumeQuota && taskErr == nil {
 				err := service.PostConsumeQuota(info, quota, 0, true)
@@ -328,15 +349,21 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	if isPerSecondBilling {
 		taskData = mergeVideoTaskBillingData(c, info, taskData, modelName, info.UsingGroup, upstreamBodyBytes)
 	}
+	// VideoRatio/VideoCompletionRatio：将扣费所需信息合并到 task.Data，轮询成功后按 usage 扣费
+	if isVideoTokenRatioBilling {
+		taskData = mergeVideoTokenRatioBillingData(c, info, taskData, modelName, info.UsingGroup)
+	}
 
 	// insert task
 	task := model.InitTask(platform, info)
 	task.TaskID = taskID
-	// 按秒计费模型：task.Quota=0（轮询后实际计费），其他模型保持估算的预扣quota
-	if isPerSecondBilling {
+	// 按秒计费 / VideoRatio 按量计费模型：task.Quota=0（轮询后实际计费），其他模型保持估算的预扣quota
+	if isPerSecondBilling || isVideoTokenRatioBilling {
 		task.Quota = 0
-		sec := resolveRequestedSeconds(c, upstreamBodyBytes)
-		task.Properties.RequestedSeconds = sec
+		if isPerSecondBilling {
+			sec := resolveRequestedSeconds(c, upstreamBodyBytes)
+			task.Properties.RequestedSeconds = sec
+		}
 	} else {
 		task.Quota = quota
 	}
@@ -380,6 +407,21 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 func isVideoPerSecondModel(modelName string) bool {
 	_, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecond(modelName)
 	return hasVideoPrice
+}
+
+func isVideoTokenRatioModel(modelName string) bool {
+	// VideoRatio 存在即认为启用（含 0 值的显式配置）
+	if _, ok := ratio_setting.GetVideoRatio(modelName); ok {
+		return true
+	}
+	// VideoCompletionRatio 能取到值也认为启用（音频/无音频任一配置即可）
+	if _, ok := ratio_setting.GetVideoCompletionRatioPricing(modelName, true); ok {
+		return true
+	}
+	if _, ok := ratio_setting.GetVideoCompletionRatioPricing(modelName, false); ok {
+		return true
+	}
+	return false
 }
 
 // getUserRequestBody 获取用户原始请求体（用于持久化到 task.UserRequestBody，轮询不覆盖）
@@ -613,6 +655,75 @@ func mergeVideoTaskBillingData(c *gin.Context, info *relaycommon.RelayInfo, task
 	merged, err := common.Marshal(dataMap)
 	if err != nil {
 		common.SysLog("[mergeVideoTaskBillingData] failed to marshal: " + err.Error())
+		return taskData
+	}
+	return merged
+}
+
+// mergeVideoTokenRatioBillingData 将按量计费视频模型（VideoRatio/VideoCompletionRatio）所需字段合并到 task.Data（轮询成功后使用）
+func mergeVideoTokenRatioBillingData(c *gin.Context, info *relaycommon.RelayInfo, taskData []byte, modelName, usingGroup string) []byte {
+	var dataMap map[string]interface{}
+	if len(taskData) > 0 {
+		_ = common.Unmarshal(taskData, &dataMap)
+	}
+	if dataMap == nil {
+		dataMap = make(map[string]interface{})
+	}
+
+	// 获取 OEM 信息
+	oemCode := "gravitex"
+	if code, exists := c.Get(string(constant.ContextKeyOemCode)); exists {
+		if codeStr, ok := code.(string); ok && codeStr != "" {
+			oemCode = codeStr
+		}
+	}
+	oemUserDiscount := service.GetOemUserDiscountForQuota(c, modelName)
+	if oemUserDiscount <= 0 {
+		oemUserDiscount = 1.0
+	}
+
+	// 计算实际 groupRatio（与提交时保持一致：优先用用户组倍率）
+	effectiveGroupRatio := ratio_setting.GetGroupRatio(usingGroup)
+	if info != nil && info.UserGroup != "" {
+		if ugr, hasUGR := ratio_setting.GetGroupGroupRatio(info.UserGroup, usingGroup); hasUGR {
+			effectiveGroupRatio = ugr
+		}
+	}
+	if effectiveGroupRatio <= 0 {
+		effectiveGroupRatio = 1.0
+	}
+
+	tokenName := c.GetString("token_name")
+	tokenId := 0
+	if tid, ok := c.Get(string(constant.ContextKeyTokenId)); ok {
+		switch v := tid.(type) {
+		case int:
+			tokenId = v
+		case float64:
+			tokenId = int(v)
+		}
+	}
+	if tokenId == 0 && info != nil && info.TokenId > 0 {
+		tokenId = info.TokenId
+	}
+
+	dataMap["billing_model_name"] = modelName
+	dataMap["billing_group"] = usingGroup
+	dataMap["billing_oem_code"] = oemCode
+	dataMap["billing_oem_user_discount"] = oemUserDiscount
+	dataMap["billing_effective_group_ratio"] = effectiveGroupRatio
+	dataMap["billing_token_name"] = tokenName
+	dataMap["billing_token_id"] = tokenId
+
+	generateAudio := parseGenerateAudioForQuota(c)
+	dataMap["generate_audio"] = generateAudio
+	dataMap["generateAudio"] = generateAudio
+
+	dataMap["billing_processed"] = false
+
+	merged, err := common.Marshal(dataMap)
+	if err != nil {
+		common.SysLog("[mergeVideoTokenRatioBillingData] failed to marshal: " + err.Error())
 		return taskData
 	}
 	return merged
