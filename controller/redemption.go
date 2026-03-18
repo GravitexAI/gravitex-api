@@ -40,12 +40,12 @@ func SearchRedemptions(c *gin.Context) {
 }
 
 func GetRedemption(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	redemption, err := model.GetRedemptionById(id)
+	redemption, err := model.GetRedemptionById(int(id64))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -113,8 +113,8 @@ func AddRedemption(c *gin.Context) {
 }
 
 func DeleteRedemption(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
-	err := model.DeleteRedemptionById(id)
+	id64, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	err := model.DeleteRedemptionById(int(id64))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -128,12 +128,33 @@ func DeleteRedemption(c *gin.Context) {
 
 func UpdateRedemption(c *gin.Context) {
 	statusOnly := c.Query("status_only")
-	redemption := model.Redemption{}
-	err := c.ShouldBindJSON(&redemption)
+	type updateRedemptionRequest struct {
+		Id          common.Int64Flexible `json:"id"`
+		Status      int                  `json:"status"`
+		Name        string               `json:"name"`
+		Quota       int                  `json:"quota"`
+		ExpiredTime int64                `json:"expired_time"`
+	}
+
+	var req updateRedemptionRequest
+	err := c.ShouldBindJSON(&req)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+
+	redemption := model.Redemption{
+		Id:          req.Id.Int(),
+		Status:      req.Status,
+		Name:        req.Name,
+		Quota:       req.Quota,
+		ExpiredTime: req.ExpiredTime,
+	}
+	if redemption.Id == 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+
 	cleanRedemption, err := model.GetRedemptionById(redemption.Id)
 	if err != nil {
 		common.ApiError(c, err)

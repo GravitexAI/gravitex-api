@@ -30,6 +30,9 @@ type Model struct {
 	Tags          string         `json:"tags,omitempty" gorm:"type:varchar(255)"`
 	TagsEn        string         `json:"tags_en,omitempty" gorm:"type:varchar(255)"`
 	TagsId        string         `json:"tags_id,omitempty" gorm:"type:varchar(255)"`
+	ShowTab       int            `json:"show_tab,omitempty" gorm:"default:0"`
+	Flag          int            `json:"flag,omitempty" gorm:"type:int;default:0"`       // 1-新发布 2-最先进 3-火爆
+	SortOrder     int            `json:"sort_order,omitempty" gorm:"type:int;default:0"` // 越小优先级越高
 	VendorID      int            `json:"vendor_id,omitempty" gorm:"index"`
 	Endpoints     string         `json:"endpoints,omitempty" gorm:"type:text"`
 	Status        int            `json:"status" gorm:"default:1"`
@@ -81,7 +84,7 @@ func (mi *Model) Update() error {
 	mi.UpdatedTime = common.GetTimestamp()
 	// 使用 Select 强制更新所有字段，包括零值
 	return DB.Model(&Model{}).Where("id = ?", mi.Id).
-		Select("model_name", "description", "description_en", "description_id", "icon", "tags", "tags_en", "tags_id", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
+		Select("model_name", "description", "description_en", "description_id", "icon", "tags", "tags_en", "tags_id", "show_tab", "flag", "sort_order", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
 		Updates(mi).Error
 }
 

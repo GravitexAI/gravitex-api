@@ -118,7 +118,7 @@ const EditUserModal = (props) => {
     if (typeof payload.quota === 'string')
       payload.quota = parseInt(payload.quota) || 0;
     if (userId) {
-      payload.id = parseInt(userId);
+      payload.id = String(userId);
     }
     const url = userId ? `/api/user/` : `/api/user/self`;
     const res = await API.put(url, payload);

@@ -19,13 +19,13 @@ import (
 )
 
 func GetCodexChannelUsage(c *gin.Context) {
-	channelId, err := strconv.Atoi(c.Param("id"))
+	channelId64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, fmt.Errorf("invalid channel id: %w", err))
 		return
 	}
 
-	ch, err := model.GetChannelById(channelId, true)
+	ch, err := model.GetChannelById(int(channelId64), true)
 	if err != nil {
 		common.ApiError(c, err)
 		return

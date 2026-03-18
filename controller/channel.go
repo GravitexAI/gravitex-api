@@ -213,13 +213,13 @@ func buildFetchModelsHeaders(channel *model.Channel, key string) (http.Header, e
 }
 
 func FetchUpstreamModels(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
-	channel, err := model.GetChannelById(id, true)
+	channel, err := model.GetChannelById(int(id64), true)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -515,12 +515,12 @@ func SearchChannels(c *gin.Context) {
 }
 
 func GetChannel(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	channel, err := model.GetChannelById(id, false)
+	channel, err := model.GetChannelById(int(id64), false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -540,11 +540,12 @@ func GetChannel(c *gin.Context) {
 // 此函数依赖 SecureVerificationRequired 中间件，确保用户已通过安全验证
 func GetChannelKey(c *gin.Context) {
 	userId := c.GetInt("id")
-	channelId, err := strconv.Atoi(c.Param("id"))
+	channelId64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, fmt.Errorf("渠道ID格式错误: %v", err))
 		return
 	}
+	channelId := int(channelId64)
 
 	// 获取渠道信息（包含密钥）
 	channel, err := model.GetChannelById(channelId, true)
@@ -649,11 +650,12 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 }
 
 func RefreshCodexChannelCredential(c *gin.Context) {
-	channelId, err := strconv.Atoi(c.Param("id"))
+	channelId64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, fmt.Errorf("invalid channel id: %w", err))
 		return
 	}
+	channelId := int(channelId64)
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
@@ -820,8 +822,8 @@ func AddChannel(c *gin.Context) {
 }
 
 func DeleteChannel(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
-	channel := model.Channel{Id: id}
+	id64, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	channel := model.Channel{Id: int(id64)}
 	err := channel.Delete()
 	if err != nil {
 		common.ApiError(c, err)
@@ -996,10 +998,86 @@ type PatchChannel struct {
 }
 
 func UpdateChannel(c *gin.Context) {
-	channel := PatchChannel{}
-	err := c.ShouldBindJSON(&channel)
+	type updateChannelRequest struct {
+		Id                 common.Int64Flexible `json:"id"`
+		Type               int                  `json:"type"`
+		Key                string               `json:"key"`
+		OpenAIOrganization *string              `json:"openai_organization"`
+		TestModel          *string              `json:"test_model"`
+		Status             int                  `json:"status"`
+		Name               string               `json:"name"`
+		Weight             *uint                `json:"weight"`
+		CreatedTime        int64                `json:"created_time"`
+		TestTime           int64                `json:"test_time"`
+		ResponseTime       int                  `json:"response_time"`
+		BaseURL            *string              `json:"base_url"`
+		Other              string               `json:"other"`
+		Balance            float64              `json:"balance"`
+		BalanceUpdatedTime int64                `json:"balance_updated_time"`
+		Models             string               `json:"models"`
+		Group              string               `json:"group"`
+		UsedQuota          int64                `json:"used_quota"`
+		ModelMapping       *string              `json:"model_mapping"`
+		StatusCodeMapping  *string              `json:"status_code_mapping"`
+		Priority           *int64               `json:"priority"`
+		AutoBan            *int                 `json:"auto_ban"`
+		OtherInfo          string               `json:"other_info"`
+		Tag                *string              `json:"tag"`
+		Setting            *string              `json:"setting"`
+		ParamOverride      *string              `json:"param_override"`
+		HeaderOverride     *string              `json:"header_override"`
+		Remark             *string              `json:"remark"`
+		ChannelInfo        model.ChannelInfo    `json:"channel_info"`
+		OtherSettings      string               `json:"settings"`
+		MultiKeyMode       *string              `json:"multi_key_mode"`
+		KeyMode            *string              `json:"key_mode"`
+	}
+
+	var req updateChannelRequest
+	err := c.ShouldBindJSON(&req)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+
+	channel := PatchChannel{
+		Channel: model.Channel{
+			Id:                 req.Id.Int(),
+			Type:               req.Type,
+			Key:                req.Key,
+			OpenAIOrganization: req.OpenAIOrganization,
+			TestModel:          req.TestModel,
+			Status:             req.Status,
+			Name:               req.Name,
+			Weight:             req.Weight,
+			CreatedTime:        req.CreatedTime,
+			TestTime:           req.TestTime,
+			ResponseTime:       req.ResponseTime,
+			BaseURL:            req.BaseURL,
+			Other:              req.Other,
+			Balance:            req.Balance,
+			BalanceUpdatedTime: req.BalanceUpdatedTime,
+			Models:             req.Models,
+			Group:              req.Group,
+			UsedQuota:          req.UsedQuota,
+			ModelMapping:       req.ModelMapping,
+			StatusCodeMapping:  req.StatusCodeMapping,
+			Priority:           req.Priority,
+			AutoBan:            req.AutoBan,
+			OtherInfo:          req.OtherInfo,
+			Tag:                req.Tag,
+			Setting:            req.Setting,
+			ParamOverride:      req.ParamOverride,
+			HeaderOverride:     req.HeaderOverride,
+			Remark:             req.Remark,
+			ChannelInfo:        req.ChannelInfo,
+			OtherSettings:      req.OtherSettings,
+		},
+		MultiKeyMode: req.MultiKeyMode,
+		KeyMode:      req.KeyMode,
+	}
+	if channel.Id == 0 {
+		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
 
@@ -1318,11 +1396,12 @@ func GetTagModels(c *gin.Context) {
 //	suffix         - string appended to the original name (default "_复制")
 //	reset_balance  - bool, when true will reset balance & used_quota to 0 (default true)
 func CopyChannel(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid id"})
 		return
 	}
+	id := int(id64)
 
 	suffix := c.DefaultQuery("suffix", "_复制")
 	resetBalance := true
@@ -2063,7 +2142,7 @@ func OllamaDeleteModel(c *gin.Context) {
 
 // OllamaVersion 获取 Ollama 服务版本信息
 func OllamaVersion(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -2072,7 +2151,7 @@ func OllamaVersion(c *gin.Context) {
 		return
 	}
 
-	channel, err := model.GetChannelById(id, true)
+	channel, err := model.GetChannelById(int(id64), true)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,

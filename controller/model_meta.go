@@ -75,7 +75,7 @@ func SearchModelsMeta(c *gin.Context) {
 // GetModelMeta 根据 ID 获取单条模型信息
 func GetModelMeta(c *gin.Context) {
 	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
+	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -159,7 +159,7 @@ func UpdateModelMeta(c *gin.Context) {
 // DeleteModelMeta 删除模型
 func DeleteModelMeta(c *gin.Context) {
 	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
+	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		common.ApiError(c, err)
 		return
