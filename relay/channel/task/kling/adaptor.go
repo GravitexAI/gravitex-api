@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/samber/lo"
@@ -69,6 +70,7 @@ type requestPayload struct {
 	CameraControl  *CameraControl `json:"camera_control,omitempty"`
 	CallbackUrl    string         `json:"callback_url,omitempty"`
 	ExternalTaskId string         `json:"external_task_id,omitempty"`
+	GenerateAudio  *bool          `json:"generate_audio,omitempty"`
 }
 
 type responsePayload struct {
@@ -112,8 +114,46 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.TaskError) {
-	// Use the standard validation method for TaskSubmitReq
-	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
+	taskErr = relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
+	if taskErr != nil {
+		return taskErr
+	}
+	// 前端对 kling 直接传顶层字段（如 aspect_ratio、image_tail），
+	// 而 TaskSubmitReq 没有这些字段，需要从原始 body 提取并注入 metadata，
+	// 使 BuildRequestBody 里的 metadata 覆盖逻辑能正常工作。
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return nil
+	}
+	rawBody, err := storage.Bytes()
+	if err != nil || len(rawBody) == 0 {
+		return nil
+	}
+	var rawMap map[string]interface{}
+	if err := common.Unmarshal(rawBody, &rawMap); err != nil {
+		return nil
+	}
+	v, ok := c.Get("task_request")
+	if !ok {
+		return nil
+	}
+	req, ok := v.(relaycommon.TaskSubmitReq)
+	if !ok {
+		return nil
+	}
+	if req.Metadata == nil {
+		req.Metadata = make(map[string]interface{})
+	}
+	// 将顶层 kling 专有字段注入 metadata（不覆盖 metadata 里已有的值）
+	for _, key := range []string{"aspect_ratio", "image_tail", "negative_prompt", "cfg_scale", "static_mask", "dynamic_masks", "camera_control", "callback_url", "external_task_id"} {
+		if val, exists := rawMap[key]; exists {
+			if _, alreadySet := req.Metadata[key]; !alreadySet {
+				req.Metadata[key] = val
+			}
+		}
+	}
+	c.Set("task_request", req)
+	return nil
 }
 
 // BuildRequestURL constructs the upstream URL.
@@ -159,6 +199,12 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
+	}
+	logger.LogInfo(c, fmt.Sprintf("[kling] upstream request body: %s", common.TruncateJsonValues(string(data))))
+	if len(req.Metadata) > 0 {
+		if metaBytes, err := json.Marshal(req.Metadata); err == nil {
+			logger.LogInfo(c, fmt.Sprintf("[kling] client metadata: %s", common.TruncateJsonValues(string(metaBytes))))
+		}
 	}
 	return bytes.NewReader(data), nil
 }
@@ -236,7 +282,15 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 }
 
 func (a *TaskAdaptor) GetModelList() []string {
-	return []string{"kling-v1", "kling-v1-6", "kling-v2-master"}
+	return []string{
+		"kling-v1",
+		"kling-v1-6",
+		"kling-v2-master",
+		"kling-v3",
+		"kling-v3-pro",
+		"kling-v3-omni",
+		"kling-v3-omni-pro",
+	}
 }
 
 func (a *TaskAdaptor) GetChannelName() string {
@@ -248,23 +302,26 @@ func (a *TaskAdaptor) GetChannelName() string {
 // ============================
 
 func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*requestPayload, error) {
+	realModel, defaultMode := normalizeKlingModelAndMode(req.Model)
 	r := requestPayload{
 		Prompt:         req.Prompt,
 		Image:          req.Image,
-		Mode:           defaultString(req.Mode, "std"),
+		Mode:           defaultString(req.Mode, defaultMode),
 		Duration:       fmt.Sprintf("%d", defaultInt(req.Duration, 5)),
 		AspectRatio:    a.getAspectRatio(req.Size),
-		ModelName:      req.Model,
-		Model:          req.Model, // Keep consistent with model_name, double writing improves compatibility
+		ModelName:      realModel,
+		Model:          realModel, // Keep consistent with model_name, double writing improves compatibility
 		CfgScale:       0.5,
 		StaticMask:     "",
 		DynamicMasks:   []DynamicMask{},
 		CameraControl:  nil,
 		CallbackUrl:    "",
 		ExternalTaskId: "",
+		GenerateAudio:  req.GenerateAudio,
 	}
 	if r.ModelName == "" {
 		r.ModelName = "kling-v1"
+		r.Model = "kling-v1"
 	}
 	metadata := req.Metadata
 	medaBytes, err := json.Marshal(metadata)
@@ -275,6 +332,8 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 	if err != nil {
 		return nil, errors.Wrap(err, "unmarshal metadata failed")
 	}
+	// sanitize: Kling 仅支持 16:9 / 9:16 / 1:1 / 4:3，其他值回退到 16:9
+	r.AspectRatio = sanitizeKlingAspectRatio(r.AspectRatio)
 	return &r, nil
 }
 
@@ -291,6 +350,17 @@ func (a *TaskAdaptor) getAspectRatio(size string) string {
 	}
 }
 
+// sanitizeKlingAspectRatio 将不被 Kling API 支持的比例回退到 16:9。
+// Kling 支持：16:9 / 9:16 / 1:1 / 4:3
+func sanitizeKlingAspectRatio(ratio string) string {
+	switch ratio {
+	case "16:9", "9:16", "1:1", "4:3":
+		return ratio
+	default:
+		return "16:9"
+	}
+}
+
 func defaultString(s, def string) string {
 	if strings.TrimSpace(s) == "" {
 		return def
@@ -303,6 +373,21 @@ func defaultInt(v int, def int) int {
 		return def
 	}
 	return v
+}
+
+// normalizeKlingModelAndMode strips the "-pro" suffix from the model name and
+// returns the real upstream model name together with the default mode to use.
+// Examples:
+//
+//	"kling-v3-pro"      → ("kling-v3",      "pro")
+//	"kling-v3-omni-pro" → ("kling-v3-omni", "pro")
+//	"kling-v3"          → ("kling-v3",      "std")
+//	"kling-v1"          → ("kling-v1",      "std")
+func normalizeKlingModelAndMode(model string) (realModel string, defaultMode string) {
+	if strings.HasSuffix(model, "-pro") {
+		return strings.TrimSuffix(model, "-pro"), "pro"
+	}
+	return model, "std"
 }
 
 // ============================

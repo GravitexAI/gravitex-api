@@ -1022,6 +1022,13 @@ var defaultVideoAudioPricing = map[string]VideoAudioPricing{
 	"veo-3.1-generate-preview":      {NoAudio: 0.2, Audio: 0.4},
 	"veo-3.0-fast-generate-001":     {NoAudio: 0.1, Audio: 0.15},
 	"veo-3.1-fast-generate-preview": {NoAudio: 0.1, Audio: 0.15},
+	// Kling V3 系列：按 generate_audio 选 noAudio 或 audio 价（官方单位：USD/秒）
+	// 标准模式：$0.084(无音频) / $0.126(有音频)
+	// 专业模式（kling-v3-pro）：$0.112(无音频) / $0.168(有音频)
+	"kling-v3":          {NoAudio: 0.084, Audio: 0.126},
+	"kling-v3-pro":      {NoAudio: 0.112, Audio: 0.168},
+	"kling-v3-omni":     {NoAudio: 0.084, Audio: 0.126},
+	"kling-v3-omni-pro": {NoAudio: 0.112, Audio: 0.168},
 }
 
 // wan2.6 flash：¥0.15/0.25（无声 720P/1080P）、¥0.3/0.5（有声 720P/1080P），按 ¥÷7.0 换算为美元/秒

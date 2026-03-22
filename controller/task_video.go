@@ -919,11 +919,42 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	}
 	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s generate_audio=%v (from_upstream=%v)", task.TaskID, generateAudio, generateAudioFromUpstream))
 	// 获取官方单秒价格（wan2.6-flash 含分辨率分档；Veo 等为 noAudio/audio 或单一数字）
-	resKey := ratio_setting.NormalizeVideoResolutionKey(alitask.ParseBillingResolutionKeyFromUpstreamJSON(task.UpstreamRequestBody))
+	// 优先使用上游 usage.size（实际分辨率），兜底解析上游请求体中的参数
+	resKey := ""
+	if usageMap, ok := taskData["usage"].(map[string]interface{}); ok && usageMap != nil {
+		if usageSize, ok := usageMap["size"].(string); ok && usageSize != "" {
+			resKey = ratio_setting.NormalizeVideoResolutionKey(alitask.ParseBillingResolutionFromSize(usageSize))
+			logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s billing_resolution from usage.size=%s -> %s", task.TaskID, usageSize, resKey))
+		}
+	}
+	if resKey == "" {
+		resKey = ratio_setting.NormalizeVideoResolutionKey(alitask.ParseBillingResolutionKeyFromUpstreamJSON(task.UpstreamRequestBody))
+	}
 	officialVideoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecondForBillingWithResolution(modelName, generateAudio, resKey)
 	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s billing_resolution=%s", task.TaskID, resKey))
 	if !hasVideoPrice || officialVideoPrice <= 0 {
 		return fmt.Errorf("handleSora2TaskBilling: video price per second not configured for model: %s", modelName)
+	}
+
+	// 对于 wan2.6 系列，优先使用 usage.output_video_duration（实际输出时长），其次 usage.duration，再回退到 requestedSeconds
+	if usageMap, ok := taskData["usage"].(map[string]interface{}); ok && usageMap != nil {
+		actualSec := 0
+		if v, ok := usageMap["output_video_duration"].(float64); ok && v > 0 {
+			actualSec = int(v)
+		} else if v, ok := usageMap["output_video_duration"].(int); ok && v > 0 {
+			actualSec = v
+		}
+		if actualSec <= 0 {
+			if v, ok := usageMap["duration"].(float64); ok && v > 0 {
+				actualSec = int(v)
+			} else if v, ok := usageMap["duration"].(int); ok && v > 0 {
+				actualSec = v
+			}
+		}
+		if actualSec > 0 && actualSec != requestedSeconds {
+			logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s using actual duration from usage: %d (was requested: %d)", task.TaskID, actualSec, requestedSeconds))
+			requestedSeconds = actualSec
+		}
 	}
 
 	// 获取 OEM 销售折扣（用于 OEM 侧成本与日志价格链）

@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -204,6 +205,12 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	data, err := common.Marshal(body)
 	if err != nil {
 		return nil, err
+	}
+	logger.LogInfo(c, fmt.Sprintf("[gemini] upstream request body: %s", common.TruncateJsonValues(string(data))))
+	if len(req.Metadata) > 0 {
+		if metaBytes, err := common.Marshal(req.Metadata); err == nil {
+			logger.LogInfo(c, fmt.Sprintf("[gemini] client metadata: %s", common.TruncateJsonValues(string(metaBytes))))
+		}
 	}
 	return bytes.NewReader(data), nil
 }

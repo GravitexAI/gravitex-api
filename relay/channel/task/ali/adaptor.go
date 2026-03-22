@@ -81,9 +81,11 @@ type AliVideoOutput struct {
 
 // AliUsage 使用统计
 type AliUsage struct {
-	Duration   int `json:"duration,omitempty"`
-	VideoCount int `json:"video_count,omitempty"`
-	SR         int `json:"SR,omitempty"`
+	Duration            int    `json:"duration,omitempty"`
+	VideoCount          int    `json:"video_count,omitempty"`
+	SR                  int    `json:"SR,omitempty"`
+	Size                string `json:"size,omitempty"`                  // wan2.6 返回实际分辨率，如 "1280*720"
+	OutputVideoDuration int    `json:"output_video_duration,omitempty"` // 实际输出时长（秒）
 }
 
 type AliMetadata struct {
@@ -130,6 +132,23 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 	if err := common.UnmarshalBodyReusable(c, &taskReq); err != nil {
 		return service.TaskErrorWrapper(err, "unmarshal_task_request_failed", http.StatusBadRequest)
 	}
+	// 前端 wan2.5 将 audio_url 放顶层字段，而 TaskSubmitReq 没有该字段；
+	// 从原始 body 顶层读取并注入 metadata，使 convertToAliRequest 能正常取到。
+	if storage, sErr := common.GetBodyStorage(c); sErr == nil {
+		if rawBody, rErr := storage.Bytes(); rErr == nil && len(rawBody) > 0 {
+			var rawMap map[string]interface{}
+			if uErr := common.Unmarshal(rawBody, &rawMap); uErr == nil {
+				if audioURL, ok := rawMap["audio_url"].(string); ok && audioURL != "" {
+					if taskReq.Metadata == nil {
+						taskReq.Metadata = make(map[string]interface{})
+					}
+					if _, alreadySet := taskReq.Metadata["audio_url"]; !alreadySet {
+						taskReq.Metadata["audio_url"] = audioURL
+					}
+				}
+			}
+		}
+	}
 	aliReq, err := a.convertToAliRequest(info, taskReq)
 	if err != nil {
 		return service.TaskErrorWrapper(err, "convert_to_ali_request_failed", http.StatusInternalServerError)
@@ -138,7 +157,14 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 	if aliReq.Parameters != nil {
 		c.Set("video_billing_resolution", BillingResolutionKeyFromParams(aliReq.Parameters))
 	}
-	logger.LogJson(c, "ali video request body", aliReq)
+	if bodyBytes, err := common.Marshal(aliReq); err == nil {
+		logger.LogInfo(c, fmt.Sprintf("[ali] converted request body: %s", common.TruncateJsonValues(string(bodyBytes))))
+	}
+	if len(taskReq.Metadata) > 0 {
+		if metaBytes, err := common.Marshal(taskReq.Metadata); err == nil {
+			logger.LogInfo(c, fmt.Sprintf("[ali] client metadata: %s", common.TruncateJsonValues(string(metaBytes))))
+		}
+	}
 	return relaycommon.ValidateMultipartDirect(c, info)
 }
 
@@ -175,6 +201,14 @@ func ParseBillingResolutionKeyFromUpstreamJSON(body []byte) string {
 		return "720p"
 	}
 	return BillingResolutionKeyFromParams(req.Parameters)
+}
+
+// ParseBillingResolutionFromSize 将 usage.size 字符串（如 "1280*720"）转换为分辨率键（如 "720p"）
+func ParseBillingResolutionFromSize(size string) string {
+	if r, err := sizeToResolution(size); err == nil {
+		return strings.ToLower(r)
+	}
+	return "720p"
 }
 
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
@@ -350,12 +384,33 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 			}
 			aliReq.Parameters.Resolution = resolution
 		}
+	} else if req.Resolution != "" {
+		// 客户端明确传了 resolution（如 720p/1080p），直接使用，转大写并补 P
+		resolution := strings.ToUpper(req.Resolution)
+		if !strings.HasSuffix(resolution, "P") {
+			resolution = resolution + "P"
+		}
+		if strings.Contains(req.Model, "t2v") || strings.Contains(req.Model, "r2v") {
+			// t2v/r2v 用 size，将 resolution 反查为 size（默认 16:9）
+			resolutionToSize := map[string]string{
+				"480P":  "832*480",
+				"720P":  "1280*720",
+				"1080P": "1920*1080",
+			}
+			if sz, ok := resolutionToSize[resolution]; ok {
+				aliReq.Parameters.Size = sz
+			} else {
+				aliReq.Parameters.Size = "1280*720"
+			}
+		} else {
+			aliReq.Parameters.Resolution = resolution
+		}
 	} else {
 		// 根据模型设置默认分辨率
 		if strings.Contains(req.Model, "t2v") || strings.Contains(req.Model, "r2v") {
 			// 文生视频 / 参考生视频 使用 size
 			if strings.HasPrefix(req.Model, "wan2.6") {
-				aliReq.Parameters.Size = "1280*720"
+				aliReq.Parameters.Size = "1920*1080" // 官方文档默认值
 			} else if strings.HasPrefix(req.Model, "wan2.5") {
 				aliReq.Parameters.Size = "1920*1080"
 			} else if strings.HasPrefix(req.Model, "wan2.2") {
@@ -364,17 +419,12 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 				aliReq.Parameters.Size = "1280*720"
 			}
 		} else {
-			// 图生视频 使用 resolution
-			if strings.HasPrefix(req.Model, "wan2.6") {
-				aliReq.Parameters.Resolution = "1080P"
-			} else if strings.HasPrefix(req.Model, "wan2.5") {
-				aliReq.Parameters.Resolution = "1080P"
-			} else if strings.HasPrefix(req.Model, "wan2.2-i2v-flash") {
+			// 图生视频 使用 resolution，按模型设置合理默认值
+			if strings.HasPrefix(req.Model, "wan2.2-i2v-flash") {
 				aliReq.Parameters.Resolution = "720P"
-			} else if strings.HasPrefix(req.Model, "wan2.2-i2v-plus") {
-				aliReq.Parameters.Resolution = "1080P"
 			} else {
-				aliReq.Parameters.Resolution = "720P"
+				// wan2.6-i2v, wan2.6-i2v-flash, wan2.5-i2v-preview, wan2.2-i2v-plus, 其他
+				aliReq.Parameters.Resolution = "1080P"
 			}
 		}
 	}
@@ -557,6 +607,16 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		taskResult.Status = model.TaskStatusSuccess
 		// 阿里直接返回视频URL，不需要额外的代理端点
 		taskResult.Url = aliResp.Output.VideoURL
+		// wan2.6 在 usage 中返回实际分辨率（size / SR）和实际输出时长，存入 taskResult 供计费使用
+		if aliResp.Usage != nil {
+			taskResult.ActualSize = aliResp.Usage.Size
+			taskResult.ActualSR = aliResp.Usage.SR
+			if aliResp.Usage.OutputVideoDuration > 0 {
+				taskResult.ActualDuration = aliResp.Usage.OutputVideoDuration
+			} else if aliResp.Usage.Duration > 0 {
+				taskResult.ActualDuration = aliResp.Usage.Duration
+			}
+		}
 	case "FAILED", "CANCELED", "UNKNOWN":
 		taskResult.Status = model.TaskStatusFailure
 		if aliResp.Message != "" {

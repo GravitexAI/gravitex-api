@@ -710,6 +710,10 @@ type TaskInfo struct {
 	Progress         string `json:"progress,omitempty"`
 	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
 	TotalTokens      int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
+	// 实际使用量（由上游 usage 字段提供，优先用于计费）
+	ActualSize     string `json:"actual_size,omitempty"`     // 实际分辨率，如 "1280*720"（阿里 wan2.6）
+	ActualSR       int    `json:"actual_sr,omitempty"`       // 实际 SR（分辨率数值，如 720）
+	ActualDuration int    `json:"actual_duration,omitempty"` // 实际输出时长（秒）
 }
 
 func FailTaskInfo(reason string) *TaskInfo {
