@@ -194,7 +194,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	if isPerSecondBilling {
 		// 按秒计费模型（Veo 等）：按是否生成音频取价，估算 quota = videoPrice × 预期秒数 × groupRatio × oemDiscount
 		generateAudio := parseGenerateAudioForQuota(c)
-		videoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecondForBilling(modelName, generateAudio)
+		resKey := "720p"
+		if v, exists := c.Get("video_billing_resolution"); exists {
+			if s, ok := v.(string); ok && s != "" {
+				resKey = ratio_setting.NormalizeVideoResolutionKey(s)
+			}
+		}
+		videoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecondForBillingWithResolution(modelName, generateAudio, resKey)
 		oemUserDiscount := service.GetOemUserDiscountForQuota(c, modelName)
 		if oemUserDiscount <= 0 {
 			oemUserDiscount = 1.0
@@ -463,19 +469,25 @@ func resolveRequestedSeconds(c *gin.Context, upstreamBodyBytes []byte) int {
 // parseGenerateAudioForQuota 从 task_request.Metadata 解析是否生成音频，用于按秒计费模型的预扣价（Veo 含音频/不含音频价格不同）。未指定时默认 true（按含音频价预留）。
 func parseGenerateAudioForQuota(c *gin.Context) bool {
 	if v, exists := c.Get("task_request"); exists {
-		if req, ok := v.(relaycommon.TaskSubmitReq); ok && req.Metadata != nil {
-			for _, key := range []string{"generateAudio", "generate_audio"} {
-				if val, ok := req.Metadata[key]; ok {
-					switch b := val.(type) {
-					case bool:
-						return b
-					case string:
-						s := strings.TrimSpace(strings.ToLower(b))
-						if s == "false" || s == "0" || s == "no" {
-							return false
-						}
-						if s == "true" || s == "1" || s == "yes" {
-							return true
+		if req, ok := v.(relaycommon.TaskSubmitReq); ok {
+			// wan2.6-flash 模型：audio 字段直接在顶层结构体（true=有声，false=无声）
+			if req.Audio != nil {
+				return *req.Audio
+			}
+			if req.Metadata != nil {
+				for _, key := range []string{"generateAudio", "generate_audio", "audio"} {
+					if val, ok := req.Metadata[key]; ok {
+						switch b := val.(type) {
+						case bool:
+							return b
+						case string:
+							s := strings.TrimSpace(strings.ToLower(b))
+							if s == "false" || s == "0" || s == "no" {
+								return false
+							}
+							if s == "true" || s == "1" || s == "yes" {
+								return true
+							}
 						}
 					}
 				}
@@ -544,15 +556,18 @@ func parseVideoSecondsFromBody(body []byte) int {
 			}
 		}
 		if params, _ := m["parameters"].(map[string]interface{}); params != nil {
-			if v, ok := params["durationSeconds"]; ok {
-				switch val := v.(type) {
-				case float64:
-					if n := int(val); n > 0 {
-						return n
-					}
-				case int:
-					if val > 0 {
-						return val
+			// 兼容 durationSeconds（Gemini/Veo）和 duration（Ali wan2.6）
+			for _, key := range []string{"durationSeconds", "duration"} {
+				if v, ok := params[key]; ok {
+					switch val := v.(type) {
+					case float64:
+						if n := int(val); n > 0 {
+							return n
+						}
+					case int:
+						if val > 0 {
+							return val
+						}
 					}
 				}
 			}

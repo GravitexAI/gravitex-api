@@ -997,6 +997,11 @@ func UpdateVideoCompletionRatioByJSONString(jsonStr string) error {
 var defaultVideoModelPricePerSecond = map[string]float64{
 	"sora-2":     0.1,  // $0.1/秒
 	"sora-2-pro": 0.15, // $0.15/秒
+	// wan2.6 系列（720P/480P 基准价，按秒计费，分辨率倍率通过 ProcessAliOtherRatios 处理）
+	// 价格来源：阿里云官方定价，RMB÷7.3 转美元
+	"wan2.6-t2v": 0.0192, // ¥0.14/s÷7.3，720P 基准
+	"wan2.6-i2v": 0.0048, // ¥0.035/s÷7.3，720P 基准
+	"wan2.6-r2v": 0.0192, // ¥0.14/s÷7.3，720P 基准
 }
 
 // VideoAudioPricing 带音频/无音频的视频定价结构（Veo：generateAudio true 用 audio，否则用 noAudio）
@@ -1005,12 +1010,30 @@ type VideoAudioPricing struct {
 	Audio   float64 `json:"audio,omitempty"`
 }
 
+// VideoFlashResolutionPricing wan2.6-*-flash：noAudio/audio 各对应 720p/1080p 等分档单价（美元/秒）
+type VideoFlashResolutionPricing struct {
+	NoAudio map[string]float64 `json:"noAudio,omitempty"`
+	Audio   map[string]float64 `json:"audio,omitempty"`
+}
+
 // Veo 模型（含 generate / fast）：按 parameters.generateAudio 选 noAudio 或 audio 价
 var defaultVideoAudioPricing = map[string]VideoAudioPricing{
 	"veo-3.0-generate-preview":      {NoAudio: 0.2, Audio: 0.4},
 	"veo-3.1-generate-preview":      {NoAudio: 0.2, Audio: 0.4},
 	"veo-3.0-fast-generate-001":     {NoAudio: 0.1, Audio: 0.15},
 	"veo-3.1-fast-generate-preview": {NoAudio: 0.1, Audio: 0.15},
+}
+
+// wan2.6 flash：¥0.15/0.25（无声 720P/1080P）、¥0.3/0.5（有声 720P/1080P），按 ¥÷7.0 换算为美元/秒
+var defaultVideoFlashResolutionPricing = map[string]VideoFlashResolutionPricing{
+	"wan2.6-i2v-flash": {
+		NoAudio: map[string]float64{"720p": 0.0214, "1080p": 0.0357},
+		Audio:   map[string]float64{"720p": 0.0429, "1080p": 0.0714},
+	},
+	"wan2.6-r2v-flash": {
+		NoAudio: map[string]float64{"720p": 0.0214, "1080p": 0.0357},
+		Audio:   map[string]float64{"720p": 0.0429, "1080p": 0.0714},
+	},
 }
 
 var (
@@ -1028,6 +1051,17 @@ var (
 var (
 	videoModelAudioPricePerSecondMap      map[string]VideoAudioPricing = nil
 	videoModelAudioPricePerSecondMapMutex                              = sync.RWMutex{}
+)
+
+var (
+	videoFlashResolutionPricePerSecondMap      map[string]VideoFlashResolutionPricing = nil
+	videoFlashResolutionPricePerSecondMapMutex                                        = sync.RWMutex{}
+)
+
+// videoResolutionPricePerSecondMap 非 flash 模型按分辨率分档单价（如 wan2.6-t2v: {"720p": N, "1080p": N}）
+var (
+	videoResolutionPricePerSecondMap      map[string]map[string]float64 = nil
+	videoResolutionPricePerSecondMapMutex                               = sync.RWMutex{}
 )
 
 var (
@@ -1107,12 +1141,70 @@ func GetImageModelPricePerImage(name string) (float64, bool) {
 	return -1, false
 }
 
+// NormalizeVideoResolutionKey 统一为 480p/720p/1080p 小写
+func NormalizeVideoResolutionKey(res string) string {
+	s := strings.TrimSpace(strings.ToLower(res))
+	if s == "" {
+		return "720p"
+	}
+	if !strings.HasSuffix(s, "p") {
+		s = s + "p"
+	}
+	return s
+}
+
+func minPositiveInFloatMap(m map[string]float64) float64 {
+	var min float64
+	for _, v := range m {
+		if v <= 0 {
+			continue
+		}
+		if min == 0 || v < min {
+			min = v
+		}
+	}
+	return min
+}
+
+func minFlashResolutionPrice(f VideoFlashResolutionPricing) float64 {
+	a := minPositiveInFloatMap(f.NoAudio)
+	b := minPositiveInFloatMap(f.Audio)
+	if a == 0 {
+		return b
+	}
+	if b == 0 {
+		return a
+	}
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// minResolutionPrice 返回分辨率价格表中最小的正数价格（用于余额预检兜底）
+func minResolutionPrice(m map[string]float64) float64 {
+	return minPositiveInFloatMap(m)
+}
+
+func getVideoResolutionPricing(name string) (map[string]float64, bool) {
+	videoResolutionPricePerSecondMapMutex.RLock()
+	defer videoResolutionPricePerSecondMapMutex.RUnlock()
+	pricing, ok := videoResolutionPricePerSecondMap[name]
+	return pricing, ok
+}
+
 // GetVideoModelPricePerSecond 获取视频模型每秒价格
 func GetVideoModelPricePerSecond(name string) (float64, bool) {
 	name = FormatMatchingModelName(name)
 	price, ok := getVideoPerSecondPriceFromPrimaryMap(name)
 	if ok && price > 0 {
 		return price, true
+	}
+
+	if flash, ok := getVideoFlashResolutionPricing(name); ok {
+		if m := minFlashResolutionPrice(flash); m > 0 {
+			return m, true
+		}
 	}
 
 	if audioPricing, ok := getVideoAudioPricing(name); ok {
@@ -1127,11 +1219,69 @@ func GetVideoModelPricePerSecond(name string) (float64, bool) {
 	return -1, false
 }
 
-// GetVideoModelPricePerSecondForBilling 按是否生成音频返回每秒价格（用于 Veo 等 noAudio/audio 分离定价）
-// 优先用 noAudio/audio 配置（按 generateAudio 选价），无该配置时再用单一数字价
-func GetVideoModelPricePerSecondForBilling(name string, generateAudio bool) (float64, bool) {
+// GetVideoModelPricePerSecondForBillingWithResolution 按音频与分辨率取价（wan2.6-flash 分档；其它模型忽略 resolution，回退为原逻辑）
+func GetVideoModelPricePerSecondForBillingWithResolution(name string, generateAudio bool, resolution string) (float64, bool) {
 	name = FormatMatchingModelName(name)
-	// 优先：有 noAudio/audio 时按 generateAudio 取价，保证带音频按 0.4、不带按 0.2
+	resKey := NormalizeVideoResolutionKey(resolution)
+
+	if flash, ok := getVideoFlashResolutionPricing(name); ok {
+		var tier map[string]float64
+		if generateAudio {
+			tier = flash.Audio
+		} else {
+			tier = flash.NoAudio
+		}
+		if len(tier) > 0 {
+			if p, ok := tier[resKey]; ok && p > 0 {
+				return p, true
+			}
+			if p, ok := tier["720p"]; ok && p > 0 {
+				return p, true
+			}
+			if p, ok := tier["1080p"]; ok && p > 0 {
+				return p, true
+			}
+			if p, ok := tier["480p"]; ok && p > 0 {
+				return p, true
+			}
+			for _, p := range tier {
+				if p > 0 {
+					return p, true
+				}
+			}
+		}
+	}
+
+	// 非 flash：查分辨率分档价表（{"720p": N, "1080p": N}）
+	if resMap, ok := getVideoResolutionPricing(name); ok && len(resMap) > 0 {
+		if p, ok := resMap[resKey]; ok && p > 0 {
+			return p, true
+		}
+		// 分辨率未命中时按优先级回退：720p → 1080p → 480p → 任意正值
+		for _, fallback := range []string{"720p", "1080p", "480p"} {
+			if p, ok := resMap[fallback]; ok && p > 0 {
+				return p, true
+			}
+		}
+		for _, p := range resMap {
+			if p > 0 {
+				return p, true
+			}
+		}
+	}
+
+	return getVideoModelPricePerSecondForBillingFlat(name, generateAudio)
+}
+
+// GetVideoModelPricePerSecondForBilling 按是否生成音频返回每秒价格（用于 Veo 等 noAudio/audio 分离定价）
+// wan2.6-flash 有分档时默认按 720p 档取价（与旧行为一致）
+func GetVideoModelPricePerSecondForBilling(name string, generateAudio bool) (float64, bool) {
+	return GetVideoModelPricePerSecondForBillingWithResolution(name, generateAudio, "720p")
+}
+
+// getVideoModelPricePerSecondForBillingFlat 非 flash 分档时的 noAudio/audio 与单一数字价
+func getVideoModelPricePerSecondForBillingFlat(name string, generateAudio bool) (float64, bool) {
+	name = FormatMatchingModelName(name)
 	if audioPricing, ok := getVideoAudioPricing(name); ok {
 		if generateAudio && audioPricing.Audio > 0 {
 			return audioPricing.Audio, true
@@ -1167,9 +1317,64 @@ func getVideoAudioPricing(name string) (VideoAudioPricing, bool) {
 	return pricing, ok
 }
 
-func buildVideoModelPriceCaches(rawMap map[string]interface{}) (map[string]float64, map[string]VideoAudioPricing) {
+func getVideoFlashResolutionPricing(name string) (VideoFlashResolutionPricing, bool) {
+	videoFlashResolutionPricePerSecondMapMutex.RLock()
+	defer videoFlashResolutionPricePerSecondMapMutex.RUnlock()
+	pricing, ok := videoFlashResolutionPricePerSecondMap[name]
+	return pricing, ok
+}
+
+func extractResolutionFloatMap(m map[string]interface{}) map[string]float64 {
+	out := make(map[string]float64)
+	for k, val := range m {
+		if f, ok := extractFloat(val); ok && f > 0 {
+			out[NormalizeVideoResolutionKey(k)] = f
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func mergeVideoFlashResolutionPricing(dst *VideoFlashResolutionPricing, v map[string]interface{}) {
+	if na, ok := v["noAudio"]; ok {
+		switch t := na.(type) {
+		case map[string]interface{}:
+			dst.NoAudio = extractResolutionFloatMap(t)
+		}
+	}
+	if na, ok := v["no_audio"]; ok && dst.NoAudio == nil {
+		switch t := na.(type) {
+		case map[string]interface{}:
+			dst.NoAudio = extractResolutionFloatMap(t)
+		}
+	}
+	if au, ok := v["audio"]; ok {
+		switch t := au.(type) {
+		case map[string]interface{}:
+			dst.Audio = extractResolutionFloatMap(t)
+		}
+	}
+	if au, ok := v["withAudio"]; ok && dst.Audio == nil {
+		switch t := au.(type) {
+		case map[string]interface{}:
+			dst.Audio = extractResolutionFloatMap(t)
+		}
+	}
+	if au, ok := v["with_audio"]; ok && dst.Audio == nil {
+		switch t := au.(type) {
+		case map[string]interface{}:
+			dst.Audio = extractResolutionFloatMap(t)
+		}
+	}
+}
+
+func buildVideoModelPriceCaches(rawMap map[string]interface{}) (map[string]float64, map[string]VideoAudioPricing, map[string]VideoFlashResolutionPricing, map[string]map[string]float64) {
 	priceMap := make(map[string]float64, len(rawMap))
 	audioMap := make(map[string]VideoAudioPricing)
+	flashMap := make(map[string]VideoFlashResolutionPricing)
+	resolutionMap := make(map[string]map[string]float64)
 
 	for modelName, value := range rawMap {
 		targetKeys := []string{modelName}
@@ -1180,6 +1385,15 @@ func buildVideoModelPriceCaches(rawMap map[string]interface{}) (map[string]float
 
 		switch v := value.(type) {
 		case map[string]interface{}:
+			var flash VideoFlashResolutionPricing
+			mergeVideoFlashResolutionPricing(&flash, v)
+			hasFlash := flash.NoAudio != nil || flash.Audio != nil
+			if hasFlash {
+				for _, key := range targetKeys {
+					flashMap[key] = flash
+				}
+			}
+
 			pricing := VideoAudioPricing{}
 			if noAudio, ok := extractFloatFromMap(v, "noAudio", "no_audio"); ok {
 				pricing.NoAudio = noAudio
@@ -1196,13 +1410,44 @@ func buildVideoModelPriceCaches(rawMap map[string]interface{}) (map[string]float
 				for _, key := range targetKeys {
 					priceMap[key] = def
 				}
-			} else if pricing.NoAudio > 0 {
+			} else if !hasFlash && pricing.NoAudio > 0 {
 				for _, key := range targetKeys {
 					priceMap[key] = pricing.NoAudio
 				}
-			} else if pricing.Audio > 0 {
+			} else if !hasFlash && pricing.Audio > 0 {
 				for _, key := range targetKeys {
 					priceMap[key] = pricing.Audio
+				}
+			}
+
+			// 非 flash、无 noAudio/audio 时，尝试作为分辨率分档价格表
+			// 支持两种格式：
+			//   带 wrapper：{"resolutions": {"720p": N, "1080p": N}}（与 Java 侧一致）
+			//   裸键：{"720p": N, "1080p": N}
+			if !hasFlash && pricing.NoAudio == 0 && pricing.Audio == 0 {
+				var rm map[string]float64
+				if resObj, ok := v["resolutions"]; ok {
+					// 带 resolutions wrapper key
+					if resMap, ok := resObj.(map[string]interface{}); ok {
+						rm = extractResolutionFloatMap(resMap)
+					}
+				}
+				if len(rm) == 0 {
+					// 裸键兜底
+					rm = extractResolutionFloatMap(v)
+				}
+				if len(rm) > 0 {
+					for _, key := range targetKeys {
+						resolutionMap[key] = rm
+					}
+					// 取最小分辨率价作为 priceMap 兜底（供余额预检用）
+					if _, exists := priceMap[targetKeys[0]]; !exists {
+						if minPrice := minResolutionPrice(rm); minPrice > 0 {
+							for _, key := range targetKeys {
+								priceMap[key] = minPrice
+							}
+						}
+					}
 				}
 			}
 		default:
@@ -1214,7 +1459,7 @@ func buildVideoModelPriceCaches(rawMap map[string]interface{}) (map[string]float
 		}
 	}
 
-	return priceMap, audioMap
+	return priceMap, audioMap, flashMap, resolutionMap
 }
 
 func extractFloatFromMap(m map[string]interface{}, keys ...string) (float64, bool) {
@@ -1258,6 +1503,10 @@ func loadVideoModelPricePerSecondFromDatabase() {
 	defer videoModelPricePerSecondMapMutex.Unlock()
 	videoModelAudioPricePerSecondMapMutex.Lock()
 	defer videoModelAudioPricePerSecondMapMutex.Unlock()
+	videoFlashResolutionPricePerSecondMapMutex.Lock()
+	defer videoFlashResolutionPricePerSecondMapMutex.Unlock()
+	videoResolutionPricePerSecondMapMutex.Lock()
+	defer videoResolutionPricePerSecondMapMutex.Unlock()
 	videoModelPricePerSecondRawMapMutex.Lock()
 	defer videoModelPricePerSecondRawMapMutex.Unlock()
 
@@ -1265,7 +1514,7 @@ func loadVideoModelPricePerSecondFromDatabase() {
 		var rawMap map[string]interface{}
 		if err := common.Unmarshal([]byte(videoStr), &rawMap); err == nil {
 			videoModelPricePerSecondRawMap = rawMap
-			videoModelPricePerSecondMap, videoModelAudioPricePerSecondMap = buildVideoModelPriceCaches(rawMap)
+			videoModelPricePerSecondMap, videoModelAudioPricePerSecondMap, videoFlashResolutionPricePerSecondMap, videoResolutionPricePerSecondMap = buildVideoModelPriceCaches(rawMap)
 			common.SysLog("Loaded video model price per second configuration from database")
 			return
 		}
@@ -1277,6 +1526,8 @@ func loadVideoModelPricePerSecondFromDatabase() {
 		videoModelPricePerSecondMap[k] = v
 	}
 	videoModelAudioPricePerSecondMap = make(map[string]VideoAudioPricing, len(defaultVideoAudioPricing))
+	videoFlashResolutionPricePerSecondMap = make(map[string]VideoFlashResolutionPricing, len(defaultVideoFlashResolutionPricing))
+	videoResolutionPricePerSecondMap = make(map[string]map[string]float64)
 	videoModelPricePerSecondRawMap = make(map[string]interface{})
 	for k, v := range defaultVideoAudioPricing {
 		videoModelAudioPricePerSecondMap[k] = v
@@ -1284,6 +1535,22 @@ func loadVideoModelPricePerSecondFromDatabase() {
 		videoModelPricePerSecondRawMap[k] = map[string]float64{
 			"noAudio": v.NoAudio,
 			"audio":   v.Audio,
+		}
+	}
+	for k, v := range defaultVideoFlashResolutionPricing {
+		videoFlashResolutionPricePerSecondMap[k] = v
+		videoModelPricePerSecondRawMap[k] = map[string]interface{}{
+			"noAudio": map[string]float64{
+				"720p":  v.NoAudio["720p"],
+				"1080p": v.NoAudio["1080p"],
+			},
+			"audio": map[string]float64{
+				"720p":  v.Audio["720p"],
+				"1080p": v.Audio["1080p"],
+			},
+		}
+		if m := minFlashResolutionPrice(v); m > 0 {
+			videoModelPricePerSecondMap[k] = m
 		}
 	}
 	for k, v := range defaultVideoModelPricePerSecond {
@@ -1305,11 +1572,15 @@ func UpdateVideoModelPricePerSecondByJSONString(jsonStr string) error {
 	defer videoModelPricePerSecondMapMutex.Unlock()
 	videoModelAudioPricePerSecondMapMutex.Lock()
 	defer videoModelAudioPricePerSecondMapMutex.Unlock()
+	videoFlashResolutionPricePerSecondMapMutex.Lock()
+	defer videoFlashResolutionPricePerSecondMapMutex.Unlock()
+	videoResolutionPricePerSecondMapMutex.Lock()
+	defer videoResolutionPricePerSecondMapMutex.Unlock()
 	videoModelPricePerSecondRawMapMutex.Lock()
 	defer videoModelPricePerSecondRawMapMutex.Unlock()
 
 	videoModelPricePerSecondRawMap = rawMap
-	videoModelPricePerSecondMap, videoModelAudioPricePerSecondMap = buildVideoModelPriceCaches(rawMap)
+	videoModelPricePerSecondMap, videoModelAudioPricePerSecondMap, videoFlashResolutionPricePerSecondMap, videoResolutionPricePerSecondMap = buildVideoModelPriceCaches(rawMap)
 	InvalidateExposedDataCache()
 	return nil
 }

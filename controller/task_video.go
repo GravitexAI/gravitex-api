@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/QuantumNous/new-api/relay/channel"
+	alitask "github.com/QuantumNous/new-api/relay/channel/task/ali"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -917,8 +918,10 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		}
 	}
 	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s generate_audio=%v (from_upstream=%v)", task.TaskID, generateAudio, generateAudioFromUpstream))
-	// 获取官方单秒价格（支持 noAudio/audio 分离定价；优先 noAudio/audio 配置再单一数字）
-	officialVideoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecondForBilling(modelName, generateAudio)
+	// 获取官方单秒价格（wan2.6-flash 含分辨率分档；Veo 等为 noAudio/audio 或单一数字）
+	resKey := ratio_setting.NormalizeVideoResolutionKey(alitask.ParseBillingResolutionKeyFromUpstreamJSON(task.UpstreamRequestBody))
+	officialVideoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecondForBillingWithResolution(modelName, generateAudio, resKey)
+	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s billing_resolution=%s", task.TaskID, resKey))
 	if !hasVideoPrice || officialVideoPrice <= 0 {
 		return fmt.Errorf("handleSora2TaskBilling: video price per second not configured for model: %s", modelName)
 	}

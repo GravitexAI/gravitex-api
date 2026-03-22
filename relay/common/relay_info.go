@@ -623,22 +623,27 @@ type TaskSubmitReq struct {
 	// 注意：历史上仅靠 Images 会丢失 role 信息，这里保留原始结构供 channel adaptor 解析。
 	Content []map[string]interface{} `json:"content,omitempty"`
 	// 以下字段用于 seedance/doubao 视频任务的直传参数（客户端当前以顶层字段提交，而不是放进 metadata）
-	CallbackURL     string                 `json:"callback_url,omitempty"`
-	Resolution      string                 `json:"resolution,omitempty"`
-	Ratio           string                 `json:"ratio,omitempty"`
-	Watermark       *bool                  `json:"watermark,omitempty"`
-	CameraFixed     *bool                  `json:"camera_fixed,omitempty"`
-	Seed            *int                   `json:"seed,omitempty"`
-	ReturnLastFrame *bool                  `json:"return_last_frame,omitempty"`
-	Mode            string                 `json:"mode,omitempty"`
-	Image           string                 `json:"image,omitempty"`
-	Images          []string               `json:"images,omitempty"`
-	Size            string                 `json:"size,omitempty"`
-	Duration        int                    `json:"duration,omitempty"`
-	Seconds         string                 `json:"seconds,omitempty"`
-	InputReference  string                 `json:"input_reference,omitempty"`
-	GenerateAudio   *bool                  `json:"generate_audio,omitempty"`
-	Metadata        map[string]interface{} `json:"metadata,omitempty"`
+	CallbackURL     string   `json:"callback_url,omitempty"`
+	Resolution      string   `json:"resolution,omitempty"`
+	Ratio           string   `json:"ratio,omitempty"`
+	Watermark       *bool    `json:"watermark,omitempty"`
+	CameraFixed     *bool    `json:"camera_fixed,omitempty"`
+	Seed            *int     `json:"seed,omitempty"`
+	ReturnLastFrame *bool    `json:"return_last_frame,omitempty"`
+	Mode            string   `json:"mode,omitempty"`
+	Image           string   `json:"image,omitempty"`
+	Images          []string `json:"images,omitempty"`
+	Size            string   `json:"size,omitempty"`
+	Duration        int      `json:"duration,omitempty"`
+	Seconds         string   `json:"seconds,omitempty"`
+	InputReference  string   `json:"input_reference,omitempty"`
+	GenerateAudio   *bool    `json:"generate_audio,omitempty"`
+	// wan2.6 专有字段
+	Audio         *bool                  `json:"audio,omitempty"`          // wan2.6-i2v-flash/r2v-flash: 有声(true)/无声(false)
+	ReferenceUrls []string               `json:"reference_urls,omitempty"` // wan2.6-r2v: 参考文件URL数组（图片+视频，最多5个）
+	ShotType      string                 `json:"shot_type,omitempty"`      // wan2.6: single/multi（需 smart_rewrite=true）
+	SmartRewrite  *bool                  `json:"smart_rewrite,omitempty"`  // wan2.6: prompt智能改写开关（覆盖默认true）
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
 }
 
 func (t *TaskSubmitReq) GetPrompt() string {
