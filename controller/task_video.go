@@ -540,6 +540,10 @@ func parseGenerateAudioFromUpstreamBody(body []byte) bool {
 			return true
 		}
 	}
+	// Kling V3 使用 sound: "on"/"off"
+	if s, ok := m["sound"].(string); ok {
+		return strings.EqualFold(s, "on")
+	}
 	if params, _ := m["parameters"].(map[string]interface{}); params != nil {
 		for _, key := range []string{"generateAudio", "generate_audio"} {
 			if parseBool(params[key]) {
@@ -558,7 +562,7 @@ func mergeBillingFieldsIntoTaskData(existingData, newData []byte) []byte {
 		"billing_model_name", "billing_group", "billing_oem_code",
 		"billing_oem_user_discount", "billing_effective_group_ratio",
 		"billing_token_name", "billing_token_id", "billing_processed",
-		"generate_audio", "generateAudio",
+		"generate_audio", "generateAudio", "sound",
 	}
 	var existMap, newMap map[string]interface{}
 	if len(existingData) > 0 {
@@ -815,6 +819,23 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 					if v, ok := params["durationSeconds"].(float64); ok && v > 0 {
 						requestedSeconds = int(v)
 					} else if v, ok := params["durationSeconds"].(int); ok && v > 0 {
+						requestedSeconds = v
+					}
+				}
+			}
+			// Kling 使用顶层 "duration" 字段（字符串格式如 "5"）
+			if requestedSeconds <= 0 {
+				switch v := upstreamReq["duration"].(type) {
+				case string:
+					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+						requestedSeconds = n
+					}
+				case float64:
+					if v > 0 {
+						requestedSeconds = int(v)
+					}
+				case int:
+					if v > 0 {
 						requestedSeconds = v
 					}
 				}

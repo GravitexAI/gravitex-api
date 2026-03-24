@@ -475,6 +475,12 @@ func parseGenerateAudioForQuota(c *gin.Context) bool {
 				return *req.Audio
 			}
 			if req.Metadata != nil {
+				// Kling V3 使用 sound: "on"/"off"
+				if soundVal, ok := req.Metadata["sound"]; ok {
+					if s, ok := soundVal.(string); ok {
+						return strings.EqualFold(s, "on")
+					}
+				}
 				for _, key := range []string{"generateAudio", "generate_audio", "audio"} {
 					if val, ok := req.Metadata[key]; ok {
 						switch b := val.(type) {
@@ -537,7 +543,7 @@ func parseVideoSecondsFromBody(body []byte) int {
 	// 1. 尝试 JSON 解析（含 parameters.durationSeconds 与顶层 seconds/n_seconds）
 	var m map[string]interface{}
 	if err := common.Unmarshal(body, &m); err == nil {
-		for _, key := range []string{"durationSeconds", "seconds", "n_seconds"} {
+		for _, key := range []string{"durationSeconds", "duration", "seconds", "n_seconds"} {
 			if v, ok := m[key]; ok {
 				switch val := v.(type) {
 				case string:
