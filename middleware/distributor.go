@@ -58,7 +58,7 @@ func Distribute() func(c *gin.Context) {
 				s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
 				if !ok {
 					// token model limit is empty, all models are not allowed
-					abortWithOpenAiMessage(c, http.StatusForbidden, "该令牌无权访问任何模型")
+					abortWithOpenAiMessage(c, http.StatusForbidden, "This token has no permission to access any models.")
 					return
 				}
 				var tokenModelLimit map[string]bool
@@ -68,14 +68,14 @@ func Distribute() func(c *gin.Context) {
 				}
 				matchName := ratio_setting.FormatMatchingModelName(modelRequest.Model) // match gpts & thinking-*
 				if _, ok := tokenModelLimit[matchName]; !ok {
-					abortWithOpenAiMessage(c, http.StatusForbidden, "该令牌无权访问模型 "+modelRequest.Model)
+					abortWithOpenAiMessage(c, http.StatusForbidden, "This token is not authorized to access the model "+modelRequest.Model)
 					return
 				}
 			}
 
 			if shouldSelectChannel {
 				if modelRequest.Model == "" {
-					abortWithOpenAiMessage(c, http.StatusBadRequest, "未指定模型名称，模型名称不能为空")
+					abortWithOpenAiMessage(c, http.StatusBadRequest, "Model name not specified; model name cannot be empty.")
 					return
 				}
 				var selectGroup string
@@ -133,7 +133,7 @@ func Distribute() func(c *gin.Context) {
 						if usingGroup == "auto" {
 							showGroup = fmt.Sprintf("auto(%s)", selectGroup)
 						}
-						message := fmt.Sprintf("获取分组 %s 下模型 %s 的可用渠道失败（distributor）: %s", showGroup, modelRequest.Model, err.Error())
+						message := fmt.Sprintf("Failed to obtain available channels (distributor) for model %s under group %s: %s", modelRequest.Model, showGroup, err.Error())
 						// 如果错误，但是渠道不为空，说明是数据库一致性问题
 						//if channel != nil {
 						//	common.SysError(fmt.Sprintf("渠道不存在：%d", channel.Id))
@@ -143,7 +143,7 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 					if channel == nil {
-						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, fmt.Sprintf("分组 %s 下模型 %s 无可用渠道（distributor）", usingGroup, modelRequest.Model), types.ErrorCodeModelNotFound)
+						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, fmt.Sprintf("No available resources for model %s under group %s.", modelRequest.Model, usingGroup), types.ErrorCodeModelNotFound)
 						return
 					}
 				}
