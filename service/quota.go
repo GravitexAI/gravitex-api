@@ -329,7 +329,16 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.FinalPreConsumedQuota))
 	} else {
-		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
+		// 与 compatible_handler.postConsumeQuota 一致：有 BillingSession 时用一次 UPDATE 完成 quota/used_quota/request_count
+		if relayInfo.Billing != nil {
+			preConsumed := relayInfo.Billing.GetPreConsumedQuota()
+			delta := quota - preConsumed
+			if err := model.ConsumeUserQuotaSettle(relayInfo.UserId, quota, delta); err != nil {
+				logger.LogError(ctx, "error consume user quota settle: "+err.Error())
+			}
+		} else {
+			model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
+		}
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
@@ -449,7 +458,16 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
-		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
+		// 与 compatible_handler.postConsumeQuota 一致：有 BillingSession 时用一次 UPDATE 完成 quota/used_quota/request_count
+		if relayInfo.Billing != nil {
+			preConsumed := relayInfo.Billing.GetPreConsumedQuota()
+			delta := quota - preConsumed
+			if err := model.ConsumeUserQuotaSettle(relayInfo.UserId, quota, delta); err != nil {
+				logger.LogError(ctx, "error consume user quota settle: "+err.Error())
+			}
+		} else {
+			model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
+		}
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
