@@ -52,13 +52,6 @@ const (
 	ContextKeyUsingGroup  ContextKey = "group"
 	ContextKeyUserName    ContextKey = "username"
 
-	/* OEM related keys */
-	ContextKeyOemCode      ContextKey = "oem_code"
-	ContextKeyOemId        ContextKey = "oem_id"
-	ContextKeyOemConfig    ContextKey = "oem_config"
-	ContextKeySystemConfig ContextKey = "system_config" // 向后兼容：与 gravitex-api 保持一致
-	ContextKeyUserOemId    ContextKey = "user_oem_id"
-
 	ContextKeyLocalCountTokens ContextKey = "local_count_tokens"
 
 	ContextKeySystemPromptOverride ContextKey = "system_prompt_override"

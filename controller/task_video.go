@@ -154,8 +154,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		// 计费所需字段，合并时从 existingData 保留到 newData，避免被上游响应覆盖
 		preservedFields := []string{
 			"requested_seconds", "billing_requested_seconds",
-			"billing_model_name", "billing_group", "billing_oem_code",
-			"billing_oem_user_discount", "billing_effective_group_ratio",
+			"billing_model_name", "billing_group",
+			"billing_effective_group_ratio",
 			"billing_token_name", "billing_token_id", "billing_processed",
 			"generate_audio", "generateAudio",
 		}
@@ -331,11 +331,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 							if hasUserGroupRatio {
 								finalGroupRatio = userGroupRatio
 							}
-							oemUserDiscount := service.GetOemUserDiscountForUserId(int64(task.UserId), modelName)
-							if oemUserDiscount <= 0 {
-								oemUserDiscount = 1.0
-							}
-							actualQuota := int(float64(taskResult.TotalTokens) * modelRatio * finalGroupRatio * oemUserDiscount)
+							actualQuota := int(float64(taskResult.TotalTokens) * modelRatio * finalGroupRatio)
 							preConsumedQuota := task.Quota
 							quotaDelta := actualQuota - preConsumedQuota
 							if quotaDelta > 0 {
@@ -559,8 +555,8 @@ func parseGenerateAudioFromUpstreamBody(body []byte) bool {
 func mergeBillingFieldsIntoTaskData(existingData, newData []byte) []byte {
 	preserved := []string{
 		"requested_seconds", "billing_requested_seconds",
-		"billing_model_name", "billing_group", "billing_oem_code",
-		"billing_oem_user_discount", "billing_effective_group_ratio",
+		"billing_model_name", "billing_group",
+		"billing_effective_group_ratio",
 		"billing_token_name", "billing_token_id", "billing_processed",
 		"generate_audio", "generateAudio", "sound",
 	}
@@ -650,8 +646,8 @@ func isVideoTokenRatioModel(name string) bool {
 func mergeVideoTaskDataWithUpstreamResponse(task *model.Task, responseBody []byte) {
 	preservedFields := []string{
 		"requested_seconds", "billing_requested_seconds",
-		"billing_model_name", "billing_group", "billing_oem_code",
-		"billing_oem_user_discount", "billing_effective_group_ratio",
+		"billing_model_name", "billing_group",
+		"billing_effective_group_ratio",
 		"billing_token_name", "billing_token_id", "billing_processed",
 		"generate_audio", "generateAudio",
 	}
@@ -767,7 +763,7 @@ func CompleteVideoTaskOnUpstreamSuccess(ctx context.Context, task *model.Task, c
 }
 
 // handleSora2TaskBilling 处理按秒计费视频模型的轮询成功计费逻辑（Sora-2 等）
-// 计费公式: actualQuota = videoPrice × requestedSeconds × QuotaPerUnit × groupRatio × oemUserDiscount
+// 计费公式: actualQuota = videoPrice × requestedSeconds × QuotaPerUnit × groupRatio
 func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	modelName := task.Properties.OriginModelName
 	if modelName == "" {
@@ -877,20 +873,6 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		return fmt.Errorf("invalid requested_seconds: %d", requestedSeconds)
 	}
 
-	oemCode := "gravitex"
-	if v, ok := taskData["billing_oem_code"].(string); ok && v != "" {
-		oemCode = v
-	}
-	oemUserDiscount := 1.0
-	if v, ok := taskData["billing_oem_user_discount"].(float64); ok && v > 0 {
-		oemUserDiscount = v
-	} else {
-		// 无存储值时按扣费用户 oemId 取折扣（与提交时逻辑一致）
-		oemUserDiscount = service.GetOemUserDiscountForUserId(int64(task.UserId), modelName)
-		if oemUserDiscount <= 0 {
-			oemUserDiscount = 1.0
-		}
-	}
 	tokenName := ""
 	if v, ok := taskData["billing_token_name"].(string); ok {
 		tokenName = v
@@ -912,9 +894,6 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	groupRatio := 0.0
 	if v, ok := taskData["billing_effective_group_ratio"].(float64); ok && v > 0 {
 		groupRatio = v
-	}
-	if groupRatio <= 0 {
-		groupRatio = service.GetGroupRatioByOem(oemCode, billingGroup)
 	}
 	if groupRatio <= 0 {
 		groupRatio = ratio_setting.GetGroupRatio(billingGroup)
@@ -978,17 +957,9 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		}
 	}
 
-	// 获取 OEM 销售折扣（用于 OEM 侧成本与日志价格链）
-	oemDiscount := model.GetOemDiscountByCode(oemCode, modelName, service.GetVendorNameFromModel(modelName))
-	if oemDiscount <= 0 {
-		oemDiscount = 1.0
-	}
-	oemVideoPrice := officialVideoPrice * oemDiscount
-
-	// 计算实际扣费 quota（与全局价格链公式保持一致）
-	// 实际用户单价 = officialVideoPrice × oemUserDiscount
-	// actualQuota = 实际用户单价 × requestedSeconds × QuotaPerUnit × effectiveGroupRatio
-	effectiveVideoPrice := officialVideoPrice * oemUserDiscount
+	// 计算实际扣费 quota
+	// actualQuota = officialVideoPrice × requestedSeconds × QuotaPerUnit × groupRatio
+	effectiveVideoPrice := officialVideoPrice
 
 	actualQuotaFloat := effectiveVideoPrice * float64(requestedSeconds) * common.QuotaPerUnit * groupRatio
 
@@ -998,12 +969,12 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	}
 
 	// 计费过程日志：公式与各因子，便于排查
-	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s seconds=%d generate_audio=%v officialPrice=%.4f oemUserDiscount=%.4f groupRatio=%.4f effectiveUserPrice=%.4f actualQuota=%d",
-		modelName, task.TaskID, requestedSeconds, generateAudio, officialVideoPrice, oemUserDiscount, groupRatio, effectiveVideoPrice, actualQuota))
+	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s seconds=%d generate_audio=%v officialPrice=%.4f groupRatio=%.4f effectiveUserPrice=%.4f actualQuota=%d",
+		modelName, task.TaskID, requestedSeconds, generateAudio, officialVideoPrice, groupRatio, effectiveVideoPrice, actualQuota))
 	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] formula: effectivePrice(%.4f) × seconds(%d) × QuotaPerUnit(%.0f) × groupRatio(%.4f) = %d",
 		effectiveVideoPrice, requestedSeconds, common.QuotaPerUnit, groupRatio, actualQuota))
 
-	// 执行扣费（已包含 OEM 用户折扣）
+	// 执行扣费
 	if actualQuota > 0 {
 		if err := model.DecreaseUserQuota(task.UserId, actualQuota); err != nil {
 			return fmt.Errorf("handleSora2TaskBilling: DecreaseUserQuota failed: %w", err)
@@ -1024,22 +995,13 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	logContent := fmt.Sprintf("视频任务成功，模型 %s，时长 %d 秒，耗时 %ds，扣费 %s",
 		modelName, requestedSeconds, useTime, logger.LogQuota(actualQuota))
 
-	priceChain := service.CalculatePriceChainForLogFromParams(oemCode, modelName, actualQuota, oemUserDiscount, groupRatio)
 	otherMap := map[string]interface{}{
 		"billing_type":                    "per_second",
 		"requested_seconds":               requestedSeconds,
 		"official_video_price_per_second": officialVideoPrice,
-		"oem_video_price_per_second":      oemVideoPrice,
-		// 最终用户每秒价格：官方价 × OEM 用户折扣
-		"video_price_per_second": effectiveVideoPrice,
-		"group_ratio":            groupRatio,
-		"user_group_ratio":       groupRatio,
-		"oem_user_discount":      oemUserDiscount,
-		"oem_code":               oemCode,
-		"oem_discount":           oemDiscount,
-	}
-	if priceChain != nil && priceChain.VendorId != nil {
-		otherMap["vendor_id"] = *priceChain.VendorId
+		"video_price_per_second":          effectiveVideoPrice,
+		"group_ratio":                     groupRatio,
+		"user_group_ratio":                groupRatio,
 	}
 	otherBytes, _ := common.Marshal(otherMap)
 
@@ -1058,15 +1020,6 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		UseTime:          useTime,
 		Group:            billingGroup,
 		Other:            string(otherBytes),
-	}
-	if priceChain != nil {
-		consumeLog.OemId = priceChain.OemId
-		consumeLog.OfficialQuota = priceChain.OfficialQuota
-		consumeLog.CostQuota = priceChain.CostQuota
-		consumeLog.SystemQuota = priceChain.SystemQuota
-		consumeLog.UserQuota = priceChain.UserQuota
-		consumeLog.PlatformProfit = priceChain.PlatformProfit
-		consumeLog.OemSubsidy = priceChain.OemSubsidy
 	}
 	if err := model.LOG_DB.Create(consumeLog).Error; err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed to insert consume log: %v", modelName, task.TaskID, err))
@@ -1088,8 +1041,8 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 
 // handleVideoTokenRatioBilling 处理 VideoRatio/VideoCompletionRatio 按量计费视频模型的轮询成功计费逻辑（如 seedance）
 // 计费公式：
-//   - 若 VideoRatio 存在且 !=0：actualQuota = tokens × (VideoRatio×VideoCompletionRatio) × groupRatio × oemUserDiscount
-//   - 否则（VideoRatio 不存在/为0）：actualQuota = tokens × ($/M tokens)/1e6 × QuotaPerUnit × groupRatio × oemUserDiscount
+//   - 若 VideoRatio 存在且 !=0：actualQuota = tokens × (VideoRatio×VideoCompletionRatio) × groupRatio
+//   - 否则（VideoRatio 不存在/为0）：actualQuota = tokens × ($/M tokens)/1e6 × QuotaPerUnit × groupRatio
 func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskResult *relaycommon.TaskInfo) error {
 	modelName := task.Properties.OriginModelName
 	if modelName == "" {
@@ -1128,19 +1081,6 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		return fmt.Errorf("handleVideoTokenRatioBilling: invalid tokens=%d (completion=%d total=%d)", tokens, taskResult.CompletionTokens, taskResult.TotalTokens)
 	}
 
-	oemCode := "gravitex"
-	if v, ok := taskData["billing_oem_code"].(string); ok && v != "" {
-		oemCode = v
-	}
-	oemUserDiscount := 1.0
-	if v, ok := taskData["billing_oem_user_discount"].(float64); ok && v > 0 {
-		oemUserDiscount = v
-	} else {
-		oemUserDiscount = service.GetOemUserDiscountForUserId(int64(task.UserId), modelName)
-		if oemUserDiscount <= 0 {
-			oemUserDiscount = 1.0
-		}
-	}
 	tokenName := ""
 	if v, ok := taskData["billing_token_name"].(string); ok {
 		tokenName = v
@@ -1160,9 +1100,6 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	groupRatio := 0.0
 	if v, ok := taskData["billing_effective_group_ratio"].(float64); ok && v > 0 {
 		groupRatio = v
-	}
-	if groupRatio <= 0 {
-		groupRatio = service.GetGroupRatioByOem(oemCode, billingGroup)
 	}
 	if groupRatio <= 0 {
 		groupRatio = ratio_setting.GetGroupRatio(billingGroup)
@@ -1203,23 +1140,21 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		"tokens":                     tokens,
 		"generate_audio":             generateAudio,
 		"group_ratio":                groupRatio,
-		"oem_user_discount":          oemUserDiscount,
-		"oem_code":                   oemCode,
 		"video_ratio":                vr,
 		"video_completion_ratio_val": cfgVal,
 		"ratio_mode":                 ratioMode,
 	}
 
 	if ratioMode {
-		// 走倍率体系：与 ModelRatio 计费一致，quota = tokens * ratio * groupRatio * discount
-		actualQuotaFloat := float64(tokens) * cfgVal * groupRatio * oemUserDiscount
+		// 走倍率体系：与 ModelRatio 计费一致，quota = tokens * ratio * groupRatio
+		actualQuotaFloat := float64(tokens) * cfgVal * groupRatio
 		actualQuota = int(actualQuotaFloat)
 		otherMap["effective_video_ratio"] = cfgVal
 	} else {
 		// 走价格体系：cfgVal 为 $/M tokens
 		pricePerMillion := cfgVal
 		pricePerToken := pricePerMillion / 1000000.0
-		actualQuotaFloat := pricePerToken * float64(tokens) * common.QuotaPerUnit * groupRatio * oemUserDiscount
+		actualQuotaFloat := pricePerToken * float64(tokens) * common.QuotaPerUnit * groupRatio
 		actualQuota = int(actualQuotaFloat)
 		otherMap["video_price_per_million_tokens"] = pricePerMillion
 		otherMap["video_price_per_token"] = pricePerToken
@@ -1228,8 +1163,8 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		actualQuota = 0
 	}
 
-	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s tokens=%d generate_audio=%v cfgVal=%.6f ratioMode=%v groupRatio=%.4f oemUserDiscount=%.4f actualQuota=%d",
-		modelName, task.TaskID, tokens, generateAudio, cfgVal, ratioMode, groupRatio, oemUserDiscount, actualQuota))
+	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s tokens=%d generate_audio=%v cfgVal=%.6f ratioMode=%v groupRatio=%.4f actualQuota=%d",
+		modelName, task.TaskID, tokens, generateAudio, cfgVal, ratioMode, groupRatio, actualQuota))
 
 	// 执行扣费
 	if actualQuota > 0 {
@@ -1252,7 +1187,6 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	logContent := fmt.Sprintf("视频任务成功，模型 %s，tokens %d，耗时 %ds，扣费 %s",
 		modelName, tokens, useTime, logger.LogQuota(actualQuota))
 
-	priceChain := service.CalculatePriceChainForLogFromParams(oemCode, modelName, actualQuota, oemUserDiscount, groupRatio)
 	otherBytes, _ := common.Marshal(otherMap)
 
 	consumeLog := &model.Log{
@@ -1270,18 +1204,6 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		UseTime:          useTime,
 		Group:            billingGroup,
 		Other:            string(otherBytes),
-	}
-	if priceChain != nil {
-		consumeLog.OemId = priceChain.OemId
-		consumeLog.OfficialQuota = priceChain.OfficialQuota
-		consumeLog.CostQuota = priceChain.CostQuota
-		consumeLog.SystemQuota = priceChain.SystemQuota
-		consumeLog.UserQuota = priceChain.UserQuota
-		consumeLog.PlatformProfit = priceChain.PlatformProfit
-		consumeLog.OemSubsidy = priceChain.OemSubsidy
-		if priceChain.VendorId != nil {
-			otherMap["vendor_id"] = *priceChain.VendorId
-		}
 	}
 	if err := model.LOG_DB.Create(consumeLog).Error; err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to insert consume log: %v", modelName, task.TaskID, err))

@@ -6,7 +6,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -51,14 +50,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	imageModelPrice, hasImageModelPrice := ratio_setting.GetImageModelPricePerImage(info.OriginModelName)
 	if hasImageModelPrice && imageModelPrice > 0 {
 		groupRatioInfo := HandleGroupRatio(c, info)
-		oemUserDiscount := 1.0
-		if c != nil {
-			oemUserDiscount = service.GetOemUserDiscountForQuota(c, info.OriginModelName)
-			if oemUserDiscount <= 0 {
-				oemUserDiscount = 1.0
-			}
-		}
-		modelPrice := imageModelPrice * oemUserDiscount
+		modelPrice := imageModelPrice
 		if meta != nil && meta.ImagePriceRatio != 0 {
 			modelPrice = modelPrice * meta.ImagePriceRatio
 		}
@@ -135,25 +127,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		if meta.ImagePriceRatio != 0 {
 			modelPrice = modelPrice * meta.ImagePriceRatio
 		}
-		// 按价格计费时后面会应用 OEM 折扣
 		preConsumedQuota = int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
-	}
-
-	// 应用 OEM 用户折扣：优先使用扣费用户的 oemId 取折扣，没有则用默认 gravitex
-	oemUserDiscount := 1.0
-	if c != nil {
-		oemUserDiscount = service.GetOemUserDiscountForQuota(c, info.OriginModelName)
-		if oemUserDiscount <= 0 {
-			oemUserDiscount = 1.0
-		}
-	}
-
-	if !usePrice {
-		// Token 计费时，文本倍率使用 OEM 折扣
-		modelRatio = modelRatio * oemUserDiscount
-	} else {
-		// 按价格计费时，直接对价格打折
-		modelPrice = modelPrice * oemUserDiscount
 	}
 
 	// check if free model pre-consume is disabled
@@ -214,14 +188,7 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) types.
 			modelPrice = defaultPrice
 		}
 	}
-	oemUserDiscount := 1.0
-	if c != nil {
-		oemUserDiscount = service.GetOemUserDiscountForQuota(c, info.OriginModelName)
-		if oemUserDiscount <= 0 {
-			oemUserDiscount = 1.0
-		}
-	}
-	quota := int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio * oemUserDiscount)
+	quota := int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 	priceData := types.PerCallPriceData{
 		ModelPrice:     modelPrice,
 		Quota:          quota,

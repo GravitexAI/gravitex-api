@@ -192,7 +192,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	var quota int
 	var modelPrice float64
 	if isPerSecondBilling {
-		// 按秒计费模型（Veo 等）：按是否生成音频取价，估算 quota = videoPrice × 预期秒数 × groupRatio × oemDiscount
+		// 按秒计费模型（Veo 等）：按是否生成音频取价，估算 quota = videoPrice × 预期秒数 × groupRatio
 		generateAudio := parseGenerateAudioForQuota(c)
 		resKey := "720p"
 		if v, exists := c.Get("video_billing_resolution"); exists {
@@ -201,16 +201,12 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 			}
 		}
 		videoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecondForBillingWithResolution(modelName, generateAudio, resKey)
-		oemUserDiscount := service.GetOemUserDiscountForQuota(c, modelName)
-		if oemUserDiscount <= 0 {
-			oemUserDiscount = 1.0
-		}
 		videoSeconds := parseVideoSeconds(c)
 		if videoSeconds <= 0 {
 			videoSeconds = 4 // 最短视频
 		}
 		if hasVideoPrice && videoPrice > 0 {
-			quota = int(videoPrice * float64(videoSeconds) * common.QuotaPerUnit * effectiveGroupRatio * oemUserDiscount)
+			quota = int(videoPrice * float64(videoSeconds) * common.QuotaPerUnit * effectiveGroupRatio)
 		} else {
 			quota = int(0.4 * common.QuotaPerUnit) // 兜底：4秒 × $0.1/秒
 		}
@@ -608,18 +604,6 @@ func mergeVideoTaskBillingData(c *gin.Context, info *relaycommon.RelayInfo, task
 		dataMap = make(map[string]interface{})
 	}
 
-	// 获取 OEM 信息
-	oemCode := "gravitex"
-	if code, exists := c.Get(string(constant.ContextKeyOemCode)); exists {
-		if codeStr, ok := code.(string); ok && codeStr != "" {
-			oemCode = codeStr
-		}
-	}
-	oemUserDiscount := service.GetOemUserDiscountForQuota(c, modelName)
-	if oemUserDiscount <= 0 {
-		oemUserDiscount = 1.0
-	}
-
 	// 计算实际 groupRatio（与提交时保持一致：优先用用户组倍率）
 	effectiveGroupRatio := ratio_setting.GetGroupRatio(usingGroup)
 	if info != nil && info.UserGroup != "" {
@@ -658,8 +642,6 @@ func mergeVideoTaskBillingData(c *gin.Context, info *relaycommon.RelayInfo, task
 
 	dataMap["billing_model_name"] = modelName
 	dataMap["billing_group"] = usingGroup
-	dataMap["billing_oem_code"] = oemCode
-	dataMap["billing_oem_user_discount"] = oemUserDiscount
 	dataMap["billing_effective_group_ratio"] = effectiveGroupRatio
 	dataMap["billing_token_name"] = tokenName
 	dataMap["billing_token_id"] = tokenId
@@ -691,18 +673,6 @@ func mergeVideoTokenRatioBillingData(c *gin.Context, info *relaycommon.RelayInfo
 		dataMap = make(map[string]interface{})
 	}
 
-	// 获取 OEM 信息
-	oemCode := "gravitex"
-	if code, exists := c.Get(string(constant.ContextKeyOemCode)); exists {
-		if codeStr, ok := code.(string); ok && codeStr != "" {
-			oemCode = codeStr
-		}
-	}
-	oemUserDiscount := service.GetOemUserDiscountForQuota(c, modelName)
-	if oemUserDiscount <= 0 {
-		oemUserDiscount = 1.0
-	}
-
 	// 计算实际 groupRatio（与提交时保持一致：优先用用户组倍率）
 	effectiveGroupRatio := ratio_setting.GetGroupRatio(usingGroup)
 	if info != nil && info.UserGroup != "" {
@@ -730,8 +700,6 @@ func mergeVideoTokenRatioBillingData(c *gin.Context, info *relaycommon.RelayInfo
 
 	dataMap["billing_model_name"] = modelName
 	dataMap["billing_group"] = usingGroup
-	dataMap["billing_oem_code"] = oemCode
-	dataMap["billing_oem_user_discount"] = oemUserDiscount
 	dataMap["billing_effective_group_ratio"] = effectiveGroupRatio
 	dataMap["billing_token_name"] = tokenName
 	dataMap["billing_token_id"] = tokenId

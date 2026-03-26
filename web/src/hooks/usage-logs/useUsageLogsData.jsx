@@ -459,10 +459,8 @@ export const useLogsData = () => {
         let content = '';
         if (!isViolationFeeLog) {
           if (other?.billing_type === 'per_second') {
-            // 优先使用最终用户单价，其次 OEM 单价，最后官方单价
             const pricePerSec =
               other?.video_price_per_second ??
-              other?.oem_video_price_per_second ??
               other?.official_video_price_per_second ??
               0;
             const seconds = other?.requested_seconds || logs[i].completion_tokens || 0;

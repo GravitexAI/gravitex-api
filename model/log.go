@@ -37,14 +37,6 @@ type Log struct {
 	Ip               string `json:"ip" gorm:"index;default:''"`
 	RequestId        string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
 	Other            string `json:"other"`
-	// OEM 价格链条（与 Nebula 一致，供日志列表与 Expenses 展示）
-	OemId          *int64 `json:"oem_id" gorm:"column:oem_id;index"`
-	OfficialQuota  int64  `json:"official_quota" gorm:"default:0"`
-	CostQuota      int64  `json:"cost_quota" gorm:"default:0"`
-	SystemQuota    int64  `json:"system_quota" gorm:"default:0"`
-	UserQuota      int64  `json:"user_quota" gorm:"default:0"`
-	PlatformProfit int64  `json:"platform_profit" gorm:"default:0"`
-	OemSubsidy     int64  `json:"oem_subsidy" gorm:"default:0"`
 }
 
 // don't use iota, avoid change log type value
@@ -141,17 +133,9 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	}
 }
 
-// PriceChainParams 价格链条参数（与 Nebula 一致，供日志与 Expenses 展示）
+// PriceChainParams 价格链条参数，供日志与 Expenses 展示
 type PriceChainParams struct {
-	OemId          *int64 `json:"oem_id"`
-	OemCode        string `json:"oem_code"`
-	OfficialQuota  int64  `json:"official_quota"`
-	CostQuota      int64  `json:"cost_quota"`
-	SystemQuota    int64  `json:"system_quota"`
-	UserQuota      int64  `json:"user_quota"`
-	PlatformProfit int64  `json:"platform_profit"`
-	OemSubsidy     int64  `json:"oem_subsidy"`
-	VendorId       *int64 `json:"vendor_id,omitempty"`
+	VendorId *int64 `json:"vendor_id,omitempty"`
 }
 
 type RecordConsumeLogParams struct {
@@ -219,15 +203,6 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		}(),
 		RequestId: requestId,
 		Other:     otherStr,
-	}
-	if params.PriceChain != nil {
-		log.OemId = params.PriceChain.OemId
-		log.OfficialQuota = params.PriceChain.OfficialQuota
-		log.CostQuota = params.PriceChain.CostQuota
-		log.SystemQuota = params.PriceChain.SystemQuota
-		log.UserQuota = params.PriceChain.UserQuota
-		log.PlatformProfit = params.PriceChain.PlatformProfit
-		log.OemSubsidy = params.PriceChain.OemSubsidy
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {

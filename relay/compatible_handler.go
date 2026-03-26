@@ -549,15 +549,6 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 		other["audio_ratio"] = audioRatio
 		other["audio_completion_ratio"] = relayInfo.PriceData.AudioCompletionRatio
 	}
-	// OEM 信息：扣费已按该折扣计算，写入日志便于对账与计费展示
-	oemCode := "gravitex"
-	if code, exists := ctx.Get(string(constant.ContextKeyOemCode)); exists {
-		if codeStr, ok := code.(string); ok && codeStr != "" {
-			oemCode = codeStr
-		}
-	}
-	other["oem_code"] = oemCode
-	other["oem_user_discount"] = service.GetOemUserDiscountForQuota(ctx, modelName)
 	if geminiImageOutputTokens > 0 || geminiTextOutputTokens > 0 || reasoningTokens > 0 {
 		other["image_output_tokens"] = geminiImageOutputTokens
 		other["text_output_tokens"] = geminiTextOutputTokens

@@ -30,14 +30,13 @@ type TokenDetails struct {
 }
 
 type QuotaInfo struct {
-	InputDetails    TokenDetails
-	OutputDetails   TokenDetails
-	ModelName       string
-	UsePrice        bool
-	ModelPrice      float64
-	ModelRatio      float64
-	GroupRatio      float64
-	OemUserDiscount float64 // OEM 用户折扣（用于音频倍率）
+	InputDetails  TokenDetails
+	OutputDetails TokenDetails
+	ModelName     string
+	UsePrice      bool
+	ModelPrice    float64
+	ModelRatio    float64
+	GroupRatio    float64
 }
 
 func hasCustomModelRatio(modelName string, currentRatio float64) bool {
@@ -81,13 +80,9 @@ func calculateAudioQuota(info QuotaInfo) int {
 	quota = quota.Add(inputTextTokens.Mul(textRatio))
 	quota = quota.Add(outputTextTokens.Mul(completionRatio).Mul(textRatio))
 
-	// 音频部分：输入用 audioRatio；输出用 effectiveAudioOutputRatio（优先音频输入倍率，否则文本输入倍率），并应用 OEM 用户折扣
-	dOemUserDiscount := decimal.NewFromFloat(info.OemUserDiscount)
-	if dOemUserDiscount.IsZero() {
-		dOemUserDiscount = decimal.NewFromInt(1)
-	}
-	quota = quota.Add(inputAudioTokens.Mul(audioRatio).Mul(groupRatio).Mul(dOemUserDiscount))
-	quota = quota.Add(outputAudioTokens.Mul(dEffectiveAudioOutputRatio).Mul(groupRatio).Mul(dOemUserDiscount))
+	// 音频部分：输入用 audioRatio；输出用 effectiveAudioOutputRatio（优先音频输入倍率，否则文本输入倍率）
+	quota = quota.Add(inputAudioTokens.Mul(audioRatio).Mul(groupRatio))
+	quota = quota.Add(outputAudioTokens.Mul(dEffectiveAudioOutputRatio).Mul(groupRatio))
 
 	// If quota is less than or equal to zero, set quota to 1
 	if quota.LessThanOrEqual(decimal.Zero) {
@@ -132,10 +127,6 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		actualGroupRatio = userGroupRatio
 	}
 
-	// 获取 OEM 用户折扣并应用到 modelRatio
-	oemUserDiscount := GetOemUserDiscountForQuota(ctx, modelName)
-	discountedModelRatio := modelRatio * oemUserDiscount
-
 	quotaInfo := QuotaInfo{
 		InputDetails: TokenDetails{
 			TextTokens:  textInputTokens,
@@ -145,11 +136,10 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 			TextTokens:  textOutTokens,
 			AudioTokens: audioOutTokens,
 		},
-		ModelName:       modelName,
-		UsePrice:        relayInfo.UsePrice,
-		ModelRatio:      discountedModelRatio, // 文本倍率已应用 OEM 折扣
-		GroupRatio:      actualGroupRatio,
-		OemUserDiscount: oemUserDiscount, // 音频倍率使用该折扣
+		ModelName:  modelName,
+		UsePrice:   relayInfo.UsePrice,
+		ModelRatio: modelRatio,
+		GroupRatio: actualGroupRatio,
 	}
 
 	quota := calculateAudioQuota(quotaInfo)
@@ -415,9 +405,6 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	modelPrice := relayInfo.PriceData.ModelPrice
 	usePrice := relayInfo.PriceData.UsePrice
 
-	// 获取 OEM 用户折扣
-	oemUserDiscount := GetOemUserDiscountForQuota(ctx, relayInfo.OriginModelName)
-
 	quotaInfo := QuotaInfo{
 		InputDetails: TokenDetails{
 			TextTokens:  textInputTokens,
@@ -427,11 +414,10 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 			TextTokens:  textOutTokens,
 			AudioTokens: audioOutTokens,
 		},
-		ModelName:       relayInfo.OriginModelName,
-		UsePrice:        usePrice,
-		ModelRatio:      modelRatio,
-		GroupRatio:      groupRatio,
-		OemUserDiscount: oemUserDiscount,
+		ModelName:  relayInfo.OriginModelName,
+		UsePrice:   usePrice,
+		ModelRatio: modelRatio,
+		GroupRatio: groupRatio,
 	}
 
 	quota := calculateAudioQuota(quotaInfo)
