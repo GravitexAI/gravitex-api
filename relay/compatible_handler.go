@@ -565,6 +565,12 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage 
 			}
 		}
 	}
+	// 按张计费：记录计费类型、单张价格、图片数量倍率，供 Java 端 BillingDetailService 识别
+	if relayInfo.PriceData.PerImageUnitPrice > 0 {
+		other["billing_type"] = "per_image"
+		other["per_call_price"] = relayInfo.PriceData.PerImageUnitPrice
+		other["per_call_image_multiplier"] = relayInfo.PriceData.ImagePriceMultiplier
+	}
 	// 价格链条（与 Nebula 一致）：官方价→成本价→系统销售价→用户实付，供日志表与 Expenses 展示
 	priceChain := service.CalculatePriceChainForLog(ctx, logModel, promptTokens, completionTokens, quota)
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{

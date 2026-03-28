@@ -27,6 +27,7 @@ import {
   Space,
   Typography,
   Radio,
+  RadioGroup,
   Notification,
 } from '@douyinfe/semi-ui';
 import {
@@ -85,22 +86,50 @@ export default function ModelRatioNotSetEditor(props) {
       const modelPrice = JSON.parse(props.options.ModelPrice || '{}');
       const modelRatio = JSON.parse(props.options.ModelRatio || '{}');
       const completionRatio = JSON.parse(props.options.CompletionRatio || '{}');
+      const audioRatio = JSON.parse(props.options.AudioRatio || '{}');
+      const audioCompletionRatio = JSON.parse(props.options.AudioCompletionRatio || '{}');
+      const imageRatio = JSON.parse(props.options.ImageRatio || '{}');
+      const imageCompletionRatio = JSON.parse(props.options.ImageCompletionRatio || '{}');
+      const videoRatio = JSON.parse(props.options.VideoRatio || '{}');
+      const videoCompletionRatio = JSON.parse(props.options.VideoCompletionRatio || '{}');
+      const cacheRatio = JSON.parse(props.options.CacheRatio || '{}');
+      const createCacheRatio = JSON.parse(props.options.CreateCacheRatio || '{}');
+      const imageModelPricePerImage = JSON.parse(props.options.ImageModelPricePerImage || '{}');
+      const videoModelPricePerSecond = JSON.parse(props.options.VideoModelPricePerSecond || '{}');
 
       // 找出所有未设置价格和倍率的模型
       const unsetModels = enabledModels.filter((modelName) => {
         const hasPrice = modelPrice[modelName] !== undefined;
         const hasRatio = modelRatio[modelName] !== undefined;
+        const hasAudioRatio = audioRatio[modelName] !== undefined;
+        const hasImageRatio = imageRatio[modelName] !== undefined;
+        const hasVideoRatio = videoRatio[modelName] !== undefined;
+        const hasImagePricePerImage = imageModelPricePerImage[modelName] !== undefined;
+        const hasVideoPricePerSecond = videoModelPricePerSecond[modelName] !== undefined;
 
-        // 如果模型没有价格或者没有倍率设置，则显示
-        return !hasPrice && !hasRatio;
+        // 如果模型在所有价格和倍率字段中都没有配置，则显示
+        return !hasPrice && !hasRatio && !hasAudioRatio && !hasImageRatio
+          && !hasVideoRatio && !hasImagePricePerImage && !hasVideoPricePerSecond;
       });
+
+      const getVal = (obj, key) => (obj[key] === undefined ? '' : obj[key]);
 
       // 创建模型数据
       const modelData = unsetModels.map((name) => ({
         name,
-        price: modelPrice[name] || '',
-        ratio: modelRatio[name] || '',
-        completionRatio: completionRatio[name] || '',
+        price: getVal(modelPrice, name),
+        ratio: getVal(modelRatio, name),
+        completionRatio: getVal(completionRatio, name),
+        audioRatio: getVal(audioRatio, name),
+        audioCompletionRatio: getVal(audioCompletionRatio, name),
+        imageRatio: getVal(imageRatio, name),
+        imageCompletionRatio: getVal(imageCompletionRatio, name),
+        videoRatio: getVal(videoRatio, name),
+        videoCompletionRatio: getVal(videoCompletionRatio, name),
+        cacheRatio: getVal(cacheRatio, name),
+        createCacheRatio: getVal(createCacheRatio, name),
+        imageModelPricePerImage: getVal(imageModelPricePerImage, name),
+        videoModelPricePerSecond: getVal(videoModelPricePerSecond, name),
       }));
 
       setModels(modelData);
@@ -142,31 +171,52 @@ export default function ModelRatioNotSetEditor(props) {
       ModelPrice: JSON.parse(props.options.ModelPrice || '{}'),
       ModelRatio: JSON.parse(props.options.ModelRatio || '{}'),
       CompletionRatio: JSON.parse(props.options.CompletionRatio || '{}'),
+      AudioRatio: JSON.parse(props.options.AudioRatio || '{}'),
+      AudioCompletionRatio: JSON.parse(props.options.AudioCompletionRatio || '{}'),
+      ImageRatio: JSON.parse(props.options.ImageRatio || '{}'),
+      ImageCompletionRatio: JSON.parse(props.options.ImageCompletionRatio || '{}'),
+      VideoRatio: JSON.parse(props.options.VideoRatio || '{}'),
+      VideoCompletionRatio: JSON.parse(props.options.VideoCompletionRatio || '{}'),
+      CacheRatio: JSON.parse(props.options.CacheRatio || '{}'),
+      CreateCacheRatio: JSON.parse(props.options.CreateCacheRatio || '{}'),
+      ImageModelPricePerImage: JSON.parse(props.options.ImageModelPricePerImage || '{}'),
+      VideoModelPricePerSecond: JSON.parse(props.options.VideoModelPricePerSecond || '{}'),
     };
 
     try {
+      const setIfNotEmpty = (obj, name, val) => {
+        if (val !== '') obj[name] = parseFloat(val);
+      };
+
       // 数据转换 - 只处理已修改的模型
       models.forEach((model) => {
-        // 只有当用户设置了值时才更新
+        // 四种计费类型互斥：按次 > 按张 > 按秒 > 按量
         if (model.price !== '') {
-          // 如果价格不为空，则转换为浮点数，忽略倍率参数
           output.ModelPrice[model.name] = parseFloat(model.price);
+        } else if (model.imageModelPricePerImage !== '') {
+          output.ImageModelPricePerImage[model.name] = parseFloat(model.imageModelPricePerImage);
+        } else if (model.videoModelPricePerSecond !== '') {
+          output.VideoModelPricePerSecond[model.name] = parseFloat(model.videoModelPricePerSecond);
         } else {
-          if (model.ratio !== '')
-            output.ModelRatio[model.name] = parseFloat(model.ratio);
-          if (model.completionRatio !== '')
-            output.CompletionRatio[model.name] = parseFloat(
-              model.completionRatio,
-            );
+          // 按量计费：所有倍率字段
+          setIfNotEmpty(output.ModelRatio, model.name, model.ratio);
+          setIfNotEmpty(output.CompletionRatio, model.name, model.completionRatio);
+          setIfNotEmpty(output.AudioRatio, model.name, model.audioRatio);
+          setIfNotEmpty(output.AudioCompletionRatio, model.name, model.audioCompletionRatio);
+          setIfNotEmpty(output.ImageRatio, model.name, model.imageRatio);
+          setIfNotEmpty(output.ImageCompletionRatio, model.name, model.imageCompletionRatio);
+          setIfNotEmpty(output.VideoRatio, model.name, model.videoRatio);
+          setIfNotEmpty(output.VideoCompletionRatio, model.name, model.videoCompletionRatio);
+          setIfNotEmpty(output.CacheRatio, model.name, model.cacheRatio);
+          setIfNotEmpty(output.CreateCacheRatio, model.name, model.createCacheRatio);
         }
       });
 
       // 准备API请求数组
-      const finalOutput = {
-        ModelPrice: JSON.stringify(output.ModelPrice, null, 2),
-        ModelRatio: JSON.stringify(output.ModelRatio, null, 2),
-        CompletionRatio: JSON.stringify(output.CompletionRatio, null, 2),
-      };
+      const finalOutput = {};
+      Object.entries(output).forEach(([key, val]) => {
+        finalOutput[key] = JSON.stringify(val, null, 2);
+      });
 
       const requestQueue = Object.entries(finalOutput).map(([key, value]) => {
         return API.put('/api/option/', {
@@ -211,11 +261,14 @@ export default function ModelRatioNotSetEditor(props) {
       title: t('模型名称'),
       dataIndex: 'name',
       key: 'name',
+      fixed: 'left',
+      width: 200,
     },
     {
       title: t('模型固定价格'),
       dataIndex: 'price',
       key: 'price',
+      width: 140,
       render: (text, record) => (
         <Input
           value={text}
@@ -228,6 +281,7 @@ export default function ModelRatioNotSetEditor(props) {
       title: t('模型倍率'),
       dataIndex: 'ratio',
       key: 'ratio',
+      width: 130,
       render: (text, record) => (
         <Input
           value={text}
@@ -241,6 +295,7 @@ export default function ModelRatioNotSetEditor(props) {
       title: t('补全倍率'),
       dataIndex: 'completionRatio',
       key: 'completionRatio',
+      width: 130,
       render: (text, record) => (
         <Input
           value={text}
@@ -249,6 +304,136 @@ export default function ModelRatioNotSetEditor(props) {
           onChange={(value) =>
             updateModel(record.name, 'completionRatio', value)
           }
+        />
+      ),
+    },
+    {
+      title: t('音频倍率'),
+      dataIndex: 'audioRatio',
+      key: 'audioRatio',
+      width: 130,
+      render: (text, record) => (
+        <Input
+          value={text}
+          placeholder='-'
+          onChange={(value) => updateModel(record.name, 'audioRatio', value)}
+        />
+      ),
+    },
+    {
+      title: t('音频补全倍率'),
+      dataIndex: 'audioCompletionRatio',
+      key: 'audioCompletionRatio',
+      width: 140,
+      render: (text, record) => (
+        <Input
+          value={text}
+          placeholder='-'
+          onChange={(value) => updateModel(record.name, 'audioCompletionRatio', value)}
+        />
+      ),
+    },
+    {
+      title: t('图片倍率'),
+      dataIndex: 'imageRatio',
+      key: 'imageRatio',
+      width: 130,
+      render: (text, record) => (
+        <Input
+          value={text}
+          placeholder='-'
+          onChange={(value) => updateModel(record.name, 'imageRatio', value)}
+        />
+      ),
+    },
+    {
+      title: t('图片补全倍率'),
+      dataIndex: 'imageCompletionRatio',
+      key: 'imageCompletionRatio',
+      width: 140,
+      render: (text, record) => (
+        <Input
+          value={text}
+          placeholder='-'
+          onChange={(value) => updateModel(record.name, 'imageCompletionRatio', value)}
+        />
+      ),
+    },
+    {
+      title: t('视频倍率'),
+      dataIndex: 'videoRatio',
+      key: 'videoRatio',
+      width: 130,
+      render: (text, record) => (
+        <Input
+          value={text}
+          placeholder='-'
+          onChange={(value) => updateModel(record.name, 'videoRatio', value)}
+        />
+      ),
+    },
+    {
+      title: t('视频补全倍率'),
+      dataIndex: 'videoCompletionRatio',
+      key: 'videoCompletionRatio',
+      width: 140,
+      render: (text, record) => (
+        <Input
+          value={text}
+          placeholder='-'
+          onChange={(value) => updateModel(record.name, 'videoCompletionRatio', value)}
+        />
+      ),
+    },
+    {
+      title: t('缓存倍率'),
+      dataIndex: 'cacheRatio',
+      key: 'cacheRatio',
+      width: 130,
+      render: (text, record) => (
+        <Input
+          value={text}
+          placeholder='-'
+          onChange={(value) => updateModel(record.name, 'cacheRatio', value)}
+        />
+      ),
+    },
+    {
+      title: t('缓存创建倍率'),
+      dataIndex: 'createCacheRatio',
+      key: 'createCacheRatio',
+      width: 140,
+      render: (text, record) => (
+        <Input
+          value={text}
+          placeholder='-'
+          onChange={(value) => updateModel(record.name, 'createCacheRatio', value)}
+        />
+      ),
+    },
+    {
+      title: t('按张计费价格'),
+      dataIndex: 'imageModelPricePerImage',
+      key: 'imageModelPricePerImage',
+      width: 140,
+      render: (text, record) => (
+        <Input
+          value={text}
+          placeholder='-'
+          onChange={(value) => updateModel(record.name, 'imageModelPricePerImage', value)}
+        />
+      ),
+    },
+    {
+      title: t('按秒计费价格'),
+      dataIndex: 'videoModelPricePerSecond',
+      key: 'videoModelPricePerSecond',
+      width: 140,
+      render: (text, record) => (
+        <Input
+          value={text}
+          placeholder='-'
+          onChange={(value) => updateModel(record.name, 'videoModelPricePerSecond', value)}
         />
       ),
     },
@@ -266,21 +451,28 @@ export default function ModelRatioNotSetEditor(props) {
     );
   };
 
+  const extraFields = [
+    'audioRatio', 'audioCompletionRatio', 'imageRatio', 'imageCompletionRatio',
+    'videoRatio', 'videoCompletionRatio', 'cacheRatio', 'createCacheRatio',
+    'imageModelPricePerImage', 'videoModelPricePerSecond',
+  ];
+
   const addModel = (values) => {
     // 检查模型名称是否存在, 如果存在则拒绝添加
     if (models.some((model) => model.name === values.name)) {
       showError(t('模型名称已存在'));
       return;
     }
-    setModels((prev) => [
-      {
-        name: values.name,
-        price: values.price || '',
-        ratio: values.ratio || '',
-        completionRatio: values.completionRatio || '',
-      },
-      ...prev,
-    ]);
+    const newModel = {
+      name: values.name,
+      price: values.price || '',
+      ratio: values.ratio || '',
+      completionRatio: values.completionRatio || '',
+    };
+    extraFields.forEach((f) => {
+      newModel[f] = values[f] || '';
+    });
+    setModels((prev) => [newModel, ...prev]);
     setVisible(false);
     showSuccess(t('添加成功'));
   };
@@ -312,6 +504,10 @@ export default function ModelRatioNotSetEditor(props) {
       }
     }
 
+    // 按量计费字段
+    const perTokenClearFields = { price: '', imageModelPricePerImage: '', videoModelPricePerSecond: '' };
+    const perRequestClearFields = { ratio: '', completionRatio: '', audioRatio: '', audioCompletionRatio: '', imageRatio: '', imageCompletionRatio: '', videoRatio: '', videoCompletionRatio: '', cacheRatio: '', createCacheRatio: '', imageModelPricePerImage: '', videoModelPricePerSecond: '' };
+
     // 根据选择的类型批量更新模型
     setModels((prev) =>
       prev.map((model) => {
@@ -319,26 +515,25 @@ export default function ModelRatioNotSetEditor(props) {
           if (batchFillType === 'price') {
             return {
               ...model,
+              ...perRequestClearFields,
               price: batchFillValue,
-              ratio: '',
-              completionRatio: '',
             };
           } else if (batchFillType === 'ratio') {
             return {
               ...model,
-              price: '',
+              ...perTokenClearFields,
               ratio: batchFillValue,
             };
           } else if (batchFillType === 'completionRatio') {
             return {
               ...model,
-              price: '',
+              ...perTokenClearFields,
               completionRatio: batchFillValue,
             };
           } else if (batchFillType === 'bothRatio') {
             return {
               ...model,
-              price: '',
+              ...perTokenClearFields,
               ratio: batchRatioValue,
               completionRatio: batchCompletionRatioValue,
             };
@@ -430,6 +625,7 @@ export default function ModelRatioNotSetEditor(props) {
           dataSource={pagedData}
           rowSelection={rowSelection}
           rowKey='name'
+          scroll={{ x: 2200 }}
           pagination={{
             currentPage: currentPage,
             pageSize: pageSize,
@@ -454,7 +650,25 @@ export default function ModelRatioNotSetEditor(props) {
         visible={visible}
         onCancel={() => setVisible(false)}
         onOk={() => {
-          currentModel && addModel(currentModel);
+          if (currentModel) {
+            // 四种计费类型互斥：清除非当前类型的字段
+            const valuesToSave = { ...currentModel };
+            const pMode = currentModel.pricingMode || 'per-token';
+            const perTokenFields = ['ratio', 'completionRatio', 'audioRatio', 'audioCompletionRatio', 'imageRatio', 'imageCompletionRatio', 'videoRatio', 'videoCompletionRatio', 'cacheRatio', 'createCacheRatio'];
+            if (pMode !== 'per-token') {
+              perTokenFields.forEach((f) => { valuesToSave[f] = ''; });
+            }
+            if (pMode !== 'per-request') {
+              valuesToSave.price = '';
+            }
+            if (pMode !== 'per-image') {
+              valuesToSave.imageModelPricePerImage = '';
+            }
+            if (pMode !== 'per-second') {
+              valuesToSave.videoModelPricePerSecond = '';
+            }
+            addModel(valuesToSave);
+          }
         }}
       >
         <Form>
@@ -467,34 +681,28 @@ export default function ModelRatioNotSetEditor(props) {
               setCurrentModel((prev) => ({ ...prev, name: value }))
             }
           />
-          <Form.Switch
-            field='priceMode'
-            label={
-              <>
-                {t('定价模式')}：
-                {currentModel?.priceMode ? t('固定价格') : t('倍率模式')}
-              </>
-            }
-            onChange={(checked) => {
-              setCurrentModel((prev) => ({
-                ...prev,
-                price: '',
-                ratio: '',
-                completionRatio: '',
-                priceMode: checked,
-              }));
-            }}
-          />
-          {currentModel?.priceMode ? (
-            <Form.Input
-              field='price'
-              label={t('固定价格(每次)')}
-              placeholder={t('输入每次价格')}
-              onChange={(value) =>
-                setCurrentModel((prev) => ({ ...prev, price: value }))
-              }
-            />
-          ) : (
+
+          <Form.Section text={t('定价模式')}>
+            <div style={{ marginBottom: '16px' }}>
+              <RadioGroup
+                type='button'
+                value={currentModel?.pricingMode || 'per-token'}
+                onChange={(e) => {
+                  setCurrentModel((prev) => ({
+                    ...prev,
+                    pricingMode: e.target.value,
+                  }));
+                }}
+              >
+                <Radio value='per-token'>{t('按量计费')}</Radio>
+                <Radio value='per-request'>{t('按次计费')}</Radio>
+                <Radio value='per-image'>{t('按张计费')}</Radio>
+                <Radio value='per-second'>{t('按秒计费')}</Radio>
+              </RadioGroup>
+            </div>
+          </Form.Section>
+
+          {(!currentModel?.pricingMode || currentModel?.pricingMode === 'per-token') && (
             <>
               <Form.Input
                 field='ratio'
@@ -507,7 +715,7 @@ export default function ModelRatioNotSetEditor(props) {
               <Form.Input
                 field='completionRatio'
                 label={t('补全倍率')}
-                placeholder={t('输入补全价格')}
+                placeholder={t('输入补全倍率')}
                 onChange={(value) =>
                   setCurrentModel((prev) => ({
                     ...prev,
@@ -515,7 +723,116 @@ export default function ModelRatioNotSetEditor(props) {
                   }))
                 }
               />
+
+              <Form.Section text={t('音频倍率')}>
+                <Form.Input
+                  field='audioRatio'
+                  label={t('音频倍率')}
+                  placeholder={t('留空则不设置')}
+                  onChange={(value) =>
+                    setCurrentModel((prev) => ({ ...prev, audioRatio: value }))
+                  }
+                />
+                <Form.Input
+                  field='audioCompletionRatio'
+                  label={t('音频补全倍率')}
+                  placeholder={t('留空则不设置')}
+                  onChange={(value) =>
+                    setCurrentModel((prev) => ({ ...prev, audioCompletionRatio: value }))
+                  }
+                />
+              </Form.Section>
+
+              <Form.Section text={t('图片倍率')}>
+                <Form.Input
+                  field='imageRatio'
+                  label={t('图片倍率')}
+                  placeholder={t('留空则不设置')}
+                  onChange={(value) =>
+                    setCurrentModel((prev) => ({ ...prev, imageRatio: value }))
+                  }
+                />
+                <Form.Input
+                  field='imageCompletionRatio'
+                  label={t('图片补全倍率')}
+                  placeholder={t('留空则不设置')}
+                  onChange={(value) =>
+                    setCurrentModel((prev) => ({ ...prev, imageCompletionRatio: value }))
+                  }
+                />
+              </Form.Section>
+
+              <Form.Section text={t('视频倍率')}>
+                <Form.Input
+                  field='videoRatio'
+                  label={t('视频倍率')}
+                  placeholder={t('留空则不设置')}
+                  onChange={(value) =>
+                    setCurrentModel((prev) => ({ ...prev, videoRatio: value }))
+                  }
+                />
+                <Form.Input
+                  field='videoCompletionRatio'
+                  label={t('视频补全倍率')}
+                  placeholder={t('留空则不设置')}
+                  onChange={(value) =>
+                    setCurrentModel((prev) => ({ ...prev, videoCompletionRatio: value }))
+                  }
+                />
+              </Form.Section>
+
+              <Form.Section text={t('缓存倍率')}>
+                <Form.Input
+                  field='cacheRatio'
+                  label={t('缓存倍率')}
+                  placeholder={t('留空则不设置')}
+                  onChange={(value) =>
+                    setCurrentModel((prev) => ({ ...prev, cacheRatio: value }))
+                  }
+                />
+                <Form.Input
+                  field='createCacheRatio'
+                  label={t('缓存创建倍率')}
+                  placeholder={t('留空则不设置')}
+                  onChange={(value) =>
+                    setCurrentModel((prev) => ({ ...prev, createCacheRatio: value }))
+                  }
+                />
+              </Form.Section>
             </>
+          )}
+
+          {currentModel?.pricingMode === 'per-request' && (
+            <Form.Input
+              field='price'
+              label={t('固定价格(每次)')}
+              placeholder={t('输入每次价格')}
+              onChange={(value) =>
+                setCurrentModel((prev) => ({ ...prev, price: value }))
+              }
+            />
+          )}
+
+          {currentModel?.pricingMode === 'per-image' && (
+            <Form.Input
+              field='imageModelPricePerImage'
+              label={t('按张计费每张价格（美元）')}
+              placeholder={t('输入每张价格')}
+              onChange={(value) =>
+                setCurrentModel((prev) => ({ ...prev, imageModelPricePerImage: value }))
+              }
+            />
+          )}
+
+          {currentModel?.pricingMode === 'per-second' && (
+            <Form.Input
+              field='videoModelPricePerSecond'
+              label={t('按秒计费每秒价格（美元）')}
+              placeholder={t('输入每秒价格')}
+              onChange={(value) =>
+                setCurrentModel((prev) => ({ ...prev, videoModelPricePerSecond: value }))
+              }
+            />
           )}
         </Form>
       </Modal>

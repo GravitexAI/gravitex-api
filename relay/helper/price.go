@@ -51,7 +51,9 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	if hasImageModelPrice && imageModelPrice > 0 {
 		groupRatioInfo := HandleGroupRatio(c, info)
 		modelPrice := imageModelPrice
+		imagePriceMultiplier := 1.0
 		if meta != nil && meta.ImagePriceRatio != 0 {
+			imagePriceMultiplier = meta.ImagePriceRatio
 			modelPrice = modelPrice * meta.ImagePriceRatio
 		}
 		preConsumedQuota := int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
@@ -60,6 +62,8 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		priceData := types.PriceData{
 			UsePrice:             true,
 			ModelPrice:           modelPrice,
+			PerImageUnitPrice:    imageModelPrice,
+			ImagePriceMultiplier: imagePriceMultiplier,
 			CompletionRatio:      completionRatio,
 			ImageCompletionRatio: imageCompletionRatio,
 			GroupRatioInfo:       groupRatioInfo,

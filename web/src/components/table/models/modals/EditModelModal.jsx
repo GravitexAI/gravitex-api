@@ -59,6 +59,13 @@ const nameRuleOptions = [
   { label: '后缀名称匹配', value: 3 },
 ];
 
+const showTabOptions = [
+  { label: '不展示', value: 0 },
+  { label: '对话', value: 1 },
+  { label: '图片', value: 2 },
+  { label: '视频', value: 3 },
+];
+
 const flagOptions = [
   { label: '无', value: 0 },
   { label: '新发布', value: 1 },
@@ -133,7 +140,7 @@ const EditModelModal = (props) => {
     name_rule: props.editingModel?.model_name ? 0 : undefined, // 通过未配置模型过来的固定为精确匹配
     status: true,
     sync_official: true,
-    show_tab: false,
+    show_tab: 0,
     flag: 0,
     sort_order: 0,
   });
@@ -169,7 +176,7 @@ const EditModelModal = (props) => {
         // 处理status/sync_official，将数字转为布尔值
         data.status = data.status === 1;
         data.sync_official = (data.sync_official ?? 1) === 1;
-        data.show_tab = (data.show_tab ?? 0) === 1;
+        data.show_tab = data.show_tab ?? 0;
         data.flag = data.flag ?? 0;
         data.sort_order = data.sort_order ?? 0;
         if (formApiRef.current) {
@@ -222,7 +229,7 @@ const EditModelModal = (props) => {
         endpoints: values.endpoints || '',
         status: values.status ? 1 : 0,
         sync_official: values.sync_official ? 1 : 0,
-        show_tab: values.show_tab ? 1 : 0,
+        show_tab: values.show_tab ?? 0,
         flag: values.flag ?? 0,
         sort_order: values.sort_order ?? 0,
       };
@@ -599,11 +606,16 @@ const EditModelModal = (props) => {
                     />
                   </Col>
                   <Col span={24}>
-                    <Form.Switch
+                    <Form.Select
                       field='show_tab'
                       label={t('展示标签')}
-                      extraText={t('开启后在模型管理/模型广场中可作为展示标签使用')}
-                      size='large'
+                      placeholder={t('请选择展示标签')}
+                      optionList={showTabOptions.map((o) => ({
+                        label: t(o.label),
+                        value: o.value,
+                      }))}
+                      extraText={t('设置模型在模型广场中的展示分类')}
+                      style={{ width: '100%' }}
                     />
                   </Col>
                   <Col span={24}>

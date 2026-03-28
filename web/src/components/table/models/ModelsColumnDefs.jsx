@@ -318,6 +318,11 @@ export const getModelsColumns = ({
       render: (text) => renderDescription(text, 200),
     },
     {
+      title: t('英文描述'),
+      dataIndex: 'description_en',
+      render: (text) => renderDescription(text, 200),
+    },
+    {
       title: t('供应商'),
       dataIndex: 'vendor_id',
       render: (vendorId, record) => renderVendorTag(vendorId, vendorMap, t),
@@ -326,6 +331,53 @@ export const getModelsColumns = ({
       title: t('标签'),
       dataIndex: 'tags',
       render: renderTags,
+    },
+    {
+      title: t('英文标签'),
+      dataIndex: 'tags_en',
+      render: renderTags,
+    },
+    {
+      title: t('展示标签'),
+      dataIndex: 'show_tab',
+      render: (val) => {
+        const map = {
+          0: { color: 'grey', label: t('不展示') },
+          1: { color: 'blue', label: t('对话') },
+          2: { color: 'cyan', label: t('图片') },
+          3: { color: 'purple', label: t('视频') },
+        };
+        const cfg = map[val] || map[0];
+        return (
+          <Tag size='small' shape='circle' color={cfg.color}>
+            {cfg.label}
+          </Tag>
+        );
+      },
+    },
+    {
+      title: t('标示'),
+      dataIndex: 'flag',
+      render: (val) => {
+        const map = {
+          0: '-',
+          1: { color: 'green', label: t('新发布') },
+          2: { color: 'blue', label: t('最先进') },
+          3: { color: 'red', label: t('火爆') },
+        };
+        const cfg = map[val];
+        if (!cfg || cfg === '-') return '-';
+        return (
+          <Tag size='small' shape='circle' color={cfg.color}>
+            {cfg.label}
+          </Tag>
+        );
+      },
+    },
+    {
+      title: t('排序'),
+      dataIndex: 'sort_order',
+      render: (val) => (val ?? 0),
     },
     {
       title: t('端点'),

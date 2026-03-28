@@ -125,6 +125,19 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		usage.(*dto.Usage).PromptTokens = int(request.N)
 	}
 
+	// 按张计费：根据上游实际生成的图片数量校正扣费金额
+	// 优先使用上游返回的 generated_images，其次使用请求中的 N
+	if info.PriceData.PerImageUnitPrice > 0 {
+		actualImages := usage.(*dto.Usage).GeneratedImages
+		if actualImages <= 0 && request.N > 0 {
+			actualImages = int(request.N)
+		}
+		if actualImages > 0 {
+			info.PriceData.ModelPrice = info.PriceData.PerImageUnitPrice * float64(actualImages)
+			info.PriceData.ImagePriceMultiplier = float64(actualImages)
+		}
+	}
+
 	quality := "standard"
 	if request.Quality == "hd" {
 		quality = "hd"

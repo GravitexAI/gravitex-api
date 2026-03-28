@@ -237,6 +237,9 @@ type Usage struct {
 
 	// OpenRouter Params
 	Cost any `json:"cost,omitempty"`
+
+	// 按张计费：上游返回的实际生成图片数量
+	GeneratedImages int `json:"generated_images,omitempty"`
 }
 
 type OpenAIVideoResponse struct {
