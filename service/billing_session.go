@@ -213,7 +213,15 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 
 	switch s.funding.Source() {
 	case BillingSourceWallet:
-		return s.relayInfo.UserQuota > trustQuota
+		// 必须从 Redis 读取实时余额，不能使用 relayInfo.UserQuota 快照。
+		// 高并发场景下，快照值可能是请求到达时的旧值，导致多个请求同时通过信任检查、
+		// 全部跳过预扣费，造成用户严重超额使用。
+		userQuota, err := model.GetUserQuota(s.relayInfo.UserId, false)
+		if err != nil {
+			// Redis/DB 查询失败时不信任，走正常预扣费流程
+			return false
+		}
+		return userQuota > trustQuota
 	case BillingSourceSubscription:
 		// 订阅不能启用信任旁路。原因：
 		// 1. PreConsumeUserSubscription 要求 amount>0 来创建预扣记录并锁定订阅

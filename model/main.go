@@ -120,8 +120,6 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 		initCol()
 	}()
 
-	prepareStmt := !common.GetEnvOrDefaultBool("DISABLE_PREPARE_STMT", false)
-
 	dsn := os.Getenv(envName)
 	if dsn != "" {
 		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
@@ -136,7 +134,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 				DSN:                  dsn,
 				PreferSimpleProtocol: true, // disables implicit prepared statement usage
 			}), &gorm.Config{
-				PrepareStmt: prepareStmt,
+				PrepareStmt: true,
 			})
 		}
 		if strings.HasPrefix(dsn, "local") {
@@ -147,7 +145,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 				common.LogSqlType = common.DatabaseTypeSQLite
 			}
 			return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
-				PrepareStmt: prepareStmt,
+				PrepareStmt: true,
 			})
 		}
 		// Use MySQL
@@ -176,7 +174,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 	common.SysLog("SQL_DSN not set, using SQLite as database")
 	common.UsingSQLite = true
 	return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
-		PrepareStmt: prepareStmt,
+		PrepareStmt: true,
 	})
 }
 

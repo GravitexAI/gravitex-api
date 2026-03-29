@@ -848,12 +848,11 @@ func IncreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	gopool.Go(func() {
-		err := cacheIncrUserQuota(id, int64(quota))
-		if err != nil {
-			common.SysLog("failed to increase user quota: " + err.Error())
-		}
-	})
+	// Redis 必须同步更新，确保后续 GetUserQuota / shouldTrust 立刻读到最新余额。
+	// 异步更新会导致高并发下信任检查读到旧值，用户可超额使用。
+	if cacheErr := cacheIncrUserQuota(id, int64(quota)); cacheErr != nil {
+		common.SysLog("failed to increase user quota cache: " + cacheErr.Error())
+	}
 	if !db && common.BatchUpdateEnabled {
 		addNewRecord(BatchUpdateTypeUserQuota, id, quota)
 		return nil
@@ -873,12 +872,11 @@ func DecreaseUserQuota(id int, quota int) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	gopool.Go(func() {
-		err := cacheDecrUserQuota(id, int64(quota))
-		if err != nil {
-			common.SysLog("failed to decrease user quota: " + err.Error())
-		}
-	})
+	// Redis 必须同步更新，确保后续 GetUserQuota / shouldTrust 立刻读到最新余额。
+	// 异步更新会导致高并发下信任检查读到旧值，用户可超额使用。
+	if cacheErr := cacheDecrUserQuota(id, int64(quota)); cacheErr != nil {
+		common.SysLog("failed to decrease user quota cache: " + cacheErr.Error())
+	}
 	if common.BatchUpdateEnabled {
 		addNewRecord(BatchUpdateTypeUserQuota, id, -quota)
 		return nil
