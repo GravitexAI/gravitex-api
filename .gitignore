@@ -8,7 +8,6 @@ build
 *.db-journal
 logs
 web/dist
-.env
 web/admin_api
 web/admin_api.zip
 web/admin_api.zip-ssr
