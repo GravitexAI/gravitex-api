@@ -85,6 +85,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	privateData := task.PrivateData
 	if privateData.Key != "" {
 		key = privateData.Key
+	} else if channel.ChannelInfo.IsMultiKey {
+		// 多 key 渠道（如 Vertex AI 配了多个 service account JSON），
+		// channel.Key 是拼接的完整字符串，需拆分取第一个
+		keys := channel.GetKeys()
+		if len(keys) > 0 {
+			key = keys[0]
+		}
 	}
 	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
 		"task_id": taskId,
