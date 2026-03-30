@@ -101,7 +101,8 @@ export default defineConfig({
     host: '0.0.0.0',
     proxy: {
       '/api': {
-        target: 'http://localhost:3003',
+        target: 'https://api.gravitex.ai',
+        // target: 'http://localhost:3003',
         changeOrigin: true,
       },
       '/mj': {
