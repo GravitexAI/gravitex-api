@@ -159,6 +159,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			"billing_effective_group_ratio",
 			"billing_token_name", "billing_token_id", "billing_processed",
 			"generate_audio", "generateAudio",
+			"billing_cost_discount",
 		}
 
 		// 合并后若仍缺 generate_audio，从 upstream_request_body 补全（与计费逻辑一致，保证 task.Data 完整）
@@ -562,6 +563,7 @@ func mergeBillingFieldsIntoTaskData(existingData, newData []byte) []byte {
 		"billing_effective_group_ratio",
 		"billing_token_name", "billing_token_id", "billing_processed",
 		"generate_audio", "generateAudio", "sound",
+		"billing_cost_discount",
 	}
 	var existMap, newMap map[string]interface{}
 	if len(existingData) > 0 {
@@ -653,6 +655,7 @@ func mergeVideoTaskDataWithUpstreamResponse(task *model.Task, responseBody []byt
 		"billing_effective_group_ratio",
 		"billing_token_name", "billing_token_id", "billing_processed",
 		"generate_audio", "generateAudio",
+		"billing_cost_discount",
 	}
 	var existingData, newData map[string]interface{}
 	if len(task.Data) > 0 {
@@ -1012,6 +1015,25 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		"group_ratio":                     groupRatio,
 		"user_group_ratio":                groupRatio,
 	}
+	// 写入渠道成本折扣：优先从 task.Data 取（提交时保存），兜底从渠道查
+	adminInfo := make(map[string]interface{})
+	costDiscount := 0.0
+	if v, ok := taskData["billing_cost_discount"].(float64); ok && v > 0 {
+		costDiscount = v
+	}
+	if costDiscount <= 0 {
+		// 兜底：通过 channel_id 查询渠道信息
+		if ch, err := model.CacheGetChannel(task.ChannelId); err == nil && ch != nil && ch.CostDiscount != nil && *ch.CostDiscount > 0 {
+			costDiscount = *ch.CostDiscount
+			logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s cost_discount fallback from channel: %.3f", task.TaskID, costDiscount))
+		}
+	}
+	if costDiscount > 0 {
+		adminInfo["cost_discount"] = costDiscount
+	}
+	if len(adminInfo) > 0 {
+		otherMap["admin_info"] = adminInfo
+	}
 	otherBytes, _ := common.Marshal(otherMap)
 
 	consumeLog := &model.Log{
@@ -1201,6 +1223,25 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 
 	logContent := fmt.Sprintf("视频任务成功，模型 %s，tokens %d，耗时 %ds，扣费 %s",
 		modelName, tokens, useTime, logger.LogQuota(actualQuota))
+
+	// 写入渠道成本折扣：优先从 task.Data 取（提交时保存），兜底从渠道查
+	adminInfoTokenRatio := make(map[string]interface{})
+	costDiscountTokenRatio := 0.0
+	if v, ok := taskData["billing_cost_discount"].(float64); ok && v > 0 {
+		costDiscountTokenRatio = v
+	}
+	if costDiscountTokenRatio <= 0 {
+		if ch, err := model.CacheGetChannel(task.ChannelId); err == nil && ch != nil && ch.CostDiscount != nil && *ch.CostDiscount > 0 {
+			costDiscountTokenRatio = *ch.CostDiscount
+			logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio task=%s cost_discount fallback from channel: %.3f", task.TaskID, costDiscountTokenRatio))
+		}
+	}
+	if costDiscountTokenRatio > 0 {
+		adminInfoTokenRatio["cost_discount"] = costDiscountTokenRatio
+	}
+	if len(adminInfoTokenRatio) > 0 {
+		otherMap["admin_info"] = adminInfoTokenRatio
+	}
 
 	otherBytes, _ := common.Marshal(otherMap)
 

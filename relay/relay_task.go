@@ -312,6 +312,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 					if hasUserGroupRatio {
 						other["user_group_ratio"] = userGroupRatio
 					}
+					adminInfo := make(map[string]interface{})
+					adminInfo["use_channel"] = c.GetStringSlice("use_channel")
+					costDiscount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
+					if costDiscount > 0 {
+						adminInfo["cost_discount"] = costDiscount
+					}
+					other["admin_info"] = adminInfo
 					priceChain := service.CalculatePriceChainForLog(c, modelName, 0, 0, quota)
 					model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
 						ChannelId:  info.ChannelId,
@@ -686,6 +693,12 @@ func mergeVideoTaskBillingData(c *gin.Context, info *relaycommon.RelayInfo, task
 	// 与 nebula-new-api 对齐：使用 requested_seconds 作为通用字段名
 	dataMap["requested_seconds"] = videoSeconds
 
+	// 保存渠道成本折扣（轮询计费时写入日志用）
+	costDiscount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
+	if costDiscount > 0 {
+		dataMap["billing_cost_discount"] = costDiscount
+	}
+
 	// 从请求中提取并保存音频生成标志（提交时落库，轮询计费时用）。优先 req.GenerateAudio，否则从 Metadata 取（客户端可能放在 metadata 里）
 	generateAudio := parseGenerateAudioForQuota(c)
 	dataMap["generate_audio"] = generateAudio
@@ -741,6 +754,12 @@ func mergeVideoTokenRatioBillingData(c *gin.Context, info *relaycommon.RelayInfo
 	dataMap["billing_effective_group_ratio"] = effectiveGroupRatio
 	dataMap["billing_token_name"] = tokenName
 	dataMap["billing_token_id"] = tokenId
+
+	// 保存渠道成本折扣（轮询计费时写入日志用）
+	costDiscountTokenRatio := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
+	if costDiscountTokenRatio > 0 {
+		dataMap["billing_cost_discount"] = costDiscountTokenRatio
+	}
 
 	generateAudio := parseGenerateAudioForQuota(c)
 	dataMap["generate_audio"] = generateAudio

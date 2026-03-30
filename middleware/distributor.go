@@ -372,6 +372,9 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, channel.GetBaseURL())
 	if channel.CostDiscount != nil {
 		common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, *channel.CostDiscount)
+	} else {
+		// 重试切换渠道时，清除上一个渠道的 cost_discount，避免残留旧值
+		common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, float64(0))
 	}
 
 	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, false)
