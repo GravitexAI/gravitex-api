@@ -347,18 +347,24 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	}
 	info.ConsumeQuota = true
 
-	// 按秒计费模型：将扣费所需信息合并到 task.Data，轮询成功后再计费（含 token 信息供轮询完成后写日志）
+	// 无论计费模式如何，都将 token 信息写入 task.Data，保证轮询完成后日志能记录令牌信息。
+	// 按秒计费模型：额外合并 group_ratio / requested_seconds / generate_audio 等计费字段。
+	// VideoRatio 按量计费模型：额外合并 group_ratio 等计费字段。
+	// 其他模型（提交时已扣费）：仅写入 token 信息，轮询日志可回溯到提交令牌。
 	if isPerSecondBilling {
 		taskData = mergeVideoTaskBillingData(c, info, taskData, modelName, info.UsingGroup, upstreamBodyBytes)
-	}
-	// VideoRatio/VideoCompletionRatio：将扣费所需信息合并到 task.Data，轮询成功后按 usage 扣费
-	if isVideoTokenRatioBilling {
+	} else if isVideoTokenRatioBilling {
 		taskData = mergeVideoTokenRatioBillingData(c, info, taskData, modelName, info.UsingGroup)
+	} else {
+		taskData = mergeTokenInfoToTaskData(c, info, taskData)
 	}
 
 	// insert task
 	task := model.InitTask(platform, info)
 	task.TaskID = taskID
+	// 令牌信息写入独立列，不受轮询 task.Data 覆盖影响
+	task.TokenName = c.GetString("token_name")
+	task.TokenId = info.TokenId
 	// 按秒计费 / VideoRatio 按量计费模型：task.Quota=0（轮询后实际计费），其他模型保持估算的预扣quota
 	if isPerSecondBilling || isVideoTokenRatioBilling {
 		task.Quota = 0
@@ -386,10 +392,6 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	}
 	if len(upstreamBodyBytes) > 0 {
 		task.UpstreamRequestBody = []byte(common.TruncateBase64Content(string(upstreamBodyBytes)))
-	}
-	if isPerSecondBilling {
-		logger.LogInfo(c, fmt.Sprintf("[VideoTaskInsert] task_id=%s requested_seconds=%d",
-			taskID, task.Properties.RequestedSeconds))
 	}
 	err = task.Insert()
 	if err != nil {
@@ -592,6 +594,42 @@ func parseVideoSecondsFromBody(body []byte) int {
 		}
 	}
 	return 0
+}
+
+// mergeTokenInfoToTaskData 将 token 信息写入 task.Data，供轮询完成后日志使用。
+// 非按秒/非 VideoRatio 模型的轻量版本：仅写入 token 信息，不包含完整计费字段。
+func mergeTokenInfoToTaskData(c *gin.Context, info *relaycommon.RelayInfo, taskData []byte) []byte {
+	var dataMap map[string]interface{}
+	if len(taskData) > 0 {
+		_ = common.Unmarshal(taskData, &dataMap)
+	}
+	if dataMap == nil {
+		dataMap = make(map[string]interface{})
+	}
+
+	tokenName := c.GetString("token_name")
+	tokenId := 0
+	if tid, ok := c.Get(string(constant.ContextKeyTokenId)); ok {
+		switch v := tid.(type) {
+		case int:
+			tokenId = v
+		case float64:
+			tokenId = int(v)
+		}
+	}
+	if tokenId == 0 && info != nil && info.TokenId > 0 {
+		tokenId = info.TokenId
+	}
+
+	dataMap["billing_token_name"] = tokenName
+	dataMap["billing_token_id"] = tokenId
+
+	merged, err := common.Marshal(dataMap)
+	if err != nil {
+		common.SysLog("[mergeTokenInfoToTaskData] failed to marshal: " + err.Error())
+		return taskData
+	}
+	return merged
 }
 
 // mergeVideoTaskBillingData 将扣费所需字段合并到 task.Data（轮询成功后使用）
@@ -874,7 +912,11 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 						_ = model.TaskUpdateFailReason(originTask.ID, originTask.FailReason)
 					}
 				} else {
-					_ = originTask.Update()
+					// 仅更新 status / progress，避免 DB.Save 全量写回可能覆盖 task.Data / properties 等计费字段
+					_ = model.DB.Model(&model.Task{}).Where("id = ?", originTask.ID).Updates(map[string]interface{}{
+						"status":   originTask.Status,
+						"progress": originTask.Progress,
+					}).Error
 				}
 			} else {
 				// 后台轮询已处理过终态，使用 DB 中已有的 fail_reason（可能是 OSS URL）

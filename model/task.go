@@ -56,6 +56,8 @@ type Task struct {
 	StartTime           int64                 `json:"start_time" gorm:"index"`
 	FinishTime          int64                 `json:"finish_time" gorm:"index"`
 	Progress            string                `json:"progress" gorm:"type:varchar(20);index"`
+	TokenName           string                `json:"token_name" gorm:"type:varchar(200)"` // 提交时的令牌名称，独立列避免被轮询覆盖
+	TokenId             int                   `json:"token_id"`                            // 提交时的令牌ID
 	Properties          Properties            `json:"properties" gorm:"type:json"`
 	UserRequestBody     json.RawMessage       `json:"-" gorm:"column:user_request_body;type:json"`
 	UpstreamRequestBody json.RawMessage       `json:"-" gorm:"column:upstream_request_body;type:json"`

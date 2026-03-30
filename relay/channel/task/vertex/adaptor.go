@@ -22,6 +22,7 @@ import (
 	vertexcore "github.com/QuantumNous/new-api/relay/channel/vertex"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 )
 
 // ============================
@@ -123,12 +124,13 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 	return nil
 }
 
+// isAPIKey returns true when the key is a plain API key (not a JSON service account).
+func isAPIKey(key string) bool {
+	return len(key) > 0 && key[0] != '{'
+}
+
 // BuildRequestURL constructs the upstream URL.
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
-	adc := &vertexcore.Credentials{}
-	if err := json.Unmarshal([]byte(a.apiKey), adc); err != nil {
-		return "", fmt.Errorf("failed to decode credentials: %w", err)
-	}
 	modelName := info.OriginModelName
 	if modelName == "" {
 		modelName = "veo-3.0-generate-001"
@@ -137,6 +139,23 @@ func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, erro
 	region := vertexcore.GetModelRegion(info.ApiVersion, modelName)
 	if strings.TrimSpace(region) == "" {
 		region = "global"
+	}
+
+	// API Key 模式：predictLongRunning 在 aiplatform.googleapis.com 需要 project 路径，
+	// 但 API Key 没有 JSON credentials 无法获取 projectID，所以切换到 Google AI 端点。
+	if info.ChannelOtherSettings.VertexKeyType == dto.VertexKeyTypeAPIKey || isAPIKey(a.apiKey) {
+		baseURL := strings.TrimRight(a.baseURL, "/")
+		if baseURL == "" {
+			baseURL = "https://generativelanguage.googleapis.com"
+		}
+		version := model_setting.GetGeminiVersionSetting(modelName)
+		return fmt.Sprintf("%s/%s/models/%s:predictLongRunning", baseURL, version, modelName), nil
+	}
+
+	// Service Account JSON 模式
+	adc := &vertexcore.Credentials{}
+	if err := json.Unmarshal([]byte(a.apiKey), adc); err != nil {
+		return "", fmt.Errorf("failed to decode credentials: %w", err)
 	}
 	if region == "global" {
 		return fmt.Sprintf(
@@ -159,6 +178,13 @@ func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
+	// API Key 模式：通过 x-goog-api-key 头部认证（与 Gemini task adaptor 一致）
+	if info.ChannelOtherSettings.VertexKeyType == dto.VertexKeyTypeAPIKey || isAPIKey(a.apiKey) {
+		req.Header.Set("x-goog-api-key", a.apiKey)
+		return nil
+	}
+
+	// Service Account JSON 模式：获取 access token
 	adc := &vertexcore.Credentials{}
 	if err := json.Unmarshal([]byte(a.apiKey), adc); err != nil {
 		return fmt.Errorf("failed to decode credentials: %w", err)
@@ -297,8 +323,35 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	}
 	project := extractProjectFromOperationName(upstreamName)
 	modelName := extractModelFromOperationName(upstreamName)
-	if project == "" || modelName == "" {
-		return nil, fmt.Errorf("cannot extract project/model from operation name")
+	if modelName == "" {
+		return nil, fmt.Errorf("cannot extract model from operation name")
+	}
+
+	// API Key 模式：使用 Google AI 端点 + x-goog-api-key 头部（与 Gemini task adaptor 一致）
+	if isAPIKey(key) {
+		fetchBaseURL := strings.TrimRight(baseUrl, "/")
+		if fetchBaseURL == "" {
+			fetchBaseURL = "https://generativelanguage.googleapis.com"
+		}
+		version := model_setting.GetGeminiVersionSetting("default")
+		url := fmt.Sprintf("%s/%s/%s", fetchBaseURL, version, upstreamName)
+
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("x-goog-api-key", key)
+		client, err := service.GetHttpClientWithProxy(proxy)
+		if err != nil {
+			return nil, fmt.Errorf("new proxy http client failed: %w", err)
+		}
+		return client.Do(req)
+	}
+
+	// Service Account JSON 模式
+	if project == "" {
+		return nil, fmt.Errorf("cannot extract project from operation name")
 	}
 	var url string
 	if region == "global" {

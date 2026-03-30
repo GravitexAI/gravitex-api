@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
@@ -25,6 +26,10 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 	info.InitChannelMeta(c)
 
+	// 打印用户请求头
+	if c.Request != nil {
+		logger.LogInfo(c, fmt.Sprintf("[claude] client request headers: %v", c.Request.Header))
+	}
 	claudeReq, ok := info.Request.(*dto.ClaudeRequest)
 
 	if !ok {

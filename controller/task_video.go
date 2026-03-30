@@ -86,12 +86,6 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	if privateData.Key != "" {
 		key = privateData.Key
 	}
-	dataLen := 0
-	if len(task.Data) > 0 {
-		dataLen = len(task.Data)
-	}
-	logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s data_len=%d properties.requested_seconds=%d",
-		taskId, dataLen, task.Properties.RequestedSeconds))
 	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
 		"task_id": taskId,
 		"action":  task.Action,
@@ -147,8 +141,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			existingData = make(map[string]interface{})
 		}
 
-		// 调试日志：打印旧 task.Data 中的计费关键字段（INFO 便于排查）
-		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s existingData: requested_seconds=%v billing_processed=%v generate_audio=%v",
+		// 调试日志：打印旧 task.Data 中的计费关键字段
+		logger.LogDebug(ctx, fmt.Sprintf("[TaskPoll] task=%s existingData: requested_seconds=%v billing_processed=%v generate_audio=%v",
 			taskId, existingData["requested_seconds"], existingData["billing_processed"], existingData["generate_audio"]))
 
 		// 计费所需字段，合并时从 existingData 保留到 newData，避免被上游响应覆盖
@@ -411,6 +405,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	if taskResult.Progress != "" {
 		task.Progress = taskResult.Progress
 	}
+	logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] before task.Update(): task=%s status=%s",
+		taskId, task.Status))
 	if err := task.Update(); err != nil {
 		common.SysLog("UpdateVideoTask task error: " + err.Error())
 		shouldRefund = false
@@ -874,15 +870,21 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	}
 
 	tokenName := ""
-	if v, ok := taskData["billing_token_name"].(string); ok {
+	if task.TokenName != "" {
+		tokenName = task.TokenName
+	} else if v, ok := taskData["billing_token_name"].(string); ok {
 		tokenName = v
 	}
 	tokenId := 0
-	switch v := taskData["billing_token_id"].(type) {
-	case float64:
-		tokenId = int(v)
-	case int:
-		tokenId = v
+	if task.TokenId > 0 {
+		tokenId = task.TokenId
+	} else {
+		switch v := taskData["billing_token_id"].(type) {
+		case float64:
+			tokenId = int(v)
+		case int:
+			tokenId = v
+		}
 	}
 	billingGroup := task.Group
 	if v, ok := taskData["billing_group"].(string); ok && v != "" {
@@ -1082,15 +1084,21 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	}
 
 	tokenName := ""
-	if v, ok := taskData["billing_token_name"].(string); ok {
+	if task.TokenName != "" {
+		tokenName = task.TokenName
+	} else if v, ok := taskData["billing_token_name"].(string); ok {
 		tokenName = v
 	}
 	tokenId := 0
-	switch v := taskData["billing_token_id"].(type) {
-	case float64:
-		tokenId = int(v)
-	case int:
-		tokenId = v
+	if task.TokenId > 0 {
+		tokenId = task.TokenId
+	} else {
+		switch v := taskData["billing_token_id"].(type) {
+		case float64:
+			tokenId = int(v)
+		case int:
+			tokenId = v
+		}
 	}
 	billingGroup := task.Group
 	if v, ok := taskData["billing_group"].(string); ok && v != "" {
