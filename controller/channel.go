@@ -1027,6 +1027,7 @@ func UpdateChannel(c *gin.Context) {
 		ParamOverride      *string              `json:"param_override"`
 		HeaderOverride     *string              `json:"header_override"`
 		Remark             *string              `json:"remark"`
+		CostDiscount       *float64             `json:"cost_discount"`
 		ChannelInfo        model.ChannelInfo    `json:"channel_info"`
 		OtherSettings      string               `json:"settings"`
 		MultiKeyMode       *string              `json:"multi_key_mode"`
@@ -1070,6 +1071,7 @@ func UpdateChannel(c *gin.Context) {
 			ParamOverride:      req.ParamOverride,
 			HeaderOverride:     req.HeaderOverride,
 			Remark:             req.Remark,
+			CostDiscount:       req.CostDiscount,
 			ChannelInfo:        req.ChannelInfo,
 			OtherSettings:      req.OtherSettings,
 		},
@@ -1191,6 +1193,10 @@ func UpdateChannel(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	// GORM Updates() 跳过 nil 指针字段，因此当用户清除 cost_discount 时需要显式置 NULL
+	if req.CostDiscount == nil && originChannel.CostDiscount != nil {
+		model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("cost_discount", nil)
 	}
 	model.InitChannelCache()
 	service.ResetProxyClientCache()
