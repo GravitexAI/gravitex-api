@@ -70,6 +70,11 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 
+	costDiscount := common.GetContextKeyFloat64(ctx, constant.ContextKeyChannelCostDiscount)
+	if costDiscount > 0 {
+		adminInfo["cost_discount"] = costDiscount
+	}
+
 	other["admin_info"] = adminInfo
 	appendRequestPath(ctx, relayInfo, other)
 	appendRequestConversionChain(relayInfo, other)

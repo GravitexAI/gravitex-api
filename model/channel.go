@@ -47,7 +47,8 @@ type Channel struct {
 	Setting           *string `json:"setting" gorm:"type:text"` // 渠道额外设置
 	ParamOverride     *string `json:"param_override" gorm:"type:text"`
 	HeaderOverride    *string `json:"header_override" gorm:"type:text"`
-	Remark            *string `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
+	Remark            *string  `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
+	CostDiscount      *float64 `json:"cost_discount" gorm:"type:decimal(4,3);default:null"`
 	// add after v0.8.5
 	ChannelInfo ChannelInfo `json:"channel_info" gorm:"type:json"`
 

@@ -370,6 +370,9 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	// c.Request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", key))
 	common.SetContextKey(c, constant.ContextKeyChannelKey, key)
 	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, channel.GetBaseURL())
+	if channel.CostDiscount != nil {
+		common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, *channel.CostDiscount)
+	}
 
 	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, false)
 

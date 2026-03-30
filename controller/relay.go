@@ -372,6 +372,10 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 		}
 		service.AppendChannelAffinityAdminInfo(c, adminInfo)
+		costDiscount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
+		if costDiscount > 0 {
+			adminInfo["cost_discount"] = costDiscount
+		}
 		other["admin_info"] = adminInfo
 		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 		if startTime.IsZero() {
