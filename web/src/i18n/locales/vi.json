@@ -3058,6 +3058,7 @@
     "销毁容器失败": "Failed to destroy container",
     "锁定": "Khóa",
     "错误": "Lỗi",
+    "重试失败": "Thử lại thất bại",
     "错误信息": "Thông tin lỗi",
     "错误日志": "Nhật ký lỗi",
     "错误码": "Mã lỗi",
