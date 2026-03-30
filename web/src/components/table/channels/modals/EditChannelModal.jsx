@@ -75,6 +75,7 @@ import {
   IconSearch,
   IconChevronUp,
   IconChevronDown,
+  IconCoinMoneyStroked,
 } from '@douyinfe/semi-icons';
 
 const { Text, Title } = Typography;
@@ -151,6 +152,7 @@ const EditChannelModal = (props) => {
     priority: 0,
     weight: 0,
     tag: '',
+    cost_discount: null,
     multi_key_mode: 'random',
     // 渠道额外设置的默认值
     force_format: false,
@@ -264,6 +266,7 @@ const EditChannelModal = (props) => {
     apiConfig: null,
     modelConfig: null,
     advancedSettings: null,
+    channelCostSettings: null,
     channelExtraSettings: null,
   });
   const [currentSectionIndex, setCurrentSectionIndex] = useState(0);
@@ -272,6 +275,7 @@ const EditChannelModal = (props) => {
     'apiConfig',
     'modelConfig',
     'advancedSettings',
+    'channelCostSettings',
     'channelExtraSettings',
   ];
   const formContainerRef = useRef(null);
@@ -3390,6 +3394,50 @@ const EditChannelModal = (props) => {
                         />
                       </>
                     )}
+                  </Card>
+                </div>
+
+                {/* Channel Cost Settings Card */}
+                <div
+                  ref={(el) =>
+                    (formSectionRefs.current.channelCostSettings = el)
+                  }
+                >
+                  <Card className='!rounded-2xl shadow-sm border-0 mb-6'>
+                    <div className='flex items-center mb-2'>
+                      <Avatar
+                        size='small'
+                        color='green'
+                        className='mr-2 shadow-md'
+                      >
+                        <IconCoinMoneyStroked size={16} />
+                      </Avatar>
+                      <div>
+                        <Text className='text-lg font-medium'>
+                          {t('渠道成本设置')}
+                        </Text>
+                        <div className='text-xs text-gray-600'>
+                          {t('配置渠道级别的成本折扣')}
+                        </div>
+                      </div>
+                    </div>
+
+                    <Form.InputNumber
+                      field='cost_discount'
+                      label={t('成本折扣')}
+                      placeholder={t('不设置则不启用渠道级成本折扣，如 0.5 表示 5 折')}
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      precision={3}
+                      style={{ width: '100%' }}
+                      onNumberChange={(value) =>
+                        handleInputChange('cost_discount', value === undefined ? null : value)
+                      }
+                      extraText={t(
+                        '设置范围 0~1，例如 0.5 表示成本按 5 折计算。不设置则不启用渠道级成本折扣',
+                      )}
+                    />
                   </Card>
                 </div>
 
