@@ -1979,6 +1979,7 @@
     "自适应列表": "Liste adaptative",
     "节省": "Économiser",
     "花费": "Dépenser",
+    "成本/折扣": "Coût/Remise",
     "花费时间": "passer du temps",
     "若你的 OIDC Provider 支持 Discovery Endpoint，你可以仅填写 OIDC Well-Known URL，系统会自动获取 OIDC 配置": "Si votre fournisseur OIDC prend en charge le Discovery Endpoint, vous pouvez simplement remplir l'URL OIDC Well-Known, le système obtiendra automatiquement la configuration OIDC",
     "获取 io.net API Key": "Get io.net API Key",

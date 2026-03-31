@@ -1973,6 +1973,7 @@
     "自适应列表": "Adaptive list",
     "节省": "Save",
     "花费": "Spend",
+    "成本/折扣": "Cost/Discount",
     "花费时间": "Time spent",
     "若你的 OIDC Provider 支持 Discovery Endpoint，你可以仅填写 OIDC Well-Known URL，系统会自动获取 OIDC 配置": "If your OIDC Provider supports Discovery Endpoint, you can only fill in the OIDC Well-Known URL, and the system will automatically obtain the OIDC configuration",
     "获取 io.net API Key": "Get io.net API Key",

@@ -1960,6 +1960,7 @@
     "自适应列表": "自适应列表",
     "节省": "节省",
     "花费": "花费",
+    "成本/折扣": "成本/折扣",
     "花费时间": "花费时间",
     "若你的 OIDC Provider 支持 Discovery Endpoint，你可以仅填写 OIDC Well-Known URL，系统会自动获取 OIDC 配置": "若你的 OIDC Provider 支持 Discovery Endpoint，你可以仅填写 OIDC Well-Known URL，系统会自动获取 OIDC 配置",
     "获取 io.net API Key": "获取 io.net API Key",

@@ -82,6 +82,8 @@ type Properties struct {
 	UpstreamModelName string `json:"upstream_model_name,omitempty"`
 	OriginModelName   string `json:"origin_model_name,omitempty"`
 	RequestedSeconds  int    `json:"requested_seconds,omitempty"` // 视频请求时长（秒），用于按秒计费，存 properties 避免被 task.Data 覆盖
+	ProjectID         string `json:"project_id,omitempty"`        // 多 key 渠道命中的 project ID（如 Vertex AI），存 properties 避免被 task.Data 覆盖
+	MultiKeyIndex     *int   `json:"multi_key_index,omitempty"`   // 多 key 渠道命中的 key 索引（从 0 开始），nil 表示非多 key 渠道
 }
 
 func (m *Properties) Scan(val interface{}) error {
@@ -139,6 +141,17 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 		if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
 			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi {
 			privateData.Key = relayInfo.ChannelMeta.ApiKey
+			// 从 JSON 凭证中提取 project_id 存入 Properties，轮询不会覆盖
+			var cred struct {
+				ProjectID string `json:"project_id"`
+			}
+			if err := json.Unmarshal([]byte(relayInfo.ChannelMeta.ApiKey), &cred); err == nil && cred.ProjectID != "" {
+				properties.ProjectID = cred.ProjectID
+			}
+		}
+		if relayInfo.ChannelMeta.ChannelIsMultiKey {
+			idx := relayInfo.ChannelMeta.ChannelMultiKeyIndex
+			properties.MultiKeyIndex = &idx
 		}
 		if relayInfo.UpstreamModelName != "" {
 			properties.UpstreamModelName = relayInfo.UpstreamModelName

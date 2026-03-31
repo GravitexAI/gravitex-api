@@ -2300,6 +2300,7 @@
     "节点": "Nút",
     "节省": "Tiết kiệm",
     "花费": "Chi tiêu",
+    "成本/折扣": "Chi phí/Chiết khấu",
     "花费时间": "Thời gian chi tiêu",
     "若不填则自动生成": "Nếu để trống, nó sẽ được tạo tự động",
     "若你的 OIDC Provider 支持 Discovery Endpoint，你可以仅填写 OIDC Well-Known URL，系统会自动获取 OIDC 配置": "Nếu Nhà cung cấp OIDC của bạn hỗ trợ Discovery Endpoint, bạn chỉ cần điền OIDC Well-Known URL, hệ thống sẽ tự động lấy cấu hình OIDC",

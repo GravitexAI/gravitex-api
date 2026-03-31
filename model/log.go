@@ -172,6 +172,18 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if params.PriceChain != nil && params.PriceChain.VendorId != nil {
 		other["vendor_id"] = *params.PriceChain.VendorId
 	}
+	// Compute official_quota (vendor cost without group markup)
+	if params.Quota != 0 && params.Other != nil {
+		effectiveGroupRatio := 1.0
+		if ugr, ok := params.Other["user_group_ratio"].(float64); ok && ugr > 0 {
+			effectiveGroupRatio = ugr
+		} else if gr, ok := params.Other["group_ratio"].(float64); ok && gr > 0 {
+			effectiveGroupRatio = gr
+		}
+		if effectiveGroupRatio > 0 {
+			other["official_quota"] = float64(params.Quota) / effectiveGroupRatio
+		}
+	}
 	otherStr := common.MapToJsonStr(other)
 	// 判断是否需要记录 IP
 	needRecordIp := false

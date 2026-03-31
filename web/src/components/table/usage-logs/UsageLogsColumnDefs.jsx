@@ -688,15 +688,19 @@ export const getLogsColumns = ({
           return <></>;
         }
         const other = getLogOther(record.other);
+        // Prefer backend-computed official_quota; fall back to quota/groupRatio for old logs
+        if (other?.official_quota != null && other.official_quota > 0) {
+          return <>{renderQuota(other.official_quota, 8)}</>;
+        }
         const groupRatio = getEffectiveGroupRatio(other);
-        if (groupRatio <= 0) return <>{renderQuota(text, 6)}</>;
+        if (groupRatio <= 0) return <>{renderQuota(text, 8)}</>;
         const vendorQuota = text / groupRatio;
-        return <>{renderQuota(vendorQuota, 6)}</>;
+        return <>{renderQuota(vendorQuota, 8)}</>;
       },
     },
     {
       key: COLUMN_KEYS.ACTUAL_COST,
-      title: t('成本花费'),
+      title: t('成本/折扣'),
       dataIndex: 'quota',
       render: (text, record, index) => {
         if (!isAdminUser || !(record.type === 2 || record.type === 5)) {
@@ -707,13 +711,19 @@ export const getLogsColumns = ({
         if (!costDiscount || costDiscount <= 0) {
           return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
         }
-        const groupRatio = getEffectiveGroupRatio(other);
-        const vendorQuota = groupRatio > 0 ? text / groupRatio : text;
+        let vendorQuota;
+        if (other?.official_quota != null && other.official_quota > 0) {
+          vendorQuota = other.official_quota;
+        } else {
+          const groupRatio = getEffectiveGroupRatio(other);
+          vendorQuota = groupRatio > 0 ? text / groupRatio : text;
+        }
         const actualCost = vendorQuota * costDiscount;
         return (
-          <Tooltip content={`${t('原厂花费')} × ${costDiscount}`}>
-            <span>{renderQuota(actualCost, 6)}</span>
-          </Tooltip>
+          <Space>
+            <span>{renderQuota(actualCost, 8)}</span>
+            <Tag color='blue'>{costDiscount}</Tag>
+          </Space>
         );
       },
     },
@@ -730,13 +740,18 @@ export const getLogsColumns = ({
         if (!costDiscount || costDiscount <= 0) {
           return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
         }
-        const groupRatio = getEffectiveGroupRatio(other);
-        const vendorQuota = groupRatio > 0 ? text / groupRatio : text;
+        let vendorQuota;
+        if (other?.official_quota != null && other.official_quota > 0) {
+          vendorQuota = other.official_quota;
+        } else {
+          const groupRatio = getEffectiveGroupRatio(other);
+          vendorQuota = groupRatio > 0 ? text / groupRatio : text;
+        }
         const actualCost = vendorQuota * costDiscount;
         const profit = text - actualCost;
         const color = profit >= 0 ? 'var(--semi-color-success)' : 'var(--semi-color-danger)';
         return (
-          <span style={{ color }}>{renderQuota(profit, 6)}</span>
+          <span style={{ color }}>{renderQuota(profit, 8)}</span>
         );
       },
     },

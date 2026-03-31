@@ -1992,6 +1992,7 @@
     "自适应列表": "Адаптивный список",
     "节省": "Экономия",
     "花费": "Расходы",
+    "成本/折扣": "Стоимость/Скидка",
     "花费时间": "Затраченное время",
     "若你的 OIDC Provider 支持 Discovery Endpoint，你可以仅填写 OIDC Well-Known URL，系统会自动获取 OIDC 配置": "Если ваш OIDC Provider поддерживает Discovery Endpoint, вы можете указать только OIDC Well-Known URL, и система автоматически получит OIDC конфигурацию",
     "获取 io.net API Key": "Get io.net API Key",

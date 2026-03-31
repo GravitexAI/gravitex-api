@@ -90,7 +90,11 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	} else if channel.ChannelInfo.IsMultiKey {
 		// 多 key 渠道（如 Vertex AI 配了多个 service account JSON），
 		// channel.Key 是拼接的完整字符串，需根据任务的 project 匹配正确的凭证
-		projectID := extractProjectFromTaskID(taskId)
+		// 优先使用 Properties.ProjectID（提交时写入），兜底从 taskID 提取
+		projectID := task.Properties.ProjectID
+		if projectID == "" {
+			projectID = extractProjectFromTaskID(taskId)
+		}
 		key = channel.FindKeyByProjectID(projectID)
 	}
 	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
@@ -1028,6 +1032,10 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		"group_ratio":                     groupRatio,
 		"user_group_ratio":                groupRatio,
 	}
+	// official_quota: vendor cost without group ratio
+	if groupRatio > 0 {
+		otherMap["official_quota"] = float64(actualQuota) / groupRatio
+	}
 	// 写入渠道成本折扣：优先从 task.Data 取（提交时保存），兜底从渠道查
 	adminInfo := make(map[string]interface{})
 	costDiscount := 0.0
@@ -1261,6 +1269,10 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	if len(adminInfoTokenRatio) > 0 {
 		otherMap["admin_info"] = adminInfoTokenRatio
 	}
+	// official_quota: vendor cost without group ratio
+	if groupRatio > 0 && actualQuota > 0 {
+		otherMap["official_quota"] = float64(actualQuota) / groupRatio
+	}
 
 	otherBytes, _ := common.Marshal(otherMap)
 
@@ -1312,8 +1324,14 @@ func extractProjectFromTaskID(taskID string) string {
 }
 
 // getVideoTaskProjectID 从视频任务中提取 Vertex AI 的 project_id。
-// 优先从 PrivateData.Key（完整 JSON 凭证）解析，兜底从 taskID（base64 operation name）提取。
+// 优先级：Properties.ProjectID（最可靠，提交时写入，不被轮询覆盖）
+//
+//	> PrivateData.Key（完整 JSON 凭证解析）
+//	> taskID（base64 operation name 提取）
 func getVideoTaskProjectID(task *model.Task) string {
+	if task.Properties.ProjectID != "" {
+		return task.Properties.ProjectID
+	}
 	if task.PrivateData.Key != "" {
 		var cred struct {
 			ProjectID string `json:"project_id"`
