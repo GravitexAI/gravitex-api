@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -87,11 +89,9 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		key = privateData.Key
 	} else if channel.ChannelInfo.IsMultiKey {
 		// 多 key 渠道（如 Vertex AI 配了多个 service account JSON），
-		// channel.Key 是拼接的完整字符串，需拆分取第一个
-		keys := channel.GetKeys()
-		if len(keys) > 0 {
-			key = keys[0]
-		}
+		// channel.Key 是拼接的完整字符串，需根据任务的 project 匹配正确的凭证
+		projectID := extractProjectFromTaskID(taskId)
+		key = channel.FindKeyByProjectID(projectID)
 	}
 	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
 		"task_id": taskId,
@@ -394,6 +394,18 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		if modelName == "" {
 			modelName = task.Properties.UpstreamModelName
 		}
+		failOtherMap := map[string]interface{}{}
+		if projectID := getVideoTaskProjectID(task); projectID != "" {
+			failOtherMap["admin_info"] = map[string]interface{}{
+				"project_id": projectID,
+			}
+		}
+		failOtherStr := ""
+		if len(failOtherMap) > 0 {
+			if b, err := common.Marshal(failOtherMap); err == nil {
+				failOtherStr = string(b)
+			}
+		}
 		failLog := &model.Log{
 			UserId:    task.UserId,
 			CreatedAt: common.GetTimestamp(),
@@ -402,6 +414,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			ChannelId: task.ChannelId,
 			ModelName: modelName,
 			Group:     task.Group,
+			Other:     failOtherStr,
 		}
 		if err := model.LOG_DB.Create(failLog).Error; err != nil {
 			logger.LogError(ctx, fmt.Sprintf("Failed to insert error log for task %s: %v", task.TaskID, err))
@@ -1031,6 +1044,9 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	if costDiscount > 0 {
 		adminInfo["cost_discount"] = costDiscount
 	}
+	if projectID := getVideoTaskProjectID(task); projectID != "" {
+		adminInfo["project_id"] = projectID
+	}
 	if len(adminInfo) > 0 {
 		otherMap["admin_info"] = adminInfo
 	}
@@ -1239,6 +1255,9 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	if costDiscountTokenRatio > 0 {
 		adminInfoTokenRatio["cost_discount"] = costDiscountTokenRatio
 	}
+	if projectID := getVideoTaskProjectID(task); projectID != "" {
+		adminInfoTokenRatio["project_id"] = projectID
+	}
 	if len(adminInfoTokenRatio) > 0 {
 		otherMap["admin_info"] = adminInfoTokenRatio
 	}
@@ -1274,4 +1293,34 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		task.Data = merged
 	}
 	return nil
+}
+
+// extractProjectFromTaskID 从 Vertex AI 视频任务的 taskID 中提取 project ID。
+// taskID 是 base64 编码的 operation name，格式：projects/PROJECT_ID/locations/.../models/.../operations/...
+var taskProjectRe = regexp.MustCompile(`projects/([^/]+)/locations/`)
+
+func extractProjectFromTaskID(taskID string) string {
+	b, err := base64.RawURLEncoding.DecodeString(taskID)
+	if err != nil {
+		return ""
+	}
+	matches := taskProjectRe.FindStringSubmatch(string(b))
+	if len(matches) >= 2 {
+		return matches[1]
+	}
+	return ""
+}
+
+// getVideoTaskProjectID 从视频任务中提取 Vertex AI 的 project_id。
+// 优先从 PrivateData.Key（完整 JSON 凭证）解析，兜底从 taskID（base64 operation name）提取。
+func getVideoTaskProjectID(task *model.Task) string {
+	if task.PrivateData.Key != "" {
+		var cred struct {
+			ProjectID string `json:"project_id"`
+		}
+		if err := common.Unmarshal([]byte(task.PrivateData.Key), &cred); err == nil && cred.ProjectID != "" {
+			return cred.ProjectID
+		}
+	}
+	return extractProjectFromTaskID(task.TaskID)
 }

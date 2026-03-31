@@ -39,14 +39,14 @@ type Channel struct {
 	UsedQuota          int64   `json:"used_quota" gorm:"bigint;default:0"`
 	ModelMapping       *string `json:"model_mapping" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
-	StatusCodeMapping *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
-	Priority          *int64  `json:"priority" gorm:"bigint;default:0"`
-	AutoBan           *int    `json:"auto_ban" gorm:"default:1"`
-	OtherInfo         string  `json:"other_info"`
-	Tag               *string `json:"tag" gorm:"index"`
-	Setting           *string `json:"setting" gorm:"type:text"` // 渠道额外设置
-	ParamOverride     *string `json:"param_override" gorm:"type:text"`
-	HeaderOverride    *string `json:"header_override" gorm:"type:text"`
+	StatusCodeMapping *string  `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
+	Priority          *int64   `json:"priority" gorm:"bigint;default:0"`
+	AutoBan           *int     `json:"auto_ban" gorm:"default:1"`
+	OtherInfo         string   `json:"other_info"`
+	Tag               *string  `json:"tag" gorm:"index"`
+	Setting           *string  `json:"setting" gorm:"type:text"` // 渠道额外设置
+	ParamOverride     *string  `json:"param_override" gorm:"type:text"`
+	HeaderOverride    *string  `json:"header_override" gorm:"type:text"`
 	Remark            *string  `json:"remark" gorm:"type:varchar(255)" validate:"max=255"`
 	CostDiscount      *float64 `json:"cost_discount" gorm:"type:decimal(4,3);default:null"`
 	// add after v0.8.5
@@ -101,6 +101,28 @@ func (channel *Channel) GetKeys() []string {
 	// Otherwise, fall back to splitting by newline
 	keys := strings.Split(strings.Trim(channel.Key, "\n"), "\n")
 	return keys
+}
+
+// FindKeyByProjectID 根据 project_id 从多 key 列表中找到匹配的 key。
+// 用于 Vertex AI 视频任务轮询时，根据 taskID 中的 project 匹配正确的 service account。
+// 如果找不到匹配的 key，返回第一个 key 作为兜底。
+func (channel *Channel) FindKeyByProjectID(projectID string) string {
+	keys := channel.GetKeys()
+	if len(keys) == 0 {
+		return channel.Key
+	}
+	if len(keys) == 1 || projectID == "" {
+		return keys[0]
+	}
+	for _, key := range keys {
+		var cred struct {
+			ProjectID string `json:"project_id"`
+		}
+		if err := json.Unmarshal([]byte(key), &cred); err == nil && cred.ProjectID == projectID {
+			return key
+		}
+	}
+	return keys[0]
 }
 
 func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {

@@ -56,6 +56,9 @@ export const useLogsData = () => {
     PROMPT: 'prompt',
     COMPLETION: 'completion',
     COST: 'cost',
+    VENDOR_COST: 'vendor_cost',
+    ACTUAL_COST: 'actual_cost',
+    PROFIT: 'profit',
     RETRY: 'retry',
     IP: 'ip',
     DETAILS: 'details',
@@ -135,6 +138,9 @@ export const useLogsData = () => {
           merged[COLUMN_KEYS.CHANNEL] = false;
           merged[COLUMN_KEYS.USERNAME] = false;
           merged[COLUMN_KEYS.RETRY] = false;
+          merged[COLUMN_KEYS.VENDOR_COST] = false;
+          merged[COLUMN_KEYS.ACTUAL_COST] = false;
+          merged[COLUMN_KEYS.PROFIT] = false;
         }
         setVisibleColumns(merged);
       } catch (e) {
@@ -160,6 +166,9 @@ export const useLogsData = () => {
       [COLUMN_KEYS.PROMPT]: true,
       [COLUMN_KEYS.COMPLETION]: true,
       [COLUMN_KEYS.COST]: true,
+      [COLUMN_KEYS.VENDOR_COST]: false,
+      [COLUMN_KEYS.ACTUAL_COST]: false,
+      [COLUMN_KEYS.PROFIT]: false,
       [COLUMN_KEYS.RETRY]: isAdminUser,
       [COLUMN_KEYS.IP]: true,
       [COLUMN_KEYS.DETAILS]: true,
@@ -188,7 +197,10 @@ export const useLogsData = () => {
       if (
         (key === COLUMN_KEYS.CHANNEL ||
           key === COLUMN_KEYS.USERNAME ||
-          key === COLUMN_KEYS.RETRY) &&
+          key === COLUMN_KEYS.RETRY ||
+          key === COLUMN_KEYS.VENDOR_COST ||
+          key === COLUMN_KEYS.ACTUAL_COST ||
+          key === COLUMN_KEYS.PROFIT) &&
         !isAdminUser
       ) {
         updatedColumns[key] = false;

@@ -3,10 +3,12 @@ package relay
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -894,10 +896,8 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		if originTask.PrivateData.Key != "" {
 			fetchKey = originTask.PrivateData.Key
 		} else if channelModel.ChannelInfo.IsMultiKey {
-			keys := channelModel.GetKeys()
-			if len(keys) > 0 {
-				fetchKey = keys[0]
-			}
+			projectID := extractProjectFromVertexTaskID(originTask.TaskID)
+			fetchKey = channelModel.FindKeyByProjectID(projectID)
 		}
 		resp, err2 := adaptor.FetchTask(baseURL, fetchKey, map[string]any{
 			"task_id": originTask.TaskID,
@@ -1038,4 +1038,19 @@ func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 		Progress:   task.Progress,
 		Data:       task.Data,
 	}
+}
+
+// extractProjectFromVertexTaskID 从 Vertex AI 视频任务的 taskID 中提取 project ID。
+var vertexTaskProjectRe = regexp.MustCompile(`projects/([^/]+)/locations/`)
+
+func extractProjectFromVertexTaskID(taskID string) string {
+	b, err := base64.RawURLEncoding.DecodeString(taskID)
+	if err != nil {
+		return ""
+	}
+	matches := vertexTaskProjectRe.FindStringSubmatch(string(b))
+	if len(matches) >= 2 {
+		return matches[1]
+	}
+	return ""
 }

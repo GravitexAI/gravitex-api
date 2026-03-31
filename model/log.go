@@ -48,7 +48,7 @@ const (
 	LogTypeSystem    = 4
 	LogTypeError     = 5
 	LogTypeRefund    = 6
-	LogTypeRetryFail = 7
+	LogTypeRetryFail = 7 // 重试（中间失败，后续有重试）
 )
 
 func formatUserLogs(logs []*Log, startIdx int) {

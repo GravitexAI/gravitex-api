@@ -72,6 +72,22 @@ function formatRatio(ratio) {
   return String(ratio);
 }
 
+/**
+ * 获取有效分组倍率：优先使用 user_group_ratio（用户专属倍率），否则用 group_ratio
+ */
+function getEffectiveGroupRatio(other) {
+  if (!other) return 1;
+  const userGroupRatio = other.user_group_ratio;
+  if (typeof userGroupRatio === 'number' && userGroupRatio > 0) {
+    return userGroupRatio;
+  }
+  const groupRatio = other.group_ratio;
+  if (typeof groupRatio === 'number' && groupRatio > 0) {
+    return groupRatio;
+  }
+  return 1;
+}
+
 function buildChannelAffinityTooltip(affinity, t) {
   if (!affinity) {
     return null;
@@ -142,7 +158,7 @@ function renderType(type, t) {
     case 7:
       return (
         <Tag color='amber' shape='circle'>
-          {t('重试失败')}
+          {t('重试')}
         </Tag>
       );
     default:
@@ -380,7 +396,7 @@ export const getLogsColumns = ({
         }
 
         return isAdminUser &&
-          (record.type === 0 || record.type === 2 || record.type === 5) ? (
+          (record.type === 0 || record.type === 2 || record.type === 5 || record.type === 7) ? (
           <Space>
             <span style={{ position: 'relative', display: 'inline-block' }}>
               <Tooltip content={record.channel_name || t('未知渠道')}>
@@ -471,7 +487,7 @@ export const getLogsColumns = ({
       title: t('令牌'),
       dataIndex: 'token_name',
       render: (text, record, index) => {
-        return record.type === 0 || record.type === 2 || record.type === 5 ? (
+        return record.type === 0 || record.type === 2 || record.type === 5 || record.type === 7 ? (
           <div>
             <Tag
               color='grey'
@@ -494,7 +510,7 @@ export const getLogsColumns = ({
       title: t('分组'),
       dataIndex: 'group',
       render: (text, record, index) => {
-        if (record.type === 0 || record.type === 2 || record.type === 5) {
+        if (record.type === 0 || record.type === 2 || record.type === 5 || record.type === 7) {
           if (record.group) {
             return <>{renderGroup(record.group)}</>;
           } else {
@@ -534,7 +550,7 @@ export const getLogsColumns = ({
       title: t('模型'),
       dataIndex: 'model_name',
       render: (text, record, index) => {
-        return record.type === 0 || record.type === 2 || record.type === 5 ? (
+        return record.type === 0 || record.type === 2 || record.type === 5 || record.type === 7 ? (
           <>{renderModelName(record, copyText, t)}</>
         ) : (
           <></>
@@ -546,7 +562,7 @@ export const getLogsColumns = ({
       title: t('用时/首字'),
       dataIndex: 'use_time',
       render: (text, record, index) => {
-        if (!(record.type === 2 || record.type === 5)) {
+        if (!(record.type === 2 || record.type === 5 || record.type === 7)) {
           return <></>;
         }
         if (record.is_stream) {
@@ -601,7 +617,7 @@ export const getLogsColumns = ({
           cacheText = `${t('缓存写')} ${formatTokenCount(cacheSummary.cacheWriteTokens)}`;
         }
 
-        return record.type === 0 || record.type === 2 || record.type === 5 ? (
+        return record.type === 0 || record.type === 2 || record.type === 5 || record.type === 7 ? (
           <div
             style={{
               display: 'inline-flex',
@@ -635,7 +651,7 @@ export const getLogsColumns = ({
       dataIndex: 'completion_tokens',
       render: (text, record, index) => {
         return parseInt(text) > 0 &&
-          (record.type === 0 || record.type === 2 || record.type === 5) ? (
+          (record.type === 0 || record.type === 2 || record.type === 5 || record.type === 7) ? (
           <>{<span> {text} </span>}</>
         ) : (
           <></>
@@ -647,7 +663,7 @@ export const getLogsColumns = ({
       title: t('花费'),
       dataIndex: 'quota',
       render: (text, record, index) => {
-        if (!(record.type === 0 || record.type === 2 || record.type === 5)) {
+        if (!(record.type === 0 || record.type === 2 || record.type === 5 || record.type === 7)) {
           return <></>;
         }
         const other = getLogOther(record.other);
@@ -661,6 +677,67 @@ export const getLogsColumns = ({
           );
         }
         return <>{renderQuota(text, 6)}</>;
+      },
+    },
+    {
+      key: COLUMN_KEYS.VENDOR_COST,
+      title: t('原厂花费'),
+      dataIndex: 'quota',
+      render: (text, record, index) => {
+        if (!isAdminUser || !(record.type === 2 || record.type === 5)) {
+          return <></>;
+        }
+        const other = getLogOther(record.other);
+        const groupRatio = getEffectiveGroupRatio(other);
+        if (groupRatio <= 0) return <>{renderQuota(text, 6)}</>;
+        const vendorQuota = text / groupRatio;
+        return <>{renderQuota(vendorQuota, 6)}</>;
+      },
+    },
+    {
+      key: COLUMN_KEYS.ACTUAL_COST,
+      title: t('成本花费'),
+      dataIndex: 'quota',
+      render: (text, record, index) => {
+        if (!isAdminUser || !(record.type === 2 || record.type === 5)) {
+          return <></>;
+        }
+        const other = getLogOther(record.other);
+        const costDiscount = other?.admin_info?.cost_discount;
+        if (!costDiscount || costDiscount <= 0) {
+          return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
+        }
+        const groupRatio = getEffectiveGroupRatio(other);
+        const vendorQuota = groupRatio > 0 ? text / groupRatio : text;
+        const actualCost = vendorQuota * costDiscount;
+        return (
+          <Tooltip content={`${t('原厂花费')} × ${costDiscount}`}>
+            <span>{renderQuota(actualCost, 6)}</span>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      key: COLUMN_KEYS.PROFIT,
+      title: t('利润'),
+      dataIndex: 'quota',
+      render: (text, record, index) => {
+        if (!isAdminUser || !(record.type === 2 || record.type === 5)) {
+          return <></>;
+        }
+        const other = getLogOther(record.other);
+        const costDiscount = other?.admin_info?.cost_discount;
+        if (!costDiscount || costDiscount <= 0) {
+          return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
+        }
+        const groupRatio = getEffectiveGroupRatio(other);
+        const vendorQuota = groupRatio > 0 ? text / groupRatio : text;
+        const actualCost = vendorQuota * costDiscount;
+        const profit = text - actualCost;
+        const color = profit >= 0 ? 'var(--semi-color-success)' : 'var(--semi-color-danger)';
+        return (
+          <span style={{ color }}>{renderQuota(profit, 6)}</span>
+        );
       },
     },
     {
@@ -703,12 +780,12 @@ export const getLogsColumns = ({
       title: t('重试'),
       dataIndex: 'retry',
       render: (text, record, index) => {
-        if (!(record.type === 2 || record.type === 5)) {
+        if (!(record.type === 2 || record.type === 5 || record.type === 7)) {
           return <></>;
         }
         let content = t('渠道') + `：${record.channel}`;
-        if (record.other !== '') {
-          let other = JSON.parse(record.other);
+        if (record.other !== '' && record.other != null) {
+          let other = getLogOther(record.other);
           if (other === null) {
             return <></>;
           }

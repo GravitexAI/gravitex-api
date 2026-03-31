@@ -221,9 +221,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 
-		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		willRetry := shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry())
 
-		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
+		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, willRetry)
+
+		if !willRetry {
 			break
 		}
 	}
@@ -232,41 +234,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if len(useChannel) > 1 {
 		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		if newAPIError != nil {
-			// 所有重试都失败了，记录重试失败日志到数据库
 			logger.LogError(c, retryLogStr+" (全部失败)")
-			if constant.ErrorLogEnabled {
-				userId := c.GetInt("id")
-				tokenName := c.GetString("token_name")
-				modelName := c.GetString("original_model")
-				tokenId := c.GetInt("token_id")
-				userGroup := c.GetString("group")
-				channelId := c.GetInt("channel_id")
-				other := make(map[string]interface{})
-				other["use_channel"] = useChannel
-				other["status_code"] = newAPIError.StatusCode
-				other["error_type"] = newAPIError.GetErrorType()
-				other["error_code"] = newAPIError.GetErrorCode()
-				startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
-				if startTime.IsZero() {
-					startTime = time.Now()
-				}
-				useTimeSeconds := int(time.Since(startTime).Seconds())
-				otherBytes, _ := common.Marshal(other)
-				retryFailLog := &model.Log{
-					UserId:    userId,
-					CreatedAt: common.GetTimestamp(),
-					Type:      model.LogTypeRetryFail,
-					Content:   fmt.Sprintf("%s，最终错误：%s", retryLogStr, newAPIError.MaskSensitiveErrorWithStatusCode()),
-					TokenName: tokenName,
-					ModelName: modelName,
-					TokenId:   tokenId,
-					ChannelId: channelId,
-					Group:     userGroup,
-					UseTime:   useTimeSeconds,
-					Other:     string(otherBytes),
-				}
-				model.LOG_DB.Create(retryFailLog)
-			}
 		} else {
 			logger.LogInfo(c, retryLogStr)
 		}
@@ -374,7 +342,7 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	return operation_setting.ShouldRetryByStatusCode(code)
 }
 
-func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
+func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, willRetry bool) {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
@@ -386,6 +354,11 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 
 	if constant.ErrorLogEnabled && types.IsRecordErrorLog(err) {
 		// 保存错误日志到mysql中
+		// willRetry=true 时记录为"重试"类型，willRetry=false 时记录为"错误"类型
+		logType := model.LogTypeError
+		if willRetry {
+			logType = model.LogTypeRetryFail
+		}
 		userId := c.GetInt("id")
 		tokenName := c.GetString("token_name")
 		modelName := c.GetString("original_model")
@@ -420,7 +393,35 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			startTime = time.Now()
 		}
 		useTimeSeconds := int(time.Since(startTime).Seconds())
-		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, false, userGroup, other)
+		if logType == model.LogTypeRetryFail {
+			// 重试类型：直接写库，使用 LogTypeRetryFail
+			// 添加重试链路信息：当前是第几次重试、渠道链路字符串
+			useChannels := c.GetStringSlice("use_channel")
+			retryCount := len(useChannels) // 第 N 次尝试（含首次）
+			other["retry_count"] = retryCount
+			other["retry_chain"] = strings.Join(useChannels, "->")
+			requestId := c.GetString(common.RequestIdKey)
+			otherStr := common.MapToJsonStr(other)
+			retryContent := fmt.Sprintf("[重试%d/%d %s] %s", retryCount, common.RetryTimes+1, strings.Join(useChannels, "->"), err.MaskSensitiveErrorWithStatusCode())
+			retryLog := &model.Log{
+				UserId:    userId,
+				Username:  c.GetString("username"),
+				CreatedAt: common.GetTimestamp(),
+				Type:      model.LogTypeRetryFail,
+				Content:   retryContent,
+				TokenName: tokenName,
+				ModelName: modelName,
+				ChannelId: channelId,
+				TokenId:   tokenId,
+				UseTime:   useTimeSeconds,
+				Group:     userGroup,
+				RequestId: requestId,
+				Other:     otherStr,
+			}
+			model.LOG_DB.Create(retryLog)
+		} else {
+			model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, false, userGroup, other)
+		}
 	}
 
 }
@@ -541,38 +542,6 @@ func RelayTask(c *gin.Context) {
 		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		if taskErr != nil {
 			logger.LogError(c, retryLogStr+" (全部失败)")
-			if constant.ErrorLogEnabled {
-				userId := c.GetInt("id")
-				tokenName := c.GetString("token_name")
-				modelName := c.GetString("original_model")
-				tokenId := c.GetInt("token_id")
-				userGroup := c.GetString("group")
-				chId := c.GetInt("channel_id")
-				other := make(map[string]interface{})
-				other["use_channel"] = useChannel
-				other["status_code"] = taskErr.StatusCode
-				other["error_code"] = taskErr.Code
-				startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
-				if startTime.IsZero() {
-					startTime = time.Now()
-				}
-				useTimeSeconds := int(time.Since(startTime).Seconds())
-				otherBytes, _ := common.Marshal(other)
-				retryFailLog := &model.Log{
-					UserId:    userId,
-					CreatedAt: common.GetTimestamp(),
-					Type:      model.LogTypeRetryFail,
-					Content:   fmt.Sprintf("%s，最终错误：%s", retryLogStr, taskErr.Message),
-					TokenName: tokenName,
-					ModelName: modelName,
-					TokenId:   tokenId,
-					ChannelId: chId,
-					Group:     userGroup,
-					UseTime:   useTimeSeconds,
-					Other:     string(otherBytes),
-				}
-				model.LOG_DB.Create(retryFailLog)
-			}
 		} else {
 			logger.LogInfo(c, retryLogStr)
 		}
