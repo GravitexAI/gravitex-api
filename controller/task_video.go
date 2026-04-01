@@ -889,13 +889,23 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 					}
 				}
 			}
-			// Gemini Veo 请求体把 durationSeconds 放在 parameters 中
+			// Gemini Veo 请求体把 durationSeconds 放在 parameters 中；Ali wan2.6 把 duration 放在 parameters 中
 			if requestedSeconds <= 0 {
 				if params, ok := upstreamReq["parameters"].(map[string]interface{}); ok && params != nil {
-					if v, ok := params["durationSeconds"].(float64); ok && v > 0 {
-						requestedSeconds = int(v)
-					} else if v, ok := params["durationSeconds"].(int); ok && v > 0 {
-						requestedSeconds = v
+					for _, key := range []string{"durationSeconds", "duration"} {
+						if requestedSeconds > 0 {
+							break
+						}
+						switch v := params[key].(type) {
+						case float64:
+							if v > 0 {
+								requestedSeconds = int(v)
+							}
+						case int:
+							if v > 0 {
+								requestedSeconds = v
+							}
+						}
 					}
 				}
 			}
@@ -939,18 +949,38 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 			}
 		}
 	}
+	// 从上游响应 usage 中读取实际时长（Ali wan2.6 等返回 usage.duration / usage.output_video_duration）
+	if requestedSeconds <= 0 {
+		if usage, ok := taskData["usage"].(map[string]interface{}); ok {
+			for _, key := range []string{"output_video_duration", "duration"} {
+				if requestedSeconds > 0 {
+					break
+				}
+				switch v := usage[key].(type) {
+				case float64:
+					if v > 0 {
+						requestedSeconds = int(v)
+					}
+				case int:
+					if v > 0 {
+						requestedSeconds = v
+					}
+				}
+			}
+		}
+	}
 	if requestedSeconds <= 0 && task.Properties.RequestedSeconds > 0 {
 		requestedSeconds = task.Properties.RequestedSeconds
+		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s using Properties.RequestedSeconds=%d", task.TaskID, requestedSeconds))
 	}
-	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s requested_seconds=%d", task.TaskID, requestedSeconds))
-	// 最后兜底：Veo 等按秒计费模型若仍为 0（历史数据或入库异常），按 4 秒计费，避免计费失败导致任务标 FAILURE
-	if requestedSeconds <= 0 && modelName != "" && strings.HasPrefix(strings.ToLower(modelName), "veo-") {
-		logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s requested_seconds=0, fallback to 4s for billing", modelName, task.TaskID))
-		requestedSeconds = 4
-	}
+	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s requested_seconds=%d (properties=%d)", task.TaskID, requestedSeconds, task.Properties.RequestedSeconds))
+	// 最后兜底：按秒计费模型若仍为 0（历史数据或入库异常），按 4 秒计费，避免计费失败导致任务标 FAILURE
 	if requestedSeconds <= 0 {
-		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s invalid requested_seconds: %d", modelName, task.TaskID, requestedSeconds))
-		return fmt.Errorf("invalid requested_seconds: %d", requestedSeconds)
+		logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s requested_seconds=0, fallback to 4s for billing", modelName, task.TaskID))
+		model.RecordLog(task.UserId, model.LogTypeSystem,
+			fmt.Sprintf("[VideoBilling] model=%s task=%s requested_seconds 解析失败，兜底按 4s 计费（properties=%d）",
+				modelName, task.TaskID, task.Properties.RequestedSeconds))
+		requestedSeconds = 4
 	}
 
 	tokenName := ""
