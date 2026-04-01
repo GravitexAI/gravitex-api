@@ -372,6 +372,7 @@ func migrateLOGDB() error {
 	if err = LOG_DB.AutoMigrate(&Log{}); err != nil {
 		return err
 	}
+	migrateLogRequestIdColumnLength()
 	return nil
 }
 
@@ -531,6 +532,35 @@ func migrateTaskIDColumnLength() {
 		return
 	}
 	if err := DB.Exec(alterSQL).Error; err != nil {
+		common.SysLog(fmt.Sprintf("Warning: failed to migrate %s.%s to varchar(512): %v", tableName, columnName, err))
+	} else {
+		common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to varchar(512)", tableName, columnName))
+	}
+}
+
+// migrateLogRequestIdColumnLength 将 logs.request_id 从 varchar(64) 扩为 varchar(512)，
+// 以支持 Vertex AI 视频任务的长 task_id（作为 request_id 记录日志）
+func migrateLogRequestIdColumnLength() {
+	if common.UsingSQLite {
+		return
+	}
+	tableName := "logs"
+	columnName := "request_id"
+	if !LOG_DB.Migrator().HasTable(tableName) {
+		return
+	}
+	if !LOG_DB.Migrator().HasColumn(&Log{}, columnName) {
+		return
+	}
+	var alterSQL string
+	if common.UsingPostgreSQL {
+		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE varchar(512)`, tableName, columnName)
+	} else if common.UsingMySQL {
+		alterSQL = fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` varchar(512) NOT NULL DEFAULT ''", tableName, columnName)
+	} else {
+		return
+	}
+	if err := LOG_DB.Exec(alterSQL).Error; err != nil {
 		common.SysLog(fmt.Sprintf("Warning: failed to migrate %s.%s to varchar(512): %v", tableName, columnName, err))
 	} else {
 		common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to varchar(512)", tableName, columnName))

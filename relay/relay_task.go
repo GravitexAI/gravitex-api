@@ -282,6 +282,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	}
 
 	// 非按秒/按量视频计费模型：提交成功即预扣费并记录日志
+	var deferTaskID string // 在 defer 之前声明，task 创建后赋值，闭包内引用
 	if !isPerSecondBilling && !isVideoTokenRatioBilling {
 		defer func() {
 			if info.ConsumeQuota && taskErr == nil {
@@ -320,6 +321,19 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 					if costDiscount > 0 {
 						adminInfo["cost_discount"] = costDiscount
 					}
+					// 多 key 渠道：记录命中的 project_id 和 key 索引
+					if info.ChannelMeta != nil && info.ChannelMeta.ChannelIsMultiKey {
+						adminInfo["multi_key_index"] = info.ChannelMeta.ChannelMultiKeyIndex
+						if info.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi ||
+							info.ChannelMeta.ChannelType == constant.ChannelTypeGemini {
+							var cred struct {
+								ProjectID string `json:"project_id"`
+							}
+							if err := common.Unmarshal([]byte(info.ChannelMeta.ApiKey), &cred); err == nil && cred.ProjectID != "" {
+								adminInfo["project_id"] = cred.ProjectID
+							}
+						}
+					}
 					other["admin_info"] = adminInfo
 					priceChain := service.CalculatePriceChainForLog(c, modelName, 0, 0, quota)
 					model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
@@ -332,6 +346,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 						Group:      info.UsingGroup,
 						Other:      other,
 						PriceChain: priceChain,
+						RequestId:  deferTaskID,
 					})
 					model.UpdateUserUsedQuotaAndRequestCount(info.UserId, quota)
 					model.UpdateChannelUsedQuota(info.ChannelId, quota)
@@ -371,6 +386,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	// insert task
 	task := model.InitTask(platform, info)
 	task.TaskID = taskID
+	deferTaskID = taskID // 供 defer 闭包内记录消费日志使用
 	// 令牌信息写入独立列，不受轮询 task.Data 覆盖影响
 	task.TokenName = c.GetString("token_name")
 	task.TokenId = info.TokenId
@@ -401,6 +417,16 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *dto.
 	}
 	if len(upstreamBodyBytes) > 0 {
 		task.UpstreamRequestBody = []byte(common.TruncateBase64Content(string(upstreamBodyBytes)))
+	}
+	// 打印任务入库前的关键信息：渠道、key、project、properties
+	{
+		multiKeyIdx := -1
+		if task.Properties.MultiKeyIndex != nil {
+			multiKeyIdx = *task.Properties.MultiKeyIndex
+		}
+		logger.LogInfo(c, fmt.Sprintf("[TaskSubmit] task_insert: taskID=%s channel=%d projectID=%s multiKeyIndex=%d privateDataKey=%v properties=%+v quota=%d",
+			task.TaskID, task.ChannelId, task.Properties.ProjectID, multiKeyIdx,
+			task.PrivateData.Key != "", task.Properties, task.Quota))
 	}
 	err = task.Insert()
 	if err != nil {
@@ -935,7 +961,16 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 			// 当上游返回终态且当前任务尚未终态时：落库（data/status/progress/fail_reason）并执行计费，与后台轮询逻辑一致，避免 Vertex 轮询只返回 {"name":"..."} 导致任务永不完成、不扣费
 			if prevStatus != model.TaskStatusSuccess && prevStatus != model.TaskStatusFailure {
 				if originTask.Status == model.TaskStatusSuccess || originTask.Status == model.TaskStatusFailure {
-					if CompleteVideoTaskOnUpstreamSuccessFn != nil {
+					// 防竞态：GET 请求上游期间后台轮询可能已完成该任务，从 DB 重新检查终态
+					freshTask, _, dbErr := model.GetByOnlyTaskId(originTask.TaskID)
+					alreadyTerminal := dbErr == nil && freshTask != nil &&
+						(freshTask.Status == model.TaskStatusSuccess || freshTask.Status == model.TaskStatusFailure)
+					if alreadyTerminal {
+						logger.LogInfo(c.Request.Context(), fmt.Sprintf("[GET /v1/videos] task=%s already terminal in DB (status=%s), skip CompleteVideoTask", originTask.TaskID, freshTask.Status))
+						originTask.FailReason = freshTask.FailReason
+						originTask.Status = freshTask.Status
+						originTask.Progress = freshTask.Progress
+					} else if CompleteVideoTaskOnUpstreamSuccessFn != nil {
 						if errComplete := CompleteVideoTaskOnUpstreamSuccessFn(c.Request.Context(), originTask, channelModel, ti, body); errComplete != nil {
 							logger.LogError(c.Request.Context(), fmt.Sprintf("[GET /v1/videos] CompleteVideoTaskOnUpstreamSuccess task=%s: %v", originTask.TaskID, errComplete))
 						}
@@ -971,27 +1006,12 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 					}
 				}
 			}
-			status := "processing"
-			switch originTask.Status {
-			case model.TaskStatusSuccess:
-				status = "succeeded"
-			case model.TaskStatusFailure:
-				status = "failed"
-			case model.TaskStatusQueued, model.TaskStatusSubmitted:
-				status = "queued"
-			}
 			if !strings.HasPrefix(c.Request.RequestURI, "/v1/videos/") {
-				out := map[string]any{
-					"error":    nil,
-					"format":   format,
-					"metadata": nil,
-					"status":   status,
-					"task_id":  originTask.TaskID,
-					"url":      originTask.FailReason,
-				}
+				vtr := taskToVideoTaskResponse(originTask)
+				vtr.Format = format
 				respBody, _ = common.Marshal(dto.TaskResponse[any]{
 					Code: "success",
-					Data: out,
+					Data: vtr,
 				})
 			}
 		}
@@ -1021,7 +1041,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	}
 	respBody, err = common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
-		Data: TaskModel2Dto(originTask),
+		Data: taskToVideoTaskResponse(originTask),
 	})
 	if err != nil {
 		taskResp = service.TaskErrorWrapper(err, "marshal_response_failed", http.StatusInternalServerError)
@@ -1045,6 +1065,79 @@ func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 
 // extractProjectFromVertexTaskID 从 Vertex AI 视频任务的 taskID 中提取 project ID。
 var vertexTaskProjectRe = regexp.MustCompile(`projects/([^/]+)/locations/`)
+
+// internalBillingFields 内部计费字段，不应暴露给 API 消费者
+var internalBillingFields = map[string]bool{
+	"billing_processed":             true,
+	"billing_group":                 true,
+	"billing_effective_group_ratio": true,
+	"billing_token_name":            true,
+	"billing_token_id":              true,
+	"billing_model_name":            true,
+	"billing_cost_discount":         true,
+	"billing_requested_seconds":     true,
+	"requested_seconds":             true,
+}
+
+// filterInternalFields 从 task.Data map 中移除内部计费字段，返回过滤后的 map
+func filterInternalFields(data map[string]interface{}) map[string]interface{} {
+	filtered := make(map[string]interface{}, len(data))
+	for k, v := range data {
+		if internalBillingFields[k] || strings.HasPrefix(k, "billing_") {
+			continue
+		}
+		filtered[k] = v
+	}
+	return filtered
+}
+
+// taskToVideoTaskResponse 将内部 Task 模型转换为统一的 VideoTaskResponse DTO，
+// 用于 /v1/video/generations/:task_id GET 端点。内部计费字段从 metadata 中过滤。
+func taskToVideoTaskResponse(task *model.Task) *dto.VideoTaskResponse {
+	status := "processing"
+	switch task.Status {
+	case model.TaskStatusSuccess:
+		status = "succeeded"
+	case model.TaskStatusFailure:
+		status = "failed"
+	case model.TaskStatusQueued, model.TaskStatusSubmitted:
+		status = "queued"
+	case model.TaskStatusInProgress:
+		status = "processing"
+	}
+
+	resp := &dto.VideoTaskResponse{
+		TaskId: task.TaskID,
+		Status: status,
+		Format: "mp4",
+	}
+
+	// succeeded 时 URL 存储在 task.FailReason（OSS URL 或 CDN URL）
+	if status == "succeeded" && task.FailReason != "" {
+		resp.Url = task.FailReason
+	}
+
+	// failed 时返回错误详情
+	if status == "failed" && task.FailReason != "" {
+		resp.Error = &dto.VideoTaskError{
+			Code:    0,
+			Message: task.FailReason,
+		}
+	}
+
+	// 从 task.Data 构建 metadata，过滤内部计费字段
+	if len(task.Data) > 0 {
+		var dataMap map[string]interface{}
+		if err := common.Unmarshal(task.Data, &dataMap); err == nil && len(dataMap) > 0 {
+			filtered := filterInternalFields(dataMap)
+			if len(filtered) > 0 {
+				resp.Metadata = filtered
+			}
+		}
+	}
+
+	return resp
+}
 
 func extractProjectFromVertexTaskID(taskID string) string {
 	b, err := base64.RawURLEncoding.DecodeString(taskID)

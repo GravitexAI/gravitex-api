@@ -418,7 +418,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 				RequestId: requestId,
 				Other:     otherStr,
 			}
-			model.LOG_DB.Create(retryLog)
+			model.CreateLog(retryLog)
 		} else {
 			model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, false, userGroup, other)
 		}

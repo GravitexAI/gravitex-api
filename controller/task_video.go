@@ -83,10 +83,12 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		return fmt.Errorf("task %s not found", taskId)
 	}
 	key := channel.Key
+	keySource := "channel_default"
 
 	privateData := task.PrivateData
 	if privateData.Key != "" {
 		key = privateData.Key
+		keySource = "private_data"
 	} else if channel.ChannelInfo.IsMultiKey {
 		// 多 key 渠道（如 Vertex AI 配了多个 service account JSON），
 		// channel.Key 是拼接的完整字符串，需根据任务的 project 匹配正确的凭证
@@ -96,6 +98,15 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			projectID = extractProjectFromTaskID(taskId)
 		}
 		key = channel.FindKeyByProjectID(projectID)
+		keySource = fmt.Sprintf("multi_key(project=%s)", projectID)
+	}
+	{
+		multiKeyIdx := -1
+		if task.Properties.MultiKeyIndex != nil {
+			multiKeyIdx = *task.Properties.MultiKeyIndex
+		}
+		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] key_selected: task=%s channel=%d keySource=%s projectID=%s multiKeyIndex=%d hasPrivateKey=%v",
+			taskId, channel.Id, keySource, task.Properties.ProjectID, multiKeyIdx, privateData.Key != ""))
 	}
 	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
 		"task_id": taskId,
@@ -278,6 +289,16 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		if taskModelName == "" {
 			taskModelName = task.Properties.UpstreamModelName
 		}
+		billingRoute := "pre_deduction_settle"
+		if isVideoPerSecondModel(taskModelName) {
+			billingRoute = "per_second"
+		} else if isVideoTokenRatioModel(taskModelName) {
+			billingRoute = "token_ratio"
+		} else if taskResult.TotalTokens > 0 {
+			billingRoute = "token_settle"
+		}
+		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task_success: task=%s model=%s channel=%d billingRoute=%s preQuota=%d",
+			taskId, taskModelName, channel.Id, billingRoute, task.Quota))
 
 		// 对于 Veo 模型，跳过 OSS 上传逻辑（使用前缀匹配避免误匹配其他含 "veo" 的模型名）
 		if strings.HasPrefix(strings.ToLower(taskModelName), "veo-") {
@@ -386,6 +407,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		}
 		task.FailReason = taskResult.Reason
 		taskResult.Progress = "100%"
+		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task_failure: task=%s channel=%d preQuota=%d shouldRefund=%v reason=%s",
+			taskId, channel.Id, quota, preStatus != model.TaskStatusFailure, common.TruncateJsonValues(taskResult.Reason)))
 		if quota != 0 {
 			if preStatus != model.TaskStatusFailure {
 				shouldRefund = true
@@ -418,9 +441,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			ChannelId: task.ChannelId,
 			ModelName: modelName,
 			Group:     task.Group,
+			RequestId: task.TaskID,
 			Other:     failOtherStr,
 		}
-		if err := model.LOG_DB.Create(failLog).Error; err != nil {
+		if err := model.CreateLog(failLog); err != nil {
 			logger.LogError(ctx, fmt.Sprintf("Failed to insert error log for task %s: %v", task.TaskID, err))
 		}
 		logger.LogInfo(ctx, fmt.Sprintf("Task %s failed: %s", task.TaskID, task.FailReason))
@@ -439,6 +463,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 
 	if shouldRefund {
 		// 任务失败且之前状态不是失败才退还额度，防止重复退还
+		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] refund: task=%s user=%d quota=%s",
+			task.TaskID, task.UserId, logger.LogQuota(quota)))
 		if err := model.IncreaseUserQuota(task.UserId, quota, false); err != nil {
 			logger.LogWarn(ctx, "Failed to increase user quota: "+err.Error())
 		}
@@ -757,7 +783,17 @@ func CompleteVideoTaskOnUpstreamSuccess(ctx context.Context, task *model.Task, c
 			task.FailReason = strings.TrimSpace(taskResult.Reason)
 		}
 	}
-	if err := task.Update(); err != nil {
+	// 只更新状态相关字段，绝不碰 quota —— quota 由 handleSora2TaskBilling / handleVideoTokenRatioBilling
+	// 的 DB 原子 guard（WHERE quota=0）独占更新。使用 DB.Save 全量写回会把后台轮询已更新的 quota 覆盖回 0，
+	// 导致 DB guard 被绕过、重复计费。
+	updateFields := map[string]interface{}{
+		"status":      task.Status,
+		"progress":    task.Progress,
+		"fail_reason": task.FailReason,
+		"finish_time": task.FinishTime,
+		"data":        task.Data,
+	}
+	if err := model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(updateFields).Error; err != nil {
 		return err
 	}
 	taskModelName := task.Properties.OriginModelName
@@ -767,18 +803,20 @@ func CompleteVideoTaskOnUpstreamSuccess(ctx context.Context, task *model.Task, c
 	if taskResult.Status == model.TaskStatusSuccess && isVideoPerSecondModel(taskModelName) {
 		if err := handleSora2TaskBilling(ctx, task); err != nil {
 			logger.LogError(ctx, fmt.Sprintf("[VideoBilling] GET path model=%s task=%s failed: %v", taskModelName, task.TaskID, err))
-			task.Status = model.TaskStatusFailure
-			task.FailReason = fmt.Sprintf("billing_failed: %v", err)
-			_ = task.Update()
+			_ = model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+				"status":      model.TaskStatusFailure,
+				"fail_reason": fmt.Sprintf("billing_failed: %v", err),
+			}).Error
 			return err
 		}
 	}
 	if taskResult.Status == model.TaskStatusSuccess && isVideoTokenRatioModel(taskModelName) {
 		if err := handleVideoTokenRatioBilling(ctx, task, taskResult); err != nil {
 			logger.LogError(ctx, fmt.Sprintf("[VideoBilling] GET path token_ratio model=%s task=%s failed: %v", taskModelName, task.TaskID, err))
-			task.Status = model.TaskStatusFailure
-			task.FailReason = fmt.Sprintf("billing_failed: %v", err)
-			_ = task.Update()
+			_ = model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+				"status":      model.TaskStatusFailure,
+				"fail_reason": fmt.Sprintf("billing_failed: %v", err),
+			}).Error
 			return err
 		}
 	}
@@ -792,6 +830,14 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	if modelName == "" {
 		modelName = task.Properties.UpstreamModelName
 	}
+	{
+		multiKeyIdx := -1
+		if task.Properties.MultiKeyIndex != nil {
+			multiKeyIdx = *task.Properties.MultiKeyIndex
+		}
+		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] per_second_start: task=%s model=%s channel=%d projectID=%s multiKeyIndex=%d user=%d group=%s",
+			task.TaskID, modelName, task.ChannelId, task.Properties.ProjectID, multiKeyIdx, task.UserId, task.Group))
+	}
 
 	// 从 task.Data 读取提交时保存的计费信息
 	var taskData map[string]interface{}
@@ -804,9 +850,20 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		taskData = make(map[string]interface{})
 	}
 
-	// 防重复计费
+	// 防重复计费（内存级检查）
 	if processed, ok := taskData["billing_processed"].(bool); ok && processed {
 		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s already billed, skip", modelName, task.TaskID))
+		return nil
+	}
+
+	// 防重复计费（DB 级原子抢占）：利用 quota 字段，仅当 quota=0（未计费）时原子更新为 -1（计费中）
+	// 后台轮询和 GET /v1/videos 路径可能并发调用此函数，内存级检查无法防止竞态
+	claimResult := model.DB.Model(&model.Task{}).Where("id = ? AND quota = 0", task.ID).Update("quota", -1)
+	if claimResult.Error != nil {
+		return fmt.Errorf("handleSora2TaskBilling: failed to claim billing lock: %w", claimResult.Error)
+	}
+	if claimResult.RowsAffected == 0 {
+		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s already billed (DB guard), skip", modelName, task.TaskID))
 		return nil
 	}
 
@@ -1074,9 +1131,10 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		TokenId:          tokenId,
 		UseTime:          useTime,
 		Group:            billingGroup,
+		RequestId:        task.TaskID,
 		Other:            string(otherBytes),
 	}
-	if err := model.LOG_DB.Create(consumeLog).Error; err != nil {
+	if err := model.CreateLog(consumeLog); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed to insert consume log: %v", modelName, task.TaskID, err))
 	}
 
@@ -1084,11 +1142,18 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	model.UpdateUserUsedQuotaAndRequestCount(task.UserId, actualQuota)
 	model.UpdateChannelUsedQuota(task.ChannelId, actualQuota)
 
-	// 更新 task.Quota 为实际扣费额度，标记 billing_processed=true
+	// 更新 task.Quota 为实际扣费额度，标记 billing_processed=true 并立即持久化到 DB
+	// 必须在函数内持久化，因为 CompleteVideoTaskOnUpstreamSuccess（GET 路径）在调用本函数后不会再调 task.Update()
 	task.Quota = actualQuota
 	taskData["billing_processed"] = true
 	if merged, err := common.Marshal(taskData); err == nil {
 		task.Data = merged
+	}
+	if err := model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+		"quota": actualQuota,
+		"data":  task.Data,
+	}).Error; err != nil {
+		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed to persist billing result: %v", modelName, task.TaskID, err))
 	}
 
 	return nil
@@ -1103,6 +1168,14 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	if modelName == "" {
 		modelName = task.Properties.UpstreamModelName
 	}
+	{
+		multiKeyIdx := -1
+		if task.Properties.MultiKeyIndex != nil {
+			multiKeyIdx = *task.Properties.MultiKeyIndex
+		}
+		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio_start: task=%s model=%s channel=%d projectID=%s multiKeyIndex=%d user=%d group=%s",
+			task.TaskID, modelName, task.ChannelId, task.Properties.ProjectID, multiKeyIdx, task.UserId, task.Group))
+	}
 
 	// 从 task.Data 读取提交时保存的计费信息
 	var taskData map[string]interface{}
@@ -1115,9 +1188,19 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		taskData = make(map[string]interface{})
 	}
 
-	// 防重复计费
+	// 防重复计费（内存级检查）
 	if processed, ok := taskData["billing_processed"].(bool); ok && processed {
 		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s already billed, skip", modelName, task.TaskID))
+		return nil
+	}
+
+	// 防重复计费（DB 级原子抢占）：利用 quota 字段，仅当 quota=0（未计费）时原子更新为 -1（计费中）
+	claimResult := model.DB.Model(&model.Task{}).Where("id = ? AND quota = 0", task.ID).Update("quota", -1)
+	if claimResult.Error != nil {
+		return fmt.Errorf("handleVideoTokenRatioBilling: failed to claim billing lock: %w", claimResult.Error)
+	}
+	if claimResult.RowsAffected == 0 {
+		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s already billed (DB guard), skip", modelName, task.TaskID))
 		return nil
 	}
 
@@ -1290,9 +1373,10 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		TokenId:          tokenId,
 		UseTime:          useTime,
 		Group:            billingGroup,
+		RequestId:        task.TaskID,
 		Other:            string(otherBytes),
 	}
-	if err := model.LOG_DB.Create(consumeLog).Error; err != nil {
+	if err := model.CreateLog(consumeLog); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to insert consume log: %v", modelName, task.TaskID, err))
 	}
 
@@ -1303,6 +1387,12 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	taskData["billing_processed"] = true
 	if merged, err := common.Marshal(taskData); err == nil {
 		task.Data = merged
+	}
+	if err := model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+		"quota": actualQuota,
+		"data":  task.Data,
+	}).Error; err != nil {
+		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to persist billing result: %v", modelName, task.TaskID, err))
 	}
 	return nil
 }

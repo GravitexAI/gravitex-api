@@ -35,7 +35,7 @@ type Log struct {
 	TokenId          int    `json:"token_id" gorm:"default:0;index"`
 	Group            string `json:"group" gorm:"index"`
 	Ip               string `json:"ip" gorm:"index;default:''"`
-	RequestId        string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
+	RequestId        string `json:"request_id,omitempty" gorm:"type:varchar(512);index:idx_logs_request_id;default:''"`
 	Other            string `json:"other"`
 }
 
@@ -51,6 +51,32 @@ const (
 	LogTypeRetryFail = 7 // 重试（中间失败，后续有重试）
 )
 
+var logTypeNames = map[int]string{
+	LogTypeUnknown:   "unknown",
+	LogTypeTopup:     "topup",
+	LogTypeConsume:   "consume",
+	LogTypeManage:    "manage",
+	LogTypeSystem:    "system",
+	LogTypeError:     "error",
+	LogTypeRefund:    "refund",
+	LogTypeRetryFail: "retry",
+}
+
+// CreateLog 统一的日志写入入口，写入 DB 并打印完整日志信息
+func CreateLog(log *Log) error {
+	typeName := logTypeNames[log.Type]
+	if typeName == "" {
+		typeName = fmt.Sprintf("type_%d", log.Type)
+	}
+	common.SysLog(fmt.Sprintf("[LogInsert] type=%s userId=%d channel=%d model=%s token=%s group=%s quota=%d content=%s other=%s",
+		typeName, log.UserId, log.ChannelId, log.ModelName, log.TokenName, log.Group, log.Quota, log.Content, log.Other))
+	err := LOG_DB.Create(log).Error
+	if err != nil {
+		common.SysLog(fmt.Sprintf("[LogInsert] FAILED type=%s userId=%d err=%s", typeName, log.UserId, err.Error()))
+	}
+	return err
+}
+
 func formatUserLogs(logs []*Log, startIdx int) {
 	for i := range logs {
 		logs[i].ChannelName = ""
@@ -60,6 +86,8 @@ func formatUserLogs(logs []*Log, startIdx int) {
 			// Remove admin-only debug fields.
 			delete(otherMap, "admin_info")
 			delete(otherMap, "reject_reason")
+			delete(otherMap, "official_quota")
+			delete(otherMap, "official_video_price_per_second")
 		}
 		logs[i].Other = common.MapToJsonStr(otherMap)
 		logs[i].Id = startIdx + i + 1
@@ -84,7 +112,7 @@ func RecordLog(userId int, logType int, content string) {
 		Type:      logType,
 		Content:   content,
 	}
-	err := LOG_DB.Create(log).Error
+	err := CreateLog(log)
 	if err != nil {
 		common.SysLog("failed to record log: " + err.Error())
 	}
@@ -128,7 +156,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		RequestId: requestId,
 		Other:     otherStr,
 	}
-	err := LOG_DB.Create(log).Error
+	err := CreateLog(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
@@ -153,6 +181,7 @@ type RecordConsumeLogParams struct {
 	Group            string                 `json:"group"`
 	Other            map[string]interface{} `json:"other"`
 	PriceChain       *PriceChainParams      `json:"price_chain,omitempty"`
+	RequestId        string                 `json:"request_id,omitempty"` // 可选覆盖，视频任务用 taskID
 }
 
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
@@ -161,7 +190,10 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	}
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
-	requestId := c.GetString(common.RequestIdKey)
+	requestId := params.RequestId
+	if requestId == "" {
+		requestId = c.GetString(common.RequestIdKey)
+	}
 	// 合并 other 与 vendor_id（来自 PriceChain），与 Nebula 一致
 	other := make(map[string]interface{})
 	if params.Other != nil {
@@ -217,7 +249,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		RequestId: requestId,
 		Other:     otherStr,
 	}
-	err := LOG_DB.Create(log).Error
+	err := CreateLog(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}

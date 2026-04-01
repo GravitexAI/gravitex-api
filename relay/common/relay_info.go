@@ -673,6 +673,7 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 			var metadataObj map[string]interface{}
 			if err := common.Unmarshal([]byte(metadataStr), &metadataObj); err == nil {
 				t.Metadata = metadataObj
+				t.populateFromMetadata()
 				return nil
 			}
 		}
@@ -683,7 +684,150 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 		}
 	}
 
+	t.populateFromMetadata()
 	return nil
+}
+
+// populateFromMetadata 将 metadata 中的已知字段回填到 TaskSubmitReq 的显式 struct 字段。
+// 仅当 struct 字段为零值时才从 metadata 取值，保证顶层字段优先。
+// 用途：前端 /v1/video/generations 将模型特有参数放入 metadata，
+// 而各 channel adaptor 直接读 struct 字段（如 req.Resolution, req.GenerateAudio），
+// 此方法确保两种传参方式都能正确工作。
+func (t *TaskSubmitReq) populateFromMetadata() {
+	m := t.Metadata
+	if m == nil {
+		return
+	}
+	// 字符串字段
+	strFields := map[string]*string{
+		"resolution":      &t.Resolution,
+		"ratio":           &t.Ratio,
+		"shot_type":       &t.ShotType,
+		"callback_url":    &t.CallbackURL,
+		"mode":            &t.Mode,
+		"size":            &t.Size,
+		"input_reference": &t.InputReference,
+		"image":           &t.Image,
+		"seconds":         &t.Seconds,
+	}
+	for key, ptr := range strFields {
+		if *ptr == "" {
+			if v, ok := m[key].(string); ok && v != "" {
+				*ptr = v
+			}
+		}
+	}
+	// int 字段
+	if t.Duration == 0 {
+		t.Duration = metadataInt(m, "duration")
+	}
+	// *int 字段
+	if t.Seed == nil {
+		if v := metadataIntPtr(m, "seed"); v != nil {
+			t.Seed = v
+		}
+	}
+	// *bool 字段
+	boolFields := map[string]**bool{
+		"generate_audio":    &t.GenerateAudio,
+		"audio":             &t.Audio,
+		"watermark":         &t.Watermark,
+		"camera_fixed":      &t.CameraFixed,
+		"smart_rewrite":     &t.SmartRewrite,
+		"return_last_frame": &t.ReturnLastFrame,
+	}
+	for key, ptr := range boolFields {
+		if *ptr == nil {
+			if v := metadataBoolPtr(m, key); v != nil {
+				*ptr = v
+			}
+		}
+	}
+	// []string 字段
+	if len(t.ReferenceUrls) == 0 {
+		t.ReferenceUrls = metadataStringSlice(m, "reference_urls")
+	}
+	// content 数组
+	if len(t.Content) == 0 {
+		t.Content = metadataContentArray(m, "content")
+	}
+}
+
+// --- metadata 类型断言辅助函数 ---
+
+func metadataInt(m map[string]interface{}, key string) int {
+	switch v := m[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return int(n)
+		}
+	}
+	return 0
+}
+
+func metadataIntPtr(m map[string]interface{}, key string) *int {
+	switch v := m[key].(type) {
+	case float64:
+		n := int(v)
+		return &n
+	case int:
+		return &v
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			ni := int(n)
+			return &ni
+		}
+	}
+	return nil
+}
+
+func metadataBoolPtr(m map[string]interface{}, key string) *bool {
+	switch v := m[key].(type) {
+	case bool:
+		return &v
+	case string:
+		b := strings.EqualFold(v, "true") || v == "1"
+		return &b
+	}
+	return nil
+}
+
+func metadataStringSlice(m map[string]interface{}, key string) []string {
+	arr, ok := m[key].([]interface{})
+	if !ok || len(arr) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(arr))
+	for _, item := range arr {
+		if s, ok := item.(string); ok {
+			result = append(result, s)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func metadataContentArray(m map[string]interface{}, key string) []map[string]interface{} {
+	arr, ok := m[key].([]interface{})
+	if !ok || len(arr) == 0 {
+		return nil
+	}
+	result := make([]map[string]interface{}, 0, len(arr))
+	for _, item := range arr {
+		if obj, ok := item.(map[string]interface{}); ok {
+			result = append(result, obj)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 func (t *TaskSubmitReq) UnmarshalMetadata(v any) error {
 	metadata := t.Metadata
