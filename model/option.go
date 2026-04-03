@@ -19,16 +19,6 @@ type Option struct {
 	Value string `json:"value"`
 }
 
-// GetOption 根据key获取Option
-func GetOption(key string) (*Option, error) {
-	var option Option
-	err := DB.Where("`key` = ?", key).First(&option).Error
-	if err != nil {
-		return nil, err
-	}
-	return &option, nil
-}
-
 func AllOption() ([]*Option, error) {
 	var options []*Option
 	var err error
@@ -133,7 +123,6 @@ func InitOptionMap() {
 	common.OptionMap["ImageRatio"] = ratio_setting.ImageRatio2JSONString()
 	common.OptionMap["AudioRatio"] = ratio_setting.AudioRatio2JSONString()
 	common.OptionMap["AudioCompletionRatio"] = ratio_setting.AudioCompletionRatio2JSONString()
-	common.OptionMap["ImageCompletionRatio"] = ratio_setting.ImageCompletionRatio2JSONString()
 	common.OptionMap["TopUpLink"] = common.TopUpLink
 	//common.OptionMap["ChatLink"] = common.ChatLink
 	//common.OptionMap["ChatLink2"] = common.ChatLink2
@@ -171,11 +160,7 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
-	options, err := AllOption()
-	if err != nil {
-		common.SysLog("load options from database failed: " + err.Error())
-		return
-	}
+	options, _ := AllOption()
 	for _, option := range options {
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {
@@ -441,12 +426,6 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateCompletionRatioByJSONString(value)
 	case "ModelPrice":
 		err = ratio_setting.UpdateModelPriceByJSONString(value)
-	case "VideoRatio":
-		err = ratio_setting.UpdateVideoRatioByJSONString(value)
-	case "VideoCompletionRatio":
-		err = ratio_setting.UpdateVideoCompletionRatioByJSONString(value)
-	case "VideoModelPricePerSecond":
-		err = ratio_setting.UpdateVideoModelPricePerSecondByJSONString(value)
 	case "CacheRatio":
 		err = ratio_setting.UpdateCacheRatioByJSONString(value)
 	case "CreateCacheRatio":
@@ -457,8 +436,6 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateAudioRatioByJSONString(value)
 	case "AudioCompletionRatio":
 		err = ratio_setting.UpdateAudioCompletionRatioByJSONString(value)
-	case "ImageCompletionRatio":
-		err = ratio_setting.UpdateImageCompletionRatioByJSONString(value)
 	case "TopUpLink":
 		common.TopUpLink = value
 	//case "ChatLink":

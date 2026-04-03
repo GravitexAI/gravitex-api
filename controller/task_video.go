@@ -108,6 +108,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] key_selected: task=%s channel=%d keySource=%s projectID=%s multiKeyIndex=%d hasPrivateKey=%v",
 			taskId, channel.Id, keySource, task.Properties.ProjectID, multiKeyIdx, privateData.Key != ""))
 	}
+	logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] FetchTask request: task=%s baseURL=%s upstreamTaskID=%s action=%s",
+		taskId, baseURL, task.GetUpstreamTaskID(), task.Action))
 	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
 		"task_id": taskId,
 		"action":  task.Action,

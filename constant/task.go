@@ -16,7 +16,7 @@ const (
 	TaskActionFirstTailGenerate = "firstTailGenerate"
 	TaskActionReferenceGenerate = "referenceGenerate"
 	TaskActionRemix             = "remixGenerate"
-	TaskActionOmniGenerate      = "omniGenerate" // kling omni-video
+	TaskActionOmniGenerate      = "omniGenerate"
 )
 
 var SunoModel2Action = map[string]string{

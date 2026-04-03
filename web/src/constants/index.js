@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 export * from './channel.constants';
+export * from './channel-affinity-template.constants';
 export * from './user.constants';
 export * from './toast.constants';
 export * from './common.constant';

@@ -1117,6 +1117,14 @@ func taskToVideoTaskResponse(task *model.Task) *dto.VideoTaskResponse {
 		resp.Url = task.FailReason
 	}
 
+	// fallback: 从 task.Data 中提取 URL（兼容 custom 渠道上游返回 content.video_url 等格式）
+	if status == "succeeded" && resp.Url == "" && len(task.Data) > 0 {
+		var dataMap map[string]interface{}
+		if err := common.Unmarshal(task.Data, &dataMap); err == nil {
+			resp.Url = extractVideoURLFromMap(dataMap)
+		}
+	}
+
 	// failed 时返回错误详情
 	if status == "failed" && task.FailReason != "" {
 		resp.Error = &dto.VideoTaskError{
@@ -1137,6 +1145,37 @@ func taskToVideoTaskResponse(task *model.Task) *dto.VideoTaskResponse {
 	}
 
 	return resp
+}
+
+// extractVideoURLFromMap tries to extract a video URL from an upstream response map.
+// Supports multiple upstream formats:
+//   - top-level: video_url, url
+//   - nested: content.video_url, content.url
+//   - metadata: metadata.url
+func extractVideoURLFromMap(m map[string]interface{}) string {
+	// top-level video_url / url
+	if u, ok := m["video_url"].(string); ok && u != "" {
+		return u
+	}
+	if u, ok := m["url"].(string); ok && u != "" {
+		return u
+	}
+	// nested content.video_url / content.url (uptoken-style)
+	if content, ok := m["content"].(map[string]interface{}); ok {
+		if u, ok := content["video_url"].(string); ok && u != "" {
+			return u
+		}
+		if u, ok := content["url"].(string); ok && u != "" {
+			return u
+		}
+	}
+	// metadata.url
+	if metadata, ok := m["metadata"].(map[string]interface{}); ok {
+		if u, ok := metadata["url"].(string); ok && u != "" {
+			return u
+		}
+	}
+	return ""
 }
 
 func extractProjectFromVertexTaskID(taskID string) string {

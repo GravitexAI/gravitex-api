@@ -14,6 +14,23 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func buildMaskedTokenResponse(token *model.Token) *model.Token {
+	if token == nil {
+		return nil
+	}
+	maskedToken := *token
+	maskedToken.Key = token.GetMaskedKey()
+	return &maskedToken
+}
+
+func buildMaskedTokenResponses(tokens []*model.Token) []*model.Token {
+	maskedTokens := make([]*model.Token, 0, len(tokens))
+	for _, token := range tokens {
+		maskedTokens = append(maskedTokens, buildMaskedTokenResponse(token))
+	}
+	return maskedTokens
+}
+
 func GetAllTokens(c *gin.Context) {
 	userId := c.GetInt("id")
 	pageInfo := common.GetPageQuery(c)
@@ -24,9 +41,8 @@ func GetAllTokens(c *gin.Context) {
 	}
 	total, _ := model.CountUserTokens(userId)
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(tokens)
+	pageInfo.SetItems(buildMaskedTokenResponses(tokens))
 	common.ApiSuccess(c, pageInfo)
-	return
 }
 
 func SearchTokens(c *gin.Context) {
@@ -42,29 +58,40 @@ func SearchTokens(c *gin.Context) {
 		return
 	}
 	pageInfo.SetTotal(int(total))
-	pageInfo.SetItems(tokens)
+	pageInfo.SetItems(buildMaskedTokenResponses(tokens))
 	common.ApiSuccess(c, pageInfo)
-	return
 }
 
 func GetToken(c *gin.Context) {
-	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	id, err := strconv.Atoi(c.Param("id"))
 	userId := c.GetInt("id")
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	token, err := model.GetTokenByIds(int(id64), userId)
+	token, err := model.GetTokenByIds(id, userId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    token,
+	common.ApiSuccess(c, buildMaskedTokenResponse(token))
+}
+
+func GetTokenKey(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	userId := c.GetInt("id")
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	token, err := model.GetTokenByIds(id, userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{
+		"key": token.GetFullKey(),
 	})
-	return
 }
 
 func GetTokenStatus(c *gin.Context) {
@@ -204,12 +231,10 @@ func AddToken(c *gin.Context) {
 		"success": true,
 		"message": "",
 	})
-	return
 }
 
 func DeleteToken(c *gin.Context) {
-	id64, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	id := int(id64)
+	id, _ := strconv.Atoi(c.Param("id"))
 	userId := c.GetInt("id")
 	err := model.DeleteTokenById(id, userId)
 	if err != nil {
@@ -220,49 +245,15 @@ func DeleteToken(c *gin.Context) {
 		"success": true,
 		"message": "",
 	})
-	return
 }
 
 func UpdateToken(c *gin.Context) {
 	userId := c.GetInt("id")
 	statusOnly := c.Query("status_only")
-	type updateTokenRequest struct {
-		Id                 common.Int64Flexible `json:"id"`
-		Status             int                  `json:"status"`
-		Name               string               `json:"name"`
-		ExpiredTime        int64                `json:"expired_time"`
-		RemainQuota        int                  `json:"remain_quota"`
-		UnlimitedQuota     bool                 `json:"unlimited_quota"`
-		ModelLimitsEnabled bool                 `json:"model_limits_enabled"`
-		ModelLimits        string               `json:"model_limits"`
-		AllowIps           *string              `json:"allow_ips"`
-		Group              string               `json:"group"`
-		CrossGroupRetry    bool                 `json:"cross_group_retry"`
-	}
-
-	var req updateTokenRequest
-	err := c.ShouldBindJSON(&req)
+	token := model.Token{}
+	err := c.ShouldBindJSON(&token)
 	if err != nil {
 		common.ApiError(c, err)
-		return
-	}
-
-	token := model.Token{
-		Id:                 req.Id.Int(),
-		Status:             req.Status,
-		Name:               req.Name,
-		ExpiredTime:        req.ExpiredTime,
-		RemainQuota:        req.RemainQuota,
-		UnlimitedQuota:     req.UnlimitedQuota,
-		ModelLimitsEnabled: req.ModelLimitsEnabled,
-		ModelLimits:        req.ModelLimits,
-		AllowIps:           req.AllowIps,
-		Group:              req.Group,
-		CrossGroupRetry:    req.CrossGroupRetry,
-	}
-
-	if token.Id == 0 {
-		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 	if len(token.Name) > 50 {
@@ -317,7 +308,7 @@ func UpdateToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    cleanToken,
+		"data":    buildMaskedTokenResponse(cleanToken),
 	})
 }
 

@@ -119,7 +119,6 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 	defer func() {
 		initCol()
 	}()
-
 	dsn := os.Getenv(envName)
 	if dsn != "" {
 		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
@@ -134,7 +133,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 				DSN:                  dsn,
 				PreferSimpleProtocol: true, // disables implicit prepared statement usage
 			}), &gorm.Config{
-				PrepareStmt: true,
+				PrepareStmt: true, // precompile SQL
 			})
 		}
 		if strings.HasPrefix(dsn, "local") {
@@ -145,7 +144,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 				common.LogSqlType = common.DatabaseTypeSQLite
 			}
 			return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
-				PrepareStmt: true,
+				PrepareStmt: true, // precompile SQL
 			})
 		}
 		// Use MySQL
@@ -163,18 +162,15 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 		} else {
 			common.LogSqlType = common.DatabaseTypeMySQL
 		}
-		// MySQL: disable PrepareStmt by default to avoid exceeding max_prepared_stmt_count
-		// under high concurrency (MaxOpenConns × unique_queries > 16382)
-		mysqlPrepareStmt := common.GetEnvOrDefaultBool("MYSQL_PREPARE_STMT", false)
 		return gorm.Open(mysql.Open(dsn), &gorm.Config{
-			PrepareStmt: mysqlPrepareStmt,
+			PrepareStmt: true, // precompile SQL
 		})
 	}
 	// Use SQLite
 	common.SysLog("SQL_DSN not set, using SQLite as database")
 	common.UsingSQLite = true
 	return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
-		PrepareStmt: true,
+		PrepareStmt: true, // precompile SQL
 	})
 }
 
@@ -254,8 +250,10 @@ func InitLogDB() (err error) {
 func migrateDB() error {
 	// Migrate price_amount column from float/double to decimal for existing tables
 	migrateSubscriptionPlanPriceAmount()
-	// 扩展 tasks.task_id 长度以支持 Veo/Vertex base64 operation name（>191）
-	migrateTaskIDColumnLength()
+	// Migrate model_limits column from varchar to text for existing tables
+	if err := migrateTokenModelLimitsToText(); err != nil {
+		return err
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -372,7 +370,6 @@ func migrateLOGDB() error {
 	if err = LOG_DB.AutoMigrate(&Log{}); err != nil {
 		return err
 	}
-	migrateLogRequestIdColumnLength()
 	return nil
 }
 
@@ -401,7 +398,7 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`stripe_price_id`" + ` varchar(128) DEFAULT '',
 ` + "`creem_product_id`" + ` varchar(128) DEFAULT '',
 ` + "`max_purchase_per_user`" + ` integer DEFAULT 0,
-` + "`upgrade_group`" + ` varchar(256) DEFAULT '',
+` + "`upgrade_group`" + ` varchar(64) DEFAULT '',
 ` + "`total_amount`" + ` bigint NOT NULL DEFAULT 0,
 ` + "`quota_reset_period`" + ` varchar(16) DEFAULT 'never',
 ` + "`quota_reset_custom_seconds`" + ` bigint DEFAULT 0,
@@ -434,7 +431,7 @@ PRIMARY KEY (` + "`id`" + `)
 		{Name: "stripe_price_id", DDL: "`stripe_price_id` varchar(128) DEFAULT ''"},
 		{Name: "creem_product_id", DDL: "`creem_product_id` varchar(128) DEFAULT ''"},
 		{Name: "max_purchase_per_user", DDL: "`max_purchase_per_user` integer DEFAULT 0"},
-		{Name: "upgrade_group", DDL: "`upgrade_group` varchar(256) DEFAULT ''"},
+		{Name: "upgrade_group", DDL: "`upgrade_group` varchar(64) DEFAULT ''"},
 		{Name: "total_amount", DDL: "`total_amount` bigint NOT NULL DEFAULT 0"},
 		{Name: "quota_reset_period", DDL: "`quota_reset_period` varchar(16) DEFAULT 'never'"},
 		{Name: "quota_reset_custom_seconds", DDL: "`quota_reset_custom_seconds` bigint DEFAULT 0"},
@@ -448,6 +445,59 @@ PRIMARY KEY (` + "`id`" + `)
 		if err := DB.Exec("ALTER TABLE `" + tableName + "` ADD COLUMN " + col.DDL).Error; err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// migrateTokenModelLimitsToText migrates model_limits column from varchar(1024) to text
+// This is safe to run multiple times - it checks the column type first
+func migrateTokenModelLimitsToText() error {
+	// SQLite uses type affinity, so TEXT and VARCHAR are effectively the same — no migration needed
+	if common.UsingSQLite {
+		return nil
+	}
+
+	tableName := "tokens"
+	columnName := "model_limits"
+
+	if !DB.Migrator().HasTable(tableName) {
+		return nil
+	}
+
+	if !DB.Migrator().HasColumn(&Token{}, columnName) {
+		return nil
+	}
+
+	var alterSQL string
+	if common.UsingPostgreSQL {
+		var dataType string
+		if err := DB.Raw(`SELECT data_type FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
+			tableName, columnName).Scan(&dataType).Error; err != nil {
+			common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
+		} else if dataType == "text" {
+			return nil
+		}
+		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE text`, tableName, columnName)
+	} else if common.UsingMySQL {
+		var columnType string
+		if err := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
+				WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+			tableName, columnName).Scan(&columnType).Error; err != nil {
+			common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
+		} else if strings.ToLower(columnType) == "text" {
+			return nil
+		}
+		alterSQL = fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s text", tableName, columnName)
+	} else {
+		return nil
+	}
+
+	if alterSQL != "" {
+		if err := DB.Exec(alterSQL).Error; err != nil {
+			return fmt.Errorf("failed to migrate %s.%s to text: %w", tableName, columnName, err)
+		}
+		common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to text", tableName, columnName))
 	}
 	return nil
 }
@@ -478,9 +528,11 @@ func migrateSubscriptionPlanPriceAmount() {
 	if common.UsingPostgreSQL {
 		// PostgreSQL: Check if already decimal/numeric
 		var dataType string
-		DB.Raw(`SELECT data_type FROM information_schema.columns 
-			WHERE table_name = ? AND column_name = ?`, tableName, columnName).Scan(&dataType)
-		if dataType == "numeric" {
+		if err := DB.Raw(`SELECT data_type FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
+			tableName, columnName).Scan(&dataType).Error; err != nil {
+			common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
+		} else if dataType == "numeric" {
 			return // Already decimal/numeric
 		}
 		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE decimal(10,6) USING %s::decimal(10,6)`,
@@ -488,10 +540,11 @@ func migrateSubscriptionPlanPriceAmount() {
 	} else if common.UsingMySQL {
 		// MySQL: Check if already decimal
 		var columnType string
-		DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns 
-			WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
-			tableName, columnName).Scan(&columnType)
-		if strings.HasPrefix(strings.ToLower(columnType), "decimal") {
+		if err := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
+				WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+			tableName, columnName).Scan(&columnType).Error; err != nil {
+			common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
+		} else if strings.HasPrefix(strings.ToLower(columnType), "decimal") {
 			return // Already decimal
 		}
 		alterSQL = fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s decimal(10,6) NOT NULL DEFAULT 0",
@@ -506,64 +559,6 @@ func migrateSubscriptionPlanPriceAmount() {
 		} else {
 			common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to decimal(10,6)", tableName, columnName))
 		}
-	}
-}
-
-// migrateTaskIDColumnLength 将 tasks.task_id 从 varchar(191) 扩为 varchar(512)，以支持 Veo/Vertex 的 base64 operation name
-func migrateTaskIDColumnLength() {
-	if common.UsingSQLite {
-		return // SQLite 不强制 varchar 长度，新表由 AutoMigrate 建为 512
-	}
-	tableName := "tasks"
-	columnName := "task_id"
-	if !DB.Migrator().HasTable(tableName) {
-		return
-	}
-	if !DB.Migrator().HasColumn(&Task{}, columnName) {
-		return
-	}
-	var alterSQL string
-	if common.UsingPostgreSQL {
-		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE varchar(512)`, tableName, columnName)
-	} else if common.UsingMySQL {
-		// 保持原索引，仅扩展长度
-		alterSQL = fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` varchar(512) NOT NULL DEFAULT ''", tableName, columnName)
-	} else {
-		return
-	}
-	if err := DB.Exec(alterSQL).Error; err != nil {
-		common.SysLog(fmt.Sprintf("Warning: failed to migrate %s.%s to varchar(512): %v", tableName, columnName, err))
-	} else {
-		common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to varchar(512)", tableName, columnName))
-	}
-}
-
-// migrateLogRequestIdColumnLength 将 logs.request_id 从 varchar(64) 扩为 varchar(512)，
-// 以支持 Vertex AI 视频任务的长 task_id（作为 request_id 记录日志）
-func migrateLogRequestIdColumnLength() {
-	if common.UsingSQLite {
-		return
-	}
-	tableName := "logs"
-	columnName := "request_id"
-	if !LOG_DB.Migrator().HasTable(tableName) {
-		return
-	}
-	if !LOG_DB.Migrator().HasColumn(&Log{}, columnName) {
-		return
-	}
-	var alterSQL string
-	if common.UsingPostgreSQL {
-		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE varchar(512)`, tableName, columnName)
-	} else if common.UsingMySQL {
-		alterSQL = fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` varchar(512) NOT NULL DEFAULT ''", tableName, columnName)
-	} else {
-		return
-	}
-	if err := LOG_DB.Exec(alterSQL).Error; err != nil {
-		common.SysLog(fmt.Sprintf("Warning: failed to migrate %s.%s to varchar(512): %v", tableName, columnName, err))
-	} else {
-		common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to varchar(512)", tableName, columnName))
 	}
 }
 

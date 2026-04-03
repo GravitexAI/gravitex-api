@@ -249,8 +249,8 @@ var defaultModelRatio = map[string]float64{
 	// Perplexity online 模型对搜索额外收费，有需要应自行调整，此处不计入搜索费用
 	"llama-3-sonar-small-32k-chat":   0.2 / 1000 * USD,
 	"llama-3-sonar-small-32k-online": 0.2 / 1000 * USD,
-	"llama-3-sonar-large-32k-chat":   1.0 / 1000 * USD,
-	"llama-3-sonar-large-32k-online": 1.0 / 1000 * USD,
+	"llama-3-sonar-large-32k-chat":   1 / 1000 * USD,
+	"llama-3-sonar-large-32k-online": 1 / 1000 * USD,
 	// grok
 	"grok-3-beta":           1.5,
 	"grok-3-mini-beta":      0.15,
@@ -475,6 +475,44 @@ func GetCompletionRatio(name string) float64 {
 	return hardCodedRatio
 }
 
+type CompletionRatioInfo struct {
+	Ratio  float64 `json:"ratio"`
+	Locked bool    `json:"locked"`
+}
+
+func GetCompletionRatioInfo(name string) CompletionRatioInfo {
+	name = FormatMatchingModelName(name)
+
+	if strings.Contains(name, "/") {
+		if ratio, ok := completionRatioMap.Get(name); ok {
+			return CompletionRatioInfo{
+				Ratio:  ratio,
+				Locked: false,
+			}
+		}
+	}
+
+	hardCodedRatio, locked := getHardcodedCompletionModelRatio(name)
+	if locked {
+		return CompletionRatioInfo{
+			Ratio:  hardCodedRatio,
+			Locked: true,
+		}
+	}
+
+	if ratio, ok := completionRatioMap.Get(name); ok {
+		return CompletionRatioInfo{
+			Ratio:  ratio,
+			Locked: false,
+		}
+	}
+
+	return CompletionRatioInfo{
+		Ratio:  hardCodedRatio,
+		Locked: false,
+	}
+}
+
 func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 
 	isReservedModel := strings.HasSuffix(name, "-all") || strings.HasSuffix(name, "-gizmo-*")
@@ -494,6 +532,12 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 		}
 		// gpt-5 匹配
 		if strings.HasPrefix(name, "gpt-5") {
+			if strings.HasPrefix(name, "gpt-5.4") {
+				if strings.HasPrefix(name, "gpt-5.4-nano") {
+					return 6.25, true
+				}
+				return 6, true
+			}
 			return 8, true
 		}
 		// gpt-4.5-preview匹配

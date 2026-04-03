@@ -21,25 +21,18 @@ type BoundChannel struct {
 }
 
 type Model struct {
-	Id            int            `json:"id"`
-	ModelName     string         `json:"model_name" gorm:"size:128;not null;uniqueIndex:uk_model_name_delete_at,priority:1"`
-	Description   string         `json:"description,omitempty" gorm:"type:text"`
-	DescriptionEn string         `json:"description_en,omitempty" gorm:"type:text"`
-	DescriptionId string         `json:"description_id,omitempty" gorm:"type:text"`
-	Icon          string         `json:"icon,omitempty" gorm:"type:varchar(128)"`
-	Tags          string         `json:"tags,omitempty" gorm:"type:varchar(255)"`
-	TagsEn        string         `json:"tags_en,omitempty" gorm:"type:varchar(255)"`
-	TagsId        string         `json:"tags_id,omitempty" gorm:"type:varchar(255)"`
-	ShowTab       int            `json:"show_tab,omitempty" gorm:"default:0"`
-	Flag          int            `json:"flag,omitempty" gorm:"type:int;default:0"`       // 1-新发布 2-最先进 3-火爆
-	SortOrder     int            `json:"sort_order,omitempty" gorm:"type:int;default:0"` // 越小优先级越高
-	VendorID      int            `json:"vendor_id,omitempty" gorm:"index"`
-	Endpoints     string         `json:"endpoints,omitempty" gorm:"type:text"`
-	Status        int            `json:"status" gorm:"default:1"`
-	SyncOfficial  int            `json:"sync_official" gorm:"default:1"`
-	CreatedTime   int64          `json:"created_time" gorm:"bigint"`
-	UpdatedTime   int64          `json:"updated_time" gorm:"bigint"`
-	DeletedAt     gorm.DeletedAt `json:"-" gorm:"index;uniqueIndex:uk_model_name_delete_at,priority:2"`
+	Id           int            `json:"id"`
+	ModelName    string         `json:"model_name" gorm:"size:128;not null;uniqueIndex:uk_model_name_delete_at,priority:1"`
+	Description  string         `json:"description,omitempty" gorm:"type:text"`
+	Icon         string         `json:"icon,omitempty" gorm:"type:varchar(128)"`
+	Tags         string         `json:"tags,omitempty" gorm:"type:varchar(255)"`
+	VendorID     int            `json:"vendor_id,omitempty" gorm:"index"`
+	Endpoints    string         `json:"endpoints,omitempty" gorm:"type:text"`
+	Status       int            `json:"status" gorm:"default:1"`
+	SyncOfficial int            `json:"sync_official" gorm:"default:1"`
+	CreatedTime  int64          `json:"created_time" gorm:"bigint"`
+	UpdatedTime  int64          `json:"updated_time" gorm:"bigint"`
+	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index;uniqueIndex:uk_model_name_delete_at,priority:2"`
 
 	BoundChannels []BoundChannel `json:"bound_channels,omitempty" gorm:"-"`
 	EnableGroups  []string       `json:"enable_groups,omitempty" gorm:"-"`
@@ -84,7 +77,7 @@ func (mi *Model) Update() error {
 	mi.UpdatedTime = common.GetTimestamp()
 	// 使用 Select 强制更新所有字段，包括零值
 	return DB.Model(&Model{}).Where("id = ?", mi.Id).
-		Select("model_name", "description", "description_en", "description_id", "icon", "tags", "tags_en", "tags_id", "show_tab", "flag", "sort_order", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
+		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
 		Updates(mi).Error
 }
 
@@ -92,16 +85,12 @@ func (mi *Model) Delete() error {
 	return DB.Delete(mi).Error
 }
 
-func GetVendorModelCounts(statusFilter int) (map[int64]int64, error) {
+func GetVendorModelCounts() (map[int64]int64, error) {
 	var stats []struct {
 		VendorID int64
 		Count    int64
 	}
-	db := DB.Model(&Model{})
-	if statusFilter >= 0 {
-		db = db.Where("status = ?", statusFilter)
-	}
-	if err := db.
+	if err := DB.Model(&Model{}).
 		Select("vendor_id as vendor_id, count(*) as count").
 		Group("vendor_id").
 		Scan(&stats).Error; err != nil {
@@ -114,13 +103,9 @@ func GetVendorModelCounts(statusFilter int) (map[int64]int64, error) {
 	return m, nil
 }
 
-func GetAllModels(offset int, limit int, statusFilter int) ([]*Model, error) {
+func GetAllModels(offset int, limit int) ([]*Model, error) {
 	var models []*Model
-	db := DB.Model(&Model{})
-	if statusFilter >= 0 {
-		db = db.Where("status = ?", statusFilter)
-	}
-	err := db.Order("id DESC").Offset(offset).Limit(limit).Find(&models).Error
+	err := DB.Order("id DESC").Offset(offset).Limit(limit).Find(&models).Error
 	return models, err
 }
 
@@ -150,12 +135,9 @@ func GetBoundChannelsByModelsMap(modelNames []string) (map[string][]BoundChannel
 	return result, nil
 }
 
-func SearchModels(keyword string, vendor string, offset int, limit int, statusFilter int) ([]*Model, int64, error) {
+func SearchModels(keyword string, vendor string, offset int, limit int) ([]*Model, int64, error) {
 	var models []*Model
 	db := DB.Model(&Model{})
-	if statusFilter >= 0 {
-		db = db.Where("status = ?", statusFilter)
-	}
 	if keyword != "" {
 		like := "%" + keyword + "%"
 		db = db.Where("model_name LIKE ? OR description LIKE ? OR tags LIKE ?", like, like, like)

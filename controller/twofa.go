@@ -504,7 +504,7 @@ func Admin2FAStats(c *gin.Context) {
 // AdminDisable2FA 管理员强制禁用用户2FA
 func AdminDisable2FA(c *gin.Context) {
 	userIdStr := c.Param("id")
-	userId64, err := strconv.ParseInt(userIdStr, 10, 64)
+	userId, err := strconv.Atoi(userIdStr)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -512,7 +512,6 @@ func AdminDisable2FA(c *gin.Context) {
 		})
 		return
 	}
-	userId := int(userId64)
 
 	// 检查目标用户权限
 	targetUser, err := model.GetUserById(userId, false)

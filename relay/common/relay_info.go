@@ -105,6 +105,7 @@ type RelayInfo struct {
 	RelayMode              int
 	OriginModelName        string
 	RequestURLPath         string
+	RequestHeaders         map[string]string
 	ShouldIncludeUsage     bool
 	DisablePing            bool // 是否禁止向下游发送自定义 Ping
 	ClientWs               *websocket.Conn
@@ -122,6 +123,10 @@ type RelayInfo struct {
 	SendResponseCount      int
 	ReceivedResponseCount  int
 	FinalPreConsumedQuota  int // 最终预消耗的配额
+	// ForcePreConsume 为 true 时禁用 BillingSession 的信任额度旁路，
+	// 强制预扣全额。用于异步任务（视频/音乐生成等），因为请求返回后任务仍在运行，
+	// 必须在提交前锁定全额。
+	ForcePreConsume bool
 	// Billing 是计费会话，封装了预扣费/结算/退款的统一生命周期。
 	// 免费模型和按次计费（MJ/Task）时为 nil。
 	Billing BillingSettler
@@ -144,6 +149,11 @@ type RelayInfo struct {
 	SubscriptionAmountUsedAfterPreConsume int64
 	IsClaudeBetaQuery                     bool // /v1/messages?beta=true
 	IsChannelTest                         bool // channel test request
+	RetryIndex                            int
+	LastError                             *types.NewAPIError
+	RuntimeHeadersOverride                map[string]interface{}
+	UseRuntimeHeadersOverride             bool
+	ParamOverrideAudit                    []string
 
 	PriceData types.PriceData
 
@@ -154,6 +164,8 @@ type RelayInfo struct {
 	RequestConversionChain []types.RelayFormat
 	// 最终请求到上游的格式 TODO: 当前仅设置了Claude
 	FinalRequestRelayFormat types.RelayFormat
+
+	StreamStatus *StreamStatus
 
 	ThinkingContentInfo
 	TokenCountMeta
@@ -460,6 +472,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		isFirstResponse: true,
 		RelayMode:       relayconstant.Path2RelayMode(c.Request.URL.Path),
 		RequestURLPath:  c.Request.URL.String(),
+		RequestHeaders:  cloneRequestHeaders(c),
 		IsStream:        isStream,
 
 		StartTime:         startTime,
@@ -490,6 +503,27 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	}
 
 	return info
+}
+
+func cloneRequestHeaders(c *gin.Context) map[string]string {
+	if c == nil || c.Request == nil {
+		return nil
+	}
+	if len(c.Request.Header) == 0 {
+		return nil
+	}
+	headers := make(map[string]string, len(c.Request.Header))
+	for key := range c.Request.Header {
+		value := strings.TrimSpace(c.Request.Header.Get(key))
+		if value == "" {
+			continue
+		}
+		headers[key] = value
+	}
+	if len(headers) == 0 {
+		return nil
+	}
+	return headers
 }
 
 func GenRelayInfo(c *gin.Context, relayFormat types.RelayFormat, request dto.Request, ws *websocket.Conn) (*RelayInfo, error) {
@@ -609,11 +643,32 @@ func (info *RelayInfo) HasSendResponse() bool {
 	return info.FirstResponseTime.After(info.StartTime)
 }
 
+func (info *RelayInfo) GetFinalRequestRelayFormat() types.RelayFormat {
+	if info == nil {
+		return ""
+	}
+	if info.FinalRequestRelayFormat != "" {
+		return info.FinalRequestRelayFormat
+	}
+	if n := len(info.RequestConversionChain); n > 0 {
+		return info.RequestConversionChain[n-1]
+	}
+	return info.RelayFormat
+}
+
 type TaskRelayInfo struct {
 	Action       string
 	OriginTaskID string
+	// PublicTaskID 是提交时预生成的 task_xxxx 格式公开 ID，
+	// 供 DoResponse 在返回给客户端时使用（避免暴露上游真实 ID）。
+	PublicTaskID string
 
 	ConsumeQuota bool
+
+	// LockedChannel holds the full channel object when the request is bound to
+	// a specific channel (e.g., remix on origin task's channel). Stored as any
+	// to avoid an import cycle with model; callers type-assert to *model.Channel.
+	LockedChannel any
 }
 
 type TaskSubmitReq struct {

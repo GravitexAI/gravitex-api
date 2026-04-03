@@ -166,12 +166,11 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 }
 
 func AdminUpdateSubscriptionPlan(c *gin.Context) {
-	id64, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	if id64 <= 0 {
+	id, _ := strconv.Atoi(c.Param("id"))
+	if id <= 0 {
 		common.ApiErrorMsg(c, "无效的ID")
 		return
 	}
-	id := int(id64)
 	var req AdminUpsertSubscriptionPlanRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		common.ApiErrorMsg(c, "参数错误")
@@ -260,12 +259,11 @@ type AdminUpdateSubscriptionPlanStatusRequest struct {
 }
 
 func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
-	id64, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	if id64 <= 0 {
+	id, _ := strconv.Atoi(c.Param("id"))
+	if id <= 0 {
 		common.ApiErrorMsg(c, "无效的ID")
 		return
 	}
-	id := int(id64)
 	var req AdminUpdateSubscriptionPlanStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.Enabled == nil {
 		common.ApiErrorMsg(c, "参数错误")
@@ -280,17 +278,17 @@ func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
 }
 
 type AdminBindSubscriptionRequest struct {
-	UserId common.Int64Flexible `json:"user_id"`
-	PlanId int                  `json:"plan_id"`
+	UserId int `json:"user_id"`
+	PlanId int `json:"plan_id"`
 }
 
 func AdminBindSubscription(c *gin.Context) {
 	var req AdminBindSubscriptionRequest
-	if err := c.ShouldBindJSON(&req); err != nil || req.UserId.Int64() <= 0 || req.PlanId <= 0 {
+	if err := c.ShouldBindJSON(&req); err != nil || req.UserId <= 0 || req.PlanId <= 0 {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	msg, err := model.AdminBindSubscription(req.UserId.Int(), req.PlanId, "")
+	msg, err := model.AdminBindSubscription(req.UserId, req.PlanId, "")
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -305,12 +303,11 @@ func AdminBindSubscription(c *gin.Context) {
 // ---- Admin: user subscription management ----
 
 func AdminListUserSubscriptions(c *gin.Context) {
-	userId64, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	if userId64 <= 0 {
+	userId, _ := strconv.Atoi(c.Param("id"))
+	if userId <= 0 {
 		common.ApiErrorMsg(c, "无效的用户ID")
 		return
 	}
-	userId := int(userId64)
 	subs, err := model.GetAllUserSubscriptions(userId)
 	if err != nil {
 		common.ApiError(c, err)
@@ -325,12 +322,11 @@ type AdminCreateUserSubscriptionRequest struct {
 
 // AdminCreateUserSubscription creates a new user subscription from a plan (no payment).
 func AdminCreateUserSubscription(c *gin.Context) {
-	userId64, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	if userId64 <= 0 {
+	userId, _ := strconv.Atoi(c.Param("id"))
+	if userId <= 0 {
 		common.ApiErrorMsg(c, "无效的用户ID")
 		return
 	}
-	userId := int(userId64)
 	var req AdminCreateUserSubscriptionRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.PlanId <= 0 {
 		common.ApiErrorMsg(c, "参数错误")
@@ -350,12 +346,12 @@ func AdminCreateUserSubscription(c *gin.Context) {
 
 // AdminInvalidateUserSubscription cancels a user subscription immediately.
 func AdminInvalidateUserSubscription(c *gin.Context) {
-	subId64, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	if subId64 <= 0 {
+	subId, _ := strconv.Atoi(c.Param("id"))
+	if subId <= 0 {
 		common.ApiErrorMsg(c, "无效的订阅ID")
 		return
 	}
-	msg, err := model.AdminInvalidateUserSubscription(int(subId64))
+	msg, err := model.AdminInvalidateUserSubscription(subId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -369,12 +365,12 @@ func AdminInvalidateUserSubscription(c *gin.Context) {
 
 // AdminDeleteUserSubscription hard-deletes a user subscription.
 func AdminDeleteUserSubscription(c *gin.Context) {
-	subId64, _ := strconv.ParseInt(c.Param("id"), 10, 64)
-	if subId64 <= 0 {
+	subId, _ := strconv.Atoi(c.Param("id"))
+	if subId <= 0 {
 		common.ApiErrorMsg(c, "无效的订阅ID")
 		return
 	}
-	msg, err := model.AdminDeleteUserSubscription(int(subId64))
+	msg, err := model.AdminDeleteUserSubscription(subId)
 	if err != nil {
 		common.ApiError(c, err)
 		return

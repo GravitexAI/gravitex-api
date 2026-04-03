@@ -1,10 +1,12 @@
 package model
 
 import (
+	"bytes"
 	"database/sql/driver"
 	"encoding/json"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
@@ -40,50 +42,49 @@ const (
 )
 
 type Task struct {
-	ID                  int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
-	CreatedAt           int64                 `json:"created_at" gorm:"index"`
-	UpdatedAt           int64                 `json:"updated_at"`
-	TaskID              string                `json:"task_id" gorm:"type:varchar(512);index"` // 第三方 id（Veo/Vertex 为 base64 的 operation name，超 191）
-	Platform            constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
-	UserId              int                   `json:"user_id" gorm:"index"`
-	Group               string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
-	ChannelId           int                   `json:"channel_id" gorm:"index"`
-	Quota               int                   `json:"quota"`
-	Action              string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
-	Status              TaskStatus            `json:"status" gorm:"type:varchar(20);index"` // 任务状态
-	FailReason          string                `json:"fail_reason"`
-	SubmitTime          int64                 `json:"submit_time" gorm:"index"`
-	StartTime           int64                 `json:"start_time" gorm:"index"`
-	FinishTime          int64                 `json:"finish_time" gorm:"index"`
-	Progress            string                `json:"progress" gorm:"type:varchar(20);index"`
-	TokenName           string                `json:"token_name" gorm:"type:varchar(200)"` // 提交时的令牌名称，独立列避免被轮询覆盖
-	TokenId             int                   `json:"token_id"`                            // 提交时的令牌ID
-	Properties          Properties            `json:"properties" gorm:"type:json"`
-	UserRequestBody     json.RawMessage       `json:"-" gorm:"column:user_request_body;type:json"`
-	UpstreamRequestBody json.RawMessage       `json:"-" gorm:"column:upstream_request_body;type:json"`
-	Username            string                `json:"username,omitempty" gorm:"-"`
+	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
+	CreatedAt  int64                 `json:"created_at" gorm:"index"`
+	UpdatedAt  int64                 `json:"updated_at"`
+	TaskID     string                `json:"task_id" gorm:"type:varchar(512);index"` // 第三方 id（Veo/Vertex 为 base64 的 operation name，超 191）
+	Platform   constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
+	UserId     int                   `json:"user_id" gorm:"index"`
+	Group      string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
+	ChannelId  int                   `json:"channel_id" gorm:"index"`
+	Quota      int                   `json:"quota"`
+	Action     string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
+	Status     TaskStatus            `json:"status" gorm:"type:varchar(20);index"` // 任务状态
+	FailReason string                `json:"fail_reason"`
+	SubmitTime int64                 `json:"submit_time" gorm:"index"`
+	StartTime  int64                 `json:"start_time" gorm:"index"`
+	FinishTime int64                 `json:"finish_time" gorm:"index"`
+	Progress   string                `json:"progress" gorm:"type:varchar(20);index"`
+	TokenName  string                `json:"token_name" gorm:"type:varchar(200)"`
+	TokenId    int                   `json:"token_id"`
+	Properties Properties            `json:"properties" gorm:"type:json"`
+	Username   string                `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
-	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
-	Data        json.RawMessage `json:"data" gorm:"type:json"`
+	PrivateData         TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
+	Data                json.RawMessage `json:"data" gorm:"type:json"`
+	UserRequestBody     json.RawMessage `json:"-" gorm:"column:user_request_body;type:json"`
+	UpstreamRequestBody json.RawMessage `json:"-" gorm:"column:upstream_request_body;type:json"`
 }
 
 func (t *Task) SetData(data any) {
-	b, _ := json.Marshal(data)
+	b, _ := common.Marshal(data)
 	t.Data = json.RawMessage(b)
 }
 
 func (t *Task) GetData(v any) error {
-	err := json.Unmarshal(t.Data, &v)
-	return err
+	return common.Unmarshal(t.Data, &v)
 }
 
 type Properties struct {
 	Input             string `json:"input"`
 	UpstreamModelName string `json:"upstream_model_name,omitempty"`
 	OriginModelName   string `json:"origin_model_name,omitempty"`
-	RequestedSeconds  int    `json:"requested_seconds,omitempty"` // 视频请求时长（秒），用于按秒计费，存 properties 避免被 task.Data 覆盖
-	ProjectID         string `json:"project_id,omitempty"`        // 多 key 渠道命中的 project ID（如 Vertex AI），存 properties 避免被 task.Data 覆盖
-	MultiKeyIndex     *int   `json:"multi_key_index,omitempty"`   // 多 key 渠道命中的 key 索引（从 0 开始），nil 表示非多 key 渠道
+	RequestedSeconds  int    `json:"requested_seconds,omitempty"`
+	ProjectID         string `json:"project_id,omitempty"`
+	MultiKeyIndex     *int   `json:"multi_key_index,omitempty"`
 }
 
 func (m *Properties) Scan(val interface{}) error {
@@ -92,18 +93,59 @@ func (m *Properties) Scan(val interface{}) error {
 		*m = Properties{}
 		return nil
 	}
-	return json.Unmarshal(bytesValue, m)
+	return common.Unmarshal(bytesValue, m)
 }
 
 func (m Properties) Value() (driver.Value, error) {
 	if m == (Properties{}) {
 		return nil, nil
 	}
-	return json.Marshal(m)
+	return common.Marshal(m)
 }
 
 type TaskPrivateData struct {
-	Key string `json:"key,omitempty"`
+	Key            string `json:"key,omitempty"`
+	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
+	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
+	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
+	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
+	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
+	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
+	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+}
+
+// TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
+type TaskBillingContext struct {
+	ModelPrice      float64            `json:"model_price,omitempty"`       // 模型单价
+	GroupRatio      float64            `json:"group_ratio,omitempty"`       // 分组倍率
+	ModelRatio      float64            `json:"model_ratio,omitempty"`       // 模型倍率
+	OtherRatios     map[string]float64 `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
+	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
+	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
+}
+
+// GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）
+// 旧数据没有 UpstreamTaskID 时，TaskID 本身就是上游 ID
+func (t *Task) GetUpstreamTaskID() string {
+	if t.PrivateData.UpstreamTaskID != "" {
+		return t.PrivateData.UpstreamTaskID
+	}
+	return t.TaskID
+}
+
+// GetResultURL 获取任务结果 URL（视频地址等）
+// 新数据存在 PrivateData.ResultURL 中；旧数据回退到 FailReason（历史兼容）
+func (t *Task) GetResultURL() string {
+	if t.PrivateData.ResultURL != "" {
+		return t.PrivateData.ResultURL
+	}
+	return t.FailReason
+}
+
+// GenerateTaskID 生成对外暴露的 task_xxxx 格式 ID
+func GenerateTaskID() string {
+	key, _ := common.GenerateRandomCharsKey(32)
+	return "task_" + key
 }
 
 func (p *TaskPrivateData) Scan(val interface{}) error {
@@ -111,14 +153,14 @@ func (p *TaskPrivateData) Scan(val interface{}) error {
 	if len(bytesValue) == 0 {
 		return nil
 	}
-	return json.Unmarshal(bytesValue, p)
+	return common.Unmarshal(bytesValue, p)
 }
 
 func (p TaskPrivateData) Value() (driver.Value, error) {
 	if (p == TaskPrivateData{}) {
 		return nil, nil
 	}
-	return json.Marshal(p)
+	return common.Marshal(p)
 }
 
 // SyncTaskQueryParams 用于包含所有搜索条件的结构体，可以根据需求添加更多字段
@@ -141,17 +183,6 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 		if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
 			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi {
 			privateData.Key = relayInfo.ChannelMeta.ApiKey
-			// 从 JSON 凭证中提取 project_id 存入 Properties，轮询不会覆盖
-			var cred struct {
-				ProjectID string `json:"project_id"`
-			}
-			if err := json.Unmarshal([]byte(relayInfo.ChannelMeta.ApiKey), &cred); err == nil && cred.ProjectID != "" {
-				properties.ProjectID = cred.ProjectID
-			}
-		}
-		if relayInfo.ChannelMeta.ChannelIsMultiKey {
-			idx := relayInfo.ChannelMeta.ChannelMultiKeyIndex
-			properties.MultiKeyIndex = &idx
 		}
 		if relayInfo.UpstreamModelName != "" {
 			properties.UpstreamModelName = relayInfo.UpstreamModelName
@@ -161,7 +192,16 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 		}
 	}
 
+	// 使用预生成的公开 ID（如果有），否则新生成
+	taskID := ""
+	if relayInfo.TaskRelayInfo != nil && relayInfo.TaskRelayInfo.PublicTaskID != "" {
+		taskID = relayInfo.TaskRelayInfo.PublicTaskID
+	} else {
+		taskID = GenerateTaskID()
+	}
+
 	t := &Task{
+		TaskID:      taskID,
 		UserId:      relayInfo.UserId,
 		Group:       relayInfo.UsingGroup,
 		SubmitTime:  time.Now().Unix(),
@@ -253,12 +293,20 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 		return nil
 	}
 
-	for _, task := range tasks {
-		if cache, err := GetUserCache(task.UserId); err == nil {
-			task.Username = cache.Username
-		}
-	}
+	return tasks
+}
 
+func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
+	var tasks []*Task
+	err := DB.Where("progress != ?", "100%").
+		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
+		Where("submit_time < ?", cutoffUnix).
+		Order("submit_time").
+		Limit(limit).
+		Find(&tasks).Error
+	if err != nil {
+		return nil
+	}
 	return tasks
 }
 
@@ -316,26 +364,63 @@ func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
 	return task, nil
 }
 
-func TaskUpdateProgress(id int64, progress string) error {
-	return DB.Model(&Task{}).Where("id = ?", id).Update("progress", progress).Error
-}
-
-// TaskUpdateFailReason 仅更新 fail_reason 字段（用于前端轮询时保存视频 URL，不更新 status/progress 以避免抢占后台计费）
-// 仅在 fail_reason 为空时更新，避免并发覆盖已有值
-func TaskUpdateFailReason(id int64, failReason string) error {
-	return DB.Model(&Task{}).Where("id = ? AND (fail_reason = '' OR fail_reason IS NULL)", id).Update("fail_reason", failReason).Error
-}
-
 func (Task *Task) Insert() error {
 	var err error
 	err = DB.Create(Task).Error
 	return err
 }
 
+type taskSnapshot struct {
+	Status     TaskStatus
+	Progress   string
+	StartTime  int64
+	FinishTime int64
+	FailReason string
+	ResultURL  string
+	Data       json.RawMessage
+}
+
+func (s taskSnapshot) Equal(other taskSnapshot) bool {
+	return s.Status == other.Status &&
+		s.Progress == other.Progress &&
+		s.StartTime == other.StartTime &&
+		s.FinishTime == other.FinishTime &&
+		s.FailReason == other.FailReason &&
+		s.ResultURL == other.ResultURL &&
+		bytes.Equal(s.Data, other.Data)
+}
+
+func (t *Task) Snapshot() taskSnapshot {
+	return taskSnapshot{
+		Status:     t.Status,
+		Progress:   t.Progress,
+		StartTime:  t.StartTime,
+		FinishTime: t.FinishTime,
+		FailReason: t.FailReason,
+		ResultURL:  t.PrivateData.ResultURL,
+		Data:       t.Data,
+	}
+}
+
 func (Task *Task) Update() error {
 	var err error
 	err = DB.Save(Task).Error
 	return err
+}
+
+// UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).
+// Returns (true, nil) if this caller won the update, (false, nil) if
+// another process already moved the task out of fromStatus.
+//
+// Uses Model().Select("*").Updates() instead of Save() because GORM's Save
+// falls back to INSERT ON CONFLICT when the WHERE-guarded UPDATE matches
+// zero rows, which silently bypasses the CAS guard.
+func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
+	result := DB.Model(t).Where("status = ?", fromStatus).Select("*").Updates(t)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
 }
 
 func TaskBulkUpdate(TaskIds []string, params map[string]any) error {
@@ -347,15 +432,11 @@ func TaskBulkUpdate(TaskIds []string, params map[string]any) error {
 		Updates(params).Error
 }
 
-func TaskBulkUpdateByTaskIds(taskIDs []int64, params map[string]any) error {
-	if len(taskIDs) == 0 {
-		return nil
-	}
-	return DB.Model(&Task{}).
-		Where("id in (?)", taskIDs).
-		Updates(params).Error
-}
-
+// TaskBulkUpdateByID performs an unconditional bulk UPDATE by primary key IDs.
+// WARNING: This function has NO CAS (Compare-And-Swap) guard — it will overwrite
+// any concurrent status changes. DO NOT use in billing/quota lifecycle flows
+// (e.g., timeout, success, failure transitions that trigger refunds or settlements).
+// For status transitions that involve billing, use Task.UpdateWithStatus() instead.
 func TaskBulkUpdateByID(ids []int64, params map[string]any) error {
 	if len(ids) == 0 {
 		return nil
@@ -368,37 +449,6 @@ func TaskBulkUpdateByID(ids []int64, params map[string]any) error {
 type TaskQuotaUsage struct {
 	Mode  string  `json:"mode"`
 	Count float64 `json:"count"`
-}
-
-func SumUsedTaskQuota(queryParams SyncTaskQueryParams) (stat []TaskQuotaUsage, err error) {
-	query := DB.Model(Task{})
-	// 添加过滤条件
-	if queryParams.ChannelID != "" {
-		query = query.Where("channel_id = ?", queryParams.ChannelID)
-	}
-	if queryParams.UserID != "" {
-		query = query.Where("user_id = ?", queryParams.UserID)
-	}
-	if len(queryParams.UserIDs) != 0 {
-		query = query.Where("user_id in (?)", queryParams.UserIDs)
-	}
-	if queryParams.TaskID != "" {
-		query = query.Where("task_id = ?", queryParams.TaskID)
-	}
-	if queryParams.Action != "" {
-		query = query.Where("action = ?", queryParams.Action)
-	}
-	if queryParams.Status != "" {
-		query = query.Where("status = ?", queryParams.Status)
-	}
-	if queryParams.StartTimestamp != 0 {
-		query = query.Where("submit_time >= ?", queryParams.StartTimestamp)
-	}
-	if queryParams.EndTimestamp != 0 {
-		query = query.Where("submit_time <= ?", queryParams.EndTimestamp)
-	}
-	err = query.Select("mode, sum(quota) as count").Group("mode").Find(&stat).Error
-	return stat, err
 }
 
 // TaskCountAllTasks returns total tasks that match the given query params (admin usage)
@@ -469,6 +519,12 @@ func (t *Task) ToOpenAIVideo() *dto.OpenAIVideo {
 	openAIVideo.SetProgressStr(t.Progress)
 	openAIVideo.CreatedAt = t.CreatedAt
 	openAIVideo.CompletedAt = t.UpdatedAt
-	openAIVideo.SetMetadata("url", t.FailReason)
+	openAIVideo.SetMetadata("url", t.GetResultURL())
 	return openAIVideo
+}
+
+// TaskUpdateFailReason 仅更新 fail_reason 字段（用于前端轮询时保存视频 URL，不更新 status/progress 以避免抢占后台计费）
+// 仅在 fail_reason 为空时更新，避免并发覆盖已有值
+func TaskUpdateFailReason(id int64, failReason string) error {
+	return DB.Model(&Task{}).Where("id = ? AND (fail_reason = '' OR fail_reason IS NULL)", id).Update("fail_reason", failReason).Error
 }

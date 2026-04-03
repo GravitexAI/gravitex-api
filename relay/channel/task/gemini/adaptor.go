@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
+	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
@@ -50,45 +52,12 @@ type GeminiVideoPayload struct {
 	Parameters GeminiVideoGenerationConfig `json:"parameters,omitempty"`
 }
 
-type submitResponse struct {
-	Name string `json:"name"`
-}
-
-type operationVideo struct {
-	MimeType           string `json:"mimeType"`
-	BytesBase64Encoded string `json:"bytesBase64Encoded"`
-	Encoding           string `json:"encoding"`
-}
-
-type operationResponse struct {
-	Name     string `json:"name"`
-	Done     bool   `json:"done"`
-	Response struct {
-		Type                    string           `json:"@type"`
-		RaiMediaFilteredCount   int              `json:"raiMediaFilteredCount"`
-		RaiMediaFilteredReasons []string         `json:"raiMediaFilteredReasons"`
-		Videos                  []operationVideo `json:"videos"`
-		BytesBase64Encoded      string           `json:"bytesBase64Encoded"`
-		Encoding                string           `json:"encoding"`
-		Video                   string           `json:"video"`
-		GenerateVideoResponse   struct {
-			GeneratedSamples []struct {
-				Video struct {
-					URI string `json:"uri"`
-				} `json:"video"`
-			} `json:"generatedSamples"`
-		} `json:"generateVideoResponse"`
-	} `json:"response"`
-	Error struct {
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
 // ============================
 // Adaptor implementation
 // ============================
 
 type TaskAdaptor struct {
+	taskcommon.BaseBilling
 	ChannelType int
 	apiKey      string
 	baseURL     string
@@ -287,6 +256,7 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
 	}
+	log.Printf("[TaskPoll] FetchTask HTTP: %s %s headers=%v", req.Method, req.URL.String(), req.Header)
 	return client.Do(req)
 }
 
@@ -315,10 +285,7 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	if op.Response.RaiMediaFilteredCount > 0 {
 		ti.Status = model.TaskStatusFailure
 		ti.Progress = "100%"
-		reason := strings.Join(op.Response.RaiMediaFilteredReasons, "; ")
-		if reason == "" {
-			reason = fmt.Sprintf("Vertex AI filtered %d video(s) (usage guidelines)", op.Response.RaiMediaFilteredCount)
-		}
+		reason := fmt.Sprintf("Vertex AI filtered %d video(s) (usage guidelines)", op.Response.RaiMediaFilteredCount)
 		ti.Reason = reason
 		return ti, nil
 	}
@@ -331,8 +298,8 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	contentURL := fmt.Sprintf("%s/v1/videos/%s/content", system_setting.ServerAddress, taskID)
 
 	// 优先用上游返回的视频地址或 base64，写入 fail_reason 供前端展示；否则用 content 代理 URL
-	if len(op.Response.GenerateVideoResponse.GeneratedSamples) > 0 {
-		if uri := op.Response.GenerateVideoResponse.GeneratedSamples[0].Video.URI; uri != "" {
+	if len(op.Response.GenerateVideoResponse.GeneratedVideos) > 0 {
+		if uri := op.Response.GenerateVideoResponse.GeneratedVideos[0].Video.URI; uri != "" {
 			ti.RemoteUrl = uri
 		}
 	}

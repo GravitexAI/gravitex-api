@@ -70,19 +70,14 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 			// apply param override
 			if len(info.ParamOverride) > 0 {
-				jsonData, err = relaycommon.ApplyParamOverride(jsonData, info.ParamOverride, relaycommon.BuildParamOverrideContext(info))
+				jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
 				if err != nil {
-					return types.NewError(err, types.ErrorCodeChannelParamOverrideInvalid, types.ErrOptionWithSkipRetry())
+					return newAPIErrorFromParamOverride(err)
 				}
 			}
 
 			if common.DebugEnabled {
-				const maxLogLen = 2000
-				bodyStr := string(jsonData)
-				if len(bodyStr) > maxLogLen {
-					bodyStr = bodyStr[:maxLogLen] + "...(truncated)"
-				}
-				logger.LogDebug(c, fmt.Sprintf("image request body: %s", bodyStr))
+				logger.LogDebug(c, fmt.Sprintf("image request body: %s", string(jsonData)))
 			}
 			requestBody = bytes.NewBuffer(jsonData)
 		}
@@ -118,24 +113,24 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return newAPIError
 	}
 
-	if usage.(*dto.Usage).TotalTokens == 0 {
-		usage.(*dto.Usage).TotalTokens = int(request.N)
-	}
-	if usage.(*dto.Usage).PromptTokens == 0 {
-		usage.(*dto.Usage).PromptTokens = int(request.N)
+	imageN := uint(1)
+	if request.N != nil {
+		imageN = *request.N
 	}
 
-	// 按张计费：根据上游实际生成的图片数量校正扣费金额
-	// 优先使用上游返回的 generated_images，其次使用请求中的 N
-	if info.PriceData.PerImageUnitPrice > 0 {
-		actualImages := usage.(*dto.Usage).GeneratedImages
-		if actualImages <= 0 && request.N > 0 {
-			actualImages = int(request.N)
-		}
-		if actualImages > 0 {
-			info.PriceData.ModelPrice = info.PriceData.PerImageUnitPrice * float64(actualImages)
-			info.PriceData.ImagePriceMultiplier = float64(actualImages)
-		}
+	// n is handled via OtherRatio so it is applied exactly once in quota
+	// calculation (both price-based and ratio-based paths).
+	// Adaptors may have already set a more accurate count from the
+	// upstream response; only set the default when they haven't.
+	if _, hasN := info.PriceData.OtherRatios["n"]; !hasN {
+		info.PriceData.AddOtherRatio("n", float64(imageN))
+	}
+
+	if usage.(*dto.Usage).TotalTokens == 0 {
+		usage.(*dto.Usage).TotalTokens = 1
+	}
+	if usage.(*dto.Usage).PromptTokens == 0 {
+		usage.(*dto.Usage).PromptTokens = 1
 	}
 
 	quality := "standard"
@@ -151,10 +146,10 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	if len(quality) > 0 {
 		logContent = append(logContent, fmt.Sprintf("品质 %s", quality))
 	}
-	if request.N > 0 {
-		logContent = append(logContent, fmt.Sprintf("生成数量 %d", request.N))
+	if imageN > 0 {
+		logContent = append(logContent, fmt.Sprintf("生成数量 %d", imageN))
 	}
 
-	postConsumeQuota(c, info, usage.(*dto.Usage), logContent...)
+	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), logContent)
 	return nil
 }

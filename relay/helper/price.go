@@ -46,40 +46,6 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 }
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
-	// 与 nebula 一致：优先按张计费（ImageModelPricePerImage），在 GetModelPrice 之前检查
-	imageModelPrice, hasImageModelPrice := ratio_setting.GetImageModelPricePerImage(info.OriginModelName)
-	if hasImageModelPrice && imageModelPrice > 0 {
-		groupRatioInfo := HandleGroupRatio(c, info)
-		modelPrice := imageModelPrice
-		imagePriceMultiplier := 1.0
-		if meta != nil && meta.ImagePriceRatio != 0 {
-			imagePriceMultiplier = meta.ImagePriceRatio
-			modelPrice = modelPrice * meta.ImagePriceRatio
-		}
-		preConsumedQuota := int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
-		completionRatio := ratio_setting.GetCompletionRatio(info.OriginModelName)
-		imageCompletionRatio := ratio_setting.GetImageCompletionRatio(info.OriginModelName)
-		priceData := types.PriceData{
-			UsePrice:             true,
-			ModelPrice:           modelPrice,
-			PerImageUnitPrice:    imageModelPrice,
-			ImagePriceMultiplier: imagePriceMultiplier,
-			CompletionRatio:      completionRatio,
-			ImageCompletionRatio: imageCompletionRatio,
-			GroupRatioInfo:       groupRatioInfo,
-			QuotaToPreConsume:    preConsumedQuota,
-		}
-		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && groupRatioInfo.GroupRatio == 0 {
-			priceData.FreeModel = true
-			priceData.QuotaToPreConsume = 0
-		} else if operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && modelPrice == 0 {
-			priceData.FreeModel = true
-			priceData.QuotaToPreConsume = 0
-		}
-		info.PriceData = priceData
-		return priceData, nil
-	}
-
 	modelPrice, usePrice := ratio_setting.GetModelPrice(info.OriginModelName, false)
 
 	groupRatioInfo := HandleGroupRatio(c, info)
@@ -87,7 +53,6 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	var preConsumedQuota int
 	var modelRatio float64
 	var completionRatio float64
-	var imageCompletionRatio float64
 	var cacheRatio float64
 	var imageRatio float64
 	var cacheCreationRatio float64
@@ -114,7 +79,6 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 			}
 		}
 		completionRatio = ratio_setting.GetCompletionRatio(info.OriginModelName)
-		imageCompletionRatio = ratio_setting.GetImageCompletionRatio(info.OriginModelName)
 		cacheRatio, _ = ratio_setting.GetCacheRatio(info.OriginModelName)
 		cacheCreationRatio, _ = ratio_setting.GetCreateCacheRatio(info.OriginModelName)
 		cacheCreationRatio5m = cacheCreationRatio
@@ -126,8 +90,6 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		ratio := modelRatio * groupRatioInfo.GroupRatio
 		preConsumedQuota = int(float64(preConsumedTokens) * ratio)
 	} else {
-		completionRatio = ratio_setting.GetCompletionRatio(info.OriginModelName)
-		imageCompletionRatio = ratio_setting.GetImageCompletionRatio(info.OriginModelName)
 		if meta.ImagePriceRatio != 0 {
 			modelPrice = modelPrice * meta.ImagePriceRatio
 		}
@@ -158,7 +120,6 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		ModelPrice:           modelPrice,
 		ModelRatio:           modelRatio,
 		CompletionRatio:      completionRatio,
-		ImageCompletionRatio: imageCompletionRatio,
 		GroupRatioInfo:       groupRatioInfo,
 		UsePrice:             usePrice,
 		CacheRatio:           cacheRatio,
@@ -179,26 +140,50 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 }
 
 // ModelPriceHelperPerCall 按次计费的 PriceHelper (MJ、Task)
-func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) types.PerCallPriceData {
+func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types.PriceData, error) {
 	groupRatioInfo := HandleGroupRatio(c, info)
 
 	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
-	// 如果没有配置价格，则使用默认价格
+	// 如果没有配置价格，检查模型倍率配置
 	if !success {
+
+		// 没有配置费用，也要使用默认费用,否则按费率计费模型无法使用
 		defaultPrice, ok := ratio_setting.GetDefaultModelPriceMap()[info.OriginModelName]
-		if !ok {
-			modelPrice = 0.1
-		} else {
+		if ok {
 			modelPrice = defaultPrice
+		} else {
+			// 没有配置倍率也不接受没配置,那就返回错误
+			_, ratioSuccess, matchName := ratio_setting.GetModelRatio(info.OriginModelName)
+			acceptUnsetRatio := false
+			if info.UserSetting.AcceptUnsetRatioModel {
+				acceptUnsetRatio = true
+			}
+			if !ratioSuccess && !acceptUnsetRatio {
+				return types.PriceData{}, fmt.Errorf("模型 %s 倍率或价格未配置，请联系管理员设置或开始自用模式；Model %s ratio or price not set, please set or start self-use mode", matchName, matchName)
+			}
+			// 未配置价格但配置了倍率，使用默认预扣价格
+			modelPrice = float64(common.PreConsumedQuota) / common.QuotaPerUnit
 		}
+
 	}
 	quota := int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
-	priceData := types.PerCallPriceData{
+
+	// 免费模型检测（与 ModelPriceHelper 对齐）
+	freeModel := false
+	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
+		if groupRatioInfo.GroupRatio == 0 || modelPrice == 0 {
+			quota = 0
+			freeModel = true
+		}
+	}
+
+	priceData := types.PriceData{
+		FreeModel:      freeModel,
 		ModelPrice:     modelPrice,
 		Quota:          quota,
 		GroupRatioInfo: groupRatioInfo,
 	}
-	return priceData
+	return priceData, nil
 }
 
 func ContainPriceOrRatio(modelName string) bool {

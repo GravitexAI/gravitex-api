@@ -66,7 +66,6 @@ const PaymentSetting = () => {
                 2,
               );
             } catch (error) {
-              console.error('解析TopupGroupRatio出错:', error);
               newInputs[item.key] = item.value;
             }
             break;
@@ -78,7 +77,6 @@ const PaymentSetting = () => {
                 2,
               );
             } catch (error) {
-              console.error('解析AmountOptions出错:', error);
               newInputs['AmountOptions'] = item.value;
             }
             break;
@@ -90,7 +88,6 @@ const PaymentSetting = () => {
                 2,
               );
             } catch (error) {
-              console.error('解析AmountDiscount出错:', error);
               newInputs['AmountDiscount'] = item.value;
             }
             break;

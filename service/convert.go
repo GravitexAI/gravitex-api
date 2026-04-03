@@ -11,35 +11,57 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/openrouter"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/reasonmap"
+	"github.com/samber/lo"
 )
 
 func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.RelayInfo) (*dto.GeneralOpenAIRequest, error) {
 	openAIRequest := dto.GeneralOpenAIRequest{
 		Model:       claudeRequest.Model,
-		MaxTokens:   claudeRequest.MaxTokens,
 		Temperature: claudeRequest.Temperature,
-		TopP:        claudeRequest.TopP,
-		Stream:      claudeRequest.Stream,
+	}
+	if claudeRequest.MaxTokens != nil {
+		openAIRequest.MaxTokens = lo.ToPtr(lo.FromPtr(claudeRequest.MaxTokens))
+	}
+	if claudeRequest.TopP != nil {
+		openAIRequest.TopP = lo.ToPtr(lo.FromPtr(claudeRequest.TopP))
+	}
+	if claudeRequest.TopK != nil {
+		openAIRequest.TopK = lo.ToPtr(lo.FromPtr(claudeRequest.TopK))
+	}
+	if claudeRequest.Stream != nil {
+		openAIRequest.Stream = lo.ToPtr(lo.FromPtr(claudeRequest.Stream))
 	}
 
 	isOpenRouter := info.ChannelType == constant.ChannelTypeOpenRouter
 
-	if claudeRequest.Thinking != nil && claudeRequest.Thinking.Type == "enabled" {
-		if isOpenRouter {
-			reasoning := openrouter.RequestReasoning{
-				MaxTokens: claudeRequest.Thinking.GetBudgetTokens(),
+	if isOpenRouter {
+		if effort := claudeRequest.GetEfforts(); effort != "" {
+			effortBytes, _ := json.Marshal(effort)
+			openAIRequest.Verbosity = effortBytes
+		}
+		if claudeRequest.Thinking != nil {
+			var reasoning openrouter.RequestReasoning
+			if claudeRequest.Thinking.Type == "enabled" {
+				reasoning = openrouter.RequestReasoning{
+					Enabled:   true,
+					MaxTokens: claudeRequest.Thinking.GetBudgetTokens(),
+				}
+			} else if claudeRequest.Thinking.Type == "adaptive" {
+				reasoning = openrouter.RequestReasoning{
+					Enabled: true,
+				}
 			}
 			reasoningJSON, err := json.Marshal(reasoning)
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal reasoning: %w", err)
 			}
 			openAIRequest.Reasoning = reasoningJSON
-		} else {
-			thinkingSuffix := "-thinking"
-			if strings.HasSuffix(info.OriginModelName, thinkingSuffix) &&
-				!strings.HasSuffix(openAIRequest.Model, thinkingSuffix) {
-				openAIRequest.Model = openAIRequest.Model + thinkingSuffix
-			}
+		}
+	} else {
+		thinkingSuffix := "-thinking"
+		if strings.HasSuffix(info.OriginModelName, thinkingSuffix) &&
+			!strings.HasSuffix(openAIRequest.Model, thinkingSuffix) {
+			openAIRequest.Model = openAIRequest.Model + thinkingSuffix
 		}
 	}
 
@@ -127,7 +149,7 @@ func ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.Re
 
 			for _, mediaMsg := range contents {
 				switch mediaMsg.Type {
-				case "text":
+				case "text", "input_text":
 					message := dto.MediaContent{
 						Type:         "text",
 						Text:         mediaMsg.GetText(),
@@ -199,6 +221,25 @@ func generateStopBlock(index int) *dto.ClaudeResponse {
 		Type:  "content_block_stop",
 		Index: common.GetPointer[int](index),
 	}
+}
+
+func buildClaudeUsageFromOpenAIUsage(oaiUsage *dto.Usage) *dto.ClaudeUsage {
+	if oaiUsage == nil {
+		return nil
+	}
+	usage := &dto.ClaudeUsage{
+		InputTokens:              oaiUsage.PromptTokens,
+		OutputTokens:             oaiUsage.CompletionTokens,
+		CacheCreationInputTokens: oaiUsage.PromptTokensDetails.CachedCreationTokens,
+		CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
+	}
+	if oaiUsage.ClaudeCacheCreation5mTokens > 0 || oaiUsage.ClaudeCacheCreation1hTokens > 0 {
+		usage.CacheCreation = &dto.ClaudeCacheCreationUsage{
+			Ephemeral5mInputTokens: oaiUsage.ClaudeCacheCreation5mTokens,
+			Ephemeral1hInputTokens: oaiUsage.ClaudeCacheCreation1hTokens,
+		}
+	}
+	return usage
 }
 
 func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamResponse, info *relaycommon.RelayInfo) []*dto.ClaudeResponse {
@@ -369,13 +410,8 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			}
 			if oaiUsage != nil {
 				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
-					Type: "message_delta",
-					Usage: &dto.ClaudeUsage{
-						InputTokens:              oaiUsage.PromptTokens,
-						OutputTokens:             oaiUsage.CompletionTokens,
-						CacheCreationInputTokens: oaiUsage.PromptTokensDetails.CachedCreationTokens,
-						CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
-					},
+					Type:  "message_delta",
+					Usage: buildClaudeUsageFromOpenAIUsage(oaiUsage),
 					Delta: &dto.ClaudeMediaMessage{
 						StopReason: common.GetPointer[string](stopReasonOpenAI2Claude(info.FinishReason)),
 					},
@@ -397,13 +433,8 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			oaiUsage := info.ClaudeConvertInfo.Usage
 			if oaiUsage != nil {
 				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
-					Type: "message_delta",
-					Usage: &dto.ClaudeUsage{
-						InputTokens:              oaiUsage.PromptTokens,
-						OutputTokens:             oaiUsage.CompletionTokens,
-						CacheCreationInputTokens: oaiUsage.PromptTokensDetails.CachedCreationTokens,
-						CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
-					},
+					Type:  "message_delta",
+					Usage: buildClaudeUsageFromOpenAIUsage(oaiUsage),
 					Delta: &dto.ClaudeMediaMessage{
 						StopReason: common.GetPointer[string](stopReasonOpenAI2Claude(info.FinishReason)),
 					},
@@ -533,13 +564,8 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			}
 			if oaiUsage != nil {
 				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
-					Type: "message_delta",
-					Usage: &dto.ClaudeUsage{
-						InputTokens:              oaiUsage.PromptTokens,
-						OutputTokens:             oaiUsage.CompletionTokens,
-						CacheCreationInputTokens: oaiUsage.PromptTokensDetails.CachedCreationTokens,
-						CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
-					},
+					Type:  "message_delta",
+					Usage: buildClaudeUsageFromOpenAIUsage(oaiUsage),
 					Delta: &dto.ClaudeMediaMessage{
 						StopReason: common.GetPointer[string](stopReasonOpenAI2Claude(info.FinishReason)),
 					},
@@ -590,10 +616,7 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relayco
 	}
 	claudeResponse.Content = contents
 	claudeResponse.StopReason = stopReason
-	claudeResponse.Usage = &dto.ClaudeUsage{
-		InputTokens:  openAIResponse.PromptTokens,
-		OutputTokens: openAIResponse.CompletionTokens,
-	}
+	claudeResponse.Usage = buildClaudeUsageFromOpenAIUsage(&openAIResponse.Usage)
 
 	return claudeResponse
 }
@@ -613,7 +636,7 @@ func toJSONString(v interface{}) string {
 func GeminiToOpenAIRequest(geminiRequest *dto.GeminiChatRequest, info *relaycommon.RelayInfo) (*dto.GeneralOpenAIRequest, error) {
 	openaiRequest := &dto.GeneralOpenAIRequest{
 		Model:  info.UpstreamModelName,
-		Stream: info.IsStream,
+		Stream: lo.ToPtr(info.IsStream),
 	}
 
 	// 转换 messages
@@ -698,21 +721,21 @@ func GeminiToOpenAIRequest(geminiRequest *dto.GeminiChatRequest, info *relaycomm
 	if geminiRequest.GenerationConfig.Temperature != nil {
 		openaiRequest.Temperature = geminiRequest.GenerationConfig.Temperature
 	}
-	if geminiRequest.GenerationConfig.TopP > 0 {
-		openaiRequest.TopP = geminiRequest.GenerationConfig.TopP
+	if geminiRequest.GenerationConfig.TopP != nil && *geminiRequest.GenerationConfig.TopP > 0 {
+		openaiRequest.TopP = lo.ToPtr(*geminiRequest.GenerationConfig.TopP)
 	}
-	if geminiRequest.GenerationConfig.TopK > 0 {
-		openaiRequest.TopK = int(geminiRequest.GenerationConfig.TopK)
+	if geminiRequest.GenerationConfig.TopK != nil && *geminiRequest.GenerationConfig.TopK > 0 {
+		openaiRequest.TopK = lo.ToPtr(int(*geminiRequest.GenerationConfig.TopK))
 	}
-	if geminiRequest.GenerationConfig.MaxOutputTokens > 0 {
-		openaiRequest.MaxTokens = geminiRequest.GenerationConfig.MaxOutputTokens
+	if geminiRequest.GenerationConfig.MaxOutputTokens != nil && *geminiRequest.GenerationConfig.MaxOutputTokens > 0 {
+		openaiRequest.MaxTokens = lo.ToPtr(*geminiRequest.GenerationConfig.MaxOutputTokens)
 	}
 	// gemini stop sequences 最多 5 个，openai stop 最多 4 个
 	if len(geminiRequest.GenerationConfig.StopSequences) > 0 {
 		openaiRequest.Stop = geminiRequest.GenerationConfig.StopSequences[:4]
 	}
-	if geminiRequest.GenerationConfig.CandidateCount > 0 {
-		openaiRequest.N = geminiRequest.GenerationConfig.CandidateCount
+	if geminiRequest.GenerationConfig.CandidateCount != nil && *geminiRequest.GenerationConfig.CandidateCount > 0 {
+		openaiRequest.N = lo.ToPtr(*geminiRequest.GenerationConfig.CandidateCount)
 	}
 
 	// 转换工具调用

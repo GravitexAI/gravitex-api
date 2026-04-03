@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -23,6 +24,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
+	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 
@@ -65,6 +67,7 @@ type responseTask struct {
 // ============================
 
 type TaskAdaptor struct {
+	taskcommon.BaseBilling
 	apiKey                string
 	baseURL               string
 	apiVersion            string
@@ -416,6 +419,7 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 		return nil, fmt.Errorf("create proxy http client failed: %w", err)
 	}
 
+	log.Printf("[TaskPoll] FetchTask HTTP: %s %s headers=%v", req.Method, req.URL.String(), req.Header)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

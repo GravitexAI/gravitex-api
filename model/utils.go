@@ -67,77 +67,33 @@ func batchUpdate() {
 	}
 
 	common.SysLog("batch update started")
-
-	// Atomically swap out all stores
-	stores := make([]map[int]int, BatchUpdateTypeCount)
 	for i := 0; i < BatchUpdateTypeCount; i++ {
 		batchUpdateLocks[i].Lock()
-		stores[i] = batchUpdateStores[i]
+		store := batchUpdateStores[i]
 		batchUpdateStores[i] = make(map[int]int)
 		batchUpdateLocks[i].Unlock()
-	}
-
-	// Merge user-related types (UserQuota, UsedQuota, RequestCount) into a single UPDATE per userId.
-	// This reduces 3 separate UPDATEs per user to 1, cutting MySQL row lock contention by ~2/3.
-	type userDelta struct {
-		quotaDelta        int
-		usedQuotaDelta    int
-		requestCountDelta int
-	}
-	userDeltas := make(map[int]*userDelta)
-
-	collectUserDelta := func(store map[int]int, field string) {
-		for userId, value := range store {
-			d, ok := userDeltas[userId]
-			if !ok {
-				d = &userDelta{}
-				userDeltas[userId] = d
-			}
-			switch field {
-			case "quota":
-				d.quotaDelta += value
-			case "used_quota":
-				d.usedQuotaDelta += value
-			case "request_count":
-				d.requestCountDelta += value
+		// TODO: maybe we can combine updates with same key?
+		for key, value := range store {
+			switch i {
+			case BatchUpdateTypeUserQuota:
+				err := increaseUserQuota(key, value)
+				if err != nil {
+					common.SysLog("failed to batch update user quota: " + err.Error())
+				}
+			case BatchUpdateTypeTokenQuota:
+				err := increaseTokenQuota(key, value)
+				if err != nil {
+					common.SysLog("failed to batch update token quota: " + err.Error())
+				}
+			case BatchUpdateTypeUsedQuota:
+				updateUserUsedQuota(key, value)
+			case BatchUpdateTypeRequestCount:
+				updateUserRequestCount(key, value)
+			case BatchUpdateTypeChannelUsedQuota:
+				updateChannelUsedQuota(key, value)
 			}
 		}
 	}
-
-	collectUserDelta(stores[BatchUpdateTypeUserQuota], "quota")
-	collectUserDelta(stores[BatchUpdateTypeUsedQuota], "used_quota")
-	collectUserDelta(stores[BatchUpdateTypeRequestCount], "request_count")
-
-	// Flush merged user updates: one UPDATE per userId
-	for userId, d := range userDeltas {
-		updates := map[string]interface{}{}
-		if d.quotaDelta != 0 {
-			updates["quota"] = gorm.Expr("quota + ?", d.quotaDelta)
-		}
-		if d.usedQuotaDelta != 0 {
-			updates["used_quota"] = gorm.Expr("used_quota + ?", d.usedQuotaDelta)
-		}
-		if d.requestCountDelta != 0 {
-			updates["request_count"] = gorm.Expr("request_count + ?", d.requestCountDelta)
-		}
-		if len(updates) == 0 {
-			continue
-		}
-		if err := DB.Model(&User{}).Where("id = ?", userId).Updates(updates).Error; err != nil {
-			common.SysLog("failed to batch update user: " + err.Error())
-		}
-	}
-
-	// Flush non-user types (token quota, channel used quota) individually
-	for key, value := range stores[BatchUpdateTypeTokenQuota] {
-		if err := increaseTokenQuota(key, value); err != nil {
-			common.SysLog("failed to batch update token quota: " + err.Error())
-		}
-	}
-	for key, value := range stores[BatchUpdateTypeChannelUsedQuota] {
-		updateChannelUsedQuota(key, value)
-	}
-
 	common.SysLog("batch update finished")
 }
 

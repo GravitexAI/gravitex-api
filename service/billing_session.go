@@ -36,30 +36,27 @@ type BillingSession struct {
 // Settle 根据实际消耗额度进行结算。
 // 资金来源和令牌额度分两步提交：若资金来源已提交但令牌调整失败，
 // 会标记 fundingSettled 防止 Refund 对已提交的资金来源执行退款。
-// skipFunding 为 true 时跳过资金来源调整（用户额度已由 handler 通过 model.ConsumeUserQuotaSettle 一次更新，与 nebula 对齐减少 SLOW SQL）。
-func (s *BillingSession) Settle(actualQuota int, skipFunding bool) error {
+func (s *BillingSession) Settle(actualQuota int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.settled {
 		return nil
 	}
 	delta := actualQuota - s.preConsumedQuota
-	if delta == 0 && skipFunding {
+	if delta == 0 {
 		s.settled = true
 		return nil
 	}
-	// 1) 调整资金来源（仅在尚未提交且未跳过时执行，防止重复调用）
-	if !s.fundingSettled && !skipFunding && delta != 0 {
+	// 1) 调整资金来源（仅在尚未提交时执行，防止重复调用）
+	if !s.fundingSettled {
 		if err := s.funding.Settle(delta); err != nil {
 			return err
 		}
 		s.fundingSettled = true
-	} else if skipFunding {
-		s.fundingSettled = true
 	}
-	// 2) 调整令牌额度（delta==0 时无需调整）
+	// 2) 调整令牌额度
 	var tokenErr error
-	if !s.relayInfo.IsPlayground && delta != 0 {
+	if !s.relayInfo.IsPlayground {
 		if delta > 0 {
 			tokenErr = model.DecreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, delta)
 		} else {
@@ -196,6 +193,11 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 
 // shouldTrust 统一信任额度检查，适用于钱包和订阅。
 func (s *BillingSession) shouldTrust(c *gin.Context) bool {
+	// 异步任务（ForcePreConsume=true）必须预扣全额，不允许信任旁路
+	if s.relayInfo.ForcePreConsume {
+		return false
+	}
+
 	trustQuota := common.GetTrustQuota()
 	if trustQuota <= 0 {
 		return false
@@ -213,15 +215,7 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 
 	switch s.funding.Source() {
 	case BillingSourceWallet:
-		// 必须从 Redis 读取实时余额，不能使用 relayInfo.UserQuota 快照。
-		// 高并发场景下，快照值可能是请求到达时的旧值，导致多个请求同时通过信任检查、
-		// 全部跳过预扣费，造成用户严重超额使用。
-		userQuota, err := model.GetUserQuota(s.relayInfo.UserId, false)
-		if err != nil {
-			// Redis/DB 查询失败时不信任，走正常预扣费流程
-			return false
-		}
-		return userQuota > trustQuota
+		return s.relayInfo.UserQuota > trustQuota
 	case BillingSourceSubscription:
 		// 订阅不能启用信任旁路。原因：
 		// 1. PreConsumeUserSubscription 要求 amount>0 来创建预扣记录并锁定订阅

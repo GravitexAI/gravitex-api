@@ -258,12 +258,12 @@ func SearchUsers(c *gin.Context) {
 }
 
 func GetUser(c *gin.Context) {
-	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	user, err := model.GetUserById(int(id64), false)
+	user, err := model.GetUserById(id, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -510,11 +510,11 @@ func generateDefaultSidebarConfig(userRole int) string {
 }
 
 func GetUserModels(c *gin.Context) {
-	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
-		id64 = int64(c.GetInt("id"))
+		id = c.GetInt("id")
 	}
-	user, err := model.GetUserCache(int(id64))
+	user, err := model.GetUserCache(id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -537,35 +537,11 @@ func GetUserModels(c *gin.Context) {
 }
 
 func UpdateUser(c *gin.Context) {
-	type updateUserRequest struct {
-		Id          common.Int64Flexible `json:"id"`
-		Username    string               `json:"username"`
-		DisplayName string               `json:"display_name"`
-		Password    string               `json:"password"`
-		Group       string               `json:"group"`
-		Quota       int                  `json:"quota"`
-		Remark      string               `json:"remark"`
-		Role        int                  `json:"role"`
-		Status      int                  `json:"status"`
-	}
-
-	var req updateUserRequest
-	err := json.NewDecoder(c.Request.Body).Decode(&req)
-	if err != nil || req.Id.Int64() == 0 {
+	var updatedUser model.User
+	err := json.NewDecoder(c.Request.Body).Decode(&updatedUser)
+	if err != nil || updatedUser.Id == 0 {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
-	}
-
-	updatedUser := model.User{
-		Id:          req.Id.Int(),
-		Username:    req.Username,
-		DisplayName: req.DisplayName,
-		Password:    req.Password,
-		Group:       req.Group,
-		Quota:       req.Quota,
-		Remark:      req.Remark,
-		Role:        req.Role,
-		Status:      req.Status,
 	}
 	if updatedUser.Password == "" {
 		updatedUser.Password = "$I_LOVE_U" // make Validator happy :)
@@ -604,6 +580,44 @@ func UpdateUser(c *gin.Context) {
 		"message": "",
 	})
 	return
+}
+
+func AdminClearUserBinding(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+
+	bindingType := strings.ToLower(strings.TrimSpace(c.Param("binding_type")))
+	if bindingType == "" {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+
+	user, err := model.GetUserById(id, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	myRole := c.GetInt("role")
+	if myRole <= user.Role && myRole != common.RoleRootUser {
+		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
+		return
+	}
+
+	if err := user.ClearBinding(bindingType); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	model.RecordLog(user.Id, model.LogTypeManage, fmt.Sprintf("admin cleared %s binding for user %s", bindingType, user.Username))
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "success",
+	})
 }
 
 func UpdateSelf(c *gin.Context) {
@@ -739,12 +753,11 @@ func checkUpdatePassword(originalPassword string, newPassword string, userId int
 }
 
 func DeleteUser(c *gin.Context) {
-	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	id := int(id64)
 	originUser, err := model.GetUserById(id, false)
 	if err != nil {
 		common.ApiError(c, err)
@@ -826,8 +839,8 @@ func CreateUser(c *gin.Context) {
 }
 
 type ManageRequest struct {
-	Id     common.Int64Flexible `json:"id"`
-	Action string               `json:"action"`
+	Id     int    `json:"id"`
+	Action string `json:"action"`
 }
 
 // ManageUser Only admin user can do this
@@ -840,7 +853,7 @@ func ManageUser(c *gin.Context) {
 		return
 	}
 	user := model.User{
-		Id: req.Id.Int(),
+		Id: req.Id,
 	}
 	// Fill attributes
 	model.DB.Unscoped().Where(&user).First(&user)
@@ -912,9 +925,19 @@ func ManageUser(c *gin.Context) {
 	return
 }
 
+type emailBindRequest struct {
+	Email string `json:"email"`
+	Code  string `json:"code"`
+}
+
 func EmailBind(c *gin.Context) {
-	email := c.Query("email")
-	code := c.Query("code")
+	var req emailBindRequest
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		common.ApiError(c, errors.New("invalid request body"))
+		return
+	}
+	email := req.Email
+	code := req.Code
 	if !common.VerifyCodeWithKey(email, code, common.EmailVerificationPurpose) {
 		common.ApiErrorI18n(c, i18n.MsgUserVerificationCodeError)
 		return
@@ -1019,17 +1042,18 @@ func TopUp(c *gin.Context) {
 }
 
 type UpdateUserSettingRequest struct {
-	QuotaWarningType           string  `json:"notify_type"`
-	QuotaWarningThreshold      float64 `json:"quota_warning_threshold"`
-	WebhookUrl                 string  `json:"webhook_url,omitempty"`
-	WebhookSecret              string  `json:"webhook_secret,omitempty"`
-	NotificationEmail          string  `json:"notification_email,omitempty"`
-	BarkUrl                    string  `json:"bark_url,omitempty"`
-	GotifyUrl                  string  `json:"gotify_url,omitempty"`
-	GotifyToken                string  `json:"gotify_token,omitempty"`
-	GotifyPriority             int     `json:"gotify_priority,omitempty"`
-	AcceptUnsetModelRatioModel bool    `json:"accept_unset_model_ratio_model"`
-	RecordIpLog                bool    `json:"record_ip_log"`
+	QuotaWarningType                 string  `json:"notify_type"`
+	QuotaWarningThreshold            float64 `json:"quota_warning_threshold"`
+	WebhookUrl                       string  `json:"webhook_url,omitempty"`
+	WebhookSecret                    string  `json:"webhook_secret,omitempty"`
+	NotificationEmail                string  `json:"notification_email,omitempty"`
+	BarkUrl                          string  `json:"bark_url,omitempty"`
+	GotifyUrl                        string  `json:"gotify_url,omitempty"`
+	GotifyToken                      string  `json:"gotify_token,omitempty"`
+	GotifyPriority                   int     `json:"gotify_priority,omitempty"`
+	UpstreamModelUpdateNotifyEnabled *bool   `json:"upstream_model_update_notify_enabled,omitempty"`
+	AcceptUnsetModelRatioModel       bool    `json:"accept_unset_model_ratio_model"`
+	RecordIpLog                      bool    `json:"record_ip_log"`
 }
 
 func UpdateUserSetting(c *gin.Context) {
@@ -1119,13 +1143,19 @@ func UpdateUserSetting(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	existingSettings := user.GetSetting()
+	upstreamModelUpdateNotifyEnabled := existingSettings.UpstreamModelUpdateNotifyEnabled
+	if user.Role >= common.RoleAdminUser && req.UpstreamModelUpdateNotifyEnabled != nil {
+		upstreamModelUpdateNotifyEnabled = *req.UpstreamModelUpdateNotifyEnabled
+	}
 
 	// 构建设置
 	settings := dto.UserSetting{
-		NotifyType:            req.QuotaWarningType,
-		QuotaWarningThreshold: req.QuotaWarningThreshold,
-		AcceptUnsetRatioModel: req.AcceptUnsetModelRatioModel,
-		RecordIpLog:           req.RecordIpLog,
+		NotifyType:                       req.QuotaWarningType,
+		QuotaWarningThreshold:            req.QuotaWarningThreshold,
+		UpstreamModelUpdateNotifyEnabled: upstreamModelUpdateNotifyEnabled,
+		AcceptUnsetRatioModel:            req.AcceptUnsetModelRatioModel,
+		RecordIpLog:                      req.RecordIpLog,
 	}
 
 	// 如果是webhook类型,添加webhook相关设置

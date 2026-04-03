@@ -21,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -48,6 +49,13 @@ func RelayMidjourneyImage(c *gin.Context) {
 	}
 	if httpClient == nil {
 		httpClient = service.GetHttpClient()
+	}
+	fetchSetting := system_setting.GetFetchSetting()
+	if err := common.ValidateURLWithFetchSetting(midjourneyTask.ImageUrl, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": fmt.Sprintf("request blocked: %v", err),
+		})
+		return
 	}
 	resp, err := httpClient.Get(midjourneyTask.ImageUrl)
 	if err != nil {
@@ -184,9 +192,15 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 	if swapFaceRequest.SourceBase64 == "" || swapFaceRequest.TargetBase64 == "" {
 		return service.MidjourneyErrorWrapper(constant.MjRequestError, "sour_base64_and_target_base64_is_required")
 	}
-	modelName := service.CoverActionToModelName(constant.MjActionSwapFace)
+	modelName := service.CovertMjpActionToModelName(constant.MjActionSwapFace)
 
-	priceData := helper.ModelPriceHelperPerCall(c, info)
+	priceData, err := helper.ModelPriceHelperPerCall(c, info)
+	if err != nil {
+		return &dto.MidjourneyResponse{
+			Code:        4,
+			Description: err.Error(),
+		}
+	}
 
 	userQuota, err := model.GetUserQuota(info.UserId, false)
 	if err != nil {
@@ -218,18 +232,20 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 
 			tokenName := c.GetString("token_name")
 			logContent := fmt.Sprintf("模型固定价格 %.2f，分组倍率 %.2f，操作 %s", priceData.ModelPrice, priceData.GroupRatioInfo.GroupRatio, constant.MjActionSwapFace)
-			other := service.GenerateMjOtherInfo(c, info, priceData)
-			priceChain := service.CalculatePriceChainForLog(c, modelName, 0, 0, priceData.Quota)
+			other := service.GenerateMjOtherInfo(c, info, types.PerCallPriceData{
+				ModelPrice:     priceData.ModelPrice,
+				Quota:          priceData.Quota,
+				GroupRatioInfo: priceData.GroupRatioInfo,
+			})
 			model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
-				ChannelId:  info.ChannelId,
-				ModelName:  modelName,
-				TokenName:  tokenName,
-				Quota:      priceData.Quota,
-				Content:    logContent,
-				TokenId:    info.TokenId,
-				Group:      info.UsingGroup,
-				Other:      other,
-				PriceChain: priceChain,
+				ChannelId: info.ChannelId,
+				ModelName: modelName,
+				TokenName: tokenName,
+				Quota:     priceData.Quota,
+				Content:   logContent,
+				TokenId:   info.TokenId,
+				Group:     info.UsingGroup,
+				Other:     other,
 			})
 			model.UpdateUserUsedQuotaAndRequestCount(info.UserId, priceData.Quota)
 			model.UpdateChannelUsedQuota(info.ChannelId, priceData.Quota)
@@ -487,9 +503,15 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 
 	fullRequestURL := fmt.Sprintf("%s%s", baseURL, requestURL)
 
-	modelName := service.CoverActionToModelName(midjRequest.Action)
+	modelName := service.CovertMjpActionToModelName(midjRequest.Action)
 
-	priceData := helper.ModelPriceHelperPerCall(c, relayInfo)
+	priceData, err := helper.ModelPriceHelperPerCall(c, relayInfo)
+	if err != nil {
+		return &dto.MidjourneyResponse{
+			Code:        4,
+			Description: err.Error(),
+		}
+	}
 
 	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
 	if err != nil {
@@ -520,18 +542,20 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 			}
 			tokenName := c.GetString("token_name")
 			logContent := fmt.Sprintf("模型固定价格 %.2f，分组倍率 %.2f，操作 %s，ID %s", priceData.ModelPrice, priceData.GroupRatioInfo.GroupRatio, midjRequest.Action, midjResponse.Result)
-			other := service.GenerateMjOtherInfo(c, relayInfo, priceData)
-			priceChain := service.CalculatePriceChainForLog(c, modelName, 0, 0, priceData.Quota)
+			other := service.GenerateMjOtherInfo(c, relayInfo, types.PerCallPriceData{
+				ModelPrice:     priceData.ModelPrice,
+				Quota:          priceData.Quota,
+				GroupRatioInfo: priceData.GroupRatioInfo,
+			})
 			model.RecordConsumeLog(c, relayInfo.UserId, model.RecordConsumeLogParams{
-				ChannelId:  relayInfo.ChannelId,
-				ModelName:  modelName,
-				TokenName:  tokenName,
-				Quota:      priceData.Quota,
-				Content:    logContent,
-				TokenId:    relayInfo.TokenId,
-				Group:      relayInfo.UsingGroup,
-				Other:      other,
-				PriceChain: priceChain,
+				ChannelId: relayInfo.ChannelId,
+				ModelName: modelName,
+				TokenName: tokenName,
+				Quota:     priceData.Quota,
+				Content:   logContent,
+				TokenId:   relayInfo.TokenId,
+				Group:     relayInfo.UsingGroup,
+				Other:     other,
 			})
 			model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, priceData.Quota)
 			model.UpdateChannelUsedQuota(relayInfo.ChannelId, priceData.Quota)

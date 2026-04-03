@@ -327,13 +327,13 @@ func PasskeyLoginFinish(c *gin.Context) {
 }
 
 func AdminResetPasskey(c *gin.Context) {
-	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		common.ApiErrorMsg(c, "无效的用户 ID")
 		return
 	}
 
-	user := &model.User{Id: int(id64)}
+	user := &model.User{Id: id}
 	if err := user.FillUserById(); err != nil {
 		common.ApiError(c, err)
 		return
@@ -467,6 +467,15 @@ func PasskeyVerifyFinish(c *gin.Context) {
 	credential.LastUsedAt = &now
 	if err := model.UpsertPasskeyCredential(credential); err != nil {
 		common.ApiError(c, err)
+		return
+	}
+
+	session := sessions.Default(c)
+	// Mark passkey as ready; /api/verify will convert this into the final secure verification session.
+	session.Set(PasskeyReadySessionKey, time.Now().Unix())
+	session.Delete(SecureVerificationSessionKey)
+	if err := session.Save(); err != nil {
+		common.ApiError(c, fmt.Errorf("保存验证状态失败: %v", err))
 		return
 	}
 

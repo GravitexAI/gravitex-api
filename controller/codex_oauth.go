@@ -64,12 +64,12 @@ func StartCodexOAuth(c *gin.Context) {
 }
 
 func StartCodexOAuthForChannel(c *gin.Context) {
-	channelID64, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	channelID, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		common.ApiError(c, fmt.Errorf("invalid channel id: %w", err))
 		return
 	}
-	startCodexOAuthWithChannelID(c, int(channelID64))
+	startCodexOAuthWithChannelID(c, channelID)
 }
 
 func startCodexOAuthWithChannelID(c *gin.Context, channelID int) {
@@ -115,12 +115,12 @@ func CompleteCodexOAuth(c *gin.Context) {
 }
 
 func CompleteCodexOAuthForChannel(c *gin.Context) {
-	channelID64, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	channelID, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		common.ApiError(c, fmt.Errorf("invalid channel id: %w", err))
 		return
 	}
-	completeCodexOAuthWithChannelID(c, int(channelID64))
+	completeCodexOAuthWithChannelID(c, channelID)
 }
 
 func completeCodexOAuthWithChannelID(c *gin.Context, channelID int) {
@@ -145,6 +145,7 @@ func completeCodexOAuthWithChannelID(c *gin.Context, channelID int) {
 		return
 	}
 
+	channelProxy := ""
 	if channelID > 0 {
 		ch, err := model.GetChannelById(channelID, false)
 		if err != nil {
@@ -159,6 +160,7 @@ func completeCodexOAuthWithChannelID(c *gin.Context, channelID int) {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "channel type is not Codex"})
 			return
 		}
+		channelProxy = ch.GetSetting().Proxy
 	}
 
 	session := sessions.Default(c)
@@ -176,7 +178,7 @@ func completeCodexOAuthWithChannelID(c *gin.Context, channelID int) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
 
-	tokenRes, err := service.ExchangeCodexAuthorizationCode(ctx, code, verifier)
+	tokenRes, err := service.ExchangeCodexAuthorizationCodeWithProxy(ctx, code, verifier, channelProxy)
 	if err != nil {
 		common.SysError("failed to exchange codex authorization code: " + err.Error())
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "授权码交换失败，请重试"})

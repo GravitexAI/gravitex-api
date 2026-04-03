@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
 )
+
+const UserNameMaxLength = 20
 
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
@@ -36,7 +39,7 @@ type User struct {
 	Quota            int            `json:"quota" gorm:"type:int;default:0"`
 	UsedQuota        int            `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
 	RequestCount     int            `json:"request_count" gorm:"type:int;default:0;"`               // request number
-	Group            string         `json:"group" gorm:"type:varchar(256);default:'default'"`
+	Group            string         `json:"group" gorm:"type:varchar(64);default:'default'"`
 	AffCode          string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
 	AffCount         int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
 	AffQuota         int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
@@ -309,7 +312,6 @@ func GetUserIdByAffCode(affCode string) (int, error) {
 	return user.Id, err
 }
 
-// GetUserByUsername 根据用户名精确查询用户
 func GetUserByUsername(username string) (*User, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
@@ -547,6 +549,37 @@ func (user *User) Edit(updatePassword bool) error {
 	}
 
 	// Update cache
+	return updateUserCache(*user)
+}
+
+func (user *User) ClearBinding(bindingType string) error {
+	if user.Id == 0 {
+		return errors.New("user id is empty")
+	}
+
+	bindingColumnMap := map[string]string{
+		"email":    "email",
+		"github":   "github_id",
+		"discord":  "discord_id",
+		"oidc":     "oidc_id",
+		"wechat":   "wechat_id",
+		"telegram": "telegram_id",
+		"linuxdo":  "linux_do_id",
+	}
+
+	column, ok := bindingColumnMap[bindingType]
+	if !ok {
+		return errors.New("invalid binding type")
+	}
+
+	if err := DB.Model(&User{}).Where("id = ?", user.Id).Update(column, "").Error; err != nil {
+		return err
+	}
+
+	if err := DB.Where("id = ?", user.Id).First(user).Error; err != nil {
+		return err
+	}
+
 	return updateUserCache(*user)
 }
 
@@ -834,9 +867,16 @@ func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error)
 		// Don't return error - fall through to DB
 	}
 	fromDB = true
-	err = DB.Model(&User{}).Where("id = ?", id).Select("setting").Find(&setting).Error
+	// can be nil setting
+	var safeSetting sql.NullString
+	err = DB.Model(&User{}).Where("id = ?", id).Select("setting").Find(&safeSetting).Error
 	if err != nil {
 		return settingMap, err
+	}
+	if safeSetting.Valid {
+		setting = safeSetting.String
+	} else {
+		setting = ""
 	}
 	userBase := &UserBase{
 		Setting: setting,
@@ -848,11 +888,12 @@ func IncreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	// Redis 必须同步更新，确保后续 GetUserQuota / shouldTrust 立刻读到最新余额。
-	// 异步更新会导致高并发下信任检查读到旧值，用户可超额使用。
-	if cacheErr := cacheIncrUserQuota(id, int64(quota)); cacheErr != nil {
-		common.SysLog("failed to increase user quota cache: " + cacheErr.Error())
-	}
+	gopool.Go(func() {
+		err := cacheIncrUserQuota(id, int64(quota))
+		if err != nil {
+			common.SysLog("failed to increase user quota: " + err.Error())
+		}
+	})
 	if !db && common.BatchUpdateEnabled {
 		addNewRecord(BatchUpdateTypeUserQuota, id, quota)
 		return nil
@@ -872,11 +913,12 @@ func DecreaseUserQuota(id int, quota int) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	// Redis 必须同步更新，确保后续 GetUserQuota / shouldTrust 立刻读到最新余额。
-	// 异步更新会导致高并发下信任检查读到旧值，用户可超额使用。
-	if cacheErr := cacheDecrUserQuota(id, int64(quota)); cacheErr != nil {
-		common.SysLog("failed to decrease user quota cache: " + cacheErr.Error())
-	}
+	gopool.Go(func() {
+		err := cacheDecrUserQuota(id, int64(quota))
+		if err != nil {
+			common.SysLog("failed to decrease user quota: " + err.Error())
+		}
+	})
 	if common.BatchUpdateEnabled {
 		addNewRecord(BatchUpdateTypeUserQuota, id, -quota)
 		return nil
@@ -922,9 +964,6 @@ func UpdateUserUsedQuotaAndRequestCount(id int, quota int) {
 	updateUserUsedQuotaAndRequestCount(id, quota, 1)
 }
 
-// ConsumeUserQuotaSettle 单次 UPDATE 完成结算：quota 扣减 quotaDelta，used_quota 增加 actualQuota，request_count +1。
-// 与 nebula 逻辑一致，用于减少对 users 表的多次写入（缓解 SLOW SQL）。
-// 当 BillingSession 存在时由 compatible_handler 先调用本函数，再调用 Billing.Settle(actualQuota, true) 仅处理 token/邮件。
 func ConsumeUserQuotaSettle(userId, actualQuota, quotaDelta int) error {
 	if common.BatchUpdateEnabled {
 		addNewRecord(BatchUpdateTypeUsedQuota, userId, actualQuota)

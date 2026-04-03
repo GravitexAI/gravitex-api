@@ -29,6 +29,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"
 )
@@ -125,12 +126,6 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		if apiVersion == "" {
 			apiVersion = constant.AzureDefaultAPIVersion
 		}
-		// 如果配置了模型特定的 API 版本，优先使用模型特定的版本（适用于普通 API 和 Responses API）
-		if len(info.ChannelOtherSettings.AzureModelApiVersions) > 0 {
-			if modelApiVersion, exists := info.ChannelOtherSettings.AzureModelApiVersions[info.UpstreamModelName]; exists && modelApiVersion != "" {
-				apiVersion = modelApiVersion
-			}
-		}
 		// https://learn.microsoft.com/en-us/azure/cognitive-services/openai/chatgpt-quickstart?pivots=rest-api&tabs=command-line#rest-api
 		requestURL := strings.Split(info.RequestURLPath, "?")[0]
 		requestURL = fmt.Sprintf("%s?api-version=%s", requestURL, apiVersion)
@@ -143,20 +138,16 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 		// 特殊处理 responses API
 		if info.RelayMode == relayconstant.RelayModeResponses {
-			responsesApiVersion := apiVersion
+			responsesApiVersion := "preview"
 
 			subUrl := "/openai/v1/responses"
 			if strings.Contains(info.ChannelBaseUrl, "cognitiveservices.azure.com") {
 				subUrl = "/openai/responses"
+				responsesApiVersion = apiVersion
 			}
 
-			// 若配置了默认 Responses 版本且当前模型未在 per-model 中，使用默认 Responses 版本
 			if info.ChannelOtherSettings.AzureResponsesVersion != "" {
-				if len(info.ChannelOtherSettings.AzureModelApiVersions) == 0 {
-					responsesApiVersion = info.ChannelOtherSettings.AzureResponsesVersion
-				} else if _, exists := info.ChannelOtherSettings.AzureModelApiVersions[info.UpstreamModelName]; !exists {
-					responsesApiVersion = info.ChannelOtherSettings.AzureResponsesVersion
-				}
+				responsesApiVersion = info.ChannelOtherSettings.AzureResponsesVersion
 			}
 
 			requestURL = fmt.Sprintf("%s?api-version=%s", subUrl, responsesApiVersion)
@@ -234,8 +225,12 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 		}
 	}
 	if info.ChannelType == constant.ChannelTypeOpenRouter {
-		header.Set("HTTP-Referer", "https://www.newapi.ai")
-		header.Set("X-Title", "New API")
+		if header.Get("HTTP-Referer") == "" {
+			header.Set("HTTP-Referer", "https://www.newapi.ai")
+		}
+		if header.Get("X-OpenRouter-Title") == "" {
+			header.Set("X-OpenRouter-Title", "New API")
+		}
 	}
 	return nil
 }
@@ -307,6 +302,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 				}
 
 				reasoning := openrouter.RequestReasoning{
+					Enabled:   true,
 					MaxTokens: *thinking.BudgetTokens,
 				}
 
@@ -324,9 +320,9 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 
 	}
 	if strings.HasPrefix(info.UpstreamModelName, "o") || strings.HasPrefix(info.UpstreamModelName, "gpt-5") {
-		if request.MaxCompletionTokens == 0 && request.MaxTokens != 0 {
+		if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
 			request.MaxCompletionTokens = request.MaxTokens
-			request.MaxTokens = 0
+			request.MaxTokens = nil
 		}
 
 		if strings.HasPrefix(info.UpstreamModelName, "o") {
@@ -336,8 +332,8 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		// gpt-5系列模型适配 归零不再支持的参数
 		if strings.HasPrefix(info.UpstreamModelName, "gpt-5") {
 			request.Temperature = nil
-			request.TopP = 0 // oai 的 top_p 默认值是 1.0，但是为了 omitempty 属性直接不传，这里显式设置为 0
-			request.LogProbs = false
+			request.TopP = nil
+			request.LogProbs = nil
 		}
 
 		// 转换模型推理力度后缀

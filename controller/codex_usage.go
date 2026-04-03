@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -19,13 +18,13 @@ import (
 )
 
 func GetCodexChannelUsage(c *gin.Context) {
-	channelId64, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	channelId, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		common.ApiError(c, fmt.Errorf("invalid channel id: %w", err))
 		return
 	}
 
-	ch, err := model.GetChannelById(int(channelId64), true)
+	ch, err := model.GetChannelById(channelId, true)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -80,7 +79,7 @@ func GetCodexChannelUsage(c *gin.Context) {
 		refreshCtx, refreshCancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 		defer refreshCancel()
 
-		res, refreshErr := service.RefreshCodexOAuthToken(refreshCtx, oauthKey.RefreshToken)
+		res, refreshErr := service.RefreshCodexOAuthTokenWithProxy(refreshCtx, oauthKey.RefreshToken, ch.GetSetting().Proxy)
 		if refreshErr == nil {
 			oauthKey.AccessToken = res.AccessToken
 			oauthKey.RefreshToken = res.RefreshToken
@@ -109,7 +108,7 @@ func GetCodexChannelUsage(c *gin.Context) {
 	}
 
 	var payload any
-	if json.Unmarshal(body, &payload) != nil {
+	if common.Unmarshal(body, &payload) != nil {
 		payload = string(body)
 	}
 
