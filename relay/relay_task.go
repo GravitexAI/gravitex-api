@@ -460,6 +460,13 @@ func isVideoTokenRatioModel(modelName string) bool {
 	if _, ok := ratio_setting.GetVideoCompletionRatioPricing(modelName, false); ok {
 		return true
 	}
+	// 视频输入维度（noVideo/video）
+	if _, ok := ratio_setting.GetVideoCompletionRatioVideoPricing(modelName, true); ok {
+		return true
+	}
+	if _, ok := ratio_setting.GetVideoCompletionRatioVideoPricing(modelName, false); ok {
+		return true
+	}
 	return false
 }
 
@@ -793,6 +800,13 @@ func mergeVideoTokenRatioBillingData(c *gin.Context, info *relaycommon.RelayInfo
 	dataMap["generate_audio"] = generateAudio
 	dataMap["generateAudio"] = generateAudio
 
+	// 保存是否有视频输入标记（UpToken seedance 等使用 noVideo/video 维度计费）
+	if v, exists := c.Get("has_video_input"); exists {
+		if b, ok := v.(bool); ok {
+			dataMap["has_video_input"] = b
+		}
+	}
+
 	dataMap["billing_processed"] = false
 
 	merged, err := common.Marshal(dataMap)
@@ -1077,6 +1091,7 @@ var internalBillingFields = map[string]bool{
 	"billing_cost_discount":         true,
 	"billing_requested_seconds":     true,
 	"requested_seconds":             true,
+	"has_video_input":               true,
 }
 
 // filterInternalFields 从 task.Data map 中移除内部计费字段，返回过滤后的 map

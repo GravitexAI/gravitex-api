@@ -189,6 +189,11 @@ export const CHANNEL_OPTIONS = [
     color: 'blue',
     label: 'Codex (OpenAI OAuth)',
   },
+  {
+    value: 59,
+    color: 'purple',
+    label: 'Uptoken',
+  },
 ];
 
 export const MODEL_TABLE_PAGE_SIZE = 10;

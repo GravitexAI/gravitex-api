@@ -127,6 +127,58 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s channel=%d status=%d 上游返回数据 body=%s",
 		taskId, channel.Id, resp.StatusCode, common.TruncateJsonValues(string(responseBody))))
 
+	// 上游返回非 JSON（如 502 HTML 页面）时，直接标记任务失败，避免 JSON 解析错误
+	if resp.StatusCode >= 400 && len(responseBody) > 0 && responseBody[0] == '<' {
+		errMsg := fmt.Sprintf("upstream returned HTTP %d with non-JSON response", resp.StatusCode)
+		logger.LogError(ctx, fmt.Sprintf("[TaskPoll] task=%s %s", taskId, errMsg))
+		taskResult := relaycommon.FailTaskInfo(errMsg)
+		// 直接跳到状态更新逻辑
+		task.Status = model.TaskStatus(taskResult.Status)
+		task.Progress = "100%"
+		task.FailReason = errMsg
+		if task.FinishTime == 0 {
+			task.FinishTime = time.Now().Unix()
+		}
+		preStatus := task.Status
+		task.Status = model.TaskStatusFailure
+		shouldRefund := false
+		if task.Quota != 0 && preStatus != model.TaskStatusFailure {
+			shouldRefund = true
+		}
+		if err := task.Update(); err != nil {
+			common.SysLog("UpdateVideoTask task error: " + err.Error())
+			shouldRefund = false
+		}
+		if shouldRefund {
+			logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] refund: task=%s user=%d quota=%s",
+				task.TaskID, task.UserId, logger.LogQuota(task.Quota)))
+			if err := model.IncreaseUserQuota(task.UserId, task.Quota, false); err != nil {
+				logger.LogWarn(ctx, "Failed to increase user quota: "+err.Error())
+			}
+			logContent := fmt.Sprintf("Video async task failed %s, refund %s", task.TaskID, logger.LogQuota(task.Quota))
+			model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
+		}
+		// 记录失败日志
+		modelName := task.Properties.OriginModelName
+		if modelName == "" {
+			modelName = task.Properties.UpstreamModelName
+		}
+		failLog := &model.Log{
+			UserId:    task.UserId,
+			CreatedAt: common.GetTimestamp(),
+			Type:      model.LogTypeError,
+			Content:   fmt.Sprintf("视频任务失败，模型 %s，原因：%s", modelName, errMsg),
+			ChannelId: task.ChannelId,
+			ModelName: modelName,
+			Group:     task.Group,
+			RequestId: task.TaskID,
+		}
+		if err := model.CreateLog(failLog); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("Failed to insert error log for task %s: %v", task.TaskID, err))
+		}
+		return nil
+	}
+
 	taskResult := &relaycommon.TaskInfo{}
 	// 仅当确认为本系统 New API 格式（code=success 且 data 含 task_id）时才走 New API 分支，避免 Vertex/Gemini 原始响应 {"name":"..."} 被误判导致 task.Data 计费字段丢失（与 nebula-new-api 对齐）
 	var responseItems dto.TaskResponse[model.Task]
@@ -174,6 +226,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			"billing_effective_group_ratio",
 			"billing_token_name", "billing_token_id", "billing_processed",
 			"generate_audio", "generateAudio",
+			"has_video_input",
 			"billing_cost_discount",
 		}
 
@@ -606,6 +659,7 @@ func mergeBillingFieldsIntoTaskData(existingData, newData []byte) []byte {
 		"billing_effective_group_ratio",
 		"billing_token_name", "billing_token_id", "billing_processed",
 		"generate_audio", "generateAudio", "sound",
+		"has_video_input",
 		"billing_cost_discount",
 	}
 	var existMap, newMap map[string]interface{}
@@ -687,6 +741,13 @@ func isVideoTokenRatioModel(name string) bool {
 	if _, ok := ratio_setting.GetVideoCompletionRatioPricing(name, false); ok {
 		return true
 	}
+	// 视频输入维度（noVideo/video）
+	if _, ok := ratio_setting.GetVideoCompletionRatioVideoPricing(name, true); ok {
+		return true
+	}
+	if _, ok := ratio_setting.GetVideoCompletionRatioVideoPricing(name, false); ok {
+		return true
+	}
 	return false
 }
 
@@ -698,6 +759,7 @@ func mergeVideoTaskDataWithUpstreamResponse(task *model.Task, responseBody []byt
 		"billing_effective_group_ratio",
 		"billing_token_name", "billing_token_id", "billing_processed",
 		"generate_audio", "generateAudio",
+		"has_video_input",
 		"billing_cost_discount",
 	}
 	var existingData, newData map[string]interface{}
@@ -1300,7 +1362,16 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	// 读取配置：GetVideoCompletionRatioPricing 返回「有效值」：
 	// - VideoRatio!=0 时：返回倍率（VideoRatio×VideoCompletionRatio）
 	// - VideoRatio==0/无时：返回 $/M tokens
-	cfgVal, ok := ratio_setting.GetVideoCompletionRatioPricing(modelName, generateAudio)
+	// 当 task.Data 中存在 has_video_input 时，使用 noVideo/video 维度（UpToken seedance 等）
+	var cfgVal float64
+	var ok bool
+	if hasVideoInput, exists := taskData["has_video_input"].(bool); exists {
+		cfgVal, ok = ratio_setting.GetVideoCompletionRatioVideoPricing(modelName, hasVideoInput)
+		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio task=%s using video_input dimension: has_video_input=%v cfgVal=%.6f ok=%v",
+			task.TaskID, hasVideoInput, cfgVal, ok))
+	} else {
+		cfgVal, ok = ratio_setting.GetVideoCompletionRatioPricing(modelName, generateAudio)
+	}
 	if !ok || cfgVal <= 0 {
 		return fmt.Errorf("handleVideoTokenRatioBilling: video completion ratio not configured for model=%s", modelName)
 	}
@@ -1317,6 +1388,10 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		"video_ratio":                vr,
 		"video_completion_ratio_val": cfgVal,
 		"ratio_mode":                 ratioMode,
+	}
+	// 记录视频输入维度（如果存在）
+	if hasVideoInput, exists := taskData["has_video_input"].(bool); exists {
+		otherMap["has_video_input"] = hasVideoInput
 	}
 
 	if ratioMode {

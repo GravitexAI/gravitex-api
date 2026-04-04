@@ -842,6 +842,45 @@ func getVideoCompletionAudioPricing(name string) (VideoAudioPricing, bool) {
 	return v, ok
 }
 
+// GetVideoCompletionRatioVideoPricing 按「是否有视频输入」维度获取 VideoCompletionRatio（UpToken seedance 等使用）
+// 当配置中包含 noVideo/video 字段时使用此维度；否则回退到 GetVideoCompletionRatioPricing 的 noAudio/audio 逻辑
+func GetVideoCompletionRatioVideoPricing(name string, hasVideoInput bool) (float64, bool) {
+	name = FormatMatchingModelName(name)
+
+	// 1) 优先取 VideoCompletionRatio 的 noVideo/video 分档
+	if pricing, ok := getVideoCompletionAudioPricing(name); ok {
+		// 仅当 noVideo/video 维度有配置时才走此分支
+		if pricing.NoVideo > 0 || pricing.Video > 0 {
+			value := 0.0
+			if hasVideoInput && pricing.Video > 0 {
+				value = pricing.Video
+			} else if !hasVideoInput && pricing.NoVideo > 0 {
+				value = pricing.NoVideo
+			} else if pricing.NoVideo > 0 {
+				value = pricing.NoVideo
+			} else if pricing.Video > 0 {
+				value = pricing.Video
+			}
+			if value > 0 {
+				if vr, hasVR := GetVideoRatio(name); hasVR && vr != 0 {
+					return vr * value, true
+				}
+				return value, true
+			}
+		}
+	}
+
+	// 2) 再取 VideoCompletionRatio 的数字值
+	if v, ok := getVideoCompletionPrimaryValue(name); ok && v > 0 {
+		if vr, hasVR := GetVideoRatio(name); hasVR && vr != 0 {
+			return vr * v, true
+		}
+		return v, true
+	}
+
+	return 0, false
+}
+
 // loadVideoRatioFromDatabase 从数据库加载视频倍率配置（OptionMap["VideoRatio"]）
 func loadVideoRatioFromDatabase() {
 	videoRatioMapMutex.Lock()
@@ -920,7 +959,14 @@ func buildVideoCompletionRatioCaches(rawMap map[string]interface{}) (map[string]
 			if audioVal, ok := extractFloatFromMap(v, "audio", "withAudio", "with_audio"); ok {
 				pricing.Audio = audioVal
 			}
-			if pricing.NoAudio > 0 || pricing.Audio > 0 {
+			// 有无视频输入维度（UpToken seedance 等）
+			if noVideo, ok := extractFloatFromMap(v, "noVideo", "no_video"); ok {
+				pricing.NoVideo = noVideo
+			}
+			if videoVal, ok := extractFloatFromMap(v, "video", "withVideo", "with_video"); ok {
+				pricing.Video = videoVal
+			}
+			if pricing.NoAudio > 0 || pricing.Audio > 0 || pricing.NoVideo > 0 || pricing.Video > 0 {
 				for _, key := range targetKeys {
 					audio[key] = pricing
 				}
@@ -1005,9 +1051,12 @@ var defaultVideoModelPricePerSecond = map[string]float64{
 }
 
 // VideoAudioPricing 带音频/无音频的视频定价结构（Veo：generateAudio true 用 audio，否则用 noAudio）
+// 同时支持有无视频输入的定价维度（UpToken seedance：hasVideo true 用 Video，否则用 NoVideo）
 type VideoAudioPricing struct {
 	NoAudio float64 `json:"noAudio,omitempty"`
 	Audio   float64 `json:"audio,omitempty"`
+	NoVideo float64 `json:"noVideo,omitempty"`
+	Video   float64 `json:"video,omitempty"`
 }
 
 // VideoFlashResolutionPricing wan2.6-*-flash：noAudio/audio 各对应 720p/1080p 等分档单价（美元/秒）
