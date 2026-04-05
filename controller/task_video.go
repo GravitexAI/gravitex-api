@@ -127,10 +127,38 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s channel=%d status=%d 上游返回数据 body=%s",
 		taskId, channel.Id, resp.StatusCode, common.TruncateJsonValues(string(responseBody))))
 
-	// 上游返回非 JSON（如 502 HTML 页面）时，直接标记任务失败，避免 JSON 解析错误
+	// 上游返回非 JSON（如 502 HTML 页面）时的处理
 	if resp.StatusCode >= 400 && len(responseBody) > 0 && responseBody[0] == '<' {
 		errMsg := fmt.Sprintf("upstream returned HTTP %d with non-JSON response", resp.StatusCode)
-		logger.LogError(ctx, fmt.Sprintf("[TaskPoll] task=%s %s", taskId, errMsg))
+
+		// 对于 502/503/504 等临时性错误，允许重试最多 3 次再标记失败
+		const maxPollRetries = 3
+		if resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
+			var taskData map[string]interface{}
+			if err := common.Unmarshal(task.Data, &taskData); err != nil || taskData == nil {
+				taskData = make(map[string]interface{})
+			}
+			pollErrCount := 0
+			if v, ok := taskData["poll_error_count"].(float64); ok {
+				pollErrCount = int(v)
+			}
+			pollErrCount++
+			taskData["poll_error_count"] = pollErrCount
+			if merged, mergeErr := common.Marshal(taskData); mergeErr == nil {
+				task.Data = merged
+				task.Update()
+			}
+			if pollErrCount < maxPollRetries {
+				logger.LogWarn(ctx, fmt.Sprintf("[TaskPoll] task=%s %s (retry %d/%d, will retry next round)",
+					taskId, errMsg, pollErrCount, maxPollRetries))
+				return nil
+			}
+			logger.LogError(ctx, fmt.Sprintf("[TaskPoll] task=%s %s (retry exhausted %d/%d, marking as failure)",
+				taskId, errMsg, pollErrCount, maxPollRetries))
+		} else {
+			logger.LogError(ctx, fmt.Sprintf("[TaskPoll] task=%s %s", taskId, errMsg))
+		}
+
 		taskResult := relaycommon.FailTaskInfo(errMsg)
 		// 直接跳到状态更新逻辑
 		task.Status = model.TaskStatus(taskResult.Status)
@@ -1308,7 +1336,21 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		tokens = taskResult.TotalTokens
 	}
 	if tokens <= 0 {
-		return fmt.Errorf("handleVideoTokenRatioBilling: invalid tokens=%d (completion=%d total=%d)", tokens, taskResult.CompletionTokens, taskResult.TotalTokens)
+		// mock 环境不会返回用量信息，此时跳过计费而不报错，避免任务被标记为失败
+		logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s tokens=0 (completion=%d total=%d), skip billing (mock or no usage reported)",
+			modelName, task.TaskID, taskResult.CompletionTokens, taskResult.TotalTokens))
+		// 释放 DB 级计费锁（quota 从 -1 恢复为 0）并标记已处理
+		taskData["billing_processed"] = true
+		taskData["billing_skipped"] = "no_usage"
+		if merged, err := common.Marshal(taskData); err == nil {
+			task.Data = merged
+		}
+		task.Quota = 0
+		model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+			"quota": 0,
+			"data":  task.Data,
+		})
+		return nil
 	}
 
 	tokenName := ""
