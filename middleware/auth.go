@@ -37,8 +37,40 @@ func authHelper(c *gin.Context, minRole int) {
 	id := session.Get("id")
 	status := session.Get("status")
 	useAccessToken := false
+	group := session.Get("group")
+	fromRuoYi := false
 	if username == nil {
-		// Check access token
+		// 优先尝试 RuoYi JWT 鉴权
+		if common.RuoYiAuthEnabled {
+			user, err := tryRuoYiJWTAuth(c)
+			if err == nil && user != nil {
+				if !validUserInfo(user.Username, user.Role) {
+					c.JSON(http.StatusOK, gin.H{
+						"success": false,
+						"message": "无权进行此操作，用户信息无效",
+					})
+					c.Abort()
+					return
+				}
+				username = user.Username
+				role = user.Role
+				id = user.Id
+				status = user.Status
+				group = user.Group
+				fromRuoYi = true
+			} else if err != nil && err != errNoRuoYiJWT {
+				// JWT 格式正确但验签/解析失败 -> 直接拒绝
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"success": false,
+					"message": "无权进行此操作，RuoYi Token 无效",
+				})
+				c.Abort()
+				return
+			}
+		}
+	}
+	if username == nil {
+		// 回退到原有的 access token 方案
 		accessToken := c.Request.Header.Get("Authorization")
 		if accessToken == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{
@@ -73,33 +105,36 @@ func authHelper(c *gin.Context, minRole int) {
 			return
 		}
 	}
-	// get header New-Api-User
-	apiUserIdStr := c.Request.Header.Get("New-Api-User")
-	if apiUserIdStr == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": "无权进行此操作，未提供 New-Api-User",
-		})
-		c.Abort()
-		return
-	}
-	apiUserId, err := strconv.Atoi(apiUserIdStr)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": "无权进行此操作，New-Api-User 格式错误",
-		})
-		c.Abort()
-		return
+	// RuoYi JWT 模式下不强制要求 New-Api-User 头
+	if !fromRuoYi {
+		// get header New-Api-User
+		apiUserIdStr := c.Request.Header.Get("New-Api-User")
+		if apiUserIdStr == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "无权进行此操作，未提供 New-Api-User",
+			})
+			c.Abort()
+			return
+		}
+		apiUserId, err := strconv.Atoi(apiUserIdStr)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "无权进行此操作，New-Api-User 格式错误",
+			})
+			c.Abort()
+			return
 
-	}
-	if id != apiUserId {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": "无权进行此操作，New-Api-User 与登录用户不匹配",
-		})
-		c.Abort()
-		return
+		}
+		if id != apiUserId {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": "无权进行此操作，New-Api-User 与登录用户不匹配",
+			})
+			c.Abort()
+			return
+		}
 	}
 	if status.(int) == common.UserStatusDisabled {
 		c.JSON(http.StatusOK, gin.H{
@@ -130,8 +165,8 @@ func authHelper(c *gin.Context, minRole int) {
 	c.Set("username", username)
 	c.Set("role", role)
 	c.Set("id", id)
-	c.Set("group", session.Get("group"))
-	c.Set("user_group", session.Get("group"))
+	c.Set("group", group)
+	c.Set("user_group", group)
 	c.Set("use_access_token", useAccessToken)
 
 	c.Next()

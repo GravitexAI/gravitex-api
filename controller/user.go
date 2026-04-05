@@ -258,12 +258,12 @@ func SearchUsers(c *gin.Context) {
 }
 
 func GetUser(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	user, err := model.GetUserById(id, false)
+	user, err := model.GetUserById(int(id64), false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -510,11 +510,11 @@ func generateDefaultSidebarConfig(userRole int) string {
 }
 
 func GetUserModels(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		id = c.GetInt("id")
+		id64 = int64(c.GetInt("id"))
 	}
-	user, err := model.GetUserCache(id)
+	user, err := model.GetUserCache(int(id64))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -537,11 +537,35 @@ func GetUserModels(c *gin.Context) {
 }
 
 func UpdateUser(c *gin.Context) {
-	var updatedUser model.User
-	err := json.NewDecoder(c.Request.Body).Decode(&updatedUser)
-	if err != nil || updatedUser.Id == 0 {
+	type updateUserRequest struct {
+		Id          common.Int64Flexible `json:"id"`
+		Username    string               `json:"username"`
+		DisplayName string               `json:"display_name"`
+		Password    string               `json:"password"`
+		Group       string               `json:"group"`
+		Quota       int                  `json:"quota"`
+		Remark      string               `json:"remark"`
+		Role        int                  `json:"role"`
+		Status      int                  `json:"status"`
+	}
+
+	var req updateUserRequest
+	err := json.NewDecoder(c.Request.Body).Decode(&req)
+	if err != nil || req.Id.Int64() == 0 {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
+	}
+
+	updatedUser := model.User{
+		Id:          req.Id.Int(),
+		Username:    req.Username,
+		DisplayName: req.DisplayName,
+		Password:    req.Password,
+		Group:       req.Group,
+		Quota:       req.Quota,
+		Remark:      req.Remark,
+		Role:        req.Role,
+		Status:      req.Status,
 	}
 	if updatedUser.Password == "" {
 		updatedUser.Password = "$I_LOVE_U" // make Validator happy :)
@@ -753,11 +777,12 @@ func checkUpdatePassword(originalPassword string, newPassword string, userId int
 }
 
 func DeleteUser(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	id := int(id64)
 	originUser, err := model.GetUserById(id, false)
 	if err != nil {
 		common.ApiError(c, err)
@@ -839,8 +864,8 @@ func CreateUser(c *gin.Context) {
 }
 
 type ManageRequest struct {
-	Id     int    `json:"id"`
-	Action string `json:"action"`
+	Id     common.Int64Flexible `json:"id"`
+	Action string               `json:"action"`
 }
 
 // ManageUser Only admin user can do this
@@ -853,7 +878,7 @@ func ManageUser(c *gin.Context) {
 		return
 	}
 	user := model.User{
-		Id: req.Id,
+		Id: req.Id.Int(),
 	}
 	// Fill attributes
 	model.DB.Unscoped().Where(&user).First(&user)

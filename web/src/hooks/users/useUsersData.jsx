@@ -137,7 +137,7 @@ export const useUsersData = () => {
 
       // Create a new array and new object to ensure React detects changes
       const newUsers = users.map((u) => {
-        if (u.id === userId) {
+        if (String(u.id) === String(userId)) {
           if (action === 'delete') {
             return { ...u, DeletedAt: new Date() };
           }

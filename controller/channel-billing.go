@@ -422,12 +422,12 @@ func updateChannelBalance(channel *model.Channel) (float64, error) {
 }
 
 func UpdateChannelBalance(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	channel, err := model.CacheGetChannel(id)
+	channel, err := model.CacheGetChannel(int(id64))
 	if err != nil {
 		common.ApiError(c, err)
 		return

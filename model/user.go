@@ -39,7 +39,7 @@ type User struct {
 	Quota            int            `json:"quota" gorm:"type:int;default:0"`
 	UsedQuota        int            `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
 	RequestCount     int            `json:"request_count" gorm:"type:int;default:0;"`               // request number
-	Group            string         `json:"group" gorm:"type:varchar(64);default:'default'"`
+	Group            string         `json:"group" gorm:"type:varchar(256);default:'default'"`
 	AffCode          string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
 	AffCount         int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
 	AffQuota         int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
@@ -310,6 +310,20 @@ func GetUserIdByAffCode(affCode string) (int, error) {
 	var user User
 	err := DB.Select("id").First(&user, "aff_code = ?", affCode).Error
 	return user.Id, err
+}
+
+// GetUserByUsername 根据用户名精确查询用户
+func GetUserByUsername(username string) (*User, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return nil, errors.New("username 为空！")
+	}
+	var user User
+	err := DB.Where("username = ?", username).First(&user).Error
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
 }
 
 func DeleteUserById(id int) (err error) {
@@ -875,12 +889,11 @@ func IncreaseUserQuota(id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	gopool.Go(func() {
-		err := cacheIncrUserQuota(id, int64(quota))
-		if err != nil {
-			common.SysLog("failed to increase user quota: " + err.Error())
-		}
-	})
+	// Redis 必须同步更新，确保后续 GetUserQuota / shouldTrust 立刻读到最新余额。
+	// 异步更新会导致高并发下信任检查读到旧值，用户可超额使用。
+	if cacheErr := cacheIncrUserQuota(id, int64(quota)); cacheErr != nil {
+		common.SysLog("failed to increase user quota cache: " + cacheErr.Error())
+	}
 	if !db && common.BatchUpdateEnabled {
 		addNewRecord(BatchUpdateTypeUserQuota, id, quota)
 		return nil
@@ -900,12 +913,11 @@ func DecreaseUserQuota(id int, quota int) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
-	gopool.Go(func() {
-		err := cacheDecrUserQuota(id, int64(quota))
-		if err != nil {
-			common.SysLog("failed to decrease user quota: " + err.Error())
-		}
-	})
+	// Redis 必须同步更新，确保后续 GetUserQuota / shouldTrust 立刻读到最新余额。
+	// 异步更新会导致高并发下信任检查读到旧值，用户可超额使用。
+	if cacheErr := cacheDecrUserQuota(id, int64(quota)); cacheErr != nil {
+		common.SysLog("failed to decrease user quota cache: " + cacheErr.Error())
+	}
 	if common.BatchUpdateEnabled {
 		addNewRecord(BatchUpdateTypeUserQuota, id, -quota)
 		return nil
@@ -949,6 +961,27 @@ func UpdateUserUsedQuotaAndRequestCount(id int, quota int) {
 		return
 	}
 	updateUserUsedQuotaAndRequestCount(id, quota, 1)
+}
+
+// ConsumeUserQuotaSettle 单次 UPDATE 完成结算：quota 扣减 quotaDelta，used_quota 增加 actualQuota，request_count +1。
+// 与 nebula 逻辑一致，用于减少对 users 表的多次写入（缓解 SLOW SQL）。
+// 当 BillingSession 存在时由 compatible_handler 先调用本函数，再调用 Billing.Settle(actualQuota, true) 仅处理 token/邮件。
+func ConsumeUserQuotaSettle(userId, actualQuota, quotaDelta int) error {
+	if common.BatchUpdateEnabled {
+		addNewRecord(BatchUpdateTypeUsedQuota, userId, actualQuota)
+		addNewRecord(BatchUpdateTypeRequestCount, userId, 1)
+		if quotaDelta != 0 {
+			addNewRecord(BatchUpdateTypeUserQuota, userId, -quotaDelta)
+		}
+		return nil
+	}
+	return DB.Model(&User{}).Where("id = ?", userId).Updates(
+		map[string]interface{}{
+			"quota":         gorm.Expr("quota - ?", quotaDelta),
+			"used_quota":    gorm.Expr("used_quota + ?", actualQuota),
+			"request_count": gorm.Expr("request_count + ?", 1),
+		},
+	).Error
 }
 
 func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {

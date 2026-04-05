@@ -381,12 +381,18 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	// c.Request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", key))
 	common.SetContextKey(c, constant.ContextKeyChannelKey, key)
 	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, channel.GetBaseURL())
+	if channel.CostDiscount != nil {
+		common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, *channel.CostDiscount)
+	} else {
+		// 重试切换渠道时，清除上一个渠道的 cost_discount，避免残留旧值
+		common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, float64(0))
+	}
 
 	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, false)
 
 	// TODO: api_version统一
 	switch channel.Type {
-	case constant.ChannelTypeAzure:
+	case constant.ChannelTypeAzure, constant.ChannelTypeAzureVideo:
 		c.Set("api_version", channel.Other)
 	case constant.ChannelTypeVertexAi:
 		c.Set("region", channel.Other)

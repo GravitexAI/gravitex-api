@@ -156,6 +156,10 @@ func GetContextKeyBool(c *gin.Context, key constant.ContextKey) bool {
 	return c.GetBool(string(key))
 }
 
+func GetContextKeyFloat64(c *gin.Context, key constant.ContextKey) float64 {
+	return c.GetFloat64(string(key))
+}
+
 func GetContextKeyStringSlice(c *gin.Context, key constant.ContextKey) []string {
 	return c.GetStringSlice(string(key))
 }

@@ -65,6 +65,22 @@ function formatRatio(ratio) {
   return String(ratio);
 }
 
+/**
+ * 获取有效分组倍率：优先使用 user_group_ratio（用户专属倍率），否则用 group_ratio
+ */
+function getEffectiveGroupRatio(other) {
+  if (!other) return 1;
+  const userGroupRatio = other.user_group_ratio;
+  if (typeof userGroupRatio === 'number' && userGroupRatio > 0) {
+    return userGroupRatio;
+  }
+  const groupRatio = other.group_ratio;
+  if (typeof groupRatio === 'number' && groupRatio > 0) {
+    return groupRatio;
+  }
+  return 1;
+}
+
 function buildChannelAffinityTooltip(affinity, t) {
   if (!affinity) {
     return null;
@@ -130,6 +146,18 @@ function renderType(type, t) {
       return (
         <Tag color='teal' shape='circle'>
           {t('退款')}
+        </Tag>
+      );
+    case 6:
+      return (
+        <Tag color='teal' shape='circle'>
+          {t('退款')}
+        </Tag>
+      );
+    case 7:
+      return (
+        <Tag color='amber' shape='circle'>
+          {t('重试')}
         </Tag>
       );
     default:
@@ -730,7 +758,7 @@ export const getLogsColumns = ({
       title: t('用时/首字'),
       dataIndex: 'use_time',
       render: (text, record, index) => {
-        if (!(record.type === 2 || record.type === 5)) {
+        if (!(record.type === 2 || record.type === 5 || record.type === 7)) {
           return <></>;
         }
         if (record.is_stream) {
@@ -861,6 +889,82 @@ export const getLogsColumns = ({
       },
     },
     {
+      key: COLUMN_KEYS.VENDOR_COST,
+      title: t('原厂花费'),
+      dataIndex: 'quota',
+      render: (text, record, index) => {
+        if (!isAdminUser || !(record.type === 2 || record.type === 5 || record.type === 7)) {
+          return <></>;
+        }
+        const other = getLogOther(record.other);
+        // Prefer backend-computed official_quota; fall back to quota/groupRatio for old logs
+        if (other?.official_quota != null && other.official_quota > 0) {
+          return <>{renderQuota(other.official_quota, 8)}</>;
+        }
+        const groupRatio = getEffectiveGroupRatio(other);
+        if (groupRatio <= 0) return <>{renderQuota(text, 8)}</>;
+        const vendorQuota = text / groupRatio;
+        return <>{renderQuota(vendorQuota, 8)}</>;
+      },
+    },
+    {
+      key: COLUMN_KEYS.ACTUAL_COST,
+      title: t('成本/折扣'),
+      dataIndex: 'quota',
+      render: (text, record, index) => {
+        if (!isAdminUser || !(record.type === 2 || record.type === 5 || record.type === 7)) {
+          return <></>;
+        }
+        const other = getLogOther(record.other);
+        const costDiscount = other?.admin_info?.cost_discount;
+        if (!costDiscount || costDiscount <= 0) {
+          return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
+        }
+        let vendorQuota;
+        if (other?.official_quota != null && other.official_quota > 0) {
+          vendorQuota = other.official_quota;
+        } else {
+          const groupRatio = getEffectiveGroupRatio(other);
+          vendorQuota = groupRatio > 0 ? text / groupRatio : text;
+        }
+        const actualCost = vendorQuota * costDiscount;
+        return (
+          <Space>
+            <span>{renderQuota(actualCost, 8)}</span>
+            <Tag color='blue'>{costDiscount}</Tag>
+          </Space>
+        );
+      },
+    },
+    {
+      key: COLUMN_KEYS.PROFIT,
+      title: t('利润'),
+      dataIndex: 'quota',
+      render: (text, record, index) => {
+        if (!isAdminUser || !(record.type === 2 || record.type === 5 || record.type === 7)) {
+          return <></>;
+        }
+        const other = getLogOther(record.other);
+        const costDiscount = other?.admin_info?.cost_discount;
+        if (!costDiscount || costDiscount <= 0) {
+          return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
+        }
+        let vendorQuota;
+        if (other?.official_quota != null && other.official_quota > 0) {
+          vendorQuota = other.official_quota;
+        } else {
+          const groupRatio = getEffectiveGroupRatio(other);
+          vendorQuota = groupRatio > 0 ? text / groupRatio : text;
+        }
+        const actualCost = vendorQuota * costDiscount;
+        const profit = text - actualCost;
+        const color = profit >= 0 ? 'var(--semi-color-success)' : 'var(--semi-color-danger)';
+        return (
+          <span style={{ color }}>{renderQuota(profit, 8)}</span>
+        );
+      },
+    },
+    {
       key: COLUMN_KEYS.IP,
       title: (
         <div className='flex items-center gap-1'>
@@ -876,7 +980,7 @@ export const getLogsColumns = ({
       ),
       dataIndex: 'ip',
       render: (text, record, index) => {
-        return (record.type === 2 || record.type === 5) && text ? (
+        return (record.type === 2 || record.type === 5 || record.type === 7) && text ? (
           <Tooltip content={text}>
             <span>
               <Tag
@@ -900,12 +1004,12 @@ export const getLogsColumns = ({
       title: t('重试'),
       dataIndex: 'retry',
       render: (text, record, index) => {
-        if (!(record.type === 2 || record.type === 5)) {
+        if (!(record.type === 2 || record.type === 5 || record.type === 7)) {
           return <></>;
         }
         let content = t('渠道') + `：${record.channel}`;
-        if (record.other !== '') {
-          let other = JSON.parse(record.other);
+        if (record.other !== '' && record.other != null) {
+          let other = getLogOther(record.other);
           if (other === null) {
             return <></>;
           }

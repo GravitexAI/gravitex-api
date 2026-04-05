@@ -34,10 +34,8 @@ import (
 	_ "net/http/pprof"
 )
 
-//go:embed web/dist
 var buildFS embed.FS
 
-//go:embed web/dist/index.html
 var indexPage []byte
 
 func main() {
@@ -121,16 +119,29 @@ func main() {
 		return a
 	}
 
+	// GET /v1/videos 收到上游终态时落库并计费（与轮询一致），避免 Vertex 轮询仅返回 {"name":"..."} 时任务永不完成
+	relay.CompleteVideoTaskOnUpstreamSuccessFn = controller.CompleteVideoTaskOnUpstreamSuccess
+
 	// Channel upstream model update check task
 	controller.StartChannelUpstreamModelUpdateTask()
 
-	if common.IsMasterNode && constant.UpdateTask {
+	// Task polling goroutines (MJ / async video tasks).
+	// Enabled by default; can be disabled via ENABLE_TASK_POLLING=false|0.
+	// Also requires UPDATE_TASK=true (default) and this being the master node.
+	taskPollingEnabled := true
+	switch strings.ToLower(os.Getenv("ENABLE_TASK_POLLING")) {
+	case "false", "0":
+		taskPollingEnabled = false
+	}
+	if taskPollingEnabled && common.IsMasterNode && constant.UpdateTask {
 		gopool.Go(func() {
 			controller.UpdateMidjourneyTaskBulk()
 		})
 		gopool.Go(func() {
 			controller.UpdateTaskBulk()
 		})
+	} else if !taskPollingEnabled {
+		common.SysLog("task polling disabled by ENABLE_TASK_POLLING")
 	}
 	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {
 		common.BatchUpdateEnabled = true
@@ -158,7 +169,7 @@ func main() {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{
 				"message": fmt.Sprintf("Panic detected, error: %v. Please submit a issue here: https://github.com/Calcium-Ion/new-api", err),
-				"type":    "new_api_panic",
+				"type":    "gravitex_api_panic",
 			},
 		})
 	}))

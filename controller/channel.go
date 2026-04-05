@@ -68,7 +68,23 @@ func clearChannelInfo(channel *model.Channel) {
 	}
 }
 
+// getRegionParam extracts and validates the region query parameter.
+// Only alphanumeric characters and underscores are allowed to prevent SQL injection.
+func getRegionParam(c *gin.Context) string {
+	region := strings.TrimSpace(c.Query("region"))
+	if region == "" {
+		return ""
+	}
+	for _, r := range region {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_') {
+			return ""
+		}
+	}
+	return region
+}
+
 func GetAllChannels(c *gin.Context) {
+	region := getRegionParam(c)
 	pageInfo := common.GetPageQuery(c)
 	channelData := make([]*model.Channel, 0)
 	idSort, _ := strconv.ParseBool(c.Query("id_sort"))
@@ -88,7 +104,7 @@ func GetAllChannels(c *gin.Context) {
 	var total int64
 
 	if enableTagMode {
-		tags, err := model.GetPaginatedTags(pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+		tags, err := model.GetPaginatedTags(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), region)
 		if err != nil {
 			common.SysError("failed to get paginated tags: " + err.Error())
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取标签失败，请稍后重试"})
@@ -98,7 +114,7 @@ func GetAllChannels(c *gin.Context) {
 			if tag == nil || *tag == "" {
 				continue
 			}
-			tagChannels, err := model.GetChannelsByTag(*tag, idSort, false)
+			tagChannels, err := model.GetChannelsByTag(*tag, idSort, false, region)
 			if err != nil {
 				continue
 			}
@@ -117,9 +133,9 @@ func GetAllChannels(c *gin.Context) {
 			}
 			channelData = append(channelData, filtered...)
 		}
-		total, _ = model.CountAllTags()
+		total, _ = model.CountAllTags(region)
 	} else {
-		baseQuery := model.DB.Model(&model.Channel{})
+		baseQuery := model.DB.Table(model.ChannelTable(region))
 		if typeFilter >= 0 {
 			baseQuery = baseQuery.Where("type = ?", typeFilter)
 		}
@@ -148,7 +164,7 @@ func GetAllChannels(c *gin.Context) {
 		clearChannelInfo(datum)
 	}
 
-	countQuery := model.DB.Model(&model.Channel{})
+	countQuery := model.DB.Table(model.ChannelTable(region))
 	if statusFilter == common.ChannelStatusEnabled {
 		countQuery = countQuery.Where("status = ?", common.ChannelStatusEnabled)
 	} else if statusFilter == 0 {
@@ -201,13 +217,13 @@ func buildFetchModelsHeaders(channel *model.Channel, key string) (http.Header, e
 }
 
 func FetchUpstreamModels(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
-	channel, err := model.GetChannelById(id, true)
+	channel, err := model.GetChannelById(int(id64), true)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -246,6 +262,7 @@ func FixChannelsAbilities(c *gin.Context) {
 }
 
 func SearchChannels(c *gin.Context) {
+	region := getRegionParam(c)
 	keyword := c.Query("keyword")
 	group := c.Query("group")
 	modelKeyword := c.Query("model")
@@ -255,7 +272,7 @@ func SearchChannels(c *gin.Context) {
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
 	channelData := make([]*model.Channel, 0)
 	if enableTagMode {
-		tags, err := model.SearchTags(keyword, group, modelKeyword, idSort)
+		tags, err := model.SearchTags(keyword, group, modelKeyword, idSort, region)
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -265,14 +282,14 @@ func SearchChannels(c *gin.Context) {
 		}
 		for _, tag := range tags {
 			if tag != nil && *tag != "" {
-				tagChannel, err := model.GetChannelsByTag(*tag, idSort, false)
+				tagChannel, err := model.GetChannelsByTag(*tag, idSort, false, region)
 				if err == nil {
 					channelData = append(channelData, tagChannel...)
 				}
 			}
 		}
 	} else {
-		channels, err := model.SearchChannels(keyword, group, modelKeyword, idSort)
+		channels, err := model.SearchChannels(keyword, group, modelKeyword, idSort, region)
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -359,12 +376,12 @@ func SearchChannels(c *gin.Context) {
 }
 
 func GetChannel(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	channel, err := model.GetChannelById(id, false)
+	channel, err := model.GetChannelById(int(id64), false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -384,11 +401,12 @@ func GetChannel(c *gin.Context) {
 // 此函数依赖 SecureVerificationRequired 中间件，确保用户已通过安全验证
 func GetChannelKey(c *gin.Context) {
 	userId := c.GetInt("id")
-	channelId, err := strconv.Atoi(c.Param("id"))
+	channelId64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, fmt.Errorf("渠道ID格式错误: %v", err))
 		return
 	}
+	channelId := int(channelId64)
 
 	// 获取渠道信息（包含密钥）
 	channel, err := model.GetChannelById(channelId, true)
@@ -493,11 +511,12 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 }
 
 func RefreshCodexChannelCredential(c *gin.Context) {
-	channelId, err := strconv.Atoi(c.Param("id"))
+	channelId64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, fmt.Errorf("invalid channel id: %w", err))
 		return
 	}
+	channelId := int(channelId64)
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
@@ -664,8 +683,8 @@ func AddChannel(c *gin.Context) {
 }
 
 func DeleteChannel(c *gin.Context) {
-	id, _ := strconv.Atoi(c.Param("id"))
-	channel := model.Channel{Id: id}
+	id64, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	channel := model.Channel{Id: int(id64)}
 	err := channel.Delete()
 	if err != nil {
 		common.ApiError(c, err)
@@ -840,10 +859,88 @@ type PatchChannel struct {
 }
 
 func UpdateChannel(c *gin.Context) {
-	channel := PatchChannel{}
-	err := c.ShouldBindJSON(&channel)
+	type updateChannelRequest struct {
+		Id                 common.Int64Flexible `json:"id"`
+		Type               int                  `json:"type"`
+		Key                string               `json:"key"`
+		OpenAIOrganization *string              `json:"openai_organization"`
+		TestModel          *string              `json:"test_model"`
+		Status             int                  `json:"status"`
+		Name               string               `json:"name"`
+		Weight             *uint                `json:"weight"`
+		CreatedTime        int64                `json:"created_time"`
+		TestTime           int64                `json:"test_time"`
+		ResponseTime       int                  `json:"response_time"`
+		BaseURL            *string              `json:"base_url"`
+		Other              string               `json:"other"`
+		Balance            float64              `json:"balance"`
+		BalanceUpdatedTime int64                `json:"balance_updated_time"`
+		Models             string               `json:"models"`
+		Group              string               `json:"group"`
+		UsedQuota          int64                `json:"used_quota"`
+		ModelMapping       *string              `json:"model_mapping"`
+		StatusCodeMapping  *string              `json:"status_code_mapping"`
+		Priority           *int64               `json:"priority"`
+		AutoBan            *int                 `json:"auto_ban"`
+		OtherInfo          string               `json:"other_info"`
+		Tag                *string              `json:"tag"`
+		Setting            *string              `json:"setting"`
+		ParamOverride      *string              `json:"param_override"`
+		HeaderOverride     *string              `json:"header_override"`
+		Remark             *string              `json:"remark"`
+		CostDiscount       *float64             `json:"cost_discount"`
+		ChannelInfo        model.ChannelInfo    `json:"channel_info"`
+		OtherSettings      string               `json:"settings"`
+		MultiKeyMode       *string              `json:"multi_key_mode"`
+		KeyMode            *string              `json:"key_mode"`
+	}
+
+	var req updateChannelRequest
+	err := c.ShouldBindJSON(&req)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+
+	channel := PatchChannel{
+		Channel: model.Channel{
+			Id:                 req.Id.Int(),
+			Type:               req.Type,
+			Key:                req.Key,
+			OpenAIOrganization: req.OpenAIOrganization,
+			TestModel:          req.TestModel,
+			Status:             req.Status,
+			Name:               req.Name,
+			Weight:             req.Weight,
+			CreatedTime:        req.CreatedTime,
+			TestTime:           req.TestTime,
+			ResponseTime:       req.ResponseTime,
+			BaseURL:            req.BaseURL,
+			Other:              req.Other,
+			Balance:            req.Balance,
+			BalanceUpdatedTime: req.BalanceUpdatedTime,
+			Models:             req.Models,
+			Group:              req.Group,
+			UsedQuota:          req.UsedQuota,
+			ModelMapping:       req.ModelMapping,
+			StatusCodeMapping:  req.StatusCodeMapping,
+			Priority:           req.Priority,
+			AutoBan:            req.AutoBan,
+			OtherInfo:          req.OtherInfo,
+			Tag:                req.Tag,
+			Setting:            req.Setting,
+			ParamOverride:      req.ParamOverride,
+			HeaderOverride:     req.HeaderOverride,
+			Remark:             req.Remark,
+			CostDiscount:       req.CostDiscount,
+			ChannelInfo:        req.ChannelInfo,
+			OtherSettings:      req.OtherSettings,
+		},
+		MultiKeyMode: req.MultiKeyMode,
+		KeyMode:      req.KeyMode,
+	}
+	if channel.Id == 0 {
+		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
 
@@ -957,6 +1054,10 @@ func UpdateChannel(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	// GORM Updates() 跳过 nil 指针字段，因此当用户清除 cost_discount 时需要显式置 NULL
+	if req.CostDiscount == nil && originChannel.CostDiscount != nil {
+		model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("cost_discount", nil)
 	}
 	model.InitChannelCache()
 	service.ResetProxyClientCache()
@@ -1124,7 +1225,7 @@ func GetTagModels(c *gin.Context) {
 		return
 	}
 
-	channels, err := model.GetChannelsByTag(tag, false, false) // idSort=false, selectAll=false
+	channels, err := model.GetChannelsByTag(tag, false, false, "") // idSort=false, selectAll=false
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -1162,11 +1263,12 @@ func GetTagModels(c *gin.Context) {
 //	suffix         - string appended to the original name (default "_复制")
 //	reset_balance  - bool, when true will reset balance & used_quota to 0 (default true)
 func CopyChannel(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid id"})
 		return
 	}
+	id := int(id64)
 
 	suffix := c.DefaultQuery("suffix", "_复制")
 	resetBalance := true
@@ -1907,7 +2009,7 @@ func OllamaDeleteModel(c *gin.Context) {
 
 // OllamaVersion 获取 Ollama 服务版本信息
 func OllamaVersion(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -1916,7 +2018,7 @@ func OllamaVersion(c *gin.Context) {
 		return
 	}
 
-	channel, err := model.GetChannelById(id, true)
+	channel, err := model.GetChannelById(int(id64), true)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,

@@ -9,7 +9,12 @@ build
 *.db-journal
 logs
 web/dist
-.env
+web/admin_api
+web/admin_api.zip
+web/admin_api.zip-ssr
+gravitex_llm.zip
+gravitex_llm.zip-ssr
+gravitex_llm
 one-api
 new-api
 /__debug_bin*

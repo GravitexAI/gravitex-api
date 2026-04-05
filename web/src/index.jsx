@@ -20,7 +20,6 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import '@douyinfe/semi-ui/dist/css/semi.css';
 import { UserProvider } from './context/User';
 import 'react-toastify/dist/ReactToastify.css';
 import { StatusProvider } from './context/Status';
@@ -33,11 +32,9 @@ import { useTranslation } from 'react-i18next';
 import zh_CN from '@douyinfe/semi-ui/lib/es/locale/source/zh_CN';
 import en_GB from '@douyinfe/semi-ui/lib/es/locale/source/en_GB';
 
-// 欢迎信息（二次开发者未经允许不准将此移除）
-// Welcome message (Do not remove this without permission from the original developer)
 if (typeof window !== 'undefined') {
   console.log(
-    '%cWE ❤ NEWAPI%c Github: https://github.com/QuantumNous/new-api',
+    '%cWE ❤ gravitex api%c',
     'color: #10b981; font-weight: bold; font-size: 24px;',
     'color: inherit; font-size: 14px;',
   );

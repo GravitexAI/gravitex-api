@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,10 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
+
+// CompleteVideoTaskOnUpstreamSuccessFn is set by main.go to break the import cycle
+// between relay and controller packages.
+var CompleteVideoTaskOnUpstreamSuccessFn func(ctx context.Context, task *model.Task, channel *model.Channel, taskResult *relaycommon.TaskInfo, responseBody []byte) error
 
 type TaskSubmitResult struct {
 	UpstreamTaskID string

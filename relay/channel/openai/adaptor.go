@@ -126,6 +126,12 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		if apiVersion == "" {
 			apiVersion = constant.AzureDefaultAPIVersion
 		}
+		// 如果配置了模型特定的 API 版本，优先使用模型特定的版本（适用于普通 API 和 Responses API）
+		if len(info.ChannelOtherSettings.AzureModelApiVersions) > 0 {
+			if modelApiVersion, exists := info.ChannelOtherSettings.AzureModelApiVersions[info.UpstreamModelName]; exists && modelApiVersion != "" {
+				apiVersion = modelApiVersion
+			}
+		}
 		// https://learn.microsoft.com/en-us/azure/cognitive-services/openai/chatgpt-quickstart?pivots=rest-api&tabs=command-line#rest-api
 		requestURL := strings.Split(info.RequestURLPath, "?")[0]
 		requestURL = fmt.Sprintf("%s?api-version=%s", requestURL, apiVersion)
@@ -138,16 +144,20 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 		// 特殊处理 responses API
 		if info.RelayMode == relayconstant.RelayModeResponses {
-			responsesApiVersion := "preview"
+			responsesApiVersion := apiVersion
 
 			subUrl := "/openai/v1/responses"
 			if strings.Contains(info.ChannelBaseUrl, "cognitiveservices.azure.com") {
 				subUrl = "/openai/responses"
-				responsesApiVersion = apiVersion
 			}
 
+			// 若配置了默认 Responses 版本且当前模型未在 per-model 中，使用默认 Responses 版本
 			if info.ChannelOtherSettings.AzureResponsesVersion != "" {
-				responsesApiVersion = info.ChannelOtherSettings.AzureResponsesVersion
+				if len(info.ChannelOtherSettings.AzureModelApiVersions) == 0 {
+					responsesApiVersion = info.ChannelOtherSettings.AzureResponsesVersion
+				} else if _, exists := info.ChannelOtherSettings.AzureModelApiVersions[info.UpstreamModelName]; !exists {
+					responsesApiVersion = info.ChannelOtherSettings.AzureResponsesVersion
+				}
 			}
 
 			requestURL = fmt.Sprintf("%s?api-version=%s", subUrl, responsesApiVersion)

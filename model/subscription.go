@@ -166,7 +166,7 @@ type SubscriptionPlan struct {
 	MaxPurchasePerUser int `json:"max_purchase_per_user" gorm:"type:int;default:0"`
 
 	// Upgrade user group after purchase (empty = no change)
-	UpgradeGroup string `json:"upgrade_group" gorm:"type:varchar(64);default:''"`
+	UpgradeGroup string `json:"upgrade_group" gorm:"type:varchar(256);default:''"`
 
 	// Total quota (amount in quota units, 0 = unlimited)
 	TotalAmount int64 `json:"total_amount" gorm:"type:bigint;not null;default:0"`
@@ -247,8 +247,8 @@ type UserSubscription struct {
 	LastResetTime int64 `json:"last_reset_time" gorm:"type:bigint;default:0"`
 	NextResetTime int64 `json:"next_reset_time" gorm:"type:bigint;default:0;index"`
 
-	UpgradeGroup  string `json:"upgrade_group" gorm:"type:varchar(64);default:''"`
-	PrevUserGroup string `json:"prev_user_group" gorm:"type:varchar(64);default:''"`
+	UpgradeGroup  string `json:"upgrade_group" gorm:"type:varchar(256);default:''"`
+	PrevUserGroup string `json:"prev_user_group" gorm:"type:varchar(256);default:''"`
 
 	CreatedAt int64 `json:"created_at" gorm:"bigint"`
 	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`

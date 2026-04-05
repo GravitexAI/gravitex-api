@@ -13,6 +13,7 @@ type PriceData struct {
 	ModelPrice           float64
 	ModelRatio           float64
 	CompletionRatio      float64
+	ImageCompletionRatio float64
 	CacheRatio           float64
 	CacheCreationRatio   float64
 	CacheCreation5mRatio float64
@@ -25,6 +26,8 @@ type PriceData struct {
 	Quota                int // 按次计费的最终额度（MJ / Task）
 	QuotaToPreConsume    int // 按量计费的预消耗额度
 	GroupRatioInfo       GroupRatioInfo
+	PerImageUnitPrice    float64 // 按张计费单价 ($/image)，来自 ImageModelPricePerImage 配置
+	ImagePriceMultiplier float64 // 按张计费倍率（图片数量×尺寸×质量），来自 meta.ImagePriceRatio
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {

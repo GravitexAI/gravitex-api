@@ -223,7 +223,7 @@ const EditTokenModal = (props) => {
       localInputs.model_limits_enabled = localInputs.model_limits.length > 0;
       let res = await API.put(`/api/token/`, {
         ...localInputs,
-        id: parseInt(props.editingToken.id),
+        id: String(props.editingToken.id),
       });
       const { success, message } = res.data;
       if (success) {

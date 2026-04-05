@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -43,6 +44,26 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 
 	// 计算使用量（基于 UsageMetadata）
 	usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
+
+	// 从 CandidatesTokensDetails 拆出图片/文本输出 token，供计费与日志使用（与 relay-gemini GeminiChatHandler 一致）
+	var imageOutputTokens, textOutputTokens int
+	for _, detail := range geminiResponse.UsageMetadata.CandidatesTokensDetails {
+		mod := strings.TrimSpace(detail.Modality)
+		if strings.EqualFold(mod, "IMAGE") {
+			imageOutputTokens += detail.TokenCount
+		} else if strings.EqualFold(mod, "TEXT") {
+			textOutputTokens += detail.TokenCount
+		}
+	}
+	if imageOutputTokens == 0 && geminiResponse.UsageMetadata.CandidatesTokenCount > 0 &&
+		strings.Contains(strings.ToLower(info.OriginModelName), "image") {
+		imageOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
+		textOutputTokens = 0
+	}
+	usage.CompletionTokenDetails.ImageTokens = imageOutputTokens
+	usage.CompletionTokenDetails.TextTokens = textOutputTokens
+	c.Set("gemini_image_output_tokens", imageOutputTokens)
+	c.Set("gemini_text_output_tokens", textOutputTokens)
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 

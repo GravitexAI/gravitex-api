@@ -57,6 +57,9 @@ export const useLogsData = () => {
     PROMPT: 'prompt',
     COMPLETION: 'completion',
     COST: 'cost',
+    VENDOR_COST: 'vendor_cost',
+    ACTUAL_COST: 'actual_cost',
+    PROFIT: 'profit',
     RETRY: 'retry',
     IP: 'ip',
     DETAILS: 'details',
@@ -120,6 +123,9 @@ export const useLogsData = () => {
       [COLUMN_KEYS.PROMPT]: true,
       [COLUMN_KEYS.COMPLETION]: true,
       [COLUMN_KEYS.COST]: true,
+      [COLUMN_KEYS.VENDOR_COST]: false,
+      [COLUMN_KEYS.ACTUAL_COST]: false,
+      [COLUMN_KEYS.PROFIT]: false,
       [COLUMN_KEYS.RETRY]: isAdminUser,
       [COLUMN_KEYS.IP]: true,
       [COLUMN_KEYS.DETAILS]: true,
@@ -142,6 +148,9 @@ export const useLogsData = () => {
         merged[COLUMN_KEYS.CHANNEL] = false;
         merged[COLUMN_KEYS.USERNAME] = false;
         merged[COLUMN_KEYS.RETRY] = false;
+          merged[COLUMN_KEYS.VENDOR_COST] = false;
+          merged[COLUMN_KEYS.ACTUAL_COST] = false;
+          merged[COLUMN_KEYS.PROFIT] = false;
       }
 
       return merged;
@@ -207,7 +216,10 @@ export const useLogsData = () => {
       if (
         (key === COLUMN_KEYS.CHANNEL ||
           key === COLUMN_KEYS.USERNAME ||
-          key === COLUMN_KEYS.RETRY) &&
+          key === COLUMN_KEYS.RETRY ||
+          key === COLUMN_KEYS.VENDOR_COST ||
+          key === COLUMN_KEYS.ACTUAL_COST ||
+          key === COLUMN_KEYS.PROFIT) &&
         !isAdminUser
       ) {
         updatedColumns[key] = false;
@@ -497,7 +509,16 @@ export const useLogsData = () => {
 
         let content = '';
         if (!isViolationFeeLog) {
-          if (other?.ws || other?.audio) {
+          if (other?.billing_type === 'per_second') {
+            const pricePerSec =
+              other?.video_price_per_second ??
+              other?.official_video_price_per_second ??
+              0;
+            const seconds = other?.requested_seconds || logs[i].completion_tokens || 0;
+            content =
+              `单价 $${pricePerSec.toFixed(4)}/秒\n` +
+              `$${pricePerSec.toFixed(4)} × ${seconds}秒 = ${renderQuota(logs[i].quota)}`;
+          } else if (other?.ws || other?.audio) {
             content = renderAudioModelPrice(
               other?.text_input,
               other?.text_output,
@@ -562,6 +583,11 @@ export const useLogsData = () => {
               other?.audio_input_price || 0,
               other?.image_generation_call || false,
               other?.image_generation_call_price || 0,
+              other?.image_output_tokens || 0,
+              (other?.text_output_tokens || 0) + (other?.reasoning_tokens || 0),
+              other?.effective_image_output_ratio ??
+                other?.image_completion_ratio ??
+                0,
               billingDisplayMode,
             );
           }

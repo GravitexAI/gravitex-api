@@ -64,12 +64,12 @@ func StartCodexOAuth(c *gin.Context) {
 }
 
 func StartCodexOAuthForChannel(c *gin.Context) {
-	channelID, err := strconv.Atoi(c.Param("id"))
+	channelID64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, fmt.Errorf("invalid channel id: %w", err))
 		return
 	}
-	startCodexOAuthWithChannelID(c, channelID)
+	startCodexOAuthWithChannelID(c, int(channelID64))
 }
 
 func startCodexOAuthWithChannelID(c *gin.Context, channelID int) {
@@ -115,12 +115,12 @@ func CompleteCodexOAuth(c *gin.Context) {
 }
 
 func CompleteCodexOAuthForChannel(c *gin.Context) {
-	channelID, err := strconv.Atoi(c.Param("id"))
+	channelID64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, fmt.Errorf("invalid channel id: %w", err))
 		return
 	}
-	completeCodexOAuthWithChannelID(c, channelID)
+	completeCodexOAuthWithChannelID(c, int(channelID64))
 }
 
 func completeCodexOAuthWithChannelID(c *gin.Context, channelID int) {

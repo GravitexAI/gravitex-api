@@ -24,7 +24,25 @@ import {
   isValidMessage,
 } from './utils';
 import axios from 'axios';
+import JSONBig from 'json-bigint';
 import { MESSAGE_ROLES } from '../constants/playground.constants';
+
+const JSONBigIntParser = JSONBig({ storeAsString: true });
+
+function safeParseResponseData(data) {
+  // axios will pass string/ArrayBuffer depending on responseType; we only handle string JSON here.
+  if (typeof data !== 'string') return data;
+  const trimmed = data.trim();
+  if (!trimmed) return data;
+  // Fast path: only attempt JSON parse if it looks like JSON.
+  const first = trimmed[0];
+  if (first !== '{' && first !== '[') return data;
+  try {
+    return JSONBigIntParser.parse(trimmed);
+  } catch {
+    return data;
+  }
+}
 
 export let API = axios.create({
   baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL
@@ -34,6 +52,8 @@ export let API = axios.create({
     'New-API-User': getUserIdFromLocalStorage(),
     'Cache-Control': 'no-store',
   },
+  // Override axios default JSON.parse to prevent bigint precision loss.
+  transformResponse: [(data) => safeParseResponseData(data)],
 });
 
 
@@ -89,6 +109,7 @@ export function updateAPI() {
       'New-API-User': getUserIdFromLocalStorage(),
       'Cache-Control': 'no-store',
     },
+    transformResponse: [(data) => safeParseResponseData(data)],
   });
 
   patchAPIInstance(API);

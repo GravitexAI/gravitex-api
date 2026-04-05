@@ -227,9 +227,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
 
-		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		willRetry := shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry())
 
-		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
+		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, willRetry)
+
+		if !willRetry {
 			break
 		}
 	}
@@ -237,7 +239,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	useChannel := c.GetStringSlice("use_channel")
 	if len(useChannel) > 1 {
 		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
-		logger.LogInfo(c, retryLogStr)
+		if newAPIError != nil {
+			logger.LogError(c, retryLogStr+" (全部失败)")
+		} else {
+			logger.LogInfo(c, retryLogStr)
+		}
 	}
 }
 
@@ -347,7 +353,7 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 	return operation_setting.ShouldRetryByStatusCode(code)
 }
 
-func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
+func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError, willRetry bool) {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
@@ -359,6 +365,11 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 
 	if constant.ErrorLogEnabled && types.IsRecordErrorLog(err) {
 		// 保存错误日志到mysql中
+		// willRetry=true 时记录为"重试"类型，willRetry=false 时记录为"错误"类型
+		logType := model.LogTypeError
+		if willRetry {
+			logType = model.LogTypeRetryFail
+		}
 		userId := c.GetInt("id")
 		tokenName := c.GetString("token_name")
 		modelName := c.GetString("original_model")
@@ -383,13 +394,45 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 		}
 		service.AppendChannelAffinityAdminInfo(c, adminInfo)
+		costDiscount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
+		if costDiscount > 0 {
+			adminInfo["cost_discount"] = costDiscount
+		}
 		other["admin_info"] = adminInfo
 		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 		if startTime.IsZero() {
 			startTime = time.Now()
 		}
 		useTimeSeconds := int(time.Since(startTime).Seconds())
-		model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, false, userGroup, other)
+		if logType == model.LogTypeRetryFail {
+			// 重试类型：直接写库，使用 LogTypeRetryFail
+			// 添加重试链路信息：当前是第几次重试、渠道链路字符串
+			useChannels := c.GetStringSlice("use_channel")
+			retryCount := len(useChannels) // 第 N 次尝试（含首次）
+			other["retry_count"] = retryCount
+			other["retry_chain"] = strings.Join(useChannels, "->")
+			requestId := c.GetString(common.RequestIdKey)
+			otherStr := common.MapToJsonStr(other)
+			retryContent := fmt.Sprintf("[重试%d/%d %s] %s", retryCount, common.RetryTimes+1, strings.Join(useChannels, "->"), err.MaskSensitiveErrorWithStatusCode())
+			retryLog := &model.Log{
+				UserId:    userId,
+				Username:  c.GetString("username"),
+				CreatedAt: common.GetTimestamp(),
+				Type:      model.LogTypeRetryFail,
+				Content:   retryContent,
+				TokenName: tokenName,
+				ModelName: modelName,
+				ChannelId: channelId,
+				TokenId:   tokenId,
+				UseTime:   useTimeSeconds,
+				Group:     userGroup,
+				RequestId: requestId,
+				Other:     otherStr,
+			}
+			model.CreateLog(retryLog)
+		} else {
+			model.RecordErrorLog(c, userId, channelId, modelName, tokenName, err.MaskSensitiveErrorWithStatusCode(), tokenId, useTimeSeconds, false, userGroup, other)
+		}
 	}
 
 }
@@ -440,7 +483,7 @@ func RelayMidjourney(c *gin.Context) {
 func RelayNotImplemented(c *gin.Context) {
 	err := types.OpenAIError{
 		Message: "API not implemented",
-		Type:    "new_api_error",
+		Type:    "gravitex_api_error",
 		Param:   "",
 		Code:    "api_not_implemented",
 	}
@@ -549,7 +592,8 @@ func RelayTask(c *gin.Context) {
 			processChannelError(c,
 				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
-				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode))
+				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode),
+				false)
 		}
 
 		if !shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry()) {
@@ -560,7 +604,11 @@ func RelayTask(c *gin.Context) {
 	useChannel := c.GetStringSlice("use_channel")
 	if len(useChannel) > 1 {
 		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
-		logger.LogInfo(c, retryLogStr)
+		if taskErr != nil {
+			logger.LogError(c, retryLogStr+" (全部失败)")
+		} else {
+			logger.LogInfo(c, retryLogStr)
+		}
 	}
 
 	// ── 成功：结算 + 日志 + 插入任务 ──

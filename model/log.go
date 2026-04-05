@@ -35,20 +35,47 @@ type Log struct {
 	TokenId          int    `json:"token_id" gorm:"default:0;index"`
 	Group            string `json:"group" gorm:"index"`
 	Ip               string `json:"ip" gorm:"index;default:''"`
-	RequestId        string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
+	RequestId        string `json:"request_id,omitempty" gorm:"type:varchar(512);index:idx_logs_request_id;default:''"`
 	Other            string `json:"other"`
 }
 
 // don't use iota, avoid change log type value
 const (
-	LogTypeUnknown = 0
-	LogTypeTopup   = 1
-	LogTypeConsume = 2
-	LogTypeManage  = 3
-	LogTypeSystem  = 4
-	LogTypeError   = 5
-	LogTypeRefund  = 6
+	LogTypeUnknown   = 0
+	LogTypeTopup     = 1
+	LogTypeConsume   = 2
+	LogTypeManage    = 3
+	LogTypeSystem    = 4
+	LogTypeError     = 5
+	LogTypeRefund    = 6
+	LogTypeRetryFail = 7 // 重试（中间失败，后续有重试）
 )
+
+var logTypeNames = map[int]string{
+	LogTypeUnknown:   "unknown",
+	LogTypeTopup:     "topup",
+	LogTypeConsume:   "consume",
+	LogTypeManage:    "manage",
+	LogTypeSystem:    "system",
+	LogTypeError:     "error",
+	LogTypeRefund:    "refund",
+	LogTypeRetryFail: "retry",
+}
+
+// CreateLog 统一的日志写入入口，写入 DB 并打印完整日志信息
+func CreateLog(log *Log) error {
+	typeName := logTypeNames[log.Type]
+	if typeName == "" {
+		typeName = fmt.Sprintf("type_%d", log.Type)
+	}
+	common.SysLog(fmt.Sprintf("[LogInsert] type=%s userId=%d channel=%d model=%s token=%s group=%s quota=%d content=%s other=%s",
+		typeName, log.UserId, log.ChannelId, log.ModelName, log.TokenName, log.Group, log.Quota, log.Content, log.Other))
+	err := LOG_DB.Create(log).Error
+	if err != nil {
+		common.SysLog(fmt.Sprintf("[LogInsert] FAILED type=%s userId=%d err=%s", typeName, log.UserId, err.Error()))
+	}
+	return err
+}
 
 func formatUserLogs(logs []*Log, startIdx int) {
 	for i := range logs {
@@ -58,8 +85,10 @@ func formatUserLogs(logs []*Log, startIdx int) {
 		if otherMap != nil {
 			// Remove admin-only debug fields.
 			delete(otherMap, "admin_info")
-			// delete(otherMap, "reject_reason")
+			delete(otherMap, "reject_reason")
 			delete(otherMap, "stream_status")
+			delete(otherMap, "official_quota")
+			delete(otherMap, "official_video_price_per_second")
 		}
 		logs[i].Other = common.MapToJsonStr(otherMap)
 		logs[i].Id = startIdx + i + 1
@@ -84,7 +113,7 @@ func RecordLog(userId int, logType int, content string) {
 		Type:      logType,
 		Content:   content,
 	}
-	err := LOG_DB.Create(log).Error
+	err := CreateLog(log)
 	if err != nil {
 		common.SysLog("failed to record log: " + err.Error())
 	}
@@ -128,10 +157,15 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		RequestId: requestId,
 		Other:     otherStr,
 	}
-	err := LOG_DB.Create(log).Error
+	err := CreateLog(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
+}
+
+// PriceChainParams 价格链条参数，供日志与 Expenses 展示
+type PriceChainParams struct {
+	VendorId *int64 `json:"vendor_id,omitempty"`
 }
 
 type RecordConsumeLogParams struct {
@@ -147,6 +181,8 @@ type RecordConsumeLogParams struct {
 	IsStream         bool                   `json:"is_stream"`
 	Group            string                 `json:"group"`
 	Other            map[string]interface{} `json:"other"`
+	PriceChain       *PriceChainParams      `json:"price_chain,omitempty"`
+	RequestId        string                 `json:"request_id,omitempty"` // 可选覆盖，视频任务用 taskID
 }
 
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
@@ -155,8 +191,33 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	}
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
-	requestId := c.GetString(common.RequestIdKey)
-	otherStr := common.MapToJsonStr(params.Other)
+	requestId := params.RequestId
+	if requestId == "" {
+		requestId = c.GetString(common.RequestIdKey)
+	}
+	// 合并 other 与 vendor_id（来自 PriceChain），与 Nebula 一致
+	other := make(map[string]interface{})
+	if params.Other != nil {
+		for k, v := range params.Other {
+			other[k] = v
+		}
+	}
+	if params.PriceChain != nil && params.PriceChain.VendorId != nil {
+		other["vendor_id"] = *params.PriceChain.VendorId
+	}
+	// Compute official_quota (vendor cost without group markup)
+	if params.Quota != 0 && params.Other != nil {
+		effectiveGroupRatio := 1.0
+		if ugr, ok := params.Other["user_group_ratio"].(float64); ok && ugr > 0 {
+			effectiveGroupRatio = ugr
+		} else if gr, ok := params.Other["group_ratio"].(float64); ok && gr > 0 {
+			effectiveGroupRatio = gr
+		}
+		if effectiveGroupRatio > 0 {
+			other["official_quota"] = float64(params.Quota) / effectiveGroupRatio
+		}
+	}
+	otherStr := common.MapToJsonStr(other)
 	// 判断是否需要记录 IP
 	needRecordIp := false
 	if settingMap, err := GetUserSetting(userId, false); err == nil {
@@ -189,7 +250,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		RequestId: requestId,
 		Other:     otherStr,
 	}
-	err := LOG_DB.Create(log).Error
+	err := CreateLog(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}

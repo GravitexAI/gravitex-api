@@ -1060,17 +1060,29 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 	usage.PromptTokensDetails.CachedTokens = metadata.CachedContentTokenCount
 
 	for _, detail := range metadata.PromptTokensDetails {
-		if detail.Modality == "AUDIO" {
+		mod := strings.TrimSpace(detail.Modality)
+		if strings.EqualFold(mod, "AUDIO") {
 			usage.PromptTokensDetails.AudioTokens += detail.TokenCount
-		} else if detail.Modality == "TEXT" {
+		} else if strings.EqualFold(mod, "TEXT") {
 			usage.PromptTokensDetails.TextTokens += detail.TokenCount
 		}
 	}
 	for _, detail := range metadata.ToolUsePromptTokensDetails {
-		if detail.Modality == "AUDIO" {
+		mod := strings.TrimSpace(detail.Modality)
+		if strings.EqualFold(mod, "AUDIO") {
 			usage.PromptTokensDetails.AudioTokens += detail.TokenCount
-		} else if detail.Modality == "TEXT" {
+		} else if strings.EqualFold(mod, "TEXT") {
 			usage.PromptTokensDetails.TextTokens += detail.TokenCount
+		}
+	}
+
+	// 从 CandidatesTokensDetails 拆出图片/文本输出 token，供计费与日志使用（modality 大小写不敏感）
+	for _, detail := range metadata.CandidatesTokensDetails {
+		mod := strings.TrimSpace(detail.Modality)
+		if strings.EqualFold(mod, "IMAGE") {
+			usage.CompletionTokenDetails.ImageTokens += detail.TokenCount
+		} else if strings.EqualFold(mod, "TEXT") {
+			usage.CompletionTokenDetails.TextTokens += detail.TokenCount
 		}
 	}
 
@@ -1326,6 +1338,25 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
 			mappedUsage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
 			*usage = mappedUsage
+			// 流式最后一包：从 CandidatesTokensDetails 拆出图片/文本输出 token，供计费与日志使用（modality 大小写不敏感）
+			var imageOutputTokens, textOutputTokens int
+			for _, detail := range geminiResponse.UsageMetadata.CandidatesTokensDetails {
+				mod := strings.TrimSpace(detail.Modality)
+				if strings.EqualFold(mod, "IMAGE") {
+					imageOutputTokens += detail.TokenCount
+				} else if strings.EqualFold(mod, "TEXT") {
+					textOutputTokens += detail.TokenCount
+				}
+			}
+			if imageOutputTokens == 0 && geminiResponse.UsageMetadata.CandidatesTokenCount > 0 &&
+				strings.Contains(strings.ToLower(info.OriginModelName), "image") {
+				imageOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
+				textOutputTokens = 0
+			}
+			usage.CompletionTokenDetails.ImageTokens = imageOutputTokens
+			usage.CompletionTokenDetails.TextTokens = textOutputTokens
+			c.Set("gemini_image_output_tokens", imageOutputTokens)
+			c.Set("gemini_text_output_tokens", textOutputTokens)
 		}
 
 		if !callback(data, &geminiResponse) {
@@ -1492,6 +1523,27 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	fullTextResponse := responseGeminiChat2OpenAI(c, &geminiResponse)
 	fullTextResponse.Model = info.UpstreamModelName
 	usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
+
+	// 从 CandidatesTokensDetails 拆出图片/文本输出 token，供计费与日志使用（modality 大小写不敏感）
+	var imageOutputTokens, textOutputTokens int
+	for _, detail := range geminiResponse.UsageMetadata.CandidatesTokensDetails {
+		mod := strings.TrimSpace(detail.Modality)
+		if strings.EqualFold(mod, "IMAGE") {
+			imageOutputTokens += detail.TokenCount
+		} else if strings.EqualFold(mod, "TEXT") {
+			textOutputTokens += detail.TokenCount
+		}
+	}
+	// 图片模型若未从 candidatesTokensDetails 解析出 IMAGE，用 candidatesTokenCount 作为图片 token 回退（与 usageMetadata 一致）
+	if imageOutputTokens == 0 && geminiResponse.UsageMetadata.CandidatesTokenCount > 0 &&
+		strings.Contains(strings.ToLower(info.OriginModelName), "image") {
+		imageOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
+		textOutputTokens = 0
+	}
+	usage.CompletionTokenDetails.ImageTokens = imageOutputTokens
+	usage.CompletionTokenDetails.TextTokens = textOutputTokens
+	c.Set("gemini_image_output_tokens", imageOutputTokens)
+	c.Set("gemini_text_output_tokens", textOutputTokens)
 
 	fullTextResponse.Usage = usage
 

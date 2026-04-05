@@ -13,7 +13,6 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 )
 
-// UserBase struct remains the same as it represents the cached data structure
 type UserBase struct {
 	Id       int    `json:"id"`
 	Group    string `json:"group"`
@@ -98,7 +97,6 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 		return nil, err // Return nil and error if DB lookup fails
 	}
 
-	// Create cache object from user data
 	userCache = &UserBase{
 		Id:       user.Id,
 		Group:    user.Group,

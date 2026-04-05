@@ -732,11 +732,12 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 }
 
 func TestChannel(c *gin.Context) {
-	channelId, err := strconv.Atoi(c.Param("id"))
+	channelId64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	channelId := int(channelId64)
 	channel, err := model.CacheGetChannel(channelId)
 	if err != nil {
 		channel, err = model.GetChannelById(channelId, true)
@@ -838,7 +839,7 @@ func testAllChannels(notify bool) error {
 
 			// disable channel
 			if isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
-				processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+				processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, false)
 			}
 
 			// enable channel

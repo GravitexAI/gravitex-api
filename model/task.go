@@ -50,6 +50,8 @@ type Task struct {
 	UserId     int                   `json:"user_id" gorm:"index"`
 	Group      string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
 	ChannelId  int                   `json:"channel_id" gorm:"index"`
+	TokenId    int                   `json:"token_id" gorm:"index"`
+	TokenName  string                `json:"token_name" gorm:"type:varchar(100)"`
 	Quota      int                   `json:"quota"`
 	Action     string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
 	Status     TaskStatus            `json:"status" gorm:"type:varchar(20);index"` // 任务状态
@@ -61,8 +63,9 @@ type Task struct {
 	Properties Properties            `json:"properties" gorm:"type:json"`
 	Username   string                `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
-	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
-	Data        json.RawMessage `json:"data" gorm:"type:json"`
+	PrivateData         TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
+	Data                json.RawMessage `json:"data" gorm:"type:json"`
+	UpstreamRequestBody json.RawMessage `json:"-" gorm:"column:upstream_request_body;type:json"`
 }
 
 func (t *Task) SetData(data any) {
@@ -78,6 +81,9 @@ type Properties struct {
 	Input             string `json:"input"`
 	UpstreamModelName string `json:"upstream_model_name,omitempty"`
 	OriginModelName   string `json:"origin_model_name,omitempty"`
+	ProjectID         string `json:"project_id,omitempty"`
+	MultiKeyIndex     *int   `json:"multi_key_index,omitempty"`
+	RequestedSeconds  int    `json:"requested_seconds,omitempty"`
 }
 
 func (m *Properties) Scan(val interface{}) error {
@@ -427,6 +433,16 @@ func TaskBulkUpdateByID(ids []int64, params map[string]any) error {
 	}
 	return DB.Model(&Task{}).
 		Where("id in (?)", ids).
+		Updates(params).Error
+}
+
+// TaskBulkUpdate performs an unconditional bulk UPDATE by task_id strings.
+func TaskBulkUpdate(taskIDs []string, params map[string]any) error {
+	if len(taskIDs) == 0 {
+		return nil
+	}
+	return DB.Model(&Task{}).
+		Where("task_id in (?)", taskIDs).
 		Updates(params).Error
 }
 

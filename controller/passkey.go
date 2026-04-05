@@ -327,13 +327,13 @@ func PasskeyLoginFinish(c *gin.Context) {
 }
 
 func AdminResetPasskey(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		common.ApiErrorMsg(c, "无效的用户 ID")
 		return
 	}
 
-	user := &model.User{Id: id}
+	user := &model.User{Id: int(id64)}
 	if err := user.FillUserById(); err != nil {
 		common.ApiError(c, err)
 		return

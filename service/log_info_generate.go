@@ -70,6 +70,11 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 
+	costDiscount := common.GetContextKeyFloat64(ctx, constant.ContextKeyChannelCostDiscount)
+	if costDiscount > 0 {
+		adminInfo["cost_discount"] = costDiscount
+	}
+
 	other["admin_info"] = adminInfo
 	appendRequestPath(ctx, relayInfo, other)
 	appendRequestConversionChain(relayInfo, other)
@@ -252,13 +257,24 @@ func GenerateClaudeOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	return info
 }
 
-func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData types.PriceData) map[string]interface{} {
+func GenerateMjOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, priceData types.PriceData) map[string]interface{} {
 	other := make(map[string]interface{})
 	other["model_price"] = priceData.ModelPrice
 	other["group_ratio"] = priceData.GroupRatioInfo.GroupRatio
 	if priceData.GroupRatioInfo.HasSpecialRatio {
 		other["user_group_ratio"] = priceData.GroupRatioInfo.GroupSpecialRatio
 	}
-	appendRequestPath(nil, relayInfo, other)
+	appendRequestPath(ctx, relayInfo, other)
+	// 写入渠道成本折扣
+	if ctx != nil {
+		adminInfo := make(map[string]interface{})
+		costDiscount := common.GetContextKeyFloat64(ctx, constant.ContextKeyChannelCostDiscount)
+		if costDiscount > 0 {
+			adminInfo["cost_discount"] = costDiscount
+		}
+		if len(adminInfo) > 0 {
+			other["admin_info"] = adminInfo
+		}
+	}
 	return other
 }

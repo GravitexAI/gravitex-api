@@ -37,35 +37,6 @@ type VeoRequestPayload struct {
 	Parameters *VeoParameters `json:"parameters,omitempty"`
 }
 
-type submitResponse struct {
-	Name string `json:"name"`
-}
 
-type operationVideo struct {
-	MimeType           string `json:"mimeType"`
-	BytesBase64Encoded string `json:"bytesBase64Encoded"`
-	Encoding           string `json:"encoding"`
-}
+// submitResponse, operationVideo, operationResponse are defined in adaptor.go
 
-type operationResponse struct {
-	Name     string `json:"name"`
-	Done     bool   `json:"done"`
-	Response struct {
-		Type                  string           `json:"@type"`
-		RaiMediaFilteredCount int              `json:"raiMediaFilteredCount"`
-		Videos                []operationVideo `json:"videos"`
-		BytesBase64Encoded    string           `json:"bytesBase64Encoded"`
-		Encoding              string           `json:"encoding"`
-		Video                 string           `json:"video"`
-		GenerateVideoResponse struct {
-			GeneratedVideos []struct {
-				Video struct {
-					URI string `json:"uri"`
-				} `json:"video"`
-			} `json:"generatedVideos"`
-		} `json:"generateVideoResponse"`
-	} `json:"response"`
-	Error struct {
-		Message string `json:"message"`
-	} `json:"error"`
-}

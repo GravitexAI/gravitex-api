@@ -117,7 +117,7 @@ const EditRedemptionModal = (props) => {
     if (isEdit) {
       res = await API.put(`/api/redemption/`, {
         ...localInputs,
-        id: parseInt(props.editingRedemption.id),
+        id: String(props.editingRedemption.id),
       });
     } else {
       res = await API.post(`/api/redemption/`, {

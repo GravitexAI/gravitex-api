@@ -31,6 +31,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/siliconflow"
 	"github.com/QuantumNous/new-api/relay/channel/submodel"
 	taskali "github.com/QuantumNous/new-api/relay/channel/task/ali"
+	taskazurevideo "github.com/QuantumNous/new-api/relay/channel/task/azurevideo"
 	taskdoubao "github.com/QuantumNous/new-api/relay/channel/task/doubao"
 	taskGemini "github.com/QuantumNous/new-api/relay/channel/task/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/task/hailuo"
@@ -38,6 +39,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/task/kling"
 	tasksora "github.com/QuantumNous/new-api/relay/channel/task/sora"
 	"github.com/QuantumNous/new-api/relay/channel/task/suno"
+	taskuptoken "github.com/QuantumNous/new-api/relay/channel/task/uptoken"
 	taskvertex "github.com/QuantumNous/new-api/relay/channel/task/vertex"
 	taskVidu "github.com/QuantumNous/new-api/relay/channel/task/vidu"
 	"github.com/QuantumNous/new-api/relay/channel/tencent"
@@ -155,10 +157,14 @@ func GetTaskAdaptor(platform constant.TaskPlatform) channel.TaskAdaptor {
 			return &taskdoubao.TaskAdaptor{}
 		case constant.ChannelTypeSora, constant.ChannelTypeOpenAI:
 			return &tasksora.TaskAdaptor{}
+		case constant.ChannelTypeAzureVideo, constant.ChannelTypeAzure:
+			return &taskazurevideo.TaskAdaptor{}
 		case constant.ChannelTypeGemini:
 			return &taskGemini.TaskAdaptor{}
 		case constant.ChannelTypeMiniMax:
 			return &hailuo.TaskAdaptor{}
+		case constant.ChannelTypeUptoken:
+			return &taskuptoken.TaskAdaptor{}
 		}
 	}
 	return nil

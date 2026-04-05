@@ -77,7 +77,12 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			}
 
 			if common.DebugEnabled {
-				logger.LogDebug(c, fmt.Sprintf("image request body: %s", string(jsonData)))
+				const maxLogLen = 2000
+				bodyStr := string(jsonData)
+				if len(bodyStr) > maxLogLen {
+					bodyStr = bodyStr[:maxLogLen] + "...(truncated)"
+				}
+				logger.LogDebug(c, fmt.Sprintf("image request body: %s", bodyStr))
 			}
 			requestBody = bytes.NewBuffer(jsonData)
 		}
@@ -131,6 +136,19 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	}
 	if usage.(*dto.Usage).PromptTokens == 0 {
 		usage.(*dto.Usage).PromptTokens = 1
+	}
+
+	// 按张计费：根据上游实际生成的图片数量校正扣费金额
+	// 优先使用上游返回的 generated_images，其次使用请求中的 N
+	if info.PriceData.PerImageUnitPrice > 0 {
+		actualImages := usage.(*dto.Usage).GeneratedImages
+		if actualImages <= 0 && request.N != nil && *request.N > 0 {
+			actualImages = int(*request.N)
+		}
+		if actualImages > 0 {
+			info.PriceData.ModelPrice = info.PriceData.PerImageUnitPrice * float64(actualImages)
+			info.PriceData.ImagePriceMultiplier = float64(actualImages)
+		}
 	}
 
 	quality := "standard"

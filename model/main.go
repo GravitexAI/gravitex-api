@@ -119,6 +119,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 	defer func() {
 		initCol()
 	}()
+
 	dsn := os.Getenv(envName)
 	if dsn != "" {
 		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
@@ -133,7 +134,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 				DSN:                  dsn,
 				PreferSimpleProtocol: true, // disables implicit prepared statement usage
 			}), &gorm.Config{
-				PrepareStmt: true, // precompile SQL
+				PrepareStmt: true,
 			})
 		}
 		if strings.HasPrefix(dsn, "local") {
@@ -144,7 +145,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 				common.LogSqlType = common.DatabaseTypeSQLite
 			}
 			return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
-				PrepareStmt: true, // precompile SQL
+				PrepareStmt: true,
 			})
 		}
 		// Use MySQL
@@ -162,15 +163,18 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 		} else {
 			common.LogSqlType = common.DatabaseTypeMySQL
 		}
+		// MySQL: disable PrepareStmt by default to avoid exceeding max_prepared_stmt_count
+		// under high concurrency (MaxOpenConns × unique_queries > 16382)
+		mysqlPrepareStmt := common.GetEnvOrDefaultBool("MYSQL_PREPARE_STMT", false)
 		return gorm.Open(mysql.Open(dsn), &gorm.Config{
-			PrepareStmt: true, // precompile SQL
+			PrepareStmt: mysqlPrepareStmt,
 		})
 	}
 	// Use SQLite
 	common.SysLog("SQL_DSN not set, using SQLite as database")
 	common.UsingSQLite = true
 	return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
-		PrepareStmt: true, // precompile SQL
+		PrepareStmt: true,
 	})
 }
 
@@ -254,6 +258,8 @@ func migrateDB() error {
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
+	// 扩展 tasks.task_id 长度以支持 Veo/Vertex base64 operation name（>191）
+	migrateTaskIDColumnLength()
 
 	err := DB.AutoMigrate(
 		&Channel{},
@@ -370,6 +376,7 @@ func migrateLOGDB() error {
 	if err = LOG_DB.AutoMigrate(&Log{}); err != nil {
 		return err
 	}
+	migrateLogRequestIdColumnLength()
 	return nil
 }
 
@@ -398,7 +405,7 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`stripe_price_id`" + ` varchar(128) DEFAULT '',
 ` + "`creem_product_id`" + ` varchar(128) DEFAULT '',
 ` + "`max_purchase_per_user`" + ` integer DEFAULT 0,
-` + "`upgrade_group`" + ` varchar(64) DEFAULT '',
+` + "`upgrade_group`" + ` varchar(256) DEFAULT '',
 ` + "`total_amount`" + ` bigint NOT NULL DEFAULT 0,
 ` + "`quota_reset_period`" + ` varchar(16) DEFAULT 'never',
 ` + "`quota_reset_custom_seconds`" + ` bigint DEFAULT 0,
@@ -431,7 +438,7 @@ PRIMARY KEY (` + "`id`" + `)
 		{Name: "stripe_price_id", DDL: "`stripe_price_id` varchar(128) DEFAULT ''"},
 		{Name: "creem_product_id", DDL: "`creem_product_id` varchar(128) DEFAULT ''"},
 		{Name: "max_purchase_per_user", DDL: "`max_purchase_per_user` integer DEFAULT 0"},
-		{Name: "upgrade_group", DDL: "`upgrade_group` varchar(64) DEFAULT ''"},
+		{Name: "upgrade_group", DDL: "`upgrade_group` varchar(256) DEFAULT ''"},
 		{Name: "total_amount", DDL: "`total_amount` bigint NOT NULL DEFAULT 0"},
 		{Name: "quota_reset_period", DDL: "`quota_reset_period` varchar(16) DEFAULT 'never'"},
 		{Name: "quota_reset_custom_seconds", DDL: "`quota_reset_custom_seconds` bigint DEFAULT 0"},
@@ -559,6 +566,64 @@ func migrateSubscriptionPlanPriceAmount() {
 		} else {
 			common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to decimal(10,6)", tableName, columnName))
 		}
+	}
+}
+
+// migrateTaskIDColumnLength 将 tasks.task_id 从 varchar(191) 扩为 varchar(512)，以支持 Veo/Vertex 的 base64 operation name
+func migrateTaskIDColumnLength() {
+	if common.UsingSQLite {
+		return // SQLite 不强制 varchar 长度，新表由 AutoMigrate 建为 512
+	}
+	tableName := "tasks"
+	columnName := "task_id"
+	if !DB.Migrator().HasTable(tableName) {
+		return
+	}
+	if !DB.Migrator().HasColumn(&Task{}, columnName) {
+		return
+	}
+	var alterSQL string
+	if common.UsingPostgreSQL {
+		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE varchar(512)`, tableName, columnName)
+	} else if common.UsingMySQL {
+		// 保持原索引，仅扩展长度
+		alterSQL = fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` varchar(512) NOT NULL DEFAULT ''", tableName, columnName)
+	} else {
+		return
+	}
+	if err := DB.Exec(alterSQL).Error; err != nil {
+		common.SysLog(fmt.Sprintf("Warning: failed to migrate %s.%s to varchar(512): %v", tableName, columnName, err))
+	} else {
+		common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to varchar(512)", tableName, columnName))
+	}
+}
+
+// migrateLogRequestIdColumnLength 将 logs.request_id 从 varchar(64) 扩为 varchar(512)，
+// 以支持 Vertex AI 视频任务的长 task_id（作为 request_id 记录日志）
+func migrateLogRequestIdColumnLength() {
+	if common.UsingSQLite {
+		return
+	}
+	tableName := "logs"
+	columnName := "request_id"
+	if !LOG_DB.Migrator().HasTable(tableName) {
+		return
+	}
+	if !LOG_DB.Migrator().HasColumn(&Log{}, columnName) {
+		return
+	}
+	var alterSQL string
+	if common.UsingPostgreSQL {
+		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE varchar(512)`, tableName, columnName)
+	} else if common.UsingMySQL {
+		alterSQL = fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` varchar(512) NOT NULL DEFAULT ''", tableName, columnName)
+	} else {
+		return
+	}
+	if err := LOG_DB.Exec(alterSQL).Error; err != nil {
+		common.SysLog(fmt.Sprintf("Warning: failed to migrate %s.%s to varchar(512): %v", tableName, columnName, err))
+	} else {
+		common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to varchar(512)", tableName, columnName))
 	}
 }
 

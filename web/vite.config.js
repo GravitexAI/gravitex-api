@@ -29,6 +29,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      '~@douyinfe/semi-theme-default': '@douyinfe/semi-theme-default',
     },
   },
   plugins: [
@@ -51,9 +52,6 @@ export default defineConfig({
       },
     },
     react(),
-    vitePluginSemi({
-      cssLayer: true,
-    }),
   ],
   optimizeDeps: {
     force: true,
@@ -61,6 +59,18 @@ export default defineConfig({
       loader: {
         '.js': 'jsx',
         '.json': 'json',
+      },
+    },
+  },
+  css: {
+    preprocessorOptions: {
+      scss: {
+        importer(url) {
+          if (url && url.startsWith('~')) {
+            return { file: url.slice(1) };
+          }
+          return null;
+        },
       },
     },
   },
@@ -91,6 +101,7 @@ export default defineConfig({
     host: '0.0.0.0',
     proxy: {
       '/api': {
+        // target: 'https://api.gravitex.ai',
         target: 'http://localhost:3000',
         changeOrigin: true,
       },

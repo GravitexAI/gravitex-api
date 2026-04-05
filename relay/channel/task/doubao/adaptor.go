@@ -2,25 +2,24 @@ package doubao
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
-	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
-	"github.com/samber/lo"
 )
 
 // ============================
@@ -28,37 +27,37 @@ import (
 // ============================
 
 type ContentItem struct {
-	Type     string    `json:"type,omitempty"`
-	Text     string    `json:"text,omitempty"`
-	ImageURL *MediaURL `json:"image_url,omitempty"`
-	VideoURL *MediaURL `json:"video_url,omitempty"`
-	AudioURL *MediaURL `json:"audio_url,omitempty"`
-	Role     string    `json:"role,omitempty"`
+	Type     string          `json:"type"`                // "text", "image_url" or "video"
+	Text     string          `json:"text,omitempty"`      // for text type
+	ImageURL *ImageURL       `json:"image_url,omitempty"` // for image_url type
+	Video    *VideoReference `json:"video,omitempty"`     // for video (sample) type
+	Role     string          `json:"role,omitempty"`      // reference_image / first_frame / last_frame
 }
 
-type MediaURL struct {
-	URL string `json:"url,omitempty"`
+type ImageURL struct {
+	URL string `json:"url"`
+}
+
+type VideoReference struct {
+	URL string `json:"url"` // Draft video URL
 }
 
 type requestPayload struct {
 	Model                 string         `json:"model"`
-	Content               []ContentItem  `json:"content,omitempty"`
+	Content               []ContentItem  `json:"content"`
 	CallbackURL           string         `json:"callback_url,omitempty"`
 	ReturnLastFrame       *dto.BoolValue `json:"return_last_frame,omitempty"`
 	ServiceTier           string         `json:"service_tier,omitempty"`
-	ExecutionExpiresAfter *dto.IntValue  `json:"execution_expires_after,omitempty"`
+	ExecutionExpiresAfter dto.IntValue   `json:"execution_expires_after,omitempty"`
 	GenerateAudio         *dto.BoolValue `json:"generate_audio,omitempty"`
 	Draft                 *dto.BoolValue `json:"draft,omitempty"`
-	Tools                 []struct {
-		Type string `json:"type,omitempty"`
-	} `json:"tools,omitempty"`
-	Resolution  string         `json:"resolution,omitempty"`
-	Ratio       string         `json:"ratio,omitempty"`
-	Duration    *dto.IntValue  `json:"duration,omitempty"`
-	Frames      *dto.IntValue  `json:"frames,omitempty"`
-	Seed        *dto.IntValue  `json:"seed,omitempty"`
-	CameraFixed *dto.BoolValue `json:"camera_fixed,omitempty"`
-	Watermark   *dto.BoolValue `json:"watermark,omitempty"`
+	Resolution            string         `json:"resolution,omitempty"`
+	Ratio                 string         `json:"ratio,omitempty"`
+	Duration              dto.IntValue   `json:"duration,omitempty"`
+	Frames                dto.IntValue   `json:"frames,omitempty"`
+	Seed                  dto.IntValue   `json:"seed,omitempty"`
+	CameraFixed           *dto.BoolValue `json:"camera_fixed,omitempty"`
+	Watermark             *dto.BoolValue `json:"watermark,omitempty"`
 }
 
 type responsePayload struct {
@@ -78,20 +77,10 @@ type responseTask struct {
 	Ratio           string `json:"ratio"`
 	FramesPerSecond int    `json:"framespersecond"`
 	ServiceTier     string `json:"service_tier"`
-	Tools           []struct {
-		Type string `json:"type"`
-	} `json:"tools"`
-	Usage struct {
+	Usage           struct {
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`
-		ToolUsage        struct {
-			WebSearch int `json:"web_search"`
-		} `json:"tool_usage"`
 	} `json:"usage"`
-	Error struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
 	CreatedAt int64 `json:"created_at"`
 	UpdatedAt int64 `json:"updated_at"`
 }
@@ -101,7 +90,6 @@ type responseTask struct {
 // ============================
 
 type TaskAdaptor struct {
-	taskcommon.BaseBilling
 	ChannelType int
 	apiKey      string
 	baseURL     string
@@ -120,12 +108,12 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 }
 
 // BuildRequestURL constructs the upstream URL.
-func (a *TaskAdaptor) BuildRequestURL(_ *relaycommon.RelayInfo) (string, error) {
+func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	return fmt.Sprintf("%s/api/v3/contents/generations/tasks", a.baseURL), nil
 }
 
 // BuildRequestHeader sets required headers.
-func (a *TaskAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, _ *relaycommon.RelayInfo) error {
+func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info *relaycommon.RelayInfo) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.apiKey)
@@ -139,18 +127,26 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, err
 	}
 
+	// 渠道 model_mapping：允许将客户端 model 重定向到上游模型/endpoint（例如 ep-xxxx）
+	// 统一以 RelayInfo.UpstreamModelName 为准（若未映射则保持原样）
+	if info != nil && info.UpstreamModelName != "" {
+		req.Model = info.UpstreamModelName
+	}
+
 	body, err := a.convertToRequestPayload(&req)
 	if err != nil {
 		return nil, errors.Wrap(err, "convert request payload failed")
 	}
-	if info.IsModelMapped {
-		body.Model = info.UpstreamModelName
-	} else {
-		info.UpstreamModelName = body.Model
-	}
-	data, err := common.Marshal(body)
+	info.UpstreamModelName = body.Model
+	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
+	}
+	logger.LogInfo(c, fmt.Sprintf("[doubao] upstream request body: %s", common.TruncateJsonValues(string(data))))
+	if len(req.Metadata) > 0 {
+		if metaBytes, err := json.Marshal(req.Metadata); err == nil {
+			logger.LogInfo(c, fmt.Sprintf("[doubao] client metadata: %s", common.TruncateJsonValues(string(metaBytes))))
+		}
 	}
 	return bytes.NewReader(data), nil
 }
@@ -171,7 +167,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 
 	// Parse Doubao response
 	var dResp responsePayload
-	if err := common.Unmarshal(responseBody, &dResp); err != nil {
+	if err := json.Unmarshal(responseBody, &dResp); err != nil {
 		taskErr = service.TaskErrorWrapper(errors.Wrapf(err, "body: %s", responseBody), "unmarshal_response_body_failed", http.StatusInternalServerError)
 		return
 	}
@@ -182,8 +178,8 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	}
 
 	ov := dto.NewOpenAIVideo()
-	ov.ID = info.PublicTaskID
-	ov.TaskID = info.PublicTaskID
+	ov.ID = dResp.ID
+	ov.TaskID = dResp.ID
 	ov.CreatedAt = time.Now().Unix()
 	ov.Model = info.OriginModelName
 
@@ -230,39 +226,134 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 		Content: []ContentItem{},
 	}
 
-	// Add images if present
-	if req.HasImage() {
-		for _, imgURL := range req.Images {
-			r.Content = append(r.Content, ContentItem{
-				Type: "image_url",
-				ImageURL: &MediaURL{
-					URL: imgURL,
-				},
-			})
+	// 1) 优先使用客户端直传的 OpenAI 风格 content（保留 role: first_frame/last_frame/reference_image）
+	if len(req.Content) > 0 {
+		for _, item := range req.Content {
+			if item == nil {
+				continue
+			}
+			typ, _ := item["type"].(string)
+			role, _ := item["role"].(string)
+
+			switch typ {
+			case "text":
+				text, _ := item["text"].(string)
+				if text == "" {
+					continue
+				}
+				r.Content = append(r.Content, ContentItem{
+					Type: "text",
+					Text: text,
+					Role: role,
+				})
+			case "image_url":
+				var url string
+				if m, ok := item["image_url"].(map[string]interface{}); ok && m != nil {
+					if u, ok := m["url"].(string); ok {
+						url = u
+					}
+				}
+				if url == "" {
+					continue
+				}
+				r.Content = append(r.Content, ContentItem{
+					Type:     "image_url",
+					ImageURL: &ImageURL{URL: url},
+					Role:     role,
+				})
+			case "video":
+				// 预留：若未来支持 video reference，保持透传结构
+				var url string
+				if m, ok := item["video"].(map[string]interface{}); ok && m != nil {
+					if u, ok := m["url"].(string); ok {
+						url = u
+					}
+				}
+				if url == "" {
+					continue
+				}
+				r.Content = append(r.Content, ContentItem{
+					Type:  "video",
+					Video: &VideoReference{URL: url},
+					Role:  role,
+				})
+			default:
+				// unknown type: skip
+			}
 		}
 	}
 
+	// 2) 兼容旧客户端：若没有 content，则按旧逻辑由 prompt/images 构建
+	if len(r.Content) == 0 {
+		// Add text prompt
+		if req.Prompt != "" {
+			r.Content = append(r.Content, ContentItem{
+				Type: "text",
+				Text: req.Prompt,
+			})
+		}
+		// Add images if present
+		if req.HasImage() {
+			for _, imgURL := range req.Images {
+				r.Content = append(r.Content, ContentItem{
+					Type: "image_url",
+					ImageURL: &ImageURL{
+						URL: imgURL,
+					},
+				})
+			}
+		}
+	}
+
+	// 3) 将客户端顶层字段映射到上游请求体（seedance/doubao 常用字段）
+	if req.CallbackURL != "" {
+		r.CallbackURL = req.CallbackURL
+	}
+	if req.Resolution != "" {
+		r.Resolution = req.Resolution
+	}
+	if req.Ratio != "" {
+		r.Ratio = req.Ratio
+	}
+	if req.Duration > 0 {
+		r.Duration = dto.IntValue(req.Duration)
+	}
+	if req.GenerateAudio != nil {
+		b := dto.BoolValue(*req.GenerateAudio)
+		r.GenerateAudio = &b
+	}
+	if req.CameraFixed != nil {
+		b := dto.BoolValue(*req.CameraFixed)
+		r.CameraFixed = &b
+	}
+	if req.Watermark != nil {
+		b := dto.BoolValue(*req.Watermark)
+		r.Watermark = &b
+	}
+	if req.Seed != nil {
+		r.Seed = dto.IntValue(*req.Seed)
+	}
+	if req.ReturnLastFrame != nil {
+		b := dto.BoolValue(*req.ReturnLastFrame)
+		r.ReturnLastFrame = &b
+	}
+
 	metadata := req.Metadata
-	if err := taskcommon.UnmarshalMetadata(metadata, &r); err != nil {
+	medaBytes, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, errors.Wrap(err, "metadata marshal metadata failed")
+	}
+	err = json.Unmarshal(medaBytes, &r)
+	if err != nil {
 		return nil, errors.Wrap(err, "unmarshal metadata failed")
 	}
-
-	if sec, _ := strconv.Atoi(req.Seconds); sec > 0 {
-		r.Duration = lo.ToPtr(dto.IntValue(sec))
-	}
-
-	r.Content = lo.Reject(r.Content, func(c ContentItem, _ int) bool { return c.Type == "text" })
-	r.Content = append(r.Content, ContentItem{
-		Type: "text",
-		Text: req.Prompt,
-	})
 
 	return &r, nil
 }
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
 	resTask := responseTask{}
-	if err := common.Unmarshal(respBody, &resTask); err != nil {
+	if err := json.Unmarshal(respBody, &resTask); err != nil {
 		return nil, errors.Wrap(err, "unmarshal task result failed")
 	}
 
@@ -288,7 +379,7 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 	case "failed":
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"
-		taskResult.Reason = resTask.Error.Message
+		taskResult.Reason = "task failed"
 	default:
 		// Unknown status, treat as processing
 		taskResult.Status = model.TaskStatusInProgress
@@ -300,7 +391,7 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error) {
 	var dResp responseTask
-	if err := common.Unmarshal(originTask.Data, &dResp); err != nil {
+	if err := json.Unmarshal(originTask.Data, &dResp); err != nil {
 		return nil, errors.Wrap(err, "unmarshal doubao task data failed")
 	}
 
@@ -309,17 +400,51 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	openAIVideo.TaskID = originTask.TaskID
 	openAIVideo.Status = originTask.Status.ToVideoStatus()
 	openAIVideo.SetProgressStr(originTask.Progress)
-	openAIVideo.SetMetadata("url", dResp.Content.VideoURL)
+	finalURL := dResp.Content.VideoURL
+	// 兼容前端轮询：优先顶层 video_url / url，其次 metadata.url
+	openAIVideo.VideoURL = finalURL
+	openAIVideo.URL = finalURL
+	openAIVideo.SetMetadata("url", finalURL)
+	openAIVideo.SetMetadata("video_url", finalURL)
+	// 将 seedance 相关字段透传进 metadata，便于前端/控制台查看完整信息
+	openAIVideo.SetMetadata("id", dResp.ID)
+	openAIVideo.SetMetadata("model", dResp.Model)
+	openAIVideo.SetMetadata("status", dResp.Status)
+	openAIVideo.SetMetadata("seed", dResp.Seed)
+	openAIVideo.SetMetadata("resolution", dResp.Resolution)
+	openAIVideo.SetMetadata("duration", dResp.Duration)
+	openAIVideo.SetMetadata("ratio", dResp.Ratio)
+	openAIVideo.SetMetadata("framespersecond", dResp.FramesPerSecond)
+	openAIVideo.SetMetadata("service_tier", dResp.ServiceTier)
+	openAIVideo.SetMetadata("created_at", dResp.CreatedAt)
+	openAIVideo.SetMetadata("updated_at", dResp.UpdatedAt)
+	openAIVideo.SetMetadata("usage", map[string]any{
+		"completion_tokens": dResp.Usage.CompletionTokens,
+		"total_tokens":      dResp.Usage.TotalTokens,
+	})
 	openAIVideo.CreatedAt = originTask.CreatedAt
 	openAIVideo.CompletedAt = originTask.UpdatedAt
 	openAIVideo.Model = originTask.Properties.OriginModelName
 
 	if dResp.Status == "failed" {
 		openAIVideo.Error = &dto.OpenAIVideoError{
-			Message: dResp.Error.Message,
-			Code:    dResp.Error.Code,
+			Message: "task failed",
+			Code:    "failed",
 		}
 	}
 
-	return common.Marshal(openAIVideo)
+	jsonData, _ := common.Marshal(openAIVideo)
+	return jsonData, nil
+}
+
+func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, taskResult *relaycommon.TaskInfo) int {
+	return 0
+}
+
+func (a *TaskAdaptor) AdjustBillingOnSubmit(info *relaycommon.RelayInfo, taskData []byte) map[string]float64 {
+	return nil
+}
+
+func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
+	return nil
 }

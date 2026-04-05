@@ -3,6 +3,7 @@ package middleware
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -39,6 +40,10 @@ func SystemPerformanceCheck() gin.HandlerFunc {
 
 // checkSystemPerformance 检查系统性能是否超过阈值
 func checkSystemPerformance() *types.NewAPIError {
+	// 本地开发可设置 DISABLE_PERFORMANCE_CHECK=true 跳过 CPU/内存/磁盘检查，避免 503
+	if os.Getenv("DISABLE_PERFORMANCE_CHECK") == "true" || os.Getenv("DISABLE_PERFORMANCE_CHECK") == "1" {
+		return nil
+	}
 	config := common.GetPerformanceMonitorConfig()
 	if !config.Enabled {
 		return nil

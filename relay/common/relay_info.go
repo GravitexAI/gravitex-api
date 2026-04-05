@@ -29,6 +29,10 @@ const (
 	LastMessageTypeText     = "text"
 	LastMessageTypeTools    = "tools"
 	LastMessageTypeThinking = "thinking"
+
+	// TaskSubmitDelayResponse：任务提交时设为 true，DoResponse 不直接写响应，由 RelayTaskSubmit 在 task.Insert() 成功后写入，避免重试时响应体被写两次导致前端 JSON 解析错误
+	TaskSubmitDelayResponse = "task_submit_delay_response"
+	TaskSubmitResponseBody  = "task_submit_response_body"
 )
 
 type ClaudeConvertInfo struct {
@@ -666,16 +670,33 @@ type TaskRelayInfo struct {
 }
 
 type TaskSubmitReq struct {
-	Prompt         string                 `json:"prompt"`
-	Model          string                 `json:"model,omitempty"`
-	Mode           string                 `json:"mode,omitempty"`
-	Image          string                 `json:"image,omitempty"`
-	Images         []string               `json:"images,omitempty"`
-	Size           string                 `json:"size,omitempty"`
-	Duration       int                    `json:"duration,omitempty"`
-	Seconds        string                 `json:"seconds,omitempty"`
-	InputReference string                 `json:"input_reference,omitempty"`
-	Metadata       map[string]interface{} `json:"metadata,omitempty"`
+	Prompt string `json:"prompt"`
+	Model  string `json:"model,omitempty"`
+	// Content 用于视频/多模态任务的 OpenAI 风格 content 数组（seedance 等会用到 role: first_frame/last_frame/reference_image）
+	// 注意：历史上仅靠 Images 会丢失 role 信息，这里保留原始结构供 channel adaptor 解析。
+	Content []map[string]interface{} `json:"content,omitempty"`
+	// 以下字段用于 seedance/doubao 视频任务的直传参数（客户端当前以顶层字段提交，而不是放进 metadata）
+	CallbackURL     string   `json:"callback_url,omitempty"`
+	Resolution      string   `json:"resolution,omitempty"`
+	Ratio           string   `json:"ratio,omitempty"`
+	Watermark       *bool    `json:"watermark,omitempty"`
+	CameraFixed     *bool    `json:"camera_fixed,omitempty"`
+	Seed            *int     `json:"seed,omitempty"`
+	ReturnLastFrame *bool    `json:"return_last_frame,omitempty"`
+	Mode            string   `json:"mode,omitempty"`
+	Image           string   `json:"image,omitempty"`
+	Images          []string `json:"images,omitempty"`
+	Size            string   `json:"size,omitempty"`
+	Duration        int      `json:"duration,omitempty"`
+	Seconds         string   `json:"seconds,omitempty"`
+	InputReference  string   `json:"input_reference,omitempty"`
+	GenerateAudio   *bool    `json:"generate_audio,omitempty"`
+	// wan2.6 专有字段
+	Audio         *bool                  `json:"audio,omitempty"`          // wan2.6-i2v-flash/r2v-flash: 有声(true)/无声(false)
+	ReferenceUrls []string               `json:"reference_urls,omitempty"` // wan2.6-r2v: 参考文件URL数组（图片+视频，最多5个）
+	ShotType      string                 `json:"shot_type,omitempty"`      // wan2.6: single/multi（需 smart_rewrite=true）
+	SmartRewrite  *bool                  `json:"smart_rewrite,omitempty"`  // wan2.6: prompt智能改写开关（覆盖默认true）
+	Metadata      map[string]interface{} `json:"metadata,omitempty"`
 }
 
 func (t *TaskSubmitReq) GetPrompt() string {
@@ -705,6 +726,7 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 			var metadataObj map[string]interface{}
 			if err := common.Unmarshal([]byte(metadataStr), &metadataObj); err == nil {
 				t.Metadata = metadataObj
+				t.populateFromMetadata()
 				return nil
 			}
 		}
@@ -715,7 +737,150 @@ func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 		}
 	}
 
+	t.populateFromMetadata()
 	return nil
+}
+
+// populateFromMetadata 将 metadata 中的已知字段回填到 TaskSubmitReq 的显式 struct 字段。
+// 仅当 struct 字段为零值时才从 metadata 取值，保证顶层字段优先。
+// 用途：前端 /v1/video/generations 将模型特有参数放入 metadata，
+// 而各 channel adaptor 直接读 struct 字段（如 req.Resolution, req.GenerateAudio），
+// 此方法确保两种传参方式都能正确工作。
+func (t *TaskSubmitReq) populateFromMetadata() {
+	m := t.Metadata
+	if m == nil {
+		return
+	}
+	// 字符串字段
+	strFields := map[string]*string{
+		"resolution":      &t.Resolution,
+		"ratio":           &t.Ratio,
+		"shot_type":       &t.ShotType,
+		"callback_url":    &t.CallbackURL,
+		"mode":            &t.Mode,
+		"size":            &t.Size,
+		"input_reference": &t.InputReference,
+		"image":           &t.Image,
+		"seconds":         &t.Seconds,
+	}
+	for key, ptr := range strFields {
+		if *ptr == "" {
+			if v, ok := m[key].(string); ok && v != "" {
+				*ptr = v
+			}
+		}
+	}
+	// int 字段
+	if t.Duration == 0 {
+		t.Duration = metadataInt(m, "duration")
+	}
+	// *int 字段
+	if t.Seed == nil {
+		if v := metadataIntPtr(m, "seed"); v != nil {
+			t.Seed = v
+		}
+	}
+	// *bool 字段
+	boolFields := map[string]**bool{
+		"generate_audio":    &t.GenerateAudio,
+		"audio":             &t.Audio,
+		"watermark":         &t.Watermark,
+		"camera_fixed":      &t.CameraFixed,
+		"smart_rewrite":     &t.SmartRewrite,
+		"return_last_frame": &t.ReturnLastFrame,
+	}
+	for key, ptr := range boolFields {
+		if *ptr == nil {
+			if v := metadataBoolPtr(m, key); v != nil {
+				*ptr = v
+			}
+		}
+	}
+	// []string 字段
+	if len(t.ReferenceUrls) == 0 {
+		t.ReferenceUrls = metadataStringSlice(m, "reference_urls")
+	}
+	// content 数组
+	if len(t.Content) == 0 {
+		t.Content = metadataContentArray(m, "content")
+	}
+}
+
+// --- metadata 类型断言辅助函数 ---
+
+func metadataInt(m map[string]interface{}, key string) int {
+	switch v := m[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return int(n)
+		}
+	}
+	return 0
+}
+
+func metadataIntPtr(m map[string]interface{}, key string) *int {
+	switch v := m[key].(type) {
+	case float64:
+		n := int(v)
+		return &n
+	case int:
+		return &v
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			ni := int(n)
+			return &ni
+		}
+	}
+	return nil
+}
+
+func metadataBoolPtr(m map[string]interface{}, key string) *bool {
+	switch v := m[key].(type) {
+	case bool:
+		return &v
+	case string:
+		b := strings.EqualFold(v, "true") || v == "1"
+		return &b
+	}
+	return nil
+}
+
+func metadataStringSlice(m map[string]interface{}, key string) []string {
+	arr, ok := m[key].([]interface{})
+	if !ok || len(arr) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(arr))
+	for _, item := range arr {
+		if s, ok := item.(string); ok {
+			result = append(result, s)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func metadataContentArray(m map[string]interface{}, key string) []map[string]interface{} {
+	arr, ok := m[key].([]interface{})
+	if !ok || len(arr) == 0 {
+		return nil
+	}
+	result := make([]map[string]interface{}, 0, len(arr))
+	for _, item := range arr {
+		if obj, ok := item.(map[string]interface{}); ok {
+			result = append(result, obj)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 func (t *TaskSubmitReq) UnmarshalMetadata(v any) error {
 	metadata := t.Metadata
@@ -742,6 +907,10 @@ type TaskInfo struct {
 	Progress         string `json:"progress,omitempty"`
 	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
 	TotalTokens      int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
+	// 实际使用量（由上游 usage 字段提供，优先用于计费）
+	ActualSize     string `json:"actual_size,omitempty"`     // 实际分辨率，如 "1280*720"（阿里 wan2.6）
+	ActualSR       int    `json:"actual_sr,omitempty"`       // 实际 SR（分辨率数值，如 720）
+	ActualDuration int    `json:"actual_duration,omitempty"` // 实际输出时长（秒）
 }
 
 func FailTaskInfo(reason string) *TaskInfo {
@@ -770,9 +939,7 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 
 	// 默认移除 service_tier，除非明确允许（避免额外计费风险）
 	if !channelOtherSettings.AllowServiceTier {
-		if _, exists := data["service_tier"]; exists {
-			delete(data, "service_tier")
-		}
+		delete(data, "service_tier")
 	}
 
 	// 默认移除 inference_geo，除非明确允许（避免在未授权情况下透传数据驻留区域）
@@ -784,16 +951,12 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 
 	// 默认允许 store 透传，除非明确禁用（禁用可能影响 Codex 使用）
 	if channelOtherSettings.DisableStore {
-		if _, exists := data["store"]; exists {
-			delete(data, "store")
-		}
+		delete(data, "store")
 	}
 
 	// 默认移除 safety_identifier，除非明确允许（保护用户隐私，避免向 OpenAI 报告用户信息）
 	if !channelOtherSettings.AllowSafetyIdentifier {
-		if _, exists := data["safety_identifier"]; exists {
-			delete(data, "safety_identifier")
-		}
+		delete(data, "safety_identifier")
 	}
 
 	// 默认移除 stream_options.include_obfuscation，除非明确允许（避免关闭响应流混淆保护）
