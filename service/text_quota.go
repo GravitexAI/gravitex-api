@@ -34,6 +34,7 @@ type textQuotaSummary struct {
 	CompletionRatio          float64
 	CacheRatio               float64
 	ImageRatio               float64
+	ImageCompletionRatio     float64
 	ModelRatio               float64
 	GroupRatio               float64
 	ModelPrice               float64
@@ -51,6 +52,11 @@ type textQuotaSummary struct {
 	FileSearchCallCount      int
 	AudioInputPrice          float64
 	ImageGenerationCallPrice float64
+	// Gemini image/text output split
+	GeminiImageOutputTokens  int
+	GeminiTextOutputTokens   int
+	ReasoningTokens          int
+	EffectiveImageOutputRatio float64
 }
 
 func cacheWriteTokensTotal(summary textQuotaSummary) int {
@@ -85,6 +91,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		CompletionRatio:      relayInfo.PriceData.CompletionRatio,
 		CacheRatio:           relayInfo.PriceData.CacheRatio,
 		ImageRatio:           relayInfo.PriceData.ImageRatio,
+		ImageCompletionRatio: relayInfo.PriceData.ImageCompletionRatio,
 		ModelRatio:           relayInfo.PriceData.ModelRatio,
 		GroupRatio:           relayInfo.PriceData.GroupRatioInfo.GroupRatio,
 		ModelPrice:           relayInfo.PriceData.ModelPrice,
@@ -112,6 +119,24 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.CacheCreationTokens1h = usage.ClaudeCacheCreation1hTokens
 	summary.ImageTokens = usage.PromptTokensDetails.ImageTokens
 	summary.AudioTokens = usage.PromptTokensDetails.AudioTokens
+	summary.ReasoningTokens = usage.CompletionTokenDetails.ReasoningTokens
+	// Gemini image/text output split: prefer context values, fallback to usage details
+	summary.GeminiImageOutputTokens = ctx.GetInt("gemini_image_output_tokens")
+	summary.GeminiTextOutputTokens = ctx.GetInt("gemini_text_output_tokens")
+	if summary.GeminiImageOutputTokens == 0 {
+		summary.GeminiImageOutputTokens = usage.CompletionTokenDetails.ImageTokens
+	}
+	if summary.GeminiTextOutputTokens == 0 {
+		summary.GeminiTextOutputTokens = usage.CompletionTokenDetails.TextTokens
+	}
+	// 图片输出倍率优先级：ImageCompletionRatio → ImageRatio → ModelRatio
+	summary.EffectiveImageOutputRatio = summary.ImageCompletionRatio
+	if summary.EffectiveImageOutputRatio <= 0 {
+		summary.EffectiveImageOutputRatio = summary.ImageRatio
+	}
+	if summary.EffectiveImageOutputRatio <= 0 {
+		summary.EffectiveImageOutputRatio = summary.ModelRatio
+	}
 	legacyClaudeDerived := isLegacyClaudeDerivedOpenAIUsage(relayInfo, usage)
 	isOpenRouterClaudeBilling := relayInfo.ChannelMeta != nil &&
 		relayInfo.ChannelType == constant.ChannelTypeOpenRouter &&
@@ -239,7 +264,22 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		}
 
 		promptQuota := baseTokens.Add(cachedTokensWithRatio).Add(imageTokensWithRatio).Add(cachedCreationTokensWithRatio)
-		completionQuota := dCompletionTokens.Mul(dCompletionRatio)
+		var completionQuota decimal.Decimal
+		if summary.GeminiImageOutputTokens > 0 && summary.EffectiveImageOutputRatio > 0 {
+			// Gemini image/text output split billing
+			textOutputTokens := int64(summary.ReasoningTokens + summary.GeminiTextOutputTokens)
+			if textOutputTokens == 0 && summary.CompletionTokens >= summary.GeminiImageOutputTokens {
+				textOutputTokens = int64(summary.CompletionTokens - summary.GeminiImageOutputTokens)
+			}
+			if textOutputTokens < 0 {
+				textOutputTokens = 0
+			}
+			textCompletionQuota := decimal.NewFromInt(textOutputTokens).Mul(dCompletionRatio)
+			imageCompletionQuota := decimal.NewFromInt(int64(summary.GeminiImageOutputTokens)).Mul(decimal.NewFromFloat(summary.EffectiveImageOutputRatio))
+			completionQuota = textCompletionQuota.Add(imageCompletionQuota)
+		} else {
+			completionQuota = dCompletionTokens.Mul(dCompletionRatio)
+		}
 		quotaCalculateDecimal := promptQuota.Add(completionQuota).Mul(ratio)
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(dWebSearchQuota)
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(dClaudeWebSearchQuota)
@@ -405,6 +445,23 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		// to cache_creation_tokens.
 		other["cache_write_tokens"] = cacheWriteTokens
 	}
+	// Gemini image/text output split: record for admin UI and billing audit
+	if summary.GeminiImageOutputTokens > 0 || summary.GeminiTextOutputTokens > 0 || summary.ReasoningTokens > 0 {
+		other["image_output_tokens"] = summary.GeminiImageOutputTokens
+		other["text_output_tokens"] = summary.GeminiTextOutputTokens
+		other["reasoning_tokens"] = summary.ReasoningTokens
+		if summary.EffectiveImageOutputRatio > 0 {
+			other["image_completion_ratio"] = summary.EffectiveImageOutputRatio
+			other["effective_image_output_ratio"] = summary.EffectiveImageOutputRatio
+			if summary.GeminiImageOutputTokens > 0 {
+				if summary.ImageRatio > 0 {
+					other["image_output_ratio_source"] = "image_input"
+				} else {
+					other["image_output_ratio_source"] = "text_input"
+				}
+			}
+		}
+	}
 	if relayInfo.GetFinalRequestRelayFormat() != types.RelayFormatClaude && usage != nil && usage.UsageSource != "" && usage.InputTokens > 0 {
 		// input_tokens_total: explicit normalized total input used by the usage log UI.
 		// Only write this field when upstream/current conversion has already provided a
@@ -413,6 +470,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["input_tokens_total"] = usage.InputTokens
 	}
 
+	priceChain := CalculatePriceChainForLog(ctx, logModel, summary.PromptTokens, summary.CompletionTokens, summary.Quota)
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     summary.PromptTokens,
@@ -426,5 +484,6 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		IsStream:         relayInfo.IsStream,
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
+		PriceChain:       priceChain,
 	})
 }

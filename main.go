@@ -122,6 +122,9 @@ func main() {
 	// GET /v1/videos 收到上游终态时落库并计费（与轮询一致），避免 Vertex 轮询仅返回 {"name":"..."} 时任务永不完成
 	relay.CompleteVideoTaskOnUpstreamSuccessFn = controller.CompleteVideoTaskOnUpstreamSuccess
 
+	// 视频任务轮询使用 controller 层的完整计费引擎（按秒/按量/分辨率分档/音频分档/CostDiscount/原子锁防重复扣费）
+	service.UpdateVideoTasksFn = controller.UpdateVideoTaskAll
+
 	// Channel upstream model update check task
 	controller.StartChannelUpstreamModelUpdateTask()
 

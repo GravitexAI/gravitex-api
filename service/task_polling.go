@@ -35,6 +35,11 @@ type TaskPollingAdaptor interface {
 // 打破 service -> relay -> relay/channel -> service 的循环依赖。
 var GetTaskAdaptorFunc func(platform constant.TaskPlatform) TaskPollingAdaptor
 
+// UpdateVideoTasksFn 由 main 包注入，用于替换默认的视频任务轮询处理。
+// 当设置后，DispatchPlatformUpdate 将使用此函数代替内置的 UpdateVideoTasks，
+// 以支持 controller/task_video.go 中更完整的按秒/按量计费引擎。
+var UpdateVideoTasksFn func(ctx context.Context, platform constant.TaskPlatform, taskChannelM map[int][]string, taskM map[string]*model.Task) error
+
 // sweepTimedOutTasks 在主轮询之前独立清理超时任务。
 // 每次最多处理 100 条，剩余的下个周期继续处理。
 // 使用 per-task CAS (UpdateWithStatus) 防止覆盖被正常轮询已推进的任务。
@@ -145,7 +150,11 @@ func DispatchPlatformUpdate(platform constant.TaskPlatform, taskChannelM map[int
 	case constant.TaskPlatformSuno:
 		_ = UpdateSunoTasks(context.Background(), taskChannelM, taskM)
 	default:
-		if err := UpdateVideoTasks(context.Background(), platform, taskChannelM, taskM); err != nil {
+		updateFn := UpdateVideoTasksFn
+		if updateFn == nil {
+			updateFn = UpdateVideoTasks
+		}
+		if err := updateFn(context.Background(), platform, taskChannelM, taskM); err != nil {
 			common.SysLog(fmt.Sprintf("UpdateVideoTasks fail: %s", err))
 		}
 	}
