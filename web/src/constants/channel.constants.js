@@ -190,6 +190,11 @@ export const CHANNEL_OPTIONS = [
     label: 'Codex (OpenAI OAuth)',
   },
   {
+    value: 58,
+    color: 'cyan',
+    label: 'Azure Video',
+  },
+  {
     value: 59,
     color: 'purple',
     label: 'Uptoken',
