@@ -277,8 +277,8 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return
 	}
 	ov := dto.NewOpenAIVideo()
-	ov.ID = kResp.Data.TaskId
-	ov.TaskID = kResp.Data.TaskId
+	ov.ID = info.PublicTaskID
+	ov.TaskID = info.PublicTaskID
 	ov.CreatedAt = time.Now().Unix()
 	ov.Model = info.OriginModelName
 	c.JSON(http.StatusOK, ov)
@@ -569,26 +569,25 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	openAIVideo.CreatedAt = klingResp.Data.CreatedAt
 	openAIVideo.CompletedAt = klingResp.Data.UpdatedAt
 
-	// 将上游 kling 响应的全部字段透传进 metadata，便于前端/控制台查看完整信息
-	openAIVideo.SetMetadata("task_id", klingResp.Data.TaskId)
-	openAIVideo.SetMetadata("task_status", klingResp.Data.TaskStatus)
-	openAIVideo.SetMetadata("task_status_msg", klingResp.Data.TaskStatusMsg)
-	openAIVideo.SetMetadata("created_at", klingResp.Data.CreatedAt)
-	openAIVideo.SetMetadata("updated_at", klingResp.Data.UpdatedAt)
-
+	// 视频 URL：优先从上游响应取，fallback 到 task.FailReason（轮询成功后写入的 CDN URL）
+	var videoURL string
 	if len(klingResp.Data.TaskResult.Videos) > 0 {
 		video := klingResp.Data.TaskResult.Videos[0]
-		if video.Url != "" {
-			openAIVideo.URL = video.Url
-			openAIVideo.VideoURL = video.Url
-			openAIVideo.SetMetadata("url", video.Url)
-			openAIVideo.SetMetadata("video_url", video.Url)
-		}
+		videoURL = video.Url
 		if video.Duration != "" {
 			openAIVideo.Seconds = video.Duration
 			openAIVideo.SetMetadata("duration", video.Duration)
 		}
 		openAIVideo.SetMetadata("video_id", video.Id)
+	}
+	if videoURL == "" {
+		videoURL = originTask.GetResultURL()
+	}
+	if videoURL != "" {
+		openAIVideo.URL = videoURL
+		openAIVideo.VideoURL = videoURL
+		openAIVideo.SetMetadata("url", videoURL)
+		openAIVideo.SetMetadata("video_url", videoURL)
 	}
 
 	if klingResp.Code != 0 && klingResp.Message != "" {
@@ -597,6 +596,10 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 			Code:    fmt.Sprintf("%d", klingResp.Code),
 		}
 	}
+
+	// 将 task.Data 中的完整上游响应数据合并到 metadata，过滤掉计费内部字段
+	openAIVideo.Metadata = relaycommon.MergeUpstreamDataToMetadata(originTask.Data, openAIVideo.Metadata)
+
 	jsonData, _ := common.Marshal(openAIVideo)
 	return jsonData, nil
 }

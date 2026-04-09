@@ -178,8 +178,8 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	}
 
 	ov := dto.NewOpenAIVideo()
-	ov.ID = dResp.ID
-	ov.TaskID = dResp.ID
+	ov.ID = info.PublicTaskID
+	ov.TaskID = info.PublicTaskID
 	ov.CreatedAt = time.Now().Unix()
 	ov.Model = info.OriginModelName
 
@@ -400,28 +400,20 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	openAIVideo.TaskID = originTask.TaskID
 	openAIVideo.Status = originTask.Status.ToVideoStatus()
 	openAIVideo.SetProgressStr(originTask.Progress)
+
+	// 视频 URL：优先从上游响应取，fallback 到 GetResultURL()（alpha 引擎存 PrivateData.ResultURL，兼容旧 FailReason）
 	finalURL := dResp.Content.VideoURL
-	// 兼容前端轮询：优先顶层 video_url / url，其次 metadata.url
+	if finalURL == "" {
+		finalURL = originTask.GetResultURL()
+	}
+	// 兼容前端轮询：同时写顶层 video_url / url 和 metadata
 	openAIVideo.VideoURL = finalURL
 	openAIVideo.URL = finalURL
 	openAIVideo.SetMetadata("url", finalURL)
 	openAIVideo.SetMetadata("video_url", finalURL)
-	// 将 seedance 相关字段透传进 metadata，便于前端/控制台查看完整信息
-	openAIVideo.SetMetadata("id", dResp.ID)
-	openAIVideo.SetMetadata("model", dResp.Model)
-	openAIVideo.SetMetadata("status", dResp.Status)
-	openAIVideo.SetMetadata("seed", dResp.Seed)
-	openAIVideo.SetMetadata("resolution", dResp.Resolution)
-	openAIVideo.SetMetadata("duration", dResp.Duration)
-	openAIVideo.SetMetadata("ratio", dResp.Ratio)
-	openAIVideo.SetMetadata("framespersecond", dResp.FramesPerSecond)
-	openAIVideo.SetMetadata("service_tier", dResp.ServiceTier)
-	openAIVideo.SetMetadata("created_at", dResp.CreatedAt)
-	openAIVideo.SetMetadata("updated_at", dResp.UpdatedAt)
-	openAIVideo.SetMetadata("usage", map[string]any{
-		"completion_tokens": dResp.Usage.CompletionTokens,
-		"total_tokens":      dResp.Usage.TotalTokens,
-	})
+	if dResp.Duration > 0 {
+		openAIVideo.Seconds = fmt.Sprintf("%d", dResp.Duration)
+	}
 	openAIVideo.CreatedAt = originTask.CreatedAt
 	openAIVideo.CompletedAt = originTask.UpdatedAt
 	openAIVideo.Model = originTask.Properties.OriginModelName
@@ -432,6 +424,9 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 			Code:    "failed",
 		}
 	}
+
+	// 将 task.Data 中的完整上游响应数据合并到 metadata，过滤掉计费内部字段
+	openAIVideo.Metadata = relaycommon.MergeUpstreamDataToMetadata(originTask.Data, openAIVideo.Metadata)
 
 	jsonData, _ := common.Marshal(openAIVideo)
 	return jsonData, nil

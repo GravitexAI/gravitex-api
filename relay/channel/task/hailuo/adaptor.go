@@ -244,6 +244,9 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 		}
 	}
 
+	// 将 task.Data 中的完整上游响应数据合并到 metadata，过滤掉计费内部字段
+	openAIVideo.Metadata = relaycommon.MergeUpstreamDataToMetadata(originTask.Data, openAIVideo.Metadata)
+
 	jsonData, err := common.Marshal(openAIVideo)
 	if err != nil {
 		return nil, errors.Wrap(err, "marshal openai video failed")

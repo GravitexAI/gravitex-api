@@ -237,8 +237,8 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	}
 	taskID = encodeLocalTaskID(s.Name)
 	ov := dto.NewOpenAIVideo()
-	ov.ID = taskID
-	ov.TaskID = taskID
+	ov.ID = info.PublicTaskID
+	ov.TaskID = info.PublicTaskID
 	ov.CreatedAt = time.Now().Unix()
 	ov.Model = info.OriginModelName
 	if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
@@ -355,13 +355,17 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 }
 
 func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
-	upstreamName, err := decodeLocalTaskID(task.TaskID)
-	if err != nil {
-		upstreamName = ""
-	}
-	modelName := extractModelFromOperationName(upstreamName)
-	if strings.TrimSpace(modelName) == "" {
-		modelName = "veo-3.0-generate-001"
+	// 模型名优先从 task.Properties 获取（任务提交时已记录），fallback 到从 operation name 解析
+	modelName := task.Properties.OriginModelName
+	if modelName == "" {
+		upstreamName, err := decodeLocalTaskID(task.TaskID)
+		if err != nil {
+			upstreamName = ""
+		}
+		modelName = extractModelFromOperationName(upstreamName)
+		if strings.TrimSpace(modelName) == "" {
+			modelName = "veo-3.0-generate-001"
+		}
 	}
 
 	video := dto.NewOpenAIVideo()
@@ -376,27 +380,31 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 		video.CompletedAt = task.UpdatedAt
 	}
 
-	// 失败时把上游错误写入 error 和 fail_reason，便于前端轮询展示
-	failReason := strings.TrimSpace(task.FailReason)
-	if task.Status == model.TaskStatusFailure && failReason != "" {
-		video.Error = &dto.OpenAIVideoError{Message: failReason, Code: "upstream_error"}
-	}
-
-	// 成功时 FailReason 存视频地址（OSS/GCS/data URI），在顶层返回 url；失败时返回 fail_reason
-	type openAIVideoExtra struct {
-		*dto.OpenAIVideo
-		Url        string `json:"url,omitempty"`
-		FailReason string `json:"fail_reason,omitempty"`
-	}
-	extra := openAIVideoExtra{OpenAIVideo: video}
-	if failReason != "" {
-		if strings.HasPrefix(failReason, "http") || strings.HasPrefix(failReason, "data:") {
-			extra.Url = failReason
-		} else {
-			extra.FailReason = failReason
+	// 视频 URL：alpha 引擎存放在 PrivateData.ResultURL，兼容旧数据 fallback 到 FailReason
+	resultURL := strings.TrimSpace(task.GetResultURL())
+	if resultURL != "" {
+		if strings.HasPrefix(resultURL, "http") || strings.HasPrefix(resultURL, "data:") {
+			video.URL = resultURL
+			video.VideoURL = resultURL
+			video.SetMetadata("url", resultURL)
+			video.SetMetadata("video_url", resultURL)
 		}
 	}
-	return common.Marshal(extra)
+
+	// 上游 operation name 透传进 metadata
+	if upstreamName, err := decodeLocalTaskID(task.TaskID); err == nil && upstreamName != "" {
+		video.SetMetadata("operation_name", upstreamName)
+	}
+
+	// 错误处理
+	if task.Status == model.TaskStatusFailure && task.FailReason != "" {
+		video.Error = &dto.OpenAIVideoError{Message: task.FailReason, Code: "upstream_error"}
+	}
+
+	// 将 task.Data 中的完整上游响应数据合并到 metadata，过滤掉计费内部字段
+	video.Metadata = relaycommon.MergeUpstreamDataToMetadata(task.Data, video.Metadata)
+
+	return common.Marshal(video)
 }
 
 // ============================

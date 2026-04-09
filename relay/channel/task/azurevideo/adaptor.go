@@ -356,7 +356,7 @@ func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, req
 	return channel.DoTaskApiRequest(a, c, info, requestBody)
 }
 
-func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, _ *relaycommon.RelayInfo) (taskID string, taskData []byte, taskErr *dto.TaskError) {
+func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, taskErr *dto.TaskError) {
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		taskErr = service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)
@@ -378,14 +378,18 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, _ *relayco
 		return
 	}
 
+	// 保留上游 task ID 用于后续轮询，但在返回给前端的响应中使用公共 task ID
+	upstreamTaskID := dResp.ID
+	dResp.ID = info.PublicTaskID
+
 	if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
 		if body, err := common.Marshal(dResp); err == nil {
 			c.Set(relaycommon.TaskSubmitResponseBody, body)
 		}
-		return dResp.ID, responseBody, nil
+		return upstreamTaskID, responseBody, nil
 	}
 	c.JSON(http.StatusOK, dResp)
-	return dResp.ID, responseBody, nil
+	return upstreamTaskID, responseBody, nil
 }
 
 // FetchTask polls Azure for the video task status.
@@ -557,26 +561,23 @@ func (a *TaskAdaptor) GetChannelName() string {
 }
 
 // ConvertToOpenAIVideo returns the task data in OpenAI Sora format.
-// If the task succeeded and an OSS URL is stored in FailReason, it is injected into
-// the "url" field so the frontend always receives a stable HTTP URL (never a base64 blob).
+// If the task succeeded and a result URL is stored (PrivateData.ResultURL or FailReason),
+// it is injected into the "url" field so the frontend always receives a stable HTTP URL (never a base64 blob).
 func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	if len(task.Data) == 0 {
-		return task.Data, nil
-	}
-	// Inject FailReason (OSS URL, CDN URL, or base64 data URI) into the "url" field.
-	ossURL := task.FailReason
-	if ossURL == "" {
-		return task.Data, nil
-	}
-	// Only inject if it looks like a usable URL or data URI
-	if !strings.HasPrefix(ossURL, "http") && !strings.HasPrefix(ossURL, "data:") {
 		return task.Data, nil
 	}
 	var m map[string]any
 	if err := common.Unmarshal(task.Data, &m); err != nil {
 		return task.Data, nil
 	}
-	m["url"] = ossURL
+	// Inject result URL (OSS URL, CDN URL, or base64 data URI) into the "url" field.
+	ossURL := task.GetResultURL()
+	if ossURL != "" && (strings.HasPrefix(ossURL, "http") || strings.HasPrefix(ossURL, "data:")) {
+		m["url"] = ossURL
+	}
+	// 过滤掉计费内部字段，避免暴露到前端
+	relaycommon.StripBillingInternalKeys(m)
 	out, err := common.Marshal(m)
 	if err != nil {
 		return task.Data, nil

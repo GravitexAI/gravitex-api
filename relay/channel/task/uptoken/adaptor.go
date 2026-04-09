@@ -157,8 +157,8 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	}
 
 	ov := dto.NewOpenAIVideo()
-	ov.ID = dResp.ID
-	ov.TaskID = dResp.ID
+	ov.ID = info.PublicTaskID
+	ov.TaskID = info.PublicTaskID
 	ov.CreatedAt = time.Now().Unix()
 	ov.Model = info.OriginModelName
 
@@ -388,13 +388,6 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	openAIVideo.URL = finalURL
 	openAIVideo.SetMetadata("url", finalURL)
 	openAIVideo.SetMetadata("video_url", finalURL)
-	openAIVideo.SetMetadata("id", dResp.ID)
-	openAIVideo.SetMetadata("status", dResp.Status)
-	if dResp.Usage.TotalTokens > 0 {
-		openAIVideo.SetMetadata("usage", map[string]any{
-			"total_tokens": dResp.Usage.TotalTokens,
-		})
-	}
 	openAIVideo.CreatedAt = originTask.CreatedAt
 	openAIVideo.CompletedAt = originTask.UpdatedAt
 	openAIVideo.Model = originTask.Properties.OriginModelName
@@ -409,6 +402,9 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 			Code:    "failed",
 		}
 	}
+
+	// 将 task.Data 中的完整上游响应数据合并到 metadata，过滤掉计费内部字段
+	openAIVideo.Metadata = relaycommon.MergeUpstreamDataToMetadata(originTask.Data, openAIVideo.Metadata)
 
 	jsonData, _ := common.Marshal(openAIVideo)
 	return jsonData, nil

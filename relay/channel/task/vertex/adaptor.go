@@ -500,6 +500,10 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 			extra.FailReason = failReason
 		}
 	}
+
+	// 将 task.Data 中的完整上游响应数据合并到 metadata，过滤掉计费内部字段
+	v.Metadata = relaycommon.MergeUpstreamDataToMetadata(task.Data, v.Metadata)
+
 	return common.Marshal(extra)
 }
 

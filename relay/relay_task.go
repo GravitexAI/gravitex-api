@@ -20,6 +20,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -32,7 +33,11 @@ type TaskSubmitResult struct {
 	TaskData       []byte
 	Platform       constant.TaskPlatform
 	Quota          int
-	//PerCallPrice   types.PriceData
+
+	// 按秒/按量计费标记（提交时不预扣费，轮询成功后由 controller 计费）
+	IsPerSecondBilling       bool
+	IsVideoTokenRatioBilling bool
+	UpstreamBodyBytes        []byte // 上游请求体，供计费解析
 }
 
 // ResolveOriginTask 处理基于已有任务的提交（remix / continuation）：
@@ -176,6 +181,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapperLocal(err, "model_mapping_failed", http.StatusBadRequest)
 	}
 
+	// 2.6 检测按秒/按量计费模型（提交时不预扣费，轮询成功后由 controller 计费）
+	isPerSecondBilling := isVideoPerSecondModel(modelName)
+	isVideoTokenRatioBilling := isVideoTokenRatioModel(modelName)
+
 	// 3. 预生成公开 task ID（仅首次）
 	if info.PublicTaskID == "" {
 		info.PublicTaskID = model.GenerateTaskID()
@@ -208,10 +217,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 
 	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
-	if info.Billing == nil && !info.PriceData.FreeModel {
-		info.ForcePreConsume = true
-		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
-			return nil, service.TaskErrorFromAPIError(apiErr)
+	// 按秒/按量视频计费模型：不做预扣费，轮询成功后由 controller.UpdateVideoTaskAll 计费
+	if !isPerSecondBilling && !isVideoTokenRatioBilling {
+		if info.Billing == nil && !info.PriceData.FreeModel {
+			info.ForcePreConsume = true
+			if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
+				return nil, service.TaskErrorFromAPIError(apiErr)
+			}
 		}
 	}
 
@@ -219,6 +231,15 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	requestBody, err := adaptor.BuildRequestBody(c, info)
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "build_request_failed", http.StatusInternalServerError)
+	}
+
+	// 8.5 捕获上游请求体用于计费解析（按秒计费模型需从中读取 durationSeconds 等）
+	var upstreamBodyBytes []byte
+	if requestBody != nil {
+		if bodyBytes, readErr := io.ReadAll(requestBody); readErr == nil {
+			upstreamBodyBytes = bodyBytes
+			requestBody = bytes.NewReader(bodyBytes)
+		}
 	}
 
 	// 9. 发送请求
@@ -245,20 +266,33 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, taskErr
 	}
 
-	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
+	// 12. 合并计费数据到 task.Data（供轮询完成后计费使用）
+	if isPerSecondBilling {
+		taskData = mergeVideoTaskBillingData(c, info, taskData, modelName, info.UsingGroup, upstreamBodyBytes)
+	} else if isVideoTokenRatioBilling {
+		taskData = mergeVideoTokenRatioBillingData(c, info, taskData, modelName, info.UsingGroup)
+	} else {
+		taskData = mergeTokenInfoToTaskData(c, info, taskData)
+	}
+
+	// 13. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
-	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
-		// 基于调整后的 ratios 重新计算 quota
-		finalQuota = recalcQuotaFromRatios(info, adjustedRatios)
-		info.PriceData.OtherRatios = adjustedRatios
-		info.PriceData.Quota = finalQuota
+	if !isPerSecondBilling && !isVideoTokenRatioBilling {
+		if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
+			finalQuota = recalcQuotaFromRatios(info, adjustedRatios)
+			info.PriceData.OtherRatios = adjustedRatios
+			info.PriceData.Quota = finalQuota
+		}
 	}
 
 	return &TaskSubmitResult{
-		UpstreamTaskID: upstreamTaskID,
-		TaskData:       taskData,
-		Platform:       platform,
-		Quota:          finalQuota,
+		UpstreamTaskID:           upstreamTaskID,
+		TaskData:                 taskData,
+		Platform:                 platform,
+		Quota:                    finalQuota,
+		IsPerSecondBilling:       isPerSecondBilling,
+		IsVideoTokenRatioBilling: isVideoTokenRatioBilling,
+		UpstreamBodyBytes:        upstreamBodyBytes,
 	}, nil
 }
 
@@ -389,27 +423,42 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		return
 	}
 
-	// OpenAI Video API 格式: 走各 adaptor 的 ConvertToOpenAIVideo
-	if isOpenAIVideoAPI {
-		adaptor := GetTaskAdaptor(originTask.Platform)
-		if adaptor == nil {
-			taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("invalid channel id: %d", originTask.ChannelId), "invalid_channel_id", http.StatusBadRequest)
-			return
-		}
+	// 统一走 ConvertToOpenAIVideo 转换为标准 OpenAI Video 格式（含 metadata）
+	adaptor := GetTaskAdaptor(originTask.Platform)
+	if adaptor != nil {
 		if converter, ok := adaptor.(channel.OpenAIVideoConverter); ok {
 			openAIVideoData, err := converter.ConvertToOpenAIVideo(originTask)
 			if err != nil {
 				taskResp = service.TaskErrorWrapper(err, "convert_to_openai_video_failed", http.StatusInternalServerError)
 				return
 			}
-			respBody = openAIVideoData
+			if isOpenAIVideoAPI {
+				// /v1/videos/:task_id — 直接返回 OpenAIVideo JSON
+				respBody = openAIVideoData
+			} else {
+				// /v1/video/generations/:task_id — 包装为 TaskResponse 格式
+				var openAIVideo any
+				if err := common.Unmarshal(openAIVideoData, &openAIVideo); err != nil {
+					taskResp = service.TaskErrorWrapper(err, "unmarshal_openai_video_failed", http.StatusInternalServerError)
+					return
+				}
+				respBody, err = common.Marshal(dto.TaskResponse[any]{
+					Code: "success",
+					Data: openAIVideo,
+				})
+				if err != nil {
+					taskResp = service.TaskErrorWrapper(err, "marshal_response_failed", http.StatusInternalServerError)
+				}
+			}
 			return
 		}
-		taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("not_implemented:%s", originTask.Platform), "not_implemented", http.StatusNotImplemented)
-		return
+		if isOpenAIVideoAPI {
+			taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("not_implemented:%s", originTask.Platform), "not_implemented", http.StatusNotImplemented)
+			return
+		}
 	}
 
-	// 通用 TaskDto 格式
+	// Fallback: 没有实现 ConvertToOpenAIVideo 的 adaptor，走通用 TaskDto 格式
 	respBody, err = common.Marshal(dto.TaskResponse[any]{
 		Code: "success",
 		Data: TaskModel2Dto(originTask),
@@ -566,4 +615,340 @@ func TaskModel2Dto(task *model.Task) *dto.TaskDto {
 		Username:   task.Username,
 		Data:       task.Data,
 	}
+}
+
+// ============================
+// 按秒/按量计费辅助函数（从 alpha 迁移）
+// ============================
+
+// isVideoPerSecondModel 判断是否为按秒计费的视频模型（提交时不预扣费）
+func isVideoPerSecondModel(modelName string) bool {
+	_, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecond(modelName)
+	return hasVideoPrice
+}
+
+func isVideoTokenRatioModel(modelName string) bool {
+	if _, ok := ratio_setting.GetVideoRatio(modelName); ok {
+		return true
+	}
+	if _, ok := ratio_setting.GetVideoCompletionRatioPricing(modelName, true); ok {
+		return true
+	}
+	if _, ok := ratio_setting.GetVideoCompletionRatioPricing(modelName, false); ok {
+		return true
+	}
+	if _, ok := ratio_setting.GetVideoCompletionRatioVideoPricing(modelName, true); ok {
+		return true
+	}
+	if _, ok := ratio_setting.GetVideoCompletionRatioVideoPricing(modelName, false); ok {
+		return true
+	}
+	return false
+}
+
+// getUserRequestBody 获取用户原始请求体（用于持久化到 task.UserRequestBody，轮询不覆盖）
+func getUserRequestBody(c *gin.Context) []byte {
+	if c == nil {
+		return nil
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return nil
+	}
+	b, _ := storage.Bytes()
+	return b
+}
+
+// ResolveRequestedSeconds 解析视频请求秒数，用于入库 Properties.RequestedSeconds
+func ResolveRequestedSeconds(c *gin.Context, upstreamBodyBytes []byte) int {
+	if c != nil {
+		if v, exists := c.Get("video_seconds"); exists {
+			if n, ok := v.(int); ok && n > 0 {
+				return n
+			}
+			if f, ok := v.(float64); ok && f > 0 {
+				return int(f)
+			}
+		}
+		if n := parseVideoSeconds(c); n > 0 {
+			return n
+		}
+	}
+	if len(upstreamBodyBytes) > 0 {
+		if n := parseVideoSecondsFromBody(upstreamBodyBytes); n > 0 {
+			return n
+		}
+	}
+	return 4
+}
+
+// parseGenerateAudioForQuota 从 task_request.Metadata 解析是否生成音频
+func parseGenerateAudioForQuota(c *gin.Context) bool {
+	if v, exists := c.Get("task_request"); exists {
+		if req, ok := v.(relaycommon.TaskSubmitReq); ok {
+			if req.Audio != nil {
+				return *req.Audio
+			}
+			if req.Metadata != nil {
+				if soundVal, ok := req.Metadata["sound"]; ok {
+					if s, ok := soundVal.(string); ok {
+						return strings.EqualFold(s, "on")
+					}
+				}
+				for _, key := range []string{"generateAudio", "generate_audio", "audio"} {
+					if val, ok := req.Metadata[key]; ok {
+						switch b := val.(type) {
+						case bool:
+							return b
+						case string:
+							s := strings.TrimSpace(strings.ToLower(b))
+							if s == "false" || s == "0" || s == "no" {
+								return false
+							}
+							if s == "true" || s == "1" || s == "yes" {
+								return true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return true
+}
+
+// parseVideoSeconds 从请求参数中解析视频秒数
+func parseVideoSeconds(c *gin.Context) int {
+	if v, exists := c.Get("video_seconds"); exists {
+		if n, ok := v.(int); ok && n > 0 {
+			return n
+		}
+		if f, ok := v.(float64); ok && f > 0 {
+			return int(f)
+		}
+	}
+	if v, exists := c.Get("azure_video_seconds"); exists {
+		if s, ok := v.(string); ok {
+			if n, err := strconv.Atoi(s); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	for _, key := range []string{"n_seconds", "seconds"} {
+		if v := c.PostForm(key); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+// parseVideoSecondsFromBody 从上游请求体解析视频秒数
+func parseVideoSecondsFromBody(body []byte) int {
+	if len(body) == 0 {
+		return 0
+	}
+	var m map[string]interface{}
+	if err := common.Unmarshal(body, &m); err == nil {
+		for _, key := range []string{"durationSeconds", "duration", "seconds", "n_seconds"} {
+			if v, ok := m[key]; ok {
+				switch val := v.(type) {
+				case string:
+					if n, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && n > 0 {
+						return n
+					}
+				case float64:
+					if n := int(val); n > 0 {
+						return n
+					}
+				case int:
+					if val > 0 {
+						return val
+					}
+				}
+			}
+		}
+		if params, _ := m["parameters"].(map[string]interface{}); params != nil {
+			for _, key := range []string{"durationSeconds", "duration"} {
+				if v, ok := params[key]; ok {
+					switch val := v.(type) {
+					case float64:
+						if n := int(val); n > 0 {
+							return n
+						}
+					case int:
+						if val > 0 {
+							return val
+						}
+					}
+				}
+			}
+		}
+	}
+	s := string(body)
+	for _, name := range []string{`name="n_seconds"`, `name="seconds"`} {
+		if idx := strings.Index(s, name); idx >= 0 {
+			rest := s[idx+len(name):]
+			if idx2 := strings.Index(rest, "\r\n\r\n"); idx2 >= 0 {
+				valPart := rest[idx2+4:]
+				if idx3 := strings.Index(valPart, "\r\n"); idx3 >= 0 {
+					valPart = valPart[:idx3]
+				}
+				if n, err := strconv.Atoi(strings.TrimSpace(valPart)); err == nil && n > 0 {
+					return n
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// mergeTokenInfoToTaskData 将 token 信息写入 task.Data，供轮询完成后日志使用
+func mergeTokenInfoToTaskData(c *gin.Context, info *relaycommon.RelayInfo, taskData []byte) []byte {
+	var dataMap map[string]interface{}
+	if len(taskData) > 0 {
+		_ = common.Unmarshal(taskData, &dataMap)
+	}
+	if dataMap == nil {
+		dataMap = make(map[string]interface{})
+	}
+	tokenName := c.GetString("token_name")
+	tokenId := 0
+	if tid, ok := c.Get(string(constant.ContextKeyTokenId)); ok {
+		switch v := tid.(type) {
+		case int:
+			tokenId = v
+		case float64:
+			tokenId = int(v)
+		}
+	}
+	if tokenId == 0 && info != nil && info.TokenId > 0 {
+		tokenId = info.TokenId
+	}
+	dataMap["billing_token_name"] = tokenName
+	dataMap["billing_token_id"] = tokenId
+	merged, err := common.Marshal(dataMap)
+	if err != nil {
+		return taskData
+	}
+	return merged
+}
+
+// mergeVideoTaskBillingData 将按秒计费所需字段合并到 task.Data（轮询成功后使用）
+func mergeVideoTaskBillingData(c *gin.Context, info *relaycommon.RelayInfo, taskData []byte, modelName, usingGroup string, upstreamBody []byte) []byte {
+	var dataMap map[string]interface{}
+	if len(taskData) > 0 {
+		_ = common.Unmarshal(taskData, &dataMap)
+	}
+	if dataMap == nil {
+		dataMap = make(map[string]interface{})
+	}
+	effectiveGroupRatio := ratio_setting.GetGroupRatio(usingGroup)
+	if info != nil && info.UserGroup != "" {
+		if ugr, hasUGR := ratio_setting.GetGroupGroupRatio(info.UserGroup, usingGroup); hasUGR {
+			effectiveGroupRatio = ugr
+		}
+	}
+	if effectiveGroupRatio <= 0 {
+		effectiveGroupRatio = 1.0
+	}
+	tokenName := c.GetString("token_name")
+	tokenId := 0
+	if tid, ok := c.Get(string(constant.ContextKeyTokenId)); ok {
+		switch v := tid.(type) {
+		case int:
+			tokenId = v
+		case float64:
+			tokenId = int(v)
+		}
+	}
+	if tokenId == 0 && info != nil && info.TokenId > 0 {
+		tokenId = info.TokenId
+	}
+	videoSeconds := parseVideoSeconds(c)
+	if videoSeconds <= 0 && len(upstreamBody) > 0 {
+		videoSeconds = parseVideoSecondsFromBody(upstreamBody)
+	}
+	if videoSeconds <= 0 {
+		videoSeconds = 4
+	}
+	c.Set("video_seconds", videoSeconds)
+	dataMap["billing_model_name"] = modelName
+	dataMap["billing_group"] = usingGroup
+	dataMap["billing_effective_group_ratio"] = effectiveGroupRatio
+	dataMap["billing_token_name"] = tokenName
+	dataMap["billing_token_id"] = tokenId
+	dataMap["requested_seconds"] = videoSeconds
+	costDiscount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
+	if costDiscount > 0 {
+		dataMap["billing_cost_discount"] = costDiscount
+	}
+	generateAudio := parseGenerateAudioForQuota(c)
+	dataMap["generate_audio"] = generateAudio
+	dataMap["generateAudio"] = generateAudio
+	dataMap["billing_processed"] = false
+	merged, err := common.Marshal(dataMap)
+	if err != nil {
+		common.SysLog("[mergeVideoTaskBillingData] failed to marshal: " + err.Error())
+		return taskData
+	}
+	return merged
+}
+
+// mergeVideoTokenRatioBillingData 将按量计费视频模型所需字段合并到 task.Data
+func mergeVideoTokenRatioBillingData(c *gin.Context, info *relaycommon.RelayInfo, taskData []byte, modelName, usingGroup string) []byte {
+	var dataMap map[string]interface{}
+	if len(taskData) > 0 {
+		_ = common.Unmarshal(taskData, &dataMap)
+	}
+	if dataMap == nil {
+		dataMap = make(map[string]interface{})
+	}
+	effectiveGroupRatio := ratio_setting.GetGroupRatio(usingGroup)
+	if info != nil && info.UserGroup != "" {
+		if ugr, hasUGR := ratio_setting.GetGroupGroupRatio(info.UserGroup, usingGroup); hasUGR {
+			effectiveGroupRatio = ugr
+		}
+	}
+	if effectiveGroupRatio <= 0 {
+		effectiveGroupRatio = 1.0
+	}
+	tokenName := c.GetString("token_name")
+	tokenId := 0
+	if tid, ok := c.Get(string(constant.ContextKeyTokenId)); ok {
+		switch v := tid.(type) {
+		case int:
+			tokenId = v
+		case float64:
+			tokenId = int(v)
+		}
+	}
+	if tokenId == 0 && info != nil && info.TokenId > 0 {
+		tokenId = info.TokenId
+	}
+	dataMap["billing_model_name"] = modelName
+	dataMap["billing_group"] = usingGroup
+	dataMap["billing_effective_group_ratio"] = effectiveGroupRatio
+	dataMap["billing_token_name"] = tokenName
+	dataMap["billing_token_id"] = tokenId
+	costDiscount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
+	if costDiscount > 0 {
+		dataMap["billing_cost_discount"] = costDiscount
+	}
+	generateAudio := parseGenerateAudioForQuota(c)
+	dataMap["generate_audio"] = generateAudio
+	dataMap["generateAudio"] = generateAudio
+	if v, exists := c.Get("has_video_input"); exists {
+		if b, ok := v.(bool); ok {
+			dataMap["has_video_input"] = b
+		}
+	}
+	dataMap["billing_processed"] = false
+	merged, err := common.Marshal(dataMap)
+	if err != nil {
+		common.SysLog("[mergeVideoTokenRatioBillingData] failed to marshal: " + err.Error())
+		return taskData
+	}
+	return merged
 }

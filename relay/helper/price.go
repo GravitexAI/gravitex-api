@@ -182,14 +182,21 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types.PriceData, error) {
 	groupRatioInfo := HandleGroupRatio(c, info)
 
-	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
-	// 如果没有配置价格，检查模型倍率配置
+	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, false)
+	// 如果没有配置价格，检查其他定价来源（视频按秒、视频倍率、模型倍率）
 	if !success {
 
 		// 没有配置费用，也要使用默认费用,否则按费率计费模型无法使用
 		defaultPrice, ok := ratio_setting.GetDefaultModelPriceMap()[info.OriginModelName]
 		if ok {
 			modelPrice = defaultPrice
+		} else if videoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecond(info.OriginModelName); hasVideoPrice && videoPrice > 0 {
+			// 视频按秒计费模型（如 kling-v3, sora-2, veo 等）：提交阶段使用每秒单价作为预扣估算，
+			// 实际按秒结算在轮询成功后由 handleSora2TaskBilling 完成。
+			modelPrice = videoPrice
+		} else if _, hasVideoCompletionRatio := ratio_setting.GetVideoCompletionRatioPricing(info.OriginModelName, false); hasVideoCompletionRatio {
+			// VideoCompletionRatio 体系（按量计费视频模型）：视为已配置，使用默认预扣价格
+			modelPrice = float64(common.PreConsumedQuota) / common.QuotaPerUnit
 		} else {
 			// 没有配置倍率也不接受没配置,那就返回错误
 			_, ratioSuccess, matchName := ratio_setting.GetModelRatio(info.OriginModelName)
@@ -232,6 +239,10 @@ func ContainPriceOrRatio(modelName string) bool {
 	}
 	_, ok, _ = ratio_setting.GetModelRatio(modelName)
 	if ok {
+		return true
+	}
+	// 视频按秒计费模型
+	if videoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecond(modelName); hasVideoPrice && videoPrice > 0 {
 		return true
 	}
 	return false

@@ -541,7 +541,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 
 	// 转换为 OpenAI 格式响应
 	openAIResp := dto.NewOpenAIVideo()
-	openAIResp.ID = aliResp.Output.TaskID
+	openAIResp.ID = info.PublicTaskID
 	openAIResp.Model = c.GetString("model")
 	if openAIResp.Model == "" && info != nil {
 		openAIResp.Model = info.OriginModelName
@@ -659,16 +659,26 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 		openAIResp.Status = convertAliStatus(aliResp.Output.TaskStatus)
 	}
 
-	// 视频 URL：task.FailReason 存放轮询成功后写入的视频地址（CDN URL）；
+	// 视频 URL：alpha 引擎存放在 task.PrivateData.ResultURL，兼容旧数据 fallback 到 FailReason
 	// aliResp.Output.VideoURL 因 task.Data 扁平合并后通常为空，作为兜底
-	videoURL := task.FailReason
+	videoURL := task.GetResultURL()
 	if videoURL == "" {
 		videoURL = aliResp.Output.VideoURL
 	}
 	if videoURL != "" {
-		// 同时写顶层 url 字段和 metadata.url，兼容前端不同读取路径
+		// 同时写顶层 url / video_url 和 metadata，兼容前端不同读取路径
 		openAIResp.URL = videoURL
+		openAIResp.VideoURL = videoURL
 		openAIResp.SetMetadata("url", videoURL)
+		openAIResp.SetMetadata("video_url", videoURL)
+	}
+
+	// 透传上游特有字段到 metadata（task.Data 完整数据会通过 MergeUpstreamDataToMetadata 自动合并，
+	// 这里只设置需要特殊处理的字段，如 Seconds 同时写入顶层字段）
+	if aliResp.Usage != nil {
+		if aliResp.Usage.Duration > 0 {
+			openAIResp.Seconds = fmt.Sprintf("%d", aliResp.Usage.Duration)
+		}
 	}
 
 	// 错误处理
@@ -695,6 +705,9 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 			Message: aliResp.Output.Message,
 		}
 	}
+
+	// 将 task.Data 中的完整上游响应数据合并到 metadata，过滤掉计费内部字段
+	openAIResp.Metadata = relaycommon.MergeUpstreamDataToMetadata(task.Data, openAIResp.Metadata)
 
 	return common.Marshal(openAIResp)
 }

@@ -613,10 +613,18 @@ func RelayTask(c *gin.Context) {
 
 	// ── 成功：结算 + 日志 + 插入任务 ──
 	if taskErr == nil {
-		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
-			common.SysError("settle task billing error: " + settleErr.Error())
+		// 按秒/按量视频计费模型：提交时不预扣费、不记录日志，轮询成功后由 controller.UpdateVideoTaskAll 计费
+		isPerSecondOrTokenRatio := result.IsPerSecondBilling || result.IsVideoTokenRatioBilling
+
+		if !isPerSecondOrTokenRatio {
+			if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
+				common.SysError("settle task billing error: " + settleErr.Error())
+			}
+			service.LogTaskConsumption(c, relayInfo)
+		} else {
+			// 按秒/按量计费不做 Settle（未预扣），仅清理 Billing 引用防止 defer Refund
+			relayInfo.Billing = nil
 		}
-		service.LogTaskConsumption(c, relayInfo)
 
 		task := model.InitTask(result.Platform, relayInfo)
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
@@ -631,9 +639,32 @@ func RelayTask(c *gin.Context) {
 			OriginModelName: relayInfo.OriginModelName,
 			PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName),
 		}
-		task.Quota = result.Quota
+
+		// 按秒/按量视频计费模型：task.Quota=0（DB guard，轮询完成后实际计费）
+		if isPerSecondOrTokenRatio {
+			task.Quota = 0
+		} else {
+			task.Quota = result.Quota
+		}
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
+
+		// 按秒计费模型：保存 Properties.RequestedSeconds 供轮询计费使用
+		if result.IsPerSecondBilling {
+			sec := relay.ResolveRequestedSeconds(c, result.UpstreamBodyBytes)
+			task.Properties.RequestedSeconds = sec
+			if task.Properties.RequestedSeconds <= 0 {
+				task.Properties.RequestedSeconds = 4
+			}
+		}
+		// 持久化上游请求体（轮询线程不覆盖，计费时从中读取 durationSeconds 等参数）
+		if len(result.UpstreamBodyBytes) > 0 {
+			task.UpstreamRequestBody = []byte(common.TruncateBase64Content(string(result.UpstreamBodyBytes)))
+		}
+		// 令牌信息写入独立列
+		task.TokenName = c.GetString("token_name")
+		task.TokenId = relayInfo.TokenId
+
 		if insertErr := task.Insert(); insertErr != nil {
 			common.SysError("insert task error: " + insertErr.Error())
 		}

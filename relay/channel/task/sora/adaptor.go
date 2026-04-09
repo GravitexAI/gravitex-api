@@ -327,5 +327,13 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	if data, err = sjson.SetBytes(data, "id", task.TaskID); err != nil {
 		return nil, errors.Wrap(err, "set id failed")
 	}
+	// 过滤掉计费内部字段，避免暴露到前端
+	var m map[string]any
+	if err := common.Unmarshal(data, &m); err == nil {
+		relaycommon.StripBillingInternalKeys(m)
+		if out, err := common.Marshal(m); err == nil {
+			return out, nil
+		}
+	}
 	return data, nil
 }

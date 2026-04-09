@@ -181,6 +181,75 @@ func ValidateMultipartDirect(c *gin.Context, info *RelayInfo) *dto.TaskError {
 	return nil
 }
 
+// billingInternalPrefixes 是在 task.Data 中存储的计费内部字段前缀，这些字段不应暴露到前端 metadata 中。
+var billingInternalPrefixes = []string{"billing_"}
+
+// billingInternalKeys 是在 task.Data 中存储的计费内部字段精确匹配键。
+var billingInternalKeys = map[string]bool{
+	"requested_seconds":             true,
+	"billing_requested_seconds":     true,
+	"billing_model_name":            true,
+	"billing_group":                 true,
+	"billing_effective_group_ratio": true,
+	"billing_token_name":            true,
+	"billing_token_id":              true,
+	"billing_processed":             true,
+	"billing_cost_discount":         true,
+	"generate_audio":                true,
+	"generateAudio":                 true,
+	"has_video_input":               true,
+	"sound":                         true,
+	"_upstream_response":            true,
+}
+
+// isBillingInternalKey 判断 key 是否为计费内部字段，不应暴露到前端 metadata。
+func isBillingInternalKey(key string) bool {
+	if billingInternalKeys[key] {
+		return true
+	}
+	for _, prefix := range billingInternalPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// MergeUpstreamDataToMetadata 将 task.Data（JSON []byte）中的上游响应数据合并到 OpenAIVideo 的 metadata 中，
+// 过滤掉计费内部字段，保留上游完整信息供前端/控制台查看。
+// 已有的 metadata key 不会被覆盖（adaptor 手动设置的优先）。
+func MergeUpstreamDataToMetadata(taskData []byte, metadata map[string]any) map[string]any {
+	if len(taskData) == 0 {
+		return metadata
+	}
+	var rawMap map[string]any
+	if err := common.Unmarshal(taskData, &rawMap); err != nil {
+		return metadata
+	}
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	for key, value := range rawMap {
+		if isBillingInternalKey(key) {
+			continue
+		}
+		// 不覆盖已有的 metadata key（adaptor 手动设置的优先）
+		if _, exists := metadata[key]; !exists {
+			metadata[key] = value
+		}
+	}
+	return metadata
+}
+
+// StripBillingInternalKeys 从 map 中删除计费内部字段，用于 azurevideo 等直接返回 task.Data 的场景。
+func StripBillingInternalKeys(m map[string]any) {
+	for key := range m {
+		if isBillingInternalKey(key) {
+			delete(m, key)
+		}
+	}
+}
+
 func isKnownTaskField(field string) bool {
 	knownFields := map[string]bool{
 		"prompt":          true,
