@@ -151,6 +151,30 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			if pollErrCount < maxPollRetries {
 				logger.LogWarn(ctx, fmt.Sprintf("[TaskPoll] task=%s %s (retry %d/%d, will retry next round)",
 					taskId, errMsg, pollErrCount, maxPollRetries))
+				// 写 LogTypeRetryFail 日志，让用户/管理员可在日志页看到中间重试记录
+				retryModelName := task.Properties.OriginModelName
+				if retryModelName == "" {
+					retryModelName = task.Properties.UpstreamModelName
+				}
+				retryLog := &model.Log{
+					UserId:    task.UserId,
+					CreatedAt: common.GetTimestamp(),
+					Type:      model.LogTypeRetryFail,
+					Content: fmt.Sprintf("视频任务轮询重试 %d/%d，模型 %s，任务 %s，原因：%s",
+						pollErrCount, maxPollRetries, retryModelName, task.TaskID, errMsg),
+					ChannelId: task.ChannelId,
+					ModelName: retryModelName,
+					TokenName: task.TokenName,
+					TokenId:   task.TokenId,
+					Group:     task.Group,
+					RequestId: task.TaskID,
+					Other: common.MapToJsonStr(map[string]interface{}{
+						"poll_error_count": pollErrCount,
+						"max_poll_retries": maxPollRetries,
+						"status_code":      resp.StatusCode,
+					}),
+				}
+				model.CreateLog(retryLog)
 				return nil
 			}
 			logger.LogError(ctx, fmt.Sprintf("[TaskPoll] task=%s %s (retry exhausted %d/%d, marking as failure)",
@@ -198,6 +222,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			Content:   fmt.Sprintf("视频任务失败，模型 %s，原因：%s", modelName, errMsg),
 			ChannelId: task.ChannelId,
 			ModelName: modelName,
+			TokenName: task.TokenName,
+			TokenId:   task.TokenId,
 			Group:     task.Group,
 			RequestId: task.TaskID,
 		}
@@ -521,6 +547,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			Content:   fmt.Sprintf("视频任务失败，模型 %s，原因：%s", modelName, task.FailReason),
 			ChannelId: task.ChannelId,
 			ModelName: modelName,
+			TokenName: task.TokenName,
+			TokenId:   task.TokenId,
 			Group:     task.Group,
 			RequestId: task.TaskID,
 			Other:     failOtherStr,
