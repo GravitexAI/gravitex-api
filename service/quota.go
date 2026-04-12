@@ -334,8 +334,10 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
-		// 与 compatible_handler.postConsumeQuota 一致：有 BillingSession 时用一次 UPDATE 完成 quota/used_quota/request_count
-		if relayInfo.Billing != nil {
+		// 有 BillingSession 时：
+		//   - 钱包用户：ConsumeUserQuotaSettle 一次 UPDATE 完成 quota 扣减 + used_quota + request_count
+		//   - 订阅用户：quota 已由 SubscriptionFunding 处理，只需更新 used_quota + request_count
+		if relayInfo.Billing != nil && relayInfo.BillingSource != BillingSourceSubscription {
 			preConsumed := relayInfo.Billing.GetPreConsumedQuota()
 			delta := quota - preConsumed
 			if err := model.ConsumeUserQuotaSettle(relayInfo.UserId, quota, delta); err != nil {

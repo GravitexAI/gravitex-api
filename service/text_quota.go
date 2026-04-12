@@ -53,9 +53,9 @@ type textQuotaSummary struct {
 	AudioInputPrice          float64
 	ImageGenerationCallPrice float64
 	// Gemini image/text output split
-	GeminiImageOutputTokens  int
-	GeminiTextOutputTokens   int
-	ReasoningTokens          int
+	GeminiImageOutputTokens   int
+	GeminiTextOutputTokens    int
+	ReasoningTokens           int
 	EffectiveImageOutputRatio float64
 }
 
@@ -363,7 +363,18 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
-		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
+		// 有 BillingSession 时：
+		//   - 钱包用户：ConsumeUserQuotaSettle 一次 UPDATE 完成 quota 扣减 + used_quota + request_count
+		//   - 订阅用户：quota 已由 SubscriptionFunding 处理，只需更新 used_quota + request_count
+		if relayInfo.Billing != nil && relayInfo.BillingSource != BillingSourceSubscription {
+			preConsumed := relayInfo.Billing.GetPreConsumedQuota()
+			delta := summary.Quota - preConsumed
+			if err := model.ConsumeUserQuotaSettle(relayInfo.UserId, summary.Quota, delta); err != nil {
+				logger.LogError(ctx, "error consume user quota settle: "+err.Error())
+			}
+		} else {
+			model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
+		}
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
 

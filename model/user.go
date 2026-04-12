@@ -971,6 +971,10 @@ func ConsumeUserQuotaSettle(userId, actualQuota, quotaDelta int) error {
 		addNewRecord(BatchUpdateTypeRequestCount, userId, 1)
 		if quotaDelta != 0 {
 			addNewRecord(BatchUpdateTypeUserQuota, userId, -quotaDelta)
+			// 同步更新 Redis 缓存，防止批量写 DB 前读到旧余额
+			if cacheErr := cacheDecrUserQuota(userId, int64(quotaDelta)); cacheErr != nil {
+				common.SysLog("failed to decrease user quota cache: " + cacheErr.Error())
+			}
 		}
 		return nil
 	}
