@@ -140,6 +140,7 @@ export const useChannelsData = () => {
     BALANCE: 'balance',
     PRIORITY: 'priority',
     WEIGHT: 'weight',
+    COST_DISCOUNT: 'cost_discount',
     OPERATE: 'operate',
   };
 
@@ -180,6 +181,7 @@ export const useChannelsData = () => {
       [COLUMN_KEYS.BALANCE]: true,
       [COLUMN_KEYS.PRIORITY]: true,
       [COLUMN_KEYS.WEIGHT]: true,
+      [COLUMN_KEYS.COST_DISCOUNT]: false,
       [COLUMN_KEYS.OPERATE]: true,
     };
   };

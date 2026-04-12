@@ -683,6 +683,26 @@ export const getChannelsColumns = ({
       },
     },
     {
+      key: COLUMN_KEYS.COST_DISCOUNT,
+      title: t('成本折扣'),
+      dataIndex: 'cost_discount',
+      render: (text, record) => {
+        if (record.children !== undefined) {
+          return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
+        }
+        if (text == null || text <= 0) {
+          return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
+        }
+        return (
+          <Tooltip content={t('成本折扣系数，用于计算实际成本与利润')}>
+            <Tag color='green' shape='circle'>
+              {text}
+            </Tag>
+          </Tooltip>
+        );
+      },
+    },
+    {
       key: COLUMN_KEYS.OPERATE,
       title: '',
       dataIndex: 'operate',
