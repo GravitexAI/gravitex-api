@@ -1195,7 +1195,8 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 	// GORM Updates() 跳过 nil 指针字段，因此当用户清除 cost_discount 时需要显式置 NULL
-	if req.CostDiscount == nil && originChannel.CostDiscount != nil {
+	// 仅当请求包含完整渠道配置（有 models 字段）时才清除，避免仅改 status 时误删
+	if req.CostDiscount == nil && originChannel.CostDiscount != nil && req.Models != "" {
 		model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("cost_discount", nil)
 	}
 	model.InitChannelCache()
