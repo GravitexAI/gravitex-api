@@ -81,11 +81,11 @@ type AliVideoOutput struct {
 
 // AliUsage 使用统计
 type AliUsage struct {
-	Duration            int    `json:"duration,omitempty"`
-	VideoCount          int    `json:"video_count,omitempty"`
-	SR                  int    `json:"SR,omitempty"`
-	Size                string `json:"size,omitempty"`                  // wan2.6 返回实际分辨率，如 "1280*720"
-	OutputVideoDuration int    `json:"output_video_duration,omitempty"` // 实际输出时长（秒）
+	Duration            dto.IntValue `json:"duration,omitempty"`
+	VideoCount          dto.IntValue `json:"video_count,omitempty"`
+	SR                  dto.IntValue `json:"SR,omitempty"`
+	Size                string       `json:"size,omitempty"`                  // wan2.6 返回实际分辨率，如 "1280*720"
+	OutputVideoDuration int          `json:"output_video_duration,omitempty"` // 实际输出时长（秒）
 }
 
 type AliMetadata struct {
@@ -610,11 +610,11 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		// wan2.6 在 usage 中返回实际分辨率（size / SR）和实际输出时长，存入 taskResult 供计费使用
 		if aliResp.Usage != nil {
 			taskResult.ActualSize = aliResp.Usage.Size
-			taskResult.ActualSR = aliResp.Usage.SR
+			taskResult.ActualSR = int(aliResp.Usage.SR)
 			if aliResp.Usage.OutputVideoDuration > 0 {
 				taskResult.ActualDuration = aliResp.Usage.OutputVideoDuration
 			} else if aliResp.Usage.Duration > 0 {
-				taskResult.ActualDuration = aliResp.Usage.Duration
+				taskResult.ActualDuration = int(aliResp.Usage.Duration)
 			}
 		}
 	case "FAILED", "CANCELED", "UNKNOWN":

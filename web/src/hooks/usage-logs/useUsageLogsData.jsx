@@ -36,6 +36,7 @@ import {
   renderAudioModelPrice,
   renderClaudeModelPrice,
   renderModelPrice,
+  renderTaskBillingProcess,
 } from '../../helpers';
 import { ITEMS_PER_PAGE } from '../../constants';
 import { useTableCompactMode } from '../common/useTableCompactMode';
@@ -518,6 +519,8 @@ export const useLogsData = () => {
             content =
               `单价 $${pricePerSec.toFixed(4)}/秒\n` +
               `$${pricePerSec.toFixed(4)} × ${seconds}秒 = ${renderQuota(logs[i].quota)}`;
+          } else if ((other?.is_task === true || other?.task_id != null) && other?.model_price === -1) {
+            content = renderTaskBillingProcess(other, logs[i].content);
           } else if (other?.ws || other?.audio) {
             content = renderAudioModelPrice(
               other?.text_input,

@@ -35,3 +35,5 @@ data/
 .gocache-temp
 .gopath
 .env
+
+token_estimator_test.go

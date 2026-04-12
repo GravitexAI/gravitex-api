@@ -472,7 +472,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 								logger.LogInfo(ctx, fmt.Sprintf("视频任务 %s 补扣费：%s（实际：%s，预扣：%s，tokens：%d）",
 									task.TaskID, logger.LogQuota(quotaDelta), logger.LogQuota(actualQuota),
 									logger.LogQuota(preConsumedQuota), taskResult.TotalTokens))
-								if err := model.DecreaseUserQuota(task.UserId, quotaDelta); err != nil {
+								if err := model.DecreaseUserQuota(task.UserId, quotaDelta, true); err != nil {
 									logger.LogError(ctx, fmt.Sprintf("补扣费失败: %s", err.Error()))
 								} else {
 									model.UpdateUserUsedQuotaAndRequestCount(task.UserId, quotaDelta)
@@ -1210,7 +1210,7 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 
 	// 执行扣费
 	if actualQuota > 0 {
-		if err := model.DecreaseUserQuota(task.UserId, actualQuota); err != nil {
+		if err := model.DecreaseUserQuota(task.UserId, actualQuota, true); err != nil {
 			return fmt.Errorf("handleSora2TaskBilling: DecreaseUserQuota failed: %w", err)
 		}
 	}
@@ -1487,7 +1487,7 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 
 	// 执行扣费
 	if actualQuota > 0 {
-		if err := model.DecreaseUserQuota(task.UserId, actualQuota); err != nil {
+		if err := model.DecreaseUserQuota(task.UserId, actualQuota, true); err != nil {
 			return fmt.Errorf("handleVideoTokenRatioBilling: DecreaseUserQuota failed: %w", err)
 		}
 	}

@@ -380,6 +380,10 @@ func UpdateModelPriceByJSONString(jsonStr string) error {
 func GetModelPrice(name string, printErr bool) (float64, bool) {
 	name = FormatMatchingModelName(name)
 
+	if price, ok := modelPriceMap.Get(name); ok {
+		return price, true
+	}
+
 	if strings.HasSuffix(name, CompactModelSuffix) {
 		price, ok := modelPriceMap.Get(CompactWildcardModelKey)
 		if !ok {
@@ -391,22 +395,18 @@ func GetModelPrice(name string, printErr bool) (float64, bool) {
 		return price, true
 	}
 
-	price, ok := modelPriceMap.Get(name)
-	if !ok {
-		// 按张计费：若 options 中配置了 ImageModelPricePerImage，则视为已配置价格（兼容 seedream-* 与 doubao-seedream-* 两种 key）
-		if perImage, okImage := GetImageModelPricePerImage(name); okImage && perImage >= 0 {
-			return perImage, true
-		}
-		// 兜底：直接读 OptionMap 并查找（避免懒加载时 OptionMap 尚未就绪）
-		if p, ok2 := getImageModelPricePerImageFromOptionMap(name); ok2 && p >= 0 {
-			return p, true
-		}
-		if printErr {
-			common.SysError("model price not found: " + name)
-		}
-		return -1, false
+	// 按张计费：若 options 中配置了 ImageModelPricePerImage，则视为已配置价格（兼容 seedream-* 与 doubao-seedream-* 两种 key）
+	if perImage, okImage := GetImageModelPricePerImage(name); okImage && perImage >= 0 {
+		return perImage, true
 	}
-	return price, true
+	// 兜底：直接读 OptionMap 并查找（避免懒加载时 OptionMap 尚未就绪）
+	if p, ok2 := getImageModelPricePerImageFromOptionMap(name); ok2 && p >= 0 {
+		return p, true
+	}
+	if printErr {
+		common.SysError("model price not found: " + name)
+	}
+	return -1, false
 }
 
 func UpdateModelRatioByJSONString(jsonStr string) error {
