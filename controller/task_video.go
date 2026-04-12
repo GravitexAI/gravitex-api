@@ -215,8 +215,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		if modelName == "" {
 			modelName = task.Properties.UpstreamModelName
 		}
+		username, _ := model.GetUsernameById(task.UserId, false)
 		failLog := &model.Log{
 			UserId:    task.UserId,
+			Username:  username,
 			CreatedAt: common.GetTimestamp(),
 			Type:      model.LogTypeError,
 			Content:   fmt.Sprintf("视频任务失败，模型 %s，原因：%s", modelName, errMsg),
@@ -540,8 +542,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 				failOtherStr = string(b)
 			}
 		}
+		username, _ := model.GetUsernameById(task.UserId, false)
 		failLog := &model.Log{
 			UserId:    task.UserId,
+			Username:  username,
 			CreatedAt: common.GetTimestamp(),
 			Type:      model.LogTypeError,
 			Content:   fmt.Sprintf("视频任务失败，模型 %s，原因：%s", modelName, task.FailReason),

@@ -198,7 +198,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types.PriceData, error) {
 	groupRatioInfo := HandleGroupRatio(c, info)
 
-	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
+	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, false)
 	usePrice := success
 	var modelRatio float64
 
@@ -214,7 +214,11 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 			modelPrice = videoPrice
 			usePrice = true
 		} else if _, hasVideoCompletionRatio := ratio_setting.GetVideoCompletionRatioPricing(info.OriginModelName, false); hasVideoCompletionRatio {
-			// VideoCompletionRatio 体系（按量计费视频模型）：视为已配置，使用默认预扣价格
+			// VideoCompletionRatio 体系（按量计费视频模型，noAudio/audio 维度）：视为已配置，使用默认预扣价格
+			modelPrice = float64(common.PreConsumedQuota) / common.QuotaPerUnit
+			usePrice = true
+		} else if _, hasVideoCompletionRatio := ratio_setting.GetVideoCompletionRatioVideoPricing(info.OriginModelName, false); hasVideoCompletionRatio {
+			// VideoCompletionRatio 体系（按量计费视频模型，noVideo/video 维度，如 seedance）：视为已配置，使用默认预扣价格
 			modelPrice = float64(common.PreConsumedQuota) / common.QuotaPerUnit
 			usePrice = true
 		} else {
@@ -276,6 +280,14 @@ func ContainPriceOrRatio(modelName string) bool {
 	}
 	// 视频按秒计费模型
 	if videoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecond(modelName); hasVideoPrice && videoPrice > 0 {
+		return true
+	}
+	// 视频按量计费模型（noAudio/audio 维度）
+	if _, hasVideoCompletionRatio := ratio_setting.GetVideoCompletionRatioPricing(modelName, false); hasVideoCompletionRatio {
+		return true
+	}
+	// 视频按量计费模型（noVideo/video 维度，如 seedance）
+	if _, hasVideoCompletionRatio := ratio_setting.GetVideoCompletionRatioVideoPricing(modelName, false); hasVideoCompletionRatio {
 		return true
 	}
 	return false
