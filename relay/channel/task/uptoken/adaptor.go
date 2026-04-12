@@ -114,6 +114,18 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, errors.Wrap(err, "convert request payload failed")
 	}
 
+	// 校验 asset:// 引用的素材是否属于当前用户
+	if assetIds := extractAssetVirtualIds(body.Content); len(assetIds) > 0 {
+		userId := c.GetInt("id")
+		notOwned, checkErr := model.CheckUserOwnsAssets(userId, assetIds)
+		if checkErr != nil {
+			return nil, errors.Wrap(checkErr, "validate asset ownership failed")
+		}
+		if len(notOwned) > 0 {
+			return nil, fmt.Errorf("asset not found or access denied: %s", strings.Join(notOwned, ", "))
+		}
+	}
+
 	// 检测是否包含视频输入（video_url 类型的 content），用于计费维度区分（noVideo/video）
 	hasVideoInput := false
 	for _, item := range body.Content {
@@ -420,4 +432,18 @@ func (a *TaskAdaptor) AdjustBillingOnSubmit(info *relaycommon.RelayInfo, taskDat
 
 func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
 	return nil
+}
+
+// extractAssetVirtualIds scans content items for asset:// URLs and returns their virtual IDs.
+func extractAssetVirtualIds(items []ContentItem) []string {
+	var ids []string
+	for _, item := range items {
+		if item.Type == "image_url" && item.ImageURL != nil && strings.HasPrefix(item.ImageURL.URL, "asset://") {
+			vid := strings.TrimPrefix(item.ImageURL.URL, "asset://")
+			if vid != "" {
+				ids = append(ids, vid)
+			}
+		}
+	}
+	return ids
 }
