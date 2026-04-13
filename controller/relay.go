@@ -579,7 +579,8 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 		return false
 	}
 	if taskErr.StatusCode == http.StatusTooManyRequests {
-		return true
+		// 429 不重试，直接返回给客户端，避免无 backoff 地反复请求上游
+		return false
 	}
 	if taskErr.StatusCode == 307 {
 		return true
