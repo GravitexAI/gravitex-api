@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -126,6 +127,12 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 
 	logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s channel=%d status=%d 上游返回数据 body=%s",
 		taskId, channel.Id, resp.StatusCode, common.TruncateJsonValues(string(responseBody))))
+
+	// 429 rate limit: skip this poll cycle silently; the next scheduled tick will retry
+	if resp.StatusCode == http.StatusTooManyRequests {
+		logger.LogWarn(ctx, fmt.Sprintf("[TaskPoll] task=%s upstream returned 429, will retry next poll cycle", taskId))
+		return nil
+	}
 
 	// 上游返回非 JSON（如 502 HTML 页面）时的处理
 	if resp.StatusCode >= 400 && len(responseBody) > 0 && responseBody[0] == '<' {
