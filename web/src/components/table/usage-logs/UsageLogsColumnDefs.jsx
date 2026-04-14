@@ -581,7 +581,8 @@ export const getLogsColumns = ({
           (record.type === 0 ||
             record.type === 2 ||
             record.type === 5 ||
-            record.type === 6) ? (
+            record.type === 6 ||
+            record.type === 7) ? (
           <Space>
             <span style={{ position: 'relative', display: 'inline-block' }}>
               <Tooltip content={record.channel_name || t('未知渠道')}>
@@ -675,7 +676,8 @@ export const getLogsColumns = ({
         return record.type === 0 ||
           record.type === 2 ||
           record.type === 5 ||
-          record.type === 6 ? (
+          record.type === 6 ||
+          record.type === 7 ? (
           <div>
             <Tag
               color='grey'
@@ -702,7 +704,8 @@ export const getLogsColumns = ({
           record.type === 0 ||
           record.type === 2 ||
           record.type === 5 ||
-          record.type === 6
+          record.type === 6 ||
+          record.type === 7
         ) {
           if (record.group) {
             return <>{renderGroup(record.group)}</>;
@@ -746,7 +749,8 @@ export const getLogsColumns = ({
         return record.type === 0 ||
           record.type === 2 ||
           record.type === 5 ||
-          record.type === 6 ? (
+          record.type === 6 ||
+          record.type === 7 ? (
           <>{renderModelName(record, copyText, t)}</>
         ) : (
           <></>
@@ -816,7 +820,8 @@ export const getLogsColumns = ({
         return record.type === 0 ||
           record.type === 2 ||
           record.type === 5 ||
-          record.type === 6 ? (
+          record.type === 6 ||
+          record.type === 7 ? (
           <div
             style={{
               display: 'inline-flex',
@@ -853,7 +858,8 @@ export const getLogsColumns = ({
           (record.type === 0 ||
             record.type === 2 ||
             record.type === 5 ||
-            record.type === 6) ? (
+            record.type === 6 ||
+            record.type === 7) ? (
           <>{<span> {text} </span>}</>
         ) : (
           <></>
@@ -870,7 +876,8 @@ export const getLogsColumns = ({
             record.type === 0 ||
             record.type === 2 ||
             record.type === 5 ||
-            record.type === 6
+            record.type === 6 ||
+            record.type === 7
           )
         ) {
           return <></>;
@@ -899,12 +906,12 @@ export const getLogsColumns = ({
         const other = getLogOther(record.other);
         // Prefer backend-computed official_quota; fall back to quota/groupRatio for old logs
         if (other?.official_quota != null && other.official_quota > 0) {
-          return <>{renderQuota(other.official_quota, 8)}</>;
+          return <>{renderQuota(other.official_quota, 2)}</>;
         }
         const groupRatio = getEffectiveGroupRatio(other);
-        if (groupRatio <= 0) return <>{renderQuota(text, 8)}</>;
+        if (groupRatio <= 0) return <>{renderQuota(text, 2)}</>;
         const vendorQuota = text / groupRatio;
-        return <>{renderQuota(vendorQuota, 8)}</>;
+        return <>{renderQuota(vendorQuota, 2)}</>;
       },
     },
     {
@@ -930,7 +937,7 @@ export const getLogsColumns = ({
         const actualCost = vendorQuota * costDiscount;
         return (
           <Space>
-            <span>{renderQuota(actualCost, 8)}</span>
+            <span>{renderQuota(actualCost, 2)}</span>
             <Tag color='blue'>{costDiscount}</Tag>
           </Space>
         );
@@ -960,7 +967,7 @@ export const getLogsColumns = ({
         const profit = text - actualCost;
         const color = profit >= 0 ? 'var(--semi-color-success)' : 'var(--semi-color-danger)';
         return (
-          <span style={{ color }}>{renderQuota(profit, 8)}</span>
+          <span style={{ color }}>{renderQuota(profit, 2)}</span>
         );
       },
     },
