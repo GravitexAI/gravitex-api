@@ -906,12 +906,12 @@ export const getLogsColumns = ({
         const other = getLogOther(record.other);
         // Prefer backend-computed official_quota; fall back to quota/groupRatio for old logs
         if (other?.official_quota != null && other.official_quota > 0) {
-          return <>{renderQuota(other.official_quota, 2)}</>;
+          return <>{renderQuota(other.official_quota, other.official_quota === 0 ? 2 : 8)}</>;
         }
         const groupRatio = getEffectiveGroupRatio(other);
-        if (groupRatio <= 0) return <>{renderQuota(text, 2)}</>;
+        if (groupRatio <= 0) return <>{renderQuota(text, text === 0 ? 2 : 8)}</>;
         const vendorQuota = text / groupRatio;
-        return <>{renderQuota(vendorQuota, 2)}</>;
+        return <>{renderQuota(vendorQuota, vendorQuota === 0 ? 2 : 8)}</>;
       },
     },
     {
@@ -937,7 +937,7 @@ export const getLogsColumns = ({
         const actualCost = vendorQuota * costDiscount;
         return (
           <Space>
-            <span>{renderQuota(actualCost, 2)}</span>
+            <span>{renderQuota(actualCost, actualCost === 0 ? 2 : 8)}</span>
             <Tag color='blue'>{costDiscount}</Tag>
           </Space>
         );
@@ -967,7 +967,7 @@ export const getLogsColumns = ({
         const profit = text - actualCost;
         const color = profit >= 0 ? 'var(--semi-color-success)' : 'var(--semi-color-danger)';
         return (
-          <span style={{ color }}>{renderQuota(profit, 2)}</span>
+          <span style={{ color }}>{renderQuota(profit, profit === 0 ? 2 : 8)}</span>
         );
       },
     },
