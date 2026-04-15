@@ -136,7 +136,7 @@ export const useTokensData = (openFluentNotification, openCCSwitchModal) => {
   const fetchTokenKey = async (tokenOrId, options = {}) => {
     const { suppressError = false } = options;
     const tokenId =
-      typeof tokenOrId === 'object' ? tokenOrId?.id : Number(tokenOrId);
+      typeof tokenOrId === 'object' ? tokenOrId?.id : tokenOrId;
 
     if (!tokenId) {
       const error = new Error(t('令牌不存在'));

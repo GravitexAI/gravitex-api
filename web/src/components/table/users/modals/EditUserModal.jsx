@@ -174,7 +174,7 @@ const EditUserModal = (props) => {
     setAdjustLoading(true);
     try {
       const res = await API.post('/api/user/manage', {
-        id: parseInt(userId),
+        id: userId,
         action: 'add_quota',
         mode: adjustMode,
         value: adjustMode === 'override' ? quotaVal : Math.abs(quotaVal),

@@ -1846,7 +1846,7 @@ const EditChannelModal = (props) => {
     if (isEdit) {
       res = await API.put(`/api/channel/`, {
         ...localInputs,
-        id: parseInt(channelId),
+        id: channelId,
         key_mode: isMultiKeyChannel ? keyMode : undefined, // 只在多key模式下传递
       });
     } else {
