@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -27,14 +28,16 @@ import (
 // ============================
 
 type ContentItem struct {
-	Type     string          `json:"type"`                // "text", "image_url" or "video"
+	Type     string          `json:"type"`                // "text", "image_url", "video_url", "audio_url" or "video"
 	Text     string          `json:"text,omitempty"`      // for text type
-	ImageURL *ImageURL       `json:"image_url,omitempty"` // for image_url type
-	Video    *VideoReference `json:"video,omitempty"`     // for video (sample) type
-	Role     string          `json:"role,omitempty"`      // reference_image / first_frame / last_frame
+	ImageURL *MediaURL       `json:"image_url,omitempty"` // for image_url type
+	VideoURL *MediaURL       `json:"video_url,omitempty"` // for video_url type (Seedance 2.0)
+	AudioURL *MediaURL       `json:"audio_url,omitempty"` // for audio_url type (Seedance 2.0)
+	Video    *VideoReference `json:"video,omitempty"`     // for video (legacy draft) type
+	Role     string          `json:"role,omitempty"`      // reference_image / first_frame / last_frame / reference_video / reference_audio
 }
 
-type ImageURL struct {
+type MediaURL struct {
 	URL string `json:"url"`
 }
 
@@ -180,6 +183,29 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, errors.Wrap(err, "convert request payload failed")
 	}
+
+	// 校验 asset:// 引用的素材是否属于当前用户
+	if assetIds := extractAssetVirtualIds(body.Content); len(assetIds) > 0 {
+		userId := c.GetInt("id")
+		notOwned, checkErr := model.CheckUserOwnsAssets(userId, assetIds)
+		if checkErr != nil {
+			return nil, errors.Wrap(checkErr, "validate asset ownership failed")
+		}
+		if len(notOwned) > 0 {
+			return nil, fmt.Errorf("asset not found or access denied: %s", strings.Join(notOwned, ", "))
+		}
+	}
+
+	// 检测是否包含视频输入（video_url 类型的 content），用于计费维度区分（noVideo/video）
+	hasVideoInput := false
+	for _, item := range body.Content {
+		if item.Type == "video_url" && item.VideoURL != nil && item.VideoURL.URL != "" {
+			hasVideoInput = true
+			break
+		}
+	}
+	c.Set("has_video_input", hasVideoInput)
+
 	info.UpstreamModelName = body.Model
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -301,7 +327,37 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 				}
 				r.Content = append(r.Content, ContentItem{
 					Type:     "image_url",
-					ImageURL: &ImageURL{URL: url},
+					ImageURL: &MediaURL{URL: url},
+					Role:     role,
+				})
+			case "video_url":
+				var url string
+				if m, ok := item["video_url"].(map[string]interface{}); ok && m != nil {
+					if u, ok := m["url"].(string); ok {
+						url = u
+					}
+				}
+				if url == "" {
+					continue
+				}
+				r.Content = append(r.Content, ContentItem{
+					Type:     "video_url",
+					VideoURL: &MediaURL{URL: url},
+					Role:     role,
+				})
+			case "audio_url":
+				var url string
+				if m, ok := item["audio_url"].(map[string]interface{}); ok && m != nil {
+					if u, ok := m["url"].(string); ok {
+						url = u
+					}
+				}
+				if url == "" {
+					continue
+				}
+				r.Content = append(r.Content, ContentItem{
+					Type:     "audio_url",
+					AudioURL: &MediaURL{URL: url},
 					Role:     role,
 				})
 			case "video":
@@ -340,7 +396,7 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 			for _, imgURL := range req.Images {
 				r.Content = append(r.Content, ContentItem{
 					Type: "image_url",
-					ImageURL: &ImageURL{
+					ImageURL: &MediaURL{
 						URL: imgURL,
 					},
 				})
@@ -481,4 +537,29 @@ func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, taskResult *rela
 
 func (a *TaskAdaptor) AdjustBillingOnSubmit(info *relaycommon.RelayInfo, taskData []byte) map[string]float64 {
 	return nil
+}
+
+// extractAssetVirtualIds scans content items for asset:// URLs and returns their virtual IDs.
+func extractAssetVirtualIds(items []ContentItem) []string {
+	var ids []string
+	extract := func(url string) {
+		if strings.HasPrefix(url, "asset://") {
+			vid := strings.TrimPrefix(url, "asset://")
+			if vid != "" {
+				ids = append(ids, vid)
+			}
+		}
+	}
+	for _, item := range items {
+		if item.ImageURL != nil {
+			extract(item.ImageURL.URL)
+		}
+		if item.VideoURL != nil {
+			extract(item.VideoURL.URL)
+		}
+		if item.AudioURL != nil {
+			extract(item.AudioURL.URL)
+		}
+	}
+	return ids
 }

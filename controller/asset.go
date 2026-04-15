@@ -24,6 +24,13 @@ const (
 	assetFetchTimeout  = 30 * time.Second  // upstream GET/DELETE timeout
 )
 
+// assetSupportedChannelTypes lists channel types that support the asset API (/v1/assets).
+var assetSupportedChannelTypes = []int{
+	constant.ChannelTypeUptoken,    // 59
+	constant.ChannelTypeVolcEngine, // 45
+	constant.ChannelTypeDoubaoVideo, // 54
+}
+
 // ---------- uptoken asset response types ----------
 
 type uptokenAssetResponse struct {
@@ -38,19 +45,44 @@ type uptokenAssetResponse struct {
 	CreatedAt      string `json:"created_at"`
 }
 
-// ---------- helpers ----------
-
-// getUptokenChannel finds an active uptoken channel to use for proxying asset requests.
-func getUptokenChannel() (*model.Channel, error) {
-	var channel model.Channel
-	err := model.DB.Where("type = ? AND status = ?", constant.ChannelTypeUptoken, common.ChannelStatusEnabled).First(&channel).Error
-	if err != nil {
-		return nil, fmt.Errorf("no active uptoken channel found: %w", err)
-	}
-	return &channel, nil
+// assetListItem wraps UserAsset with a space_label for the list response.
+// space_label groups assets by channel without exposing internal channel IDs.
+type assetListItem struct {
+	model.UserAsset
+	SpaceLabel string `json:"space_label"`
 }
 
-func uptokenHTTPClient(ch *model.Channel) (*http.Client, error) {
+// ---------- helpers ----------
+
+// getAssetChannelById loads a channel by ID and verifies it is an asset-supported type.
+func getAssetChannelById(channelId int) (*model.Channel, error) {
+	ch, err := model.GetChannelById(channelId, true)
+	if err != nil {
+		return nil, fmt.Errorf("channel %d not found: %w", channelId, err)
+	}
+	for _, t := range assetSupportedChannelTypes {
+		if ch.Type == t {
+			return ch, nil
+		}
+	}
+	return nil, fmt.Errorf("channel %d (type=%d) does not support asset API", channelId, ch.Type)
+}
+
+// getAssetSupportedChannels returns all enabled asset-supporting channels accessible by the token's group.
+func getAssetSupportedChannels(group string) ([]model.Channel, error) {
+	return model.GetAssetSupportedChannelsByGroup(group, assetSupportedChannelTypes)
+}
+
+// getAssetChannelBaseURL returns the base URL for the channel, falling back to the default for its type.
+func getAssetChannelBaseURL(ch *model.Channel) string {
+	baseURL := ch.GetBaseURL()
+	if baseURL == "" {
+		baseURL = constant.ChannelBaseURLs[ch.Type]
+	}
+	return baseURL
+}
+
+func assetHTTPClient(ch *model.Channel) (*http.Client, error) {
 	proxy := ch.GetSetting().Proxy
 	return service.GetHttpClientWithProxy(proxy)
 }
@@ -77,17 +109,46 @@ func isAllowedImageType(ct string) bool {
 	return false
 }
 
-// UploadAsset proxies a multipart file upload to uptoken POST /v1/assets
+// UploadAsset proxies a multipart file upload to the upstream POST /v1/assets
 // and records the user-asset mapping locally.
+// The channel is auto-selected: if channel_id is provided, use it; otherwise pick the first
+// asset-supporting channel accessible by the token's group.
 func UploadAsset(c *gin.Context) {
 	userId := c.GetInt("id")
 	tokenId := c.GetInt("token_id")
+	group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 
-	ch, err := getUptokenChannel()
-	if err != nil {
-		logger.LogError(c.Request.Context(), "UploadAsset: "+err.Error())
-		assetErrorResponse(c, http.StatusServiceUnavailable, "Asset service unavailable")
-		return
+	// Determine which channel to use
+	var ch *model.Channel
+	var err error
+
+	channelIdStr := c.Query("channel_id")
+	if channelIdStr == "" {
+		channelIdStr = c.PostForm("channel_id")
+	}
+
+	if channelIdStr != "" {
+		// Explicit channel_id provided
+		var channelId int
+		if _, err := fmt.Sscanf(channelIdStr, "%d", &channelId); err != nil {
+			assetErrorResponse(c, http.StatusBadRequest, "Invalid channel_id")
+			return
+		}
+		ch, err = getAssetChannelById(channelId)
+		if err != nil {
+			logger.LogError(c.Request.Context(), "UploadAsset: "+err.Error())
+			assetErrorResponse(c, http.StatusBadRequest, "Invalid or unsupported channel")
+			return
+		}
+	} else {
+		// Auto-select first available asset channel for this token's group
+		channels, err := getAssetSupportedChannels(group)
+		if err != nil || len(channels) == 0 {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("UploadAsset: no asset channel available for group=%s: %v", group, err))
+			assetErrorResponse(c, http.StatusServiceUnavailable, "No asset channel available for this token")
+			return
+		}
+		ch = &channels[0]
 	}
 
 	// Read uploaded file
@@ -131,10 +192,7 @@ func UploadAsset(c *gin.Context) {
 	}
 	writer.Close()
 
-	baseURL := ch.GetBaseURL()
-	if baseURL == "" {
-		baseURL = constant.ChannelBaseURLs[constant.ChannelTypeUptoken]
-	}
+	baseURL := getAssetChannelBaseURL(ch)
 	url := fmt.Sprintf("%s/v1/assets", baseURL)
 
 	// Use a dedicated timeout context for the upstream upload
@@ -149,13 +207,13 @@ func UploadAsset(c *gin.Context) {
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+ch.Key)
 
-	client, err := uptokenHTTPClient(ch)
+	client, err := assetHTTPClient(ch)
 	if err != nil {
 		assetErrorResponse(c, http.StatusInternalServerError, "Failed to create HTTP client")
 		return
 	}
 
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("UploadAsset: proxying to %s, file=%s size=%d", url, header.Filename, header.Size))
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("UploadAsset: proxying to %s (channel=%d, type=%d), file=%s size=%d", url, ch.Id, ch.Type, header.Filename, header.Size))
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -187,10 +245,11 @@ func UploadAsset(c *gin.Context) {
 		return
 	}
 
-	// Save mapping locally
+	// Save mapping locally with channel_id
 	userAsset := &model.UserAsset{
 		UserId:      userId,
 		TokenId:     tokenId,
+		ChannelId:   ch.Id,
 		VirtualId:   assetResp.VirtualId,
 		AssetUrl:    assetResp.AssetUrl,
 		Url:         assetResp.Url,
@@ -228,38 +287,53 @@ func inferImageContentType(filename string) string {
 	}
 }
 
-// ListAssets returns assets belonging to the current user.
-// For pending assets, it refreshes status from upstream.
+// ListAssets returns assets belonging to the current user across all asset-supporting channels
+// accessible by the token's group. For pending assets, it refreshes status from upstream.
 func ListAssets(c *gin.Context) {
 	userId := c.GetInt("id")
+	group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 
-	assets, err := model.GetUserAssetsByUserId(userId)
+	// Find all asset-supporting channels accessible by this token
+	channels, err := getAssetSupportedChannels(group)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("ListAssets: failed to get asset channels: %s", err.Error()))
+		assetErrorResponse(c, http.StatusInternalServerError, "Failed to list assets")
+		return
+	}
+
+	if len(channels) == 0 {
+		// No channels available — return empty list
+		c.JSON(http.StatusOK, gin.H{
+			"assets": []model.UserAsset{},
+			"total":  0,
+		})
+		return
+	}
+
+	// Build channel ID list and channel lookup map
+	channelIds := make([]int, len(channels))
+	channelMap := make(map[int]*model.Channel, len(channels))
+	for i := range channels {
+		channelIds[i] = channels[i].Id
+		channelMap[channels[i].Id] = &channels[i]
+	}
+
+	assets, err := model.GetUserAssetsByUserIdAndChannelIds(userId, channelIds)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("ListAssets: DB query failed: %s", err.Error()))
 		assetErrorResponse(c, http.StatusInternalServerError, "Failed to list assets")
 		return
 	}
 
-	ch, err := getUptokenChannel()
-	if err != nil {
-		// Can't refresh statuses, return local data as-is
-		logger.LogError(c.Request.Context(), "ListAssets: "+err.Error())
-		c.JSON(http.StatusOK, gin.H{
-			"assets": assets,
-			"total":  len(assets),
-		})
-		return
-	}
-
-	// Refresh status for pending/ready assets from upstream
-	client, _ := uptokenHTTPClient(ch)
-	baseURL := ch.GetBaseURL()
-	if baseURL == "" {
-		baseURL = constant.ChannelBaseURLs[constant.ChannelTypeUptoken]
-	}
-
+	// Refresh status for pending/ready assets from upstream (per channel)
 	for i := range assets {
 		if assets[i].Status == "pending" || assets[i].Status == "ready" {
+			ch, ok := channelMap[assets[i].ChannelId]
+			if !ok {
+				continue
+			}
+			client, _ := assetHTTPClient(ch)
+			baseURL := getAssetChannelBaseURL(ch)
 			refreshed, err := fetchUpstreamAsset(c, client, baseURL, ch.Key, assets[i].VirtualId)
 			if err == nil && refreshed != nil {
 				if refreshed.Status != assets[i].Status {
@@ -274,9 +348,28 @@ func ListAssets(c *gin.Context) {
 		}
 	}
 
+	// Assign space_label (A, B, C...) to each unique channel_id, ordered by channel id.
+	// This abstracts away the internal channel concept into user-friendly "spaces".
+	spaceLabelMap := make(map[int]string, len(channels))
+	for i, ch := range channels {
+		if i < 26 {
+			spaceLabelMap[ch.Id] = string(rune('A' + i))
+		} else {
+			spaceLabelMap[ch.Id] = fmt.Sprintf("Z%d", i-25)
+		}
+	}
+
+	items := make([]assetListItem, len(assets))
+	for i := range assets {
+		items[i] = assetListItem{
+			UserAsset:  assets[i],
+			SpaceLabel: spaceLabelMap[assets[i].ChannelId],
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"assets": assets,
-		"total":  len(assets),
+		"assets": items,
+		"total":  len(items),
 	})
 }
 
@@ -296,18 +389,16 @@ func GetAsset(c *gin.Context) {
 		return
 	}
 
-	ch, err := getUptokenChannel()
+	ch, err := getAssetChannelById(asset.ChannelId)
 	if err != nil {
-		// Return local data
+		// Return local data if channel is unavailable
+		logger.LogError(c.Request.Context(), fmt.Sprintf("GetAsset: channel lookup failed: %s", err.Error()))
 		c.JSON(http.StatusOK, asset)
 		return
 	}
 
-	client, _ := uptokenHTTPClient(ch)
-	baseURL := ch.GetBaseURL()
-	if baseURL == "" {
-		baseURL = constant.ChannelBaseURLs[constant.ChannelTypeUptoken]
-	}
+	client, _ := assetHTTPClient(ch)
+	baseURL := getAssetChannelBaseURL(ch)
 
 	refreshed, err := fetchUpstreamAsset(c, client, baseURL, ch.Key, virtualId)
 	if err != nil {
@@ -339,23 +430,20 @@ func DeleteAsset(c *gin.Context) {
 		return
 	}
 
-	_, err := model.GetUserAssetByUserIdAndVirtualId(userId, virtualId)
+	asset, err := model.GetUserAssetByUserIdAndVirtualId(userId, virtualId)
 	if err != nil {
 		assetErrorResponse(c, http.StatusNotFound, "Asset not found")
 		return
 	}
 
-	ch, err := getUptokenChannel()
+	ch, err := getAssetChannelById(asset.ChannelId)
 	if err != nil {
 		logger.LogError(c.Request.Context(), "DeleteAsset: "+err.Error())
 		assetErrorResponse(c, http.StatusServiceUnavailable, "Asset service unavailable")
 		return
 	}
 
-	baseURL := ch.GetBaseURL()
-	if baseURL == "" {
-		baseURL = constant.ChannelBaseURLs[constant.ChannelTypeUptoken]
-	}
+	baseURL := getAssetChannelBaseURL(ch)
 	url := fmt.Sprintf("%s/v1/assets/%s", baseURL, virtualId)
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), assetFetchTimeout)
@@ -368,7 +456,7 @@ func DeleteAsset(c *gin.Context) {
 	}
 	req.Header.Set("Authorization", "Bearer "+ch.Key)
 
-	client, err := uptokenHTTPClient(ch)
+	client, err := assetHTTPClient(ch)
 	if err != nil {
 		assetErrorResponse(c, http.StatusInternalServerError, "Failed to create HTTP client")
 		return
@@ -399,7 +487,7 @@ func DeleteAsset(c *gin.Context) {
 	})
 }
 
-// fetchUpstreamAsset fetches a single asset's details from uptoken.
+// fetchUpstreamAsset fetches a single asset's details from upstream.
 func fetchUpstreamAsset(c *gin.Context, client *http.Client, baseURL, apiKey, virtualId string) (*uptokenAssetResponse, error) {
 	if client == nil {
 		client = service.GetHttpClient()

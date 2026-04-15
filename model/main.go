@@ -300,6 +300,8 @@ func migrateDB() error {
 			return err
 		}
 	}
+	// Backfill channel_id for legacy user_assets (channel_id=0) with the first enabled uptoken channel
+	migrateUserAssetChannelId()
 	return nil
 }
 
@@ -636,6 +638,28 @@ func closeDB(db *gorm.DB) error {
 	}
 	err = sqlDB.Close()
 	return err
+}
+
+// migrateUserAssetChannelId backfills channel_id for legacy user_assets records (channel_id=0).
+// It finds the first enabled uptoken channel and assigns its ID to those records.
+func migrateUserAssetChannelId() {
+	var count int64
+	DB.Model(&UserAsset{}).Where("channel_id = 0").Count(&count)
+	if count == 0 {
+		return
+	}
+	// Find the first enabled uptoken channel
+	var ch Channel
+	err := DB.Where("type = ? AND status = ?", constant.ChannelTypeUptoken, common.ChannelStatusEnabled).First(&ch).Error
+	if err != nil {
+		common.SysLog(fmt.Sprintf("Warning: found %d user_assets with channel_id=0 but no enabled uptoken channel to backfill: %v", count, err))
+		return
+	}
+	if err := MigrateUserAssetChannelId(ch.Id); err != nil {
+		common.SysLog(fmt.Sprintf("Warning: failed to migrate user_assets channel_id: %v", err))
+	} else {
+		common.SysLog(fmt.Sprintf("Successfully migrated %d user_assets records to channel_id=%d", count, ch.Id))
+	}
 }
 
 func CloseDB() error {

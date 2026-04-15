@@ -1,11 +1,13 @@
 package model
 
-// UserAsset maps gateway users to UpToken asset library resources.
-// All assets live under one shared UpToken account; this table provides per-user isolation.
+// UserAsset maps gateway users to upstream asset library resources (UpToken, VolcEngine, etc.).
+// Each asset is bound to a specific channel instance via ChannelId, because different upstream
+// accounts have isolated asset stores.
 type UserAsset struct {
 	Id          int    `json:"id" gorm:"primaryKey;autoIncrement"`
 	UserId      int    `json:"user_id" gorm:"index;not null"`
 	TokenId     int    `json:"token_id"`
+	ChannelId   int    `json:"channel_id" gorm:"index;default:0"`
 	VirtualId   string `json:"virtual_id" gorm:"type:varchar(128);uniqueIndex;not null"`
 	AssetUrl    string `json:"asset_url" gorm:"type:varchar(256)"`
 	Url         string `json:"url" gorm:"type:text"`
@@ -24,6 +26,16 @@ func InsertUserAsset(asset *UserAsset) error {
 func GetUserAssetsByUserId(userId int) ([]UserAsset, error) {
 	var assets []UserAsset
 	err := DB.Where("user_id = ?", userId).Order("created_at DESC").Find(&assets).Error
+	return assets, err
+}
+
+// GetUserAssetsByUserIdAndChannelIds returns assets belonging to the user across the given channels.
+func GetUserAssetsByUserIdAndChannelIds(userId int, channelIds []int) ([]UserAsset, error) {
+	var assets []UserAsset
+	if len(channelIds) == 0 {
+		return assets, nil
+	}
+	err := DB.Where("user_id = ? AND channel_id IN ?", userId, channelIds).Order("created_at DESC").Find(&assets).Error
 	return assets, err
 }
 
@@ -79,4 +91,43 @@ func CheckUserOwnsAssets(userId int, virtualIds []string) ([]string, error) {
 		}
 	}
 	return notOwned, nil
+}
+
+// GetAssetChannelIdByVirtualIds looks up the channel_id for the given virtual_ids owned by the user.
+// Returns a map of virtualId -> channelId. Missing or not-owned assets are omitted.
+func GetAssetChannelIdByVirtualIds(userId int, virtualIds []string) (map[string]int, error) {
+	if len(virtualIds) == 0 {
+		return nil, nil
+	}
+	var assets []UserAsset
+	err := DB.Select("virtual_id, channel_id").Where("user_id = ? AND virtual_id IN ?", userId, virtualIds).Find(&assets).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]int, len(assets))
+	for _, a := range assets {
+		result[a.VirtualId] = a.ChannelId
+	}
+	return result, nil
+}
+
+// MigrateUserAssetChannelId sets the default channel_id for legacy assets (channel_id=0).
+func MigrateUserAssetChannelId(defaultChannelId int) error {
+	return DB.Model(&UserAsset{}).Where("channel_id = 0").Update("channel_id", defaultChannelId).Error
+}
+
+// GetAssetSupportedChannelsByGroup returns enabled channels of the given types
+// that are accessible by the specified group (via abilities table).
+// Returns distinct channels ordered by id.
+func GetAssetSupportedChannelsByGroup(group string, channelTypes []int) ([]Channel, error) {
+	if len(channelTypes) == 0 {
+		return nil, nil
+	}
+	var channels []Channel
+	err := DB.Where("id IN (?) AND type IN ? AND status = ?",
+		DB.Table("abilities").Select("DISTINCT channel_id").Where(commonGroupCol+" = ? AND enabled = ?", group, true),
+		channelTypes,
+		1, // ChannelStatusEnabled
+	).Order("id").Find(&channels).Error
+	return channels, err
 }

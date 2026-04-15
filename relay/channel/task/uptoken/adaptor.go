@@ -438,12 +438,23 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 // extractAssetVirtualIds scans content items for asset:// URLs and returns their virtual IDs.
 func extractAssetVirtualIds(items []ContentItem) []string {
 	var ids []string
-	for _, item := range items {
-		if item.Type == "image_url" && item.ImageURL != nil && strings.HasPrefix(item.ImageURL.URL, "asset://") {
-			vid := strings.TrimPrefix(item.ImageURL.URL, "asset://")
+	extract := func(url string) {
+		if strings.HasPrefix(url, "asset://") {
+			vid := strings.TrimPrefix(url, "asset://")
 			if vid != "" {
 				ids = append(ids, vid)
 			}
+		}
+	}
+	for _, item := range items {
+		if item.ImageURL != nil {
+			extract(item.ImageURL.URL)
+		}
+		if item.VideoURL != nil {
+			extract(item.VideoURL.URL)
+		}
+		if item.AudioURL != nil {
+			extract(item.AudioURL.URL)
 		}
 	}
 	return ids

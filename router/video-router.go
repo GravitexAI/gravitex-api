@@ -16,7 +16,7 @@ func SetVideoRouter(router *gin.Engine) {
 		videoProxyRouter.GET("/videos/:task_id/content", controller.VideoProxy)
 	}
 
-	// Asset library routes (uptoken) — TokenAuth only, no Distribute
+	// Asset library routes — TokenAuth only, no Distribute (multi-channel: uptoken/volcengine)
 	assetV1Router := router.Group("/v1")
 	assetV1Router.Use(middleware.TokenAuth())
 	{
@@ -28,7 +28,7 @@ func SetVideoRouter(router *gin.Engine) {
 
 	videoV1Router := router.Group("/v1")
 	videoV1Router.Use(middleware.RouteTag("relay"))
-	videoV1Router.Use(middleware.TokenAuth(), middleware.Distribute())
+	videoV1Router.Use(middleware.TokenAuth(), middleware.AssetResolveChannel(), middleware.Distribute())
 	{
 		videoV1Router.POST("/video/generations", controller.RelayTask)
 		videoV1Router.GET("/video/generations/:task_id", controller.RelayTaskFetch)
