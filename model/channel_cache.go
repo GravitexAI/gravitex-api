@@ -190,6 +190,77 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 	return nil, errors.New("channel not found")
 }
 
+// GetChannelsByGroupAndModelPrefix returns all enabled channels that serve at least one model
+// matching the given prefix under the specified group. Channels are deduplicated and sorted
+// by priority DESC (highest first). This uses the same in-memory cache as Distribute(),
+// with a DB fallback when cache is disabled.
+func GetChannelsByGroupAndModelPrefix(group string, modelPrefix string) ([]*Channel, error) {
+	if !common.MemoryCacheEnabled {
+		return getChannelsByGroupAndModelPrefixFromDB(group, modelPrefix)
+	}
+
+	channelSyncLock.RLock()
+	defer channelSyncLock.RUnlock()
+
+	model2channels, ok := group2model2channels[group]
+	if !ok {
+		return nil, nil
+	}
+
+	// Collect unique channel IDs across all models matching the prefix
+	seen := make(map[int]bool)
+	var result []*Channel
+	for model, channelIds := range model2channels {
+		if !strings.HasPrefix(model, modelPrefix) {
+			continue
+		}
+		for _, chId := range channelIds {
+			if seen[chId] {
+				continue
+			}
+			seen[chId] = true
+			if ch, exists := channelsIDM[chId]; exists {
+				result = append(result, ch)
+			}
+		}
+	}
+
+	// Sort by priority DESC, then by id ASC for stable ordering
+	sort.Slice(result, func(i, j int) bool {
+		pi, pj := result[i].GetPriority(), result[j].GetPriority()
+		if pi != pj {
+			return pi > pj
+		}
+		return result[i].Id < result[j].Id
+	})
+
+	return result, nil
+}
+
+// getChannelsByGroupAndModelPrefixFromDB is the DB fallback for GetChannelsByGroupAndModelPrefix.
+func getChannelsByGroupAndModelPrefixFromDB(group string, modelPrefix string) ([]*Channel, error) {
+	var channelIds []int
+	err := DB.Model(&Ability{}).
+		Select("DISTINCT channel_id").
+		Where(commonGroupCol+" = ? AND enabled = ? AND model LIKE ?", group, true, modelPrefix+"%").
+		Pluck("channel_id", &channelIds).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(channelIds) == 0 {
+		return nil, nil
+	}
+
+	var channels []*Channel
+	err = DB.Where("id IN ? AND status = ?", channelIds, common.ChannelStatusEnabled).
+		Order("priority DESC, id ASC").
+		Find(&channels).Error
+	if err != nil {
+		return nil, err
+	}
+	return channels, nil
+}
+
 func CacheGetChannel(id int) (*Channel, error) {
 	if !common.MemoryCacheEnabled {
 		return GetChannelById(id, true)

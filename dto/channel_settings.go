@@ -41,6 +41,12 @@ type ChannelOtherSettings struct {
 	UpstreamModelUpdateLastDetectedModels []string          `json:"upstream_model_update_last_detected_models,omitempty"` // 上次检测到的可加入模型
 	UpstreamModelUpdateLastRemovedModels  []string          `json:"upstream_model_update_last_removed_models,omitempty"`  // 上次检测到的可删除模型
 	UpstreamModelUpdateIgnoredModels      []string          `json:"upstream_model_update_ignored_models,omitempty"`       // 手动忽略的模型
+
+	// BytePlus Asset API credentials (AK/SK auth, separate from Channel.Key which holds Bearer API Key for video gen)
+	ByteplusAssetAK          string `json:"byteplus_asset_ak,omitempty"`
+	ByteplusAssetSK          string `json:"byteplus_asset_sk,omitempty"`
+	ByteplusAssetRegion      string `json:"byteplus_asset_region,omitempty"`       // e.g. "ap-southeast-1"
+	ByteplusAssetProjectName string `json:"byteplus_asset_project_name,omitempty"` // e.g. "default"
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {
@@ -48,4 +54,22 @@ func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {
 		return false
 	}
 	return *s.OpenRouterEnterprise
+}
+
+func (s ChannelOtherSettings) HasByteplusAssetConfig() bool {
+	return s.ByteplusAssetAK != "" && s.ByteplusAssetSK != ""
+}
+
+func (s ChannelOtherSettings) GetByteplusAssetRegion() string {
+	if s.ByteplusAssetRegion == "" {
+		return "ap-southeast-1"
+	}
+	return s.ByteplusAssetRegion
+}
+
+func (s ChannelOtherSettings) GetByteplusAssetProjectName() string {
+	if s.ByteplusAssetProjectName == "" {
+		return "default"
+	}
+	return s.ByteplusAssetProjectName
 }

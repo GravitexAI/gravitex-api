@@ -24,13 +24,6 @@ const (
 	assetFetchTimeout  = 30 * time.Second  // upstream GET/DELETE timeout
 )
 
-// assetSupportedChannelTypes lists channel types that support the asset API (/v1/assets).
-var assetSupportedChannelTypes = []int{
-	constant.ChannelTypeUptoken,    // 59
-	constant.ChannelTypeVolcEngine, // 45
-	constant.ChannelTypeDoubaoVideo, // 54
-}
-
 // ---------- uptoken asset response types ----------
 
 type uptokenAssetResponse struct {
@@ -54,23 +47,23 @@ type assetListItem struct {
 
 // ---------- helpers ----------
 
-// getAssetChannelById loads a channel by ID and verifies it is an asset-supported type.
+// getAssetChannelById loads a channel by ID and verifies it supports the asset API
+// (i.e., has seedance-2-0 models configured and is enabled in channel cache).
 func getAssetChannelById(channelId int) (*model.Channel, error) {
-	ch, err := model.GetChannelById(channelId, true)
+	ch, err := model.CacheGetChannel(channelId)
 	if err != nil {
 		return nil, fmt.Errorf("channel %d not found: %w", channelId, err)
 	}
-	for _, t := range assetSupportedChannelTypes {
-		if ch.Type == t {
-			return ch, nil
-		}
+	if !model.IsAssetSupportedChannel(channelId) {
+		return nil, fmt.Errorf("channel %d does not have seedance-2-0 models configured", channelId)
 	}
-	return nil, fmt.Errorf("channel %d (type=%d) does not support asset API", channelId, ch.Type)
+	return ch, nil
 }
 
-// getAssetSupportedChannels returns all enabled asset-supporting channels accessible by the token's group.
-func getAssetSupportedChannels(group string) ([]model.Channel, error) {
-	return model.GetAssetSupportedChannelsByGroup(group, assetSupportedChannelTypes)
+// getAssetSupportedChannels returns all enabled channels with seedance-2-0 models accessible by the token's group.
+// Uses the same channel cache and priority/weight ordering as Distribute().
+func getAssetSupportedChannels(group string) ([]*model.Channel, error) {
+	return model.GetAssetSupportedChannelsByGroup(group)
 }
 
 // getAssetChannelBaseURL returns the base URL for the channel, falling back to the default for its type.
@@ -109,11 +102,97 @@ func isAllowedImageType(ct string) bool {
 	return false
 }
 
-// UploadAsset proxies a multipart file upload to the upstream POST /v1/assets
-// and records the user-asset mapping locally.
-// The channel is auto-selected: if channel_id is provided, use it; otherwise pick the first
-// asset-supporting channel accessible by the token's group.
-func UploadAsset(c *gin.Context) {
+// ---------- BytePlus mode: create asset request ----------
+
+type createAssetRequest struct {
+	URL       string `json:"url" binding:"required"`
+	GroupId   string `json:"group_id" binding:"required"`
+	AssetType string `json:"asset_type"` // defaults to "Image"
+	Name      string `json:"name"`
+}
+
+// CreateAsset handles asset creation in dual mode:
+//   - Uptoken channels: multipart file upload (Content-Type: multipart/form-data)
+//   - BytePlus channels: JSON body with URL + group_id (Content-Type: application/json)
+func CreateAsset(c *gin.Context) {
+	ct := c.ContentType()
+	if strings.HasPrefix(ct, "multipart/form-data") {
+		uploadAssetUptoken(c)
+	} else {
+		createAssetByteplus(c)
+	}
+}
+
+// createAssetByteplus creates an asset via BytePlus SDK (URL-based, no file upload).
+func createAssetByteplus(c *gin.Context) {
+	userId := c.GetInt("id")
+	tokenId := c.GetInt("token_id")
+
+	var req createAssetRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		assetErrorResponse(c, http.StatusBadRequest, "Invalid request: "+err.Error())
+		return
+	}
+
+	// Verify group ownership
+	assetGroup, err := model.GetUserAssetGroupByUserIdAndGroupId(userId, req.GroupId)
+	if err != nil {
+		assetErrorResponse(c, http.StatusBadRequest, "Asset group not found or access denied")
+		return
+	}
+
+	ch, err := getAssetChannelById(assetGroup.ChannelId)
+	if err != nil {
+		assetErrorResponse(c, http.StatusServiceUnavailable, "Asset channel unavailable")
+		return
+	}
+
+	if !isByteplusAssetChannel(ch) {
+		assetErrorResponse(c, http.StatusBadRequest, "Channel does not have BytePlus asset configuration")
+		return
+	}
+
+	cfg := getByteplusAssetConfig(ch)
+
+	assetType := req.AssetType
+	if assetType == "" {
+		assetType = "Image"
+	}
+
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): channel=%d group=%s url=%s type=%s", ch.Id, req.GroupId, req.URL, assetType))
+
+	assetId, err := service.ByteplusCreateAsset(cfg, req.GroupId, req.URL, assetType, req.Name)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): %s", err.Error()))
+		assetErrorResponse(c, http.StatusBadGateway, "Failed to create asset on upstream: "+err.Error())
+		return
+	}
+
+	// Save locally
+	userAsset := &model.UserAsset{
+		UserId:    userId,
+		TokenId:   tokenId,
+		ChannelId: ch.Id,
+		GroupId:   req.GroupId,
+		VirtualId: assetId,
+		AssetUrl:  "asset://" + assetId,
+		Filename:  req.Name,
+		Status:    "pending", // BytePlus "Processing" → internal "pending"
+	}
+	if err := model.InsertUserAsset(userAsset); err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): save failed: %s", err.Error()))
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"virtual_id": assetId,
+		"asset_url":  "asset://" + assetId,
+		"group_id":   req.GroupId,
+		"status":     "pending",
+	})
+}
+
+// uploadAssetUptoken is the legacy uptoken multipart upload flow.
+func uploadAssetUptoken(c *gin.Context) {
 	userId := c.GetInt("id")
 	tokenId := c.GetInt("token_id")
 	group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
@@ -128,7 +207,6 @@ func UploadAsset(c *gin.Context) {
 	}
 
 	if channelIdStr != "" {
-		// Explicit channel_id provided
 		var channelId int
 		if _, err := fmt.Sscanf(channelIdStr, "%d", &channelId); err != nil {
 			assetErrorResponse(c, http.StatusBadRequest, "Invalid channel_id")
@@ -140,15 +218,30 @@ func UploadAsset(c *gin.Context) {
 			assetErrorResponse(c, http.StatusBadRequest, "Invalid or unsupported channel")
 			return
 		}
+		// BytePlus channels don't support multipart file upload — must use JSON body with URL
+		if isByteplusAssetChannel(ch) {
+			assetErrorResponse(c, http.StatusBadRequest, "This channel requires JSON body with image URL, not file upload. Use POST /v1/assets with Content-Type: application/json")
+			return
+		}
 	} else {
-		// Auto-select first available asset channel for this token's group
 		channels, err := getAssetSupportedChannels(group)
 		if err != nil || len(channels) == 0 {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("UploadAsset: no asset channel available for group=%s: %v", group, err))
 			assetErrorResponse(c, http.StatusServiceUnavailable, "No asset channel available for this token")
 			return
 		}
-		ch = &channels[0]
+		// Filter out BytePlus channels — they don't support multipart file upload (REST proxy)
+		var uptokenChannels []*model.Channel
+		for _, c := range channels {
+			if !isByteplusAssetChannel(c) {
+				uptokenChannels = append(uptokenChannels, c)
+			}
+		}
+		if len(uptokenChannels) == 0 {
+			assetErrorResponse(c, http.StatusBadRequest, "No file-upload channel available. Use JSON body with image URL for BytePlus channels")
+			return
+		}
+		ch = uptokenChannels[0]
 	}
 
 	// Read uploaded file
@@ -160,10 +253,8 @@ func UploadAsset(c *gin.Context) {
 	}
 	defer file.Close()
 
-	// Validate file type — accept common image MIME types; be lenient since browsers vary
 	ct := header.Header.Get("Content-Type")
 	if ct == "" || ct == "application/octet-stream" {
-		// Fallback: infer from filename extension
 		ct = inferImageContentType(header.Filename)
 	}
 	if !isAllowedImageType(ct) {
@@ -171,13 +262,11 @@ func UploadAsset(c *gin.Context) {
 		return
 	}
 
-	// Validate size (30MB)
 	if header.Size > 30*1024*1024 {
 		assetErrorResponse(c, http.StatusBadRequest, "File too large, max 30MB")
 		return
 	}
 
-	// Build multipart body for upstream
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 	part, err := writer.CreateFormFile("file", header.Filename)
@@ -195,7 +284,6 @@ func UploadAsset(c *gin.Context) {
 	baseURL := getAssetChannelBaseURL(ch)
 	url := fmt.Sprintf("%s/v1/assets", baseURL)
 
-	// Use a dedicated timeout context for the upstream upload
 	ctx, cancel := context.WithTimeout(c.Request.Context(), assetUploadTimeout)
 	defer cancel()
 
@@ -237,7 +325,6 @@ func UploadAsset(c *gin.Context) {
 		return
 	}
 
-	// Parse upstream response
 	var assetResp uptokenAssetResponse
 	if err := common.Unmarshal(body, &assetResp); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("UploadAsset: failed to parse upstream response: %s", err.Error()))
@@ -245,7 +332,6 @@ func UploadAsset(c *gin.Context) {
 		return
 	}
 
-	// Save mapping locally with channel_id
 	userAsset := &model.UserAsset{
 		UserId:      userId,
 		TokenId:     tokenId,
@@ -260,7 +346,6 @@ func UploadAsset(c *gin.Context) {
 	}
 	if err := model.InsertUserAsset(userAsset); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("UploadAsset: failed to save asset mapping: %s", err.Error()))
-		// Still return the upstream response to user — asset was created upstream
 	}
 
 	c.Data(http.StatusOK, "application/json", body)
@@ -287,14 +372,16 @@ func inferImageContentType(filename string) string {
 	}
 }
 
-// ListAssets returns assets belonging to the current user across all asset-supporting channels
+// ListAssets returns assets belonging to the current user across all BytePlus-enabled channels
 // accessible by the token's group. For pending assets, it refreshes status from upstream.
+// Note: only BytePlus channels are listed; uptoken assets are excluded from the asset library.
 func ListAssets(c *gin.Context) {
 	userId := c.GetInt("id")
 	group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	groupIdFilter := c.Query("group_id") // optional: filter by BytePlus asset group
 
-	// Find all asset-supporting channels accessible by this token
-	channels, err := getAssetSupportedChannels(group)
+	// Only list assets from BytePlus-enabled channels (skip uptoken channels)
+	channels, err := getByteplusEnabledChannels(group)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("ListAssets: failed to get asset channels: %s", err.Error()))
 		assetErrorResponse(c, http.StatusInternalServerError, "Failed to list assets")
@@ -315,34 +402,40 @@ func ListAssets(c *gin.Context) {
 	channelMap := make(map[int]*model.Channel, len(channels))
 	for i := range channels {
 		channelIds[i] = channels[i].Id
-		channelMap[channels[i].Id] = &channels[i]
+		channelMap[channels[i].Id] = channels[i]
 	}
 
-	assets, err := model.GetUserAssetsByUserIdAndChannelIds(userId, channelIds)
-	if err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("ListAssets: DB query failed: %s", err.Error()))
+	var assets []model.UserAsset
+	var err2 error
+	if groupIdFilter != "" {
+		assets, err2 = model.GetUserAssetsByGroupId(userId, groupIdFilter)
+	} else {
+		assets, err2 = model.GetUserAssetsByUserIdAndChannelIds(userId, channelIds)
+	}
+	if err2 != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("ListAssets: DB query failed: %s", err2.Error()))
 		assetErrorResponse(c, http.StatusInternalServerError, "Failed to list assets")
 		return
 	}
 
-	// Refresh status for pending/ready assets from upstream (per channel)
+	// Refresh status for pending/ready assets from upstream via BytePlus SDK
 	for i := range assets {
 		if assets[i].Status == "pending" || assets[i].Status == "ready" {
 			ch, ok := channelMap[assets[i].ChannelId]
 			if !ok {
 				continue
 			}
-			client, _ := assetHTTPClient(ch)
-			baseURL := getAssetChannelBaseURL(ch)
-			refreshed, err := fetchUpstreamAsset(c, client, baseURL, ch.Key, assets[i].VirtualId)
-			if err == nil && refreshed != nil {
-				if refreshed.Status != assets[i].Status {
+			cfg := getByteplusAssetConfig(ch)
+			info, err := service.ByteplusGetAsset(cfg, assets[i].VirtualId)
+			if err == nil && info != nil {
+				newStatus := service.ByteplusStatusToInternal(info.Status)
+				if newStatus != assets[i].Status || info.URL != assets[i].Url {
 					_ = model.UpdateUserAssetFields(assets[i].VirtualId, map[string]interface{}{
-						"status": refreshed.Status,
-						"url":    refreshed.Url,
+						"status": newStatus,
+						"url":    info.URL,
 					})
-					assets[i].Status = refreshed.Status
-					assets[i].Url = refreshed.Url
+					assets[i].Status = newStatus
+					assets[i].Url = info.URL
 				}
 			}
 		}
@@ -397,27 +490,57 @@ func GetAsset(c *gin.Context) {
 		return
 	}
 
-	client, _ := assetHTTPClient(ch)
-	baseURL := getAssetChannelBaseURL(ch)
-
-	refreshed, err := fetchUpstreamAsset(c, client, baseURL, ch.Key, virtualId)
-	if err != nil {
-		// Return local data on upstream error
-		logger.LogError(c.Request.Context(), fmt.Sprintf("GetAsset: upstream fetch failed: %s", err.Error()))
-		c.JSON(http.StatusOK, asset)
-		return
-	}
-
-	// Update local if status changed
-	if refreshed.Status != asset.Status || refreshed.Url != asset.Url {
-		_ = model.UpdateUserAssetFields(virtualId, map[string]interface{}{
-			"status": refreshed.Status,
-			"url":    refreshed.Url,
+	if isByteplusAssetChannel(ch) {
+		// BytePlus path: use SDK
+		cfg := getByteplusAssetConfig(ch)
+		info, err := service.ByteplusGetAsset(cfg, virtualId)
+		if err != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("GetAsset(byteplus): %s", err.Error()))
+			c.JSON(http.StatusOK, asset)
+			return
+		}
+		newStatus := service.ByteplusStatusToInternal(info.Status)
+		if newStatus != asset.Status || info.URL != asset.Url {
+			_ = model.UpdateUserAssetFields(virtualId, map[string]interface{}{
+				"status": newStatus,
+				"url":    info.URL,
+			})
+		}
+		// Return merged response
+		c.JSON(http.StatusOK, gin.H{
+			"virtual_id":      asset.VirtualId,
+			"asset_url":       asset.AssetUrl,
+			"url":             info.URL,
+			"filename":        asset.Filename,
+			"status":          newStatus,
+			"group_id":        asset.GroupId,
+			"byteplus_status": info.Status,
+			"asset_type":      info.AssetType,
+			"created_at":      asset.CreatedAt,
 		})
-	}
+	} else {
+		// Uptoken path: use REST API
+		client, _ := assetHTTPClient(ch)
+		baseURL := getAssetChannelBaseURL(ch)
 
-	// Return upstream data (more complete)
-	c.JSON(http.StatusOK, refreshed)
+		refreshed, err := fetchUpstreamAsset(c, client, baseURL, ch.Key, virtualId)
+		if err != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("GetAsset: upstream fetch failed: %s", err.Error()))
+			c.JSON(http.StatusOK, asset)
+			return
+		}
+
+		// Update local if status changed
+		if refreshed.Status != asset.Status || refreshed.Url != asset.Url {
+			_ = model.UpdateUserAssetFields(virtualId, map[string]interface{}{
+				"status": refreshed.Status,
+				"url":    refreshed.Url,
+			})
+		}
+
+		// Return upstream data (more complete)
+		c.JSON(http.StatusOK, refreshed)
+	}
 }
 
 // DeleteAsset removes an asset, both locally and from upstream.
@@ -443,42 +566,47 @@ func DeleteAsset(c *gin.Context) {
 		return
 	}
 
-	baseURL := getAssetChannelBaseURL(ch)
-	url := fmt.Sprintf("%s/v1/assets/%s", baseURL, virtualId)
+	if isByteplusAssetChannel(ch) {
+		// BytePlus path: use SDK to delete upstream
+		cfg := getByteplusAssetConfig(ch)
+		if err := service.ByteplusDeleteAsset(cfg, virtualId); err != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("DeleteAsset(byteplus): %s", err.Error()))
+			// Continue to delete locally even if upstream fails
+		}
+	} else {
+		// Uptoken path: use REST API to delete upstream
+		baseURL := getAssetChannelBaseURL(ch)
+		delURL := fmt.Sprintf("%s/v1/assets/%s", baseURL, virtualId)
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), assetFetchTimeout)
-	defer cancel()
+		ctx, cancel := context.WithTimeout(c.Request.Context(), assetFetchTimeout)
+		defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
-	if err != nil {
-		assetErrorResponse(c, http.StatusInternalServerError, "Failed to create upstream request")
-		return
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodDelete, delURL, nil)
+		if reqErr == nil {
+			req.Header.Set("Authorization", "Bearer "+ch.Key)
+			client, clientErr := assetHTTPClient(ch)
+			if clientErr == nil {
+				resp, doErr := client.Do(req)
+				if doErr != nil {
+					logger.LogError(c.Request.Context(), fmt.Sprintf("DeleteAsset: upstream request failed: %s", doErr.Error()))
+				} else {
+					body, _ := io.ReadAll(resp.Body)
+					resp.Body.Close()
+					if resp.StatusCode != http.StatusOK {
+						logger.LogError(c.Request.Context(), fmt.Sprintf("DeleteAsset: upstream returned %d: %s", resp.StatusCode, string(body)))
+					}
+				}
+			} else {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("DeleteAsset: failed to create HTTP client: %s", clientErr.Error()))
+			}
+		} else {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("DeleteAsset: failed to create upstream request: %s", reqErr.Error()))
+		}
 	}
-	req.Header.Set("Authorization", "Bearer "+ch.Key)
-
-	client, err := assetHTTPClient(ch)
-	if err != nil {
-		assetErrorResponse(c, http.StatusInternalServerError, "Failed to create HTTP client")
-		return
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("DeleteAsset: upstream request failed: %s", err.Error()))
-		assetErrorResponse(c, http.StatusBadGateway, "Failed to delete asset from upstream")
-		return
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
 
 	// Delete from local DB regardless of upstream result (asset may already be gone upstream)
 	if err := model.DeleteUserAssetByVirtualId(virtualId); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("DeleteAsset: failed to delete local record: %s", err.Error()))
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("DeleteAsset: upstream returned %d: %s", resp.StatusCode, string(body)))
 	}
 
 	c.JSON(http.StatusOK, gin.H{

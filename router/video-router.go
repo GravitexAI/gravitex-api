@@ -20,10 +20,15 @@ func SetVideoRouter(router *gin.Engine) {
 	assetV1Router := router.Group("/v1")
 	assetV1Router.Use(middleware.TokenAuth())
 	{
-		assetV1Router.POST("/assets", controller.UploadAsset)
+		assetV1Router.POST("/assets", controller.CreateAsset)
 		assetV1Router.GET("/assets", controller.ListAssets)
 		assetV1Router.GET("/assets/:virtual_id", controller.GetAsset)
 		assetV1Router.DELETE("/assets/:virtual_id", controller.DeleteAsset)
+
+		// Asset groups (BytePlus mode)
+		assetV1Router.POST("/asset-groups", controller.CreateAssetGroup)
+		assetV1Router.GET("/asset-groups", controller.ListAssetGroups)
+		assetV1Router.DELETE("/asset-groups/:group_id", controller.DeleteAssetGroup)
 	}
 
 	videoV1Router := router.Group("/v1")

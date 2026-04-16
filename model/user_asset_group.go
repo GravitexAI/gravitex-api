@@ -1,0 +1,72 @@
+package model
+
+// UserAssetGroup maps gateway users to BytePlus AssetGroups.
+// Each group belongs to a specific channel (upstream BytePlus account) and user.
+type UserAssetGroup struct {
+	Id          int    `json:"id" gorm:"primaryKey;autoIncrement"`
+	UserId      int    `json:"user_id" gorm:"index;not null"`
+	ChannelId   int    `json:"channel_id" gorm:"index;not null"`
+	GroupId     string `json:"group_id" gorm:"type:varchar(128);uniqueIndex;not null"` // e.g. "group-20260318033332-xxxxx"
+	Name        string `json:"name" gorm:"type:varchar(256)"`
+	Description string `json:"description" gorm:"type:text"`
+	ProjectName string `json:"project_name" gorm:"type:varchar(64);default:'default'"`
+	CreatedAt   int64  `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt   int64  `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+func (UserAssetGroup) TableName() string {
+	return "t_user_asset_groups"
+}
+
+func InsertUserAssetGroup(group *UserAssetGroup) error {
+	return DB.Create(group).Error
+}
+
+func GetUserAssetGroupsByUserIdAndChannelIds(userId int, channelIds []int) ([]UserAssetGroup, error) {
+	var groups []UserAssetGroup
+	if len(channelIds) == 0 {
+		return groups, nil
+	}
+	err := DB.Where("user_id = ? AND channel_id IN ?", userId, channelIds).Order("created_at DESC").Find(&groups).Error
+	return groups, err
+}
+
+func GetUserAssetGroupByUserIdAndGroupId(userId int, groupId string) (*UserAssetGroup, error) {
+	var group UserAssetGroup
+	err := DB.Where("user_id = ? AND group_id = ?", userId, groupId).First(&group).Error
+	if err != nil {
+		return nil, err
+	}
+	return &group, nil
+}
+
+func GetUserAssetGroupByGroupId(groupId string) (*UserAssetGroup, error) {
+	var group UserAssetGroup
+	err := DB.Where("group_id = ?", groupId).First(&group).Error
+	if err != nil {
+		return nil, err
+	}
+	return &group, nil
+}
+
+func DeleteUserAssetGroupByGroupId(groupId string) error {
+	// Delete assets belonging to this group first
+	if err := DB.Where("group_id = ?", groupId).Delete(&UserAsset{}).Error; err != nil {
+		return err
+	}
+	return DB.Where("group_id = ?", groupId).Delete(&UserAssetGroup{}).Error
+}
+
+// CountAssetsByGroupId returns the number of assets belonging to the given group.
+func CountAssetsByGroupId(groupId string) (int64, error) {
+	var count int64
+	err := DB.Model(&UserAsset{}).Where("group_id = ?", groupId).Count(&count).Error
+	return count, err
+}
+
+// CountUserAssetGroupsByChannel returns the number of asset groups the user has on the given channel.
+func CountUserAssetGroupsByChannel(userId, channelId int) (int64, error) {
+	var count int64
+	err := DB.Model(&UserAssetGroup{}).Where("user_id = ? AND channel_id = ?", userId, channelId).Count(&count).Error
+	return count, err
+}

@@ -80,7 +80,7 @@ func AssetResolveChannel() gin.HandlerFunc {
 				first = false
 			} else if chId != targetChannelId {
 				abortWithOpenAiMessage(c, http.StatusBadRequest,
-					"同一请求中的素材必须来自同一空间 / All assets in a single request must belong to the same space")
+					"同一请求中的素材必须来自同一素材组 / All assets in a single request must belong to the same asset group")
 				return
 			}
 		}
