@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -194,7 +195,15 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return openaiErr
 	}
 
-	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
+	usageData := usage.(*dto.Usage)
+	containAudioTokens := usageData.CompletionTokenDetails.AudioTokens > 0 || usageData.PromptTokensDetails.AudioTokens > 0
+	containsAudioRatios := ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)
+
+	if containAudioTokens && containsAudioRatios {
+		service.PostAudioConsumeQuota(c, info, usageData, "")
+	} else {
+		service.PostTextConsumeQuota(c, info, usageData, nil)
+	}
 	return nil
 }
 

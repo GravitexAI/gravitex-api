@@ -80,9 +80,9 @@ func calculateAudioQuota(info QuotaInfo) int {
 	quota = quota.Add(inputTextTokens.Mul(textRatio))
 	quota = quota.Add(outputTextTokens.Mul(completionRatio).Mul(textRatio))
 
-	// 音频部分：输入用 audioRatio；输出用 effectiveAudioOutputRatio（优先音频输入倍率，否则文本输入倍率）
-	quota = quota.Add(inputAudioTokens.Mul(audioRatio).Mul(groupRatio))
-	quota = quota.Add(outputAudioTokens.Mul(dEffectiveAudioOutputRatio).Mul(groupRatio))
+	// 音频部分：输入用 audioRatio × modelRatio；输出用 effectiveAudioOutputRatio × modelRatio（与文本/图片倍率体系一致）
+	quota = quota.Add(inputAudioTokens.Mul(audioRatio).Mul(textRatio))
+	quota = quota.Add(outputAudioTokens.Mul(dEffectiveAudioOutputRatio).Mul(textRatio))
 
 	// If quota is less than or equal to zero, set quota to 1
 	if quota.LessThanOrEqual(decimal.Zero) {
@@ -276,7 +276,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 
 	useTimeSeconds := time.Now().Unix() - relayInfo.StartTime.Unix()
 	textInputTokens := usage.PromptTokensDetails.TextTokens
-	textOutTokens := usage.CompletionTokenDetails.TextTokens
+	textOutTokens := usage.CompletionTokenDetails.TextTokens + usage.CompletionTokenDetails.ReasoningTokens
 
 	audioInputTokens := usage.PromptTokensDetails.AudioTokens
 	audioOutTokens := usage.CompletionTokenDetails.AudioTokens

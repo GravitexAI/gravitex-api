@@ -230,9 +230,12 @@ func GenerateAudioOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 	info["audio_input"] = usage.PromptTokensDetails.AudioTokens
 	info["audio_output"] = usage.CompletionTokenDetails.AudioTokens
 	info["text_input"] = usage.PromptTokensDetails.TextTokens
-	info["text_output"] = usage.CompletionTokenDetails.TextTokens
+	info["text_output"] = usage.CompletionTokenDetails.TextTokens + usage.CompletionTokenDetails.ReasoningTokens
 	info["audio_ratio"] = audioRatio
 	info["audio_completion_ratio"] = audioCompletionRatio
+	if usage.CompletionTokenDetails.ReasoningTokens > 0 {
+		info["reasoning_tokens"] = usage.CompletionTokenDetails.ReasoningTokens
+	}
 	return info
 }
 
