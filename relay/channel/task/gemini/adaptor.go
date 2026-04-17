@@ -236,6 +236,10 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return "", nil, service.TaskErrorWrapper(fmt.Errorf("missing operation name"), "invalid_response", http.StatusInternalServerError)
 	}
 	taskID = encodeLocalTaskID(s.Name)
+
+	// 使用上游真实 ID 作为公开 ID（避免依赖 private_data.upstream_task_id）
+	info.PublicTaskID = taskID
+
 	ov := dto.NewOpenAIVideo()
 	ov.ID = info.PublicTaskID
 	ov.TaskID = info.PublicTaskID

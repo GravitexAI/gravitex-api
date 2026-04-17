@@ -378,9 +378,9 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return
 	}
 
-	// 保留上游 task ID 用于后续轮询，但在返回给前端的响应中使用公共 task ID
+	// 使用上游真实 ID 作为公开 ID（避免依赖 private_data.upstream_task_id）
 	upstreamTaskID := dResp.ID
-	dResp.ID = info.PublicTaskID
+	info.PublicTaskID = upstreamTaskID
 
 	if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
 		if body, err := common.Marshal(dResp); err == nil {

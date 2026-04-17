@@ -87,7 +87,16 @@ type Properties struct {
 }
 
 func (m *Properties) Scan(val interface{}) error {
-	bytesValue, _ := val.([]byte)
+	var bytesValue []byte
+	switch v := val.(type) {
+	case []byte:
+		bytesValue = v
+	case string:
+		bytesValue = []byte(v)
+	default:
+		*m = Properties{}
+		return nil
+	}
 	if len(bytesValue) == 0 {
 		*m = Properties{}
 		return nil
@@ -148,7 +157,16 @@ func GenerateTaskID() string {
 }
 
 func (p *TaskPrivateData) Scan(val interface{}) error {
-	bytesValue, _ := val.([]byte)
+	var bytesValue []byte
+	switch v := val.(type) {
+	case []byte:
+		bytesValue = v
+	case string:
+		bytesValue = []byte(v)
+	default:
+		// nil or unsupported type
+		return nil
+	}
 	if len(bytesValue) == 0 {
 		return nil
 	}
@@ -306,6 +324,7 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 	if err != nil {
 		return nil
 	}
+	repairTaskPrivateData(tasks)
 	return tasks
 }
 
@@ -317,7 +336,36 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 	if err != nil {
 		return nil
 	}
+	// Workaround: GORM batch Find may skip calling TaskPrivateData.Scan for
+	// JSON columns on some MySQL/driver combinations. Re-read private_data via
+	// raw rows.Scan to ensure the field is always populated correctly.
+	repairTaskPrivateData(tasks)
 	return tasks
+}
+
+// repairTaskPrivateData re-reads private_data for any tasks where PrivateData
+// is zero-valued after a batch GORM Find.
+//
+// Root cause: GORM v2 batch Find sometimes does not invoke the custom
+// sql.Scanner on TaskPrivateData for MySQL JSON columns. Additionally,
+// raw rows.Scan(&interface{}) also returns nil for MySQL JSON columns in
+// some driver configurations.
+//
+// Solution: use GORM's DB.First (single-row load) which is proven to
+// always invoke the custom Scanner correctly.
+func repairTaskPrivateData(tasks []*Task) {
+	if len(tasks) == 0 {
+		return
+	}
+	for _, t := range tasks {
+		if (t.PrivateData == TaskPrivateData{}) {
+			// Re-read using First — proven to invoke custom Scanner correctly
+			var fresh Task
+			if err := DB.First(&fresh, t.ID).Error; err == nil {
+				t.PrivateData = fresh.PrivateData
+			}
+		}
+	}
 }
 
 func GetByOnlyTaskId(taskId string) (*Task, bool, error) {
@@ -402,9 +450,16 @@ func (t *Task) Snapshot() taskSnapshot {
 }
 
 func (Task *Task) Update() error {
-	var err error
-	err = DB.Save(Task).Error
-	return err
+	// Always omit private_data from GORM's Save to avoid Valuer bug on MySQL JSON columns
+	err := DB.Model(Task).Omit("private_data").Save(Task).Error
+	if err != nil {
+		return err
+	}
+	// Write private_data separately with explicit serialization
+	if pdVal, _ := Task.PrivateData.Value(); pdVal != nil {
+		return DB.Model(Task).Update("private_data", pdVal).Error
+	}
+	return nil
 }
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).
@@ -414,10 +469,26 @@ func (Task *Task) Update() error {
 // Uses Model().Select("*").Updates() instead of Save() because GORM's Save
 // falls back to INSERT ON CONFLICT when the WHERE-guarded UPDATE matches
 // zero rows, which silently bypasses the CAS guard.
+//
+// IMPORTANT: private_data is always Omit-ed from GORM struct serialization
+// and written separately via a pre-serialized value. This is because GORM's
+// Select("*").Updates(struct) does not correctly invoke the custom Valuer
+// (TaskPrivateData.Value) for MySQL JSON columns, causing NULL to be written.
 func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
-	result := DB.Model(t).Where("status = ?", fromStatus).Select("*").Updates(t)
+	// Always omit private_data from struct-based Updates to avoid GORM Valuer bug
+	result := DB.Model(t).
+		Where("status = ?", fromStatus).
+		Omit("private_data").
+		Select("*").
+		Updates(t)
 	if result.Error != nil {
 		return false, result.Error
+	}
+	if result.RowsAffected > 0 {
+		// Write private_data separately with explicit serialization
+		if pdVal, _ := t.PrivateData.Value(); pdVal != nil {
+			DB.Model(t).Update("private_data", pdVal)
+		}
 	}
 	return result.RowsAffected > 0, nil
 }

@@ -465,16 +465,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			// 按秒计费：轮询成功后根据 task.Data 中保存的信息计费并写消费日志
 			if err := handleSora2TaskBilling(ctx, task); err != nil {
 				logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed: %v", taskModelName, task.TaskID, err))
-				// 计费失败时将任务标记为 FAILURE，防止用户免费获得视频
-				task.Status = model.TaskStatusFailure
-				task.FailReason = fmt.Sprintf("billing_failed: %v", err)
+				// 计费失败仅记录日志，不覆盖任务状态，视频已生成应正常返回给用户
 			}
 		} else if isVideoTokenRatioModel(taskModelName) {
 			// VideoRatio/VideoCompletionRatio：轮询成功后根据 task.Data + usage.tokens 计费并写消费日志
 			if err := handleVideoTokenRatioBilling(ctx, task, taskResult); err != nil {
 				logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed: %v", taskModelName, task.TaskID, err))
-				task.Status = model.TaskStatusFailure
-				task.FailReason = fmt.Sprintf("billing_failed: %v", err)
+				// 计费失败仅记录日志，不覆盖任务状态，视频已生成应正常返回给用户
 			}
 		} else if taskResult.TotalTokens > 0 {
 			// 按 token 计费模型（如 Doubao）：根据实际 token 数结算差额

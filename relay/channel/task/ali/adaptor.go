@@ -539,6 +539,9 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return
 	}
 
+	// 使用上游真实 ID 作为公开 ID（避免依赖 private_data.upstream_task_id）
+	info.PublicTaskID = aliResp.Output.TaskID
+
 	// 转换为 OpenAI 格式响应
 	openAIResp := dto.NewOpenAIVideo()
 	openAIResp.ID = info.PublicTaskID

@@ -109,7 +109,9 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return
 	}
 
-	// 使用公开 task_xxxx ID 替换上游 ID 返回给客户端
+	// 使用上游真实 ID 作为公开 ID（避免依赖 private_data.upstream_task_id）
+	info.PublicTaskID = sunoResponse.Data
+
 	publicResponse := dto.TaskResponse[string]{
 		Code:    sunoResponse.Code,
 		Message: sunoResponse.Message,

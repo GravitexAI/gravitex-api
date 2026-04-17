@@ -94,12 +94,6 @@ func ByteplusCreateAssetGroup(cfg ByteplusAssetConfig, name, description string)
 		return "", err
 	}
 
-	// Debug: log raw response to diagnose field mapping
-	if resp != nil {
-		rawBytes, _ := common.Marshal(*resp)
-		fmt.Printf("[ByteplusCreateAssetGroup] raw response: %s\n", string(rawBytes))
-	}
-
 	// Try extracting Id from top level first, then from nested Result
 	groupId := extractStringField(resp, "Id")
 	if groupId == "" {

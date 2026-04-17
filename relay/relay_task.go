@@ -185,10 +185,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	isPerSecondBilling := isVideoPerSecondModel(modelName)
 	isVideoTokenRatioBilling := isVideoTokenRatioModel(modelName)
 
-	// 3. 预生成公开 task ID（仅首次）
-	if info.PublicTaskID == "" {
-		info.PublicTaskID = model.GenerateTaskID()
-	}
+	// 3. PublicTaskID 不再预生成：由各 adaptor 的 DoResponse 在拿到上游真实 ID 后
+	//    回写 info.PublicTaskID = upstreamID，使 task_id 直接使用上游 ID，
+	//    避免依赖 private_data.upstream_task_id（GORM MySQL JSON Scanner 有 bug）。
+	//    如果 adaptor 未设置，InitTask 内部会 fallback 生成 task_xxxx。
 
 	// 4. 价格计算：基础模型价格
 	info.OriginModelName = modelName
