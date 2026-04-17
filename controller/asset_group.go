@@ -113,7 +113,7 @@ func CreateAssetGroup(c *gin.Context) {
 		return
 	}
 	if count >= MaxAssetGroupsPerUserPerChannel {
-		assetErrorResponse(c, http.StatusForbidden, fmt.Sprintf("Asset group limit reached (%d per channel)", MaxAssetGroupsPerUserPerChannel))
+		assetErrorResponse(c, http.StatusForbidden, fmt.Sprintf("Asset group limit reached (%d)", MaxAssetGroupsPerUserPerChannel))
 		return
 	}
 

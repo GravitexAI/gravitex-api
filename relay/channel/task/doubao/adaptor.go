@@ -84,6 +84,11 @@ type responseTask struct {
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`
 	} `json:"usage"`
+	Error *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	} `json:"error,omitempty"`
 	CreatedAt int64 `json:"created_at"`
 	UpdatedAt int64 `json:"updated_at"`
 }
@@ -460,6 +465,14 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		Code: 0,
 	}
 
+	// 检测上游错误响应（如 ResourceNotFound 404），优先于状态映射
+	if resTask.Error != nil && resTask.Error.Message != "" {
+		taskResult.Status = model.TaskStatusFailure
+		taskResult.Progress = "100%"
+		taskResult.Reason = fmt.Sprintf("%s: %s", resTask.Error.Code, resTask.Error.Message)
+		return &taskResult, nil
+	}
+
 	// Map Doubao status to internal status
 	switch resTask.Status {
 	case "pending", "queued":
@@ -517,10 +530,18 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(originTask *model.Task) ([]byte, erro
 	openAIVideo.CompletedAt = originTask.UpdatedAt
 	openAIVideo.Model = originTask.Properties.OriginModelName
 
-	if dResp.Status == "failed" {
+	if dResp.Status == "failed" || (dResp.Error != nil && dResp.Error.Message != "") {
+		errMsg := "task failed"
+		errCode := "failed"
+		if dResp.Error != nil && dResp.Error.Message != "" {
+			errMsg = dResp.Error.Message
+			if dResp.Error.Code != "" {
+				errCode = dResp.Error.Code
+			}
+		}
 		openAIVideo.Error = &dto.OpenAIVideoError{
-			Message: "task failed",
-			Code:    "failed",
+			Message: errMsg,
+			Code:    errCode,
 		}
 	}
 

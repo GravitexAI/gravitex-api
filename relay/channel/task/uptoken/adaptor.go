@@ -357,6 +357,14 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		Code: 0,
 	}
 
+	// 检测上游错误响应（如 ResourceNotFound），优先于状态映射
+	if resTask.Error != nil && resTask.Error.Message != "" && resTask.Status == "" {
+		taskResult.Status = model.TaskStatusFailure
+		taskResult.Progress = "100%"
+		taskResult.Reason = resTask.Error.Message
+		return &taskResult, nil
+	}
+
 	switch resTask.Status {
 	case "queued":
 		taskResult.Status = model.TaskStatusQueued

@@ -243,129 +243,151 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	}
 
 	taskResult := &relaycommon.TaskInfo{}
-	// 仅当确认为本系统 New API 格式（code=success 且 data 含 task_id）时才走 New API 分支，避免 Vertex/Gemini 原始响应 {"name":"..."} 被误判导致 task.Data 计费字段丢失（与 nebula-new-api 对齐）
-	var responseItems dto.TaskResponse[model.Task]
-	_isNewAPIFormat := false
-	if err = common.Unmarshal(responseBody, &responseItems); err == nil && responseItems.IsSuccess() {
-		if responseItems.Data.TaskID != "" {
-			_isNewAPIFormat = true
+	skipUpstreamParse := false
+
+	// 上游返回 4xx JSON 错误响应（如 404 ResourceNotFound）时，直接标记失败
+	// 4xx 是客户端错误，通常不可重试，直接判定任务失败
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		var errResp struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := common.Unmarshal(responseBody, &errResp); err == nil && errResp.Error.Message != "" {
+			errMsg := fmt.Sprintf("%s: %s", errResp.Error.Code, errResp.Error.Message)
+			logger.LogError(ctx, fmt.Sprintf("[TaskPoll] task=%s upstream 4xx JSON error (HTTP %d): %s", taskId, resp.StatusCode, errMsg))
+			taskResult = relaycommon.FailTaskInfo(errMsg)
+			task.Data = mergeBillingFieldsIntoTaskData(task.Data, responseBody)
+			skipUpstreamParse = true
 		}
 	}
-	if _isNewAPIFormat {
-		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s branch=newAPI", taskId))
-		logger.LogDebug(ctx, fmt.Sprintf("UpdateVideoSingleTask parsed as new api response format: %+v", responseItems))
-		t := responseItems.Data
-		taskResult.TaskID = t.TaskID
-		taskResult.Status = string(t.Status)
-		taskResult.Url = t.FailReason
-		taskResult.Progress = t.Progress
-		taskResult.Reason = t.FailReason
-		task.Data = mergeBillingFieldsIntoTaskData(task.Data, t.Data)
-	} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
-		return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
-	} else {
-		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s branch=parseResult", taskId))
-		// 与 nebula-new-api 对齐：合并新的响应数据，但保留计费所需的关键字段
-		var existingData map[string]interface{}
-		var newData map[string]interface{}
 
-		if len(task.Data) > 0 {
-			if err := common.Unmarshal(task.Data, &existingData); err != nil {
-				logger.LogWarn(ctx, fmt.Sprintf("UpdateVideoSingleTask: failed to unmarshal existing task.Data: %v", err))
+	if !skipUpstreamParse {
+		// 仅当确认为本系统 New API 格式（code=success 且 data 含 task_id）时才走 New API 分支，避免 Vertex/Gemini 原始响应 {"name":"..."} 被误判导致 task.Data 计费字段丢失（与 nebula-new-api 对齐）
+		var responseItems dto.TaskResponse[model.Task]
+		_isNewAPIFormat := false
+		if err = common.Unmarshal(responseBody, &responseItems); err == nil && responseItems.IsSuccess() {
+			if responseItems.Data.TaskID != "" {
+				_isNewAPIFormat = true
+			}
+		}
+		if _isNewAPIFormat {
+			logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s branch=newAPI", taskId))
+			logger.LogDebug(ctx, fmt.Sprintf("UpdateVideoSingleTask parsed as new api response format: %+v", responseItems))
+			t := responseItems.Data
+			taskResult.TaskID = t.TaskID
+			taskResult.Status = string(t.Status)
+			taskResult.Url = t.FailReason
+			taskResult.Progress = t.Progress
+			taskResult.Reason = t.FailReason
+			task.Data = mergeBillingFieldsIntoTaskData(task.Data, t.Data)
+		} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
+			return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
+		} else {
+			logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s branch=parseResult", taskId))
+			// 与 nebula-new-api 对齐：合并新的响应数据，但保留计费所需的关键字段
+			var existingData map[string]interface{}
+			var newData map[string]interface{}
+
+			if len(task.Data) > 0 {
+				if err := common.Unmarshal(task.Data, &existingData); err != nil {
+					logger.LogWarn(ctx, fmt.Sprintf("UpdateVideoSingleTask: failed to unmarshal existing task.Data: %v", err))
+					existingData = make(map[string]interface{})
+				}
+			} else {
 				existingData = make(map[string]interface{})
 			}
-		} else {
-			existingData = make(map[string]interface{})
-		}
 
-		// 调试日志：打印旧 task.Data 中的计费关键字段
-		logger.LogDebug(ctx, fmt.Sprintf("[TaskPoll] task=%s existingData: requested_seconds=%v billing_processed=%v generate_audio=%v",
-			taskId, existingData["requested_seconds"], existingData["billing_processed"], existingData["generate_audio"]))
+			// 调试日志：打印旧 task.Data 中的计费关键字段
+			logger.LogDebug(ctx, fmt.Sprintf("[TaskPoll] task=%s existingData: requested_seconds=%v billing_processed=%v generate_audio=%v",
+				taskId, existingData["requested_seconds"], existingData["billing_processed"], existingData["generate_audio"]))
 
-		// 计费所需字段，合并时从 existingData 保留到 newData，避免被上游响应覆盖
-		preservedFields := []string{
-			"requested_seconds", "billing_requested_seconds",
-			"billing_model_name", "billing_group",
-			"billing_effective_group_ratio",
-			"billing_token_name", "billing_token_id", "billing_processed",
-			"generate_audio", "generateAudio",
-			"has_video_input",
-			"billing_cost_discount",
-		}
-
-		// 合并后若仍缺 generate_audio，从 upstream_request_body 补全（与计费逻辑一致，保证 task.Data 完整）
-		ensureGenerateAudioInMap := func(data map[string]interface{}) {
-			if _, hasAudio := data["generate_audio"]; hasAudio {
-				return
+			// 计费所需字段，合并时从 existingData 保留到 newData，避免被上游响应覆盖
+			preservedFields := []string{
+				"requested_seconds", "billing_requested_seconds",
+				"billing_model_name", "billing_group",
+				"billing_effective_group_ratio",
+				"billing_token_name", "billing_token_id", "billing_processed",
+				"generate_audio", "generateAudio",
+				"has_video_input",
+				"billing_cost_discount",
 			}
-			if _, hasAudio := data["generateAudio"]; hasAudio {
-				return
-			}
-			if parseGenerateAudioFromUpstreamBody(task.UpstreamRequestBody) {
-				data["generate_audio"] = true
-				data["generateAudio"] = true
-			}
-		}
 
-		redactedBody := redactVideoResponseBody(responseBody)
-		if err := common.Unmarshal(redactedBody, &newData); err != nil {
-			// 解析失败时仍保留计费字段，将上游响应放入 _upstream_response（与 nebula-new-api 对齐，不直接用 redactedBody 覆盖）
-			logger.LogWarn(ctx, fmt.Sprintf("UpdateVideoSingleTask: failed to unmarshal video response body: %v", err))
-			newData = make(map[string]interface{})
-			for _, field := range preservedFields {
-				if value, exists := existingData[field]; exists {
-					newData[field] = value
+			// 合并后若仍缺 generate_audio，从 upstream_request_body 补全（与计费逻辑一致，保证 task.Data 完整）
+			ensureGenerateAudioInMap := func(data map[string]interface{}) {
+				if _, hasAudio := data["generate_audio"]; hasAudio {
+					return
+				}
+				if _, hasAudio := data["generateAudio"]; hasAudio {
+					return
+				}
+				if parseGenerateAudioFromUpstreamBody(task.UpstreamRequestBody) {
+					data["generate_audio"] = true
+					data["generateAudio"] = true
 				}
 			}
-			ensureGenerateAudioInMap(newData)
-			newData["_upstream_response"] = string(redactedBody)
-			if merged, err := common.Marshal(newData); err == nil {
-				task.Data = merged
-			} else {
-				// Marshal 失败时也不覆盖为纯 redactedBody，保留计费字段
-				fallback := make(map[string]interface{})
-				for _, f := range preservedFields {
-					if v, ok := existingData[f]; ok {
-						fallback[f] = v
-					}
-				}
-				ensureGenerateAudioInMap(fallback)
-				fallback["_upstream_response"] = string(redactedBody)
-				if fb, _ := common.Marshal(fallback); len(fb) > 0 {
-					task.Data = fb
-				} else {
-					task.Data = redactedBody
-				}
-			}
-		} else {
-			for _, field := range preservedFields {
-				if value, exists := existingData[field]; exists {
-					newData[field] = value
-				}
-			}
-			ensureGenerateAudioInMap(newData)
 
-			if merged, err := common.Marshal(newData); err == nil {
-				task.Data = merged
-			} else {
-				logger.LogError(ctx, fmt.Sprintf("UpdateVideoSingleTask: failed to marshal merged task.Data: %v", err))
-				// 不直接覆盖为 redactedBody，避免丢失计费字段；退化为仅保留计费字段 + 上游响应
-				fallback := make(map[string]interface{})
+			redactedBody := redactVideoResponseBody(responseBody)
+			if err := common.Unmarshal(redactedBody, &newData); err != nil {
+				// 解析失败时仍保留计费字段，将上游响应放入 _upstream_response（与 nebula-new-api 对齐，不直接用 redactedBody 覆盖）
+				logger.LogWarn(ctx, fmt.Sprintf("UpdateVideoSingleTask: failed to unmarshal video response body: %v", err))
+				newData = make(map[string]interface{})
 				for _, field := range preservedFields {
 					if value, exists := existingData[field]; exists {
-						fallback[field] = value
+						newData[field] = value
 					}
 				}
-				ensureGenerateAudioInMap(fallback)
-				fallback["_upstream_response"] = string(redactedBody)
-				if fb, _ := common.Marshal(fallback); len(fb) > 0 {
-					task.Data = fb
+				ensureGenerateAudioInMap(newData)
+				newData["_upstream_response"] = string(redactedBody)
+				if merged, err := common.Marshal(newData); err == nil {
+					task.Data = merged
 				} else {
-					task.Data = redactedBody
+					// Marshal 失败时也不覆盖为纯 redactedBody，保留计费字段
+					fallback := make(map[string]interface{})
+					for _, f := range preservedFields {
+						if v, ok := existingData[f]; ok {
+							fallback[f] = v
+						}
+					}
+					ensureGenerateAudioInMap(fallback)
+					fallback["_upstream_response"] = string(redactedBody)
+					if fb, _ := common.Marshal(fallback); len(fb) > 0 {
+						task.Data = fb
+					} else {
+						task.Data = redactedBody
+					}
+				}
+			} else {
+				for _, field := range preservedFields {
+					if value, exists := existingData[field]; exists {
+						newData[field] = value
+					}
+				}
+				ensureGenerateAudioInMap(newData)
+
+				if merged, err := common.Marshal(newData); err == nil {
+					task.Data = merged
+				} else {
+					logger.LogError(ctx, fmt.Sprintf("UpdateVideoSingleTask: failed to marshal merged task.Data: %v", err))
+					// 不直接覆盖为 redactedBody，避免丢失计费字段；退化为仅保留计费字段 + 上游响应
+					fallback := make(map[string]interface{})
+					for _, field := range preservedFields {
+						if value, exists := existingData[field]; exists {
+							fallback[field] = value
+						}
+					}
+					ensureGenerateAudioInMap(fallback)
+					fallback["_upstream_response"] = string(redactedBody)
+					if fb, _ := common.Marshal(fallback); len(fb) > 0 {
+						task.Data = fb
+					} else {
+						task.Data = redactedBody
+					}
 				}
 			}
 		}
-	}
+	} // end if !skipUpstreamParse
 
 	safeTaskResult := *taskResult
 	safeTaskResult.Url = truncateBase64(safeTaskResult.Url)
