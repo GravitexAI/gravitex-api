@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
@@ -236,8 +237,8 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 		if userQuota <= 0 {
 			return nil, service.TaskErrorWrapperLocal(
-				fmt.Errorf("用户额度不足，剩余额度: %d", userQuota),
-				"insufficient_quota", http.StatusForbidden)
+				fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
+				"insufficient_user_quota", http.StatusForbidden)
 		}
 	}
 
