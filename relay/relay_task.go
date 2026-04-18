@@ -218,12 +218,26 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
 	// 按秒/按量视频计费模型：不做预扣费，轮询成功后由 controller.UpdateVideoTaskAll 计费
+	// 但仍需检查用户余额，防止零余额用户白嫖（与 chat/images 路径一致，TokenUnlimited 只免 token 额度检查，不免用户余额检查）
 	if !isPerSecondBilling && !isVideoTokenRatioBilling {
 		if info.Billing == nil && !info.PriceData.FreeModel {
 			info.ForcePreConsume = true
 			if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
 				return nil, service.TaskErrorFromAPIError(apiErr)
 			}
+		}
+	} else if !info.PriceData.FreeModel {
+		// 按秒/按量计费模型：不预扣费，但检查用户余额 > 0
+		userQuota, err := model.GetUserQuota(info.UserId, false)
+		if err != nil {
+			return nil, service.TaskErrorWrapperLocal(
+				fmt.Errorf("查询用户额度失败: %v", err),
+				"query_quota_failed", http.StatusInternalServerError)
+		}
+		if userQuota <= 0 {
+			return nil, service.TaskErrorWrapperLocal(
+				fmt.Errorf("用户额度不足，剩余额度: %d", userQuota),
+				"insufficient_quota", http.StatusForbidden)
 		}
 	}
 
