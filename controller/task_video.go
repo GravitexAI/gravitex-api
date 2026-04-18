@@ -736,6 +736,38 @@ func parseGenerateAudioFromUpstreamBody(body []byte) bool {
 	return false
 }
 
+// parseHasVideoInputFromUpstreamBody 从 upstream_request_body 的 content 数组中检测是否包含 video_url 类型的输入，
+// 用于在 task.Data 计费字段丢失时兜底判断 has_video_input 维度。
+// 返回 (hasVideoInput, found)，found=true 表示成功从 upstream_request_body 解析到了判断依据。
+func parseHasVideoInputFromUpstreamBody(body []byte) (bool, bool) {
+	if len(body) == 0 {
+		return false, false
+	}
+	var m map[string]interface{}
+	if err := common.Unmarshal(body, &m); err != nil {
+		return false, false
+	}
+	content, ok := m["content"].([]interface{})
+	if !ok {
+		return false, false
+	}
+	for _, item := range content {
+		itemMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if itemType, _ := itemMap["type"].(string); itemType == "video_url" {
+			if videoURL, _ := itemMap["video_url"].(map[string]interface{}); videoURL != nil {
+				if url, _ := videoURL["url"].(string); url != "" {
+					return true, true
+				}
+			}
+		}
+	}
+	// content 数组存在但没有 video_url 类型
+	return false, true
+}
+
 // mergeBillingFieldsIntoTaskData 将 existingData 中的计费字段合并进 newData，返回合并后的 JSON；用于 New API 格式分支避免覆盖导致计费失败。
 // 与 nebula-new-api 对齐：当上游响应非 New API（如 Vertex 仅返回 {"name":"..."}）时不要用空数据覆盖，保留 existingData。
 func mergeBillingFieldsIntoTaskData(existingData, newData []byte) []byte {
@@ -1462,13 +1494,25 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	// 读取配置：GetVideoCompletionRatioPricing 返回「有效值」：
 	// - VideoRatio!=0 时：返回倍率（VideoRatio×VideoCompletionRatio）
 	// - VideoRatio==0/无时：返回 $/M tokens
-	// 当 task.Data 中存在 has_video_input 时，使用 noVideo/video 维度（UpToken seedance 等）
+	// 判断 has_video_input：优先从 task.Data 读，再从 upstream_request_body 解析兜底
+	// （task.Data 中的计费字段可能在中间轮询更新时丢失，upstream_request_body 不会被覆盖）
 	var cfgVal float64
 	var ok bool
-	if hasVideoInput, exists := taskData["has_video_input"].(bool); exists {
-		cfgVal, ok = ratio_setting.GetVideoCompletionRatioVideoPricing(modelName, hasVideoInput)
+	hasVideoInputResolved := false
+	hasVideoInputVal := false
+	if v, exists := taskData["has_video_input"].(bool); exists {
+		hasVideoInputResolved = true
+		hasVideoInputVal = v
+	} else if v, found := parseHasVideoInputFromUpstreamBody(task.UpstreamRequestBody); found {
+		hasVideoInputResolved = true
+		hasVideoInputVal = v
+		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio task=%s has_video_input resolved from upstream_request_body: %v",
+			task.TaskID, v))
+	}
+	if hasVideoInputResolved {
+		cfgVal, ok = ratio_setting.GetVideoCompletionRatioVideoPricing(modelName, hasVideoInputVal)
 		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio task=%s using video_input dimension: has_video_input=%v cfgVal=%.6f ok=%v",
-			task.TaskID, hasVideoInput, cfgVal, ok))
+			task.TaskID, hasVideoInputVal, cfgVal, ok))
 	} else {
 		cfgVal, ok = ratio_setting.GetVideoCompletionRatioPricing(modelName, generateAudio)
 	}
@@ -1489,9 +1533,9 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		"video_completion_ratio_val": cfgVal,
 		"ratio_mode":                 ratioMode,
 	}
-	// 记录视频输入维度（如果存在）
-	if hasVideoInput, exists := taskData["has_video_input"].(bool); exists {
-		otherMap["has_video_input"] = hasVideoInput
+	// 记录视频输入维度（如果解析到了）
+	if hasVideoInputResolved {
+		otherMap["has_video_input"] = hasVideoInputVal
 	}
 
 	if ratioMode {

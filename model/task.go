@@ -450,8 +450,10 @@ func (t *Task) Snapshot() taskSnapshot {
 }
 
 func (Task *Task) Update() error {
-	// Always omit private_data from GORM's Save to avoid Valuer bug on MySQL JSON columns
-	err := DB.Model(Task).Omit("private_data").Save(Task).Error
+	// Always omit private_data and upstream_request_body from GORM's Save to avoid
+	// Valuer/Scanner bugs on MySQL JSON columns. upstream_request_body is write-once
+	// (set at INSERT), so it must never be overwritten by the polling loop.
+	err := DB.Model(Task).Omit("private_data", "upstream_request_body").Save(Task).Error
 	if err != nil {
 		return err
 	}
@@ -475,10 +477,12 @@ func (Task *Task) Update() error {
 // Select("*").Updates(struct) does not correctly invoke the custom Valuer
 // (TaskPrivateData.Value) for MySQL JSON columns, causing NULL to be written.
 func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
-	// Always omit private_data from struct-based Updates to avoid GORM Valuer bug
+	// Always omit private_data and upstream_request_body from struct-based Updates to avoid
+	// GORM Valuer/Scanner bugs on MySQL JSON columns. upstream_request_body is write-once
+	// (set at INSERT), so it must never be overwritten by the polling loop.
 	result := DB.Model(t).
 		Where("status = ?", fromStatus).
-		Omit("private_data").
+		Omit("private_data", "upstream_request_body").
 		Select("*").
 		Updates(t)
 	if result.Error != nil {
