@@ -233,8 +233,16 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	}
 	other := GenerateWssOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
 		completionRatio.InexactFloat64(), audioRatio, effectiveAudioOutputRatio, modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+
+	// 将系统生成的 request_id 存入 other，request_id 字段改存上游返回的 ID
+	systemRequestId := ctx.GetString(common.RequestIdKey)
+	if systemRequestId != "" {
+		other["system_request_id"] = systemRequestId
+	}
+
 	priceChain := CalculatePriceChainForLog(ctx, logModel, usage.InputTokens, usage.OutputTokens, quota)
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+		RequestId:        relayInfo.UpstreamResponseId,
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     usage.InputTokens,
 		CompletionTokens: usage.OutputTokens,
@@ -359,8 +367,16 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	}
 	other := GenerateAudioOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
 		completionRatio.InexactFloat64(), audioRatioF, effectiveAudioOutputRatio, modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+
+	// 将系统生成的 request_id 存入 other，request_id 字段改存上游返回的 ID
+	systemRequestId := ctx.GetString(common.RequestIdKey)
+	if systemRequestId != "" {
+		other["system_request_id"] = systemRequestId
+	}
+
 	priceChain := CalculatePriceChainForLog(ctx, logModel, usage.PromptTokens, usage.CompletionTokens, quota)
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+		RequestId:        relayInfo.UpstreamResponseId,
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,

@@ -59,6 +59,10 @@ func xAIStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			usage.CompletionTokens = usage.TotalTokens - usage.PromptTokens
 		}
 
+		if info.UpstreamResponseId == "" && xAIResp.Id != "" {
+			info.UpstreamResponseId = xAIResp.Id
+		}
+
 		openaiResponse := streamResponseXAI2OpenAI(xAIResp, usage)
 		_ = openai.ProcessStreamResponse(*openaiResponse, &responseTextBuilder, &toolCount)
 		if err := helper.ObjectData(c, openaiResponse); err != nil {
@@ -99,6 +103,8 @@ func xAIHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
+
+	info.UpstreamResponseId = xaiResponse.Id
 
 	service.IOCopyBytesGracefully(c, resp, encodeJson)
 

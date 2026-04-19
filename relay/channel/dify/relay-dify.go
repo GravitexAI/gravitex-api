@@ -230,6 +230,9 @@ func difyStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			sr.Error(err)
 			return
 		}
+		if info.UpstreamResponseId == "" && difyResponse.ConversationId != "" {
+			info.UpstreamResponseId = difyResponse.ConversationId
+		}
 		if difyResponse.Event == "message_end" {
 			usage = &difyResponse.MetaData.Usage
 			sr.Done()
@@ -270,6 +273,7 @@ func difyHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respons
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
+	info.UpstreamResponseId = difyResponse.ConversationId
 	fullTextResponse := dto.OpenAITextResponse{
 		Id:      difyResponse.ConversationId,
 		Object:  "chat.completion",

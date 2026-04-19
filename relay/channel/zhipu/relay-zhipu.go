@@ -201,6 +201,7 @@ func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 				common.SysLog("error unmarshalling stream response: " + err.Error())
 				return true
 			}
+			info.UpstreamResponseId = zhipuResponse.RequestId
 			response, zhipuUsage := streamMetaResponseZhipu2OpenAI(&zhipuResponse)
 			jsonResponse, err := json.Marshal(response)
 			if err != nil {
@@ -236,6 +237,7 @@ func zhipuHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respon
 			Code:    zhipuResponse.Code,
 		}, resp.StatusCode)
 	}
+	info.UpstreamResponseId = zhipuResponse.Data.TaskId
 	fullTextResponse := responseZhipu2OpenAI(&zhipuResponse)
 	jsonResponse, err := json.Marshal(fullTextResponse)
 	if err != nil {

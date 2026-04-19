@@ -111,6 +111,10 @@ func tencentStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *htt
 			continue
 		}
 
+		if info.UpstreamResponseId == "" && tencentResponse.Id != "" {
+			info.UpstreamResponseId = tencentResponse.Id
+		}
+
 		response := streamResponseTencent2OpenAI(&tencentResponse)
 		if len(response.Choices) != 0 {
 			responseText += response.Choices[0].Delta.GetContentString()
@@ -151,6 +155,7 @@ func tencentHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Resp
 		}, resp.StatusCode)
 	}
 	fullTextResponse := responseTencent2OpenAI(&tencentSb.Response)
+	info.UpstreamResponseId = tencentSb.Response.Id
 	jsonResponse, err := common.Marshal(fullTextResponse)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)

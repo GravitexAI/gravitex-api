@@ -249,6 +249,15 @@ func awsHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (*types
 	if handlerErr != nil {
 		return handlerErr, nil
 	}
+
+	// 从响应体中提取上游 ID（如 msg_bdrk_xxx）
+	var idHolder struct {
+		Id string `json:"id"`
+	}
+	if err := common.Unmarshal(awsResp.Body, &idHolder); err == nil && idHolder.Id != "" {
+		info.UpstreamResponseId = idHolder.Id
+	}
+
 	return nil, claudeInfo.Usage
 }
 
@@ -290,6 +299,10 @@ func awsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, a *Adaptor) (
 	}
 
 	claude.HandleStreamFinalResponse(c, info, claudeInfo)
+
+	// claudeInfo.ResponseId 在 message_start 事件中已被 FormatClaudeResponseInfo 更新为上游 ID
+	info.UpstreamResponseId = claudeInfo.ResponseId
+
 	return nil, claudeInfo.Usage
 }
 

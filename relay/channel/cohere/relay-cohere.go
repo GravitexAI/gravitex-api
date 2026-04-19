@@ -141,6 +141,9 @@ func cohereStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 				if cohereResp.Response != nil {
 					usage.PromptTokens = cohereResp.Response.Meta.BilledUnits.InputTokens
 					usage.CompletionTokens = cohereResp.Response.Meta.BilledUnits.OutputTokens
+					if info.UpstreamResponseId == "" {
+						info.UpstreamResponseId = cohereResp.Response.ResponseId
+					}
 				}
 			} else {
 				openaiResp.Choices = []dto.ChatCompletionsStreamResponseChoice{
@@ -195,6 +198,8 @@ func cohereHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	openaiResp.Object = "chat.completion"
 	openaiResp.Model = info.UpstreamModelName
 	openaiResp.Usage = usage
+
+	info.UpstreamResponseId = cohereResp.ResponseId
 
 	openaiResp.Choices = []dto.OpenAITextResponseChoice{
 		{

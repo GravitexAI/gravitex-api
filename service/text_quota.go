@@ -481,8 +481,15 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["input_tokens_total"] = usage.InputTokens
 	}
 
+	// 将系统生成的 request_id 存入 other，request_id 字段改存上游返回的 ID
+	systemRequestId := ctx.GetString(common.RequestIdKey)
+	if systemRequestId != "" {
+		other["system_request_id"] = systemRequestId
+	}
+
 	priceChain := CalculatePriceChainForLog(ctx, logModel, summary.PromptTokens, summary.CompletionTokens, summary.Quota)
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
+		RequestId:        relayInfo.UpstreamResponseId,
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     summary.PromptTokens,
 		CompletionTokens: summary.CompletionTokens,

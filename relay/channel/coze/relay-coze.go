@@ -70,6 +70,7 @@ func cozeChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 	usage.TotalTokens = c.GetInt("coze_token_count")
 	response.Usage = usage
 	response.Id = helper.GetResponseID(c)
+	info.UpstreamResponseId = c.GetString("coze_chat_id")
 
 	var responseContent json.RawMessage
 	for _, data := range cozeResponse.Data {
@@ -163,6 +164,7 @@ func handleCozeEvent(c *gin.Context, event string, data string, responseText *st
 		usage.PromptTokens = chatData.Usage.InputCount
 		usage.CompletionTokens = chatData.Usage.OutputCount
 		usage.TotalTokens = chatData.Usage.TokenCount
+		info.UpstreamResponseId = chatData.Id
 
 		finishReason := "stop"
 		stopResponse := helper.GenerateStopResponse(id, common.GetTimestamp(), info.UpstreamModelName, finishReason)

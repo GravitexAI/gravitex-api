@@ -145,6 +145,8 @@ type RelayInfo struct {
 	SubscriptionPlanTitle string
 	// RequestId is used for idempotent pre-consume/refund
 	RequestId string
+	// UpstreamResponseId 上游返回的响应 ID（如 chatcmpl-xxx, msg_xxx, gemini responseId）
+	UpstreamResponseId string
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.
 	SubscriptionAmountTotal               int64
 	SubscriptionAmountUsedAfterPreConsume int64

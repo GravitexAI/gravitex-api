@@ -50,7 +50,15 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = info.UpstreamModelName
 	}
+
+	// 将系统生成的 request_id 存入 other，request_id 字段改存上游返回的 ID
+	systemRequestId := c.GetString(common.RequestIdKey)
+	if systemRequestId != "" {
+		other["system_request_id"] = systemRequestId
+	}
+
 	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
+		RequestId: info.UpstreamResponseId,
 		ChannelId: info.ChannelId,
 		ModelName: info.OriginModelName,
 		TokenName: tokenName,
