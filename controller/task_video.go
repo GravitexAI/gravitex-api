@@ -736,6 +736,26 @@ func parseGenerateAudioFromUpstreamBody(body []byte) bool {
 	return false
 }
 
+// parseResolutionFromVeoUpstreamBody 从 Veo 系列（Vertex/Gemini）上游请求体中提取分辨率参数
+// Vertex 格式：{"instances": [...], "parameters": {"resolution": "720p", ...}}
+// Gemini 格式：{"instances": [...], "parameters": {"resolution": "720p", ...}}
+func parseResolutionFromVeoUpstreamBody(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var m map[string]interface{}
+	if err := common.Unmarshal(body, &m); err != nil {
+		return ""
+	}
+	// parameters.resolution（Vertex / Gemini 通用）
+	if params, ok := m["parameters"].(map[string]interface{}); ok {
+		if res, ok := params["resolution"].(string); ok && res != "" {
+			return res
+		}
+	}
+	return ""
+}
+
 // parseHasVideoInputFromUpstreamBody 从 upstream_request_body 的 content 数组中检测是否包含 video_url 类型的输入，
 // 用于在 task.Data 计费字段丢失时兜底判断 has_video_input 维度。
 // 返回 (hasVideoInput, found)，found=true 表示成功从 upstream_request_body 解析到了判断依据。
@@ -768,6 +788,21 @@ func parseHasVideoInputFromUpstreamBody(body []byte) (bool, bool) {
 	return false, true
 }
 
+// parseResolutionFromUpstreamBody 从 upstream_request_body 解析 resolution 字段
+func parseResolutionFromUpstreamBody(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var m map[string]interface{}
+	if err := common.Unmarshal(body, &m); err != nil {
+		return ""
+	}
+	if res, ok := m["resolution"].(string); ok && res != "" {
+		return res
+	}
+	return ""
+}
+
 // mergeBillingFieldsIntoTaskData 将 existingData 中的计费字段合并进 newData，返回合并后的 JSON；用于 New API 格式分支避免覆盖导致计费失败。
 // 与 nebula-new-api 对齐：当上游响应非 New API（如 Vertex 仅返回 {"name":"..."}）时不要用空数据覆盖，保留 existingData。
 func mergeBillingFieldsIntoTaskData(existingData, newData []byte) []byte {
@@ -778,6 +813,7 @@ func mergeBillingFieldsIntoTaskData(existingData, newData []byte) []byte {
 		"billing_token_name", "billing_token_id", "billing_processed",
 		"generate_audio", "generateAudio", "sound",
 		"has_video_input",
+		"video_resolution",
 		"billing_cost_discount",
 	}
 	var existMap, newMap map[string]interface{}
@@ -1214,7 +1250,7 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		}
 	}
 	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s generate_audio=%v (from_upstream=%v)", task.TaskID, generateAudio, generateAudioFromUpstream))
-	// 获取官方单秒价格（wan2.6-flash 含分辨率分档；Veo 等为 noAudio/audio 或单一数字）
+	// 获取官方单秒价格（wan2.6-flash / Veo 3.1 含分辨率分档；其它为 noAudio/audio 或单一数字）
 	// 优先使用上游 usage.size（实际分辨率），兜底解析上游请求体中的参数
 	resKey := ""
 	if usageMap, ok := taskData["usage"].(map[string]interface{}); ok && usageMap != nil {
@@ -1225,6 +1261,25 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	}
 	if resKey == "" {
 		resKey = ratio_setting.NormalizeVideoResolutionKey(alitask.ParseBillingResolutionKeyFromUpstreamJSON(task.UpstreamRequestBody))
+	}
+	// Veo 系列：Ali 解析器返回默认 720p 时，补充尝试从 parameters.resolution 和 task.Data 中提取分辨率
+	if resKey == "" || resKey == "720p" {
+		if veoRes := parseResolutionFromVeoUpstreamBody(task.UpstreamRequestBody); veoRes != "" {
+			parsed := ratio_setting.NormalizeVideoResolutionKey(veoRes)
+			if parsed != "720p" || resKey == "" {
+				resKey = parsed
+				logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s billing_resolution from veo upstream body -> %s", task.TaskID, resKey))
+			}
+		}
+	}
+	if resKey == "" || resKey == "720p" {
+		if v, ok := taskData["video_resolution"].(string); ok && v != "" {
+			parsed := ratio_setting.NormalizeVideoResolutionKey(v)
+			if parsed != "720p" || resKey == "" {
+				resKey = parsed
+				logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s billing_resolution from task.Data -> %s", task.TaskID, resKey))
+			}
+		}
 	}
 	officialVideoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecondForBillingWithResolution(modelName, generateAudio, resKey)
 	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s billing_resolution=%s", task.TaskID, resKey))
@@ -1298,6 +1353,8 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		"video_price_per_second":          effectiveVideoPrice,
 		"group_ratio":                     groupRatio,
 		"user_group_ratio":                groupRatio,
+		"generate_audio":                  generateAudio,
+		"video_resolution":                resKey,
 	}
 	// official_quota: vendor cost without group ratio
 	if groupRatio > 0 {
@@ -1509,10 +1566,29 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio task=%s has_video_input resolved from upstream_request_body: %v",
 			task.TaskID, v))
 	}
+
+	// 解析分辨率：优先上游返回 > task.Data > upstream_request_body > 默认 720p
+	videoResolution := ""
+	if taskResult != nil && taskResult.Resolution != "" {
+		videoResolution = taskResult.Resolution
+	}
+	if videoResolution == "" {
+		if v, vOk := taskData["video_resolution"].(string); vOk && v != "" {
+			videoResolution = v
+		}
+	}
+	if videoResolution == "" {
+		videoResolution = parseResolutionFromUpstreamBody(task.UpstreamRequestBody)
+	}
+	if videoResolution == "" {
+		videoResolution = "720p"
+	}
+
 	if hasVideoInputResolved {
-		cfgVal, ok = ratio_setting.GetVideoCompletionRatioVideoPricing(modelName, hasVideoInputVal)
-		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio task=%s using video_input dimension: has_video_input=%v cfgVal=%.6f ok=%v",
-			task.TaskID, hasVideoInputVal, cfgVal, ok))
+		// 优先尝试分辨率维度定价
+		cfgVal, ok = ratio_setting.GetVideoCompletionRatioResolutionPricing(modelName, hasVideoInputVal, videoResolution)
+		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio task=%s using video_input+resolution dimension: has_video_input=%v resolution=%s cfgVal=%.6f ok=%v",
+			task.TaskID, hasVideoInputVal, videoResolution, cfgVal, ok))
 	} else {
 		cfgVal, ok = ratio_setting.GetVideoCompletionRatioPricing(modelName, generateAudio)
 	}
@@ -1537,6 +1613,7 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	if hasVideoInputResolved {
 		otherMap["has_video_input"] = hasVideoInputVal
 	}
+	otherMap["video_resolution"] = videoResolution
 
 	if ratioMode {
 		// 走倍率体系：与 ModelRatio 计费一致，quota = tokens * ratio * groupRatio

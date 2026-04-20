@@ -137,6 +137,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	}
 	c.Set("has_video_input", hasVideoInput)
 
+	// 保存分辨率信息，用于按分辨率维度计费
+	if body.Resolution != "" {
+		c.Set("video_resolution", body.Resolution)
+	}
+
 	info.UpstreamModelName = body.Model
 	data, err := json.Marshal(body)
 	if err != nil {

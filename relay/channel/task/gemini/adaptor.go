@@ -130,6 +130,12 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 			c.Set("video_seconds", n)
 		}
 	}
+	// 保存分辨率到 gin context，供 mergeVideoTaskBillingData 写入 task.Data（计费用）
+	if res, ok := metaData["resolution"]; ok {
+		if s, ok := res.(string); ok && s != "" {
+			c.Set("video_resolution", s)
+		}
+	}
 	v, ok := c.Get("task_request")
 	if !ok {
 		return nil
@@ -573,6 +579,8 @@ func sanitizeResolutionFromMetadata(metadata map[string]interface{}) string {
 		return "720p"
 	case strings.Contains(res, "1080"):
 		return "1080p"
+	case strings.Contains(res, "4k") || strings.Contains(res, "2160"):
+		return "4k"
 	default:
 		return "1080p"
 	}

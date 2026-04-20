@@ -1,0 +1,1813 @@
+{
+  "endpoint": "POST /v1/messages",
+  "description": "Anthropic Claude Messages API - 创建模型响应。支持多模态输入、工具调用、扩展思考、Prompt缓存、联网搜索等能力。",
+
+  "examples": {
+    "1_basic": {
+      "description": "基础对话（最简请求）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "messages": [
+          {"role": "user", "content": "Hello, who are you?"}
+        ]
+      }
+    },
+
+    "2_with_system": {
+      "description": "带系统提示词（字符串格式）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "system": "You are a professional translator. Translate all input to Chinese.",
+        "messages": [
+          {"role": "user", "content": "The weather is beautiful today."}
+        ]
+      }
+    },
+
+    "3_system_array_format": {
+      "description": "系统提示词（数组格式 - 支持 cache_control）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are a professional AI assistant with extensive knowledge in science and technology.",
+            "cache_control": {"type": "ephemeral"}
+          },
+          {
+            "type": "text",
+            "text": "Always respond in a concise, structured manner."
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "Explain quantum computing."}
+        ]
+      }
+    },
+
+    "4_multi_turn": {
+      "description": "多轮对话",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "messages": [
+          {"role": "user", "content": "What is the capital of France?"},
+          {"role": "assistant", "content": "The capital of France is Paris."},
+          {"role": "user", "content": "What about Germany?"}
+        ]
+      }
+    },
+
+    "5_multi_turn_with_content_array": {
+      "description": "多轮对话（content 数组格式）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "What is 2+2?"}
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {"type": "text", "text": "2 + 2 = 4."}
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "And what is that multiplied by 3?"}
+            ]
+          }
+        ]
+      }
+    },
+
+    "6_streaming": {
+      "description": "流式输出",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "stream": true,
+        "messages": [
+          {"role": "user", "content": "Write a short poem about the ocean."}
+        ]
+      }
+    },
+
+    "7_all_sampling_params": {
+      "description": "完整采样参数",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 2048,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "top_k": 40,
+        "stop_sequences": ["\n\nHuman:", "END"],
+        "messages": [
+          {"role": "user", "content": "Write a creative story about a robot."}
+        ]
+      }
+    },
+
+    "8_vision_base64": {
+      "description": "图片理解（Base64 格式）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image",
+                "source": {
+                  "type": "base64",
+                  "media_type": "image/jpeg",
+                  "data": "/9j/4AAQSkZJRgABAQEASABIAAD..."
+                }
+              },
+              {
+                "type": "text",
+                "text": "What's in this image? Describe it in detail."
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "9_vision_url": {
+      "description": "图片理解（URL 格式）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image",
+                "source": {
+                  "type": "url",
+                  "url": "https://example.com/image.jpg"
+                }
+              },
+              {
+                "type": "text",
+                "text": "What's in this image?"
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "10_multi_image": {
+      "description": "多图片对比",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image",
+                "source": {
+                  "type": "url",
+                  "url": "https://example.com/image1.jpg"
+                }
+              },
+              {
+                "type": "image",
+                "source": {
+                  "type": "url",
+                  "url": "https://example.com/image2.jpg"
+                }
+              },
+              {
+                "type": "text",
+                "text": "Compare these two images. What are the differences?"
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "11_pdf_document": {
+      "description": "PDF 文档理解（Base64）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "document",
+                "source": {
+                  "type": "base64",
+                  "media_type": "application/pdf",
+                  "data": "JVBERi0xLjQKJcOkw7zDtsO..."
+                }
+              },
+              {
+                "type": "text",
+                "text": "Please summarize this document and extract the key points."
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "12_pdf_document_url": {
+      "description": "PDF 文档理解（URL）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "document",
+                "source": {
+                  "type": "url",
+                  "url": "https://example.com/report.pdf"
+                }
+              },
+              {
+                "type": "text",
+                "text": "Summarize the key findings in this report."
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "13_tool_use_basic": {
+      "description": "工具调用（基础 Tool Use）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "tools": [
+          {
+            "name": "get_weather",
+            "description": "Get the current weather in a given location",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "location": {
+                  "type": "string",
+                  "description": "The city and state, e.g. San Francisco, CA"
+                },
+                "unit": {
+                  "type": "string",
+                  "enum": ["celsius", "fahrenheit"],
+                  "description": "Temperature unit"
+                }
+              },
+              "required": ["location"]
+            }
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "What's the weather like in Beijing today?"}
+        ]
+      }
+    },
+
+    "14_tool_use_multi_tool": {
+      "description": "多个工具定义",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "tools": [
+          {
+            "name": "get_weather",
+            "description": "Get current weather for a location",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "location": {"type": "string"}
+              },
+              "required": ["location"]
+            }
+          },
+          {
+            "name": "search_web",
+            "description": "Search the web for information",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "num_results": {"type": "integer", "description": "Number of results to return"}
+              },
+              "required": ["query"]
+            }
+          },
+          {
+            "name": "calculate",
+            "description": "Perform mathematical calculations",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "expression": {"type": "string", "description": "Math expression to evaluate"}
+              },
+              "required": ["expression"]
+            }
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "What's the weather in Beijing and what's 15% of 850?"}
+        ]
+      }
+    },
+
+    "15_tool_use_result": {
+      "description": "工具调用结果回传（完整多轮 Tool Use 流程）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "tools": [
+          {
+            "name": "get_weather",
+            "description": "Get current weather for a location",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "location": {"type": "string"},
+                "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+              },
+              "required": ["location"]
+            }
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "What's the weather like in Beijing?"},
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "I'll check the weather in Beijing for you."
+              },
+              {
+                "type": "tool_use",
+                "id": "toolu_01A09q90qw90lq917835lq9",
+                "name": "get_weather",
+                "input": {"location": "Beijing", "unit": "celsius"}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "toolu_01A09q90qw90lq917835lq9",
+                "content": "{\"temperature\": 22, \"condition\": \"Partly cloudy\", \"humidity\": 45}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "16_tool_result_with_images": {
+      "description": "工具结果包含图片（tool_result 多模态）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "tools": [
+          {
+            "name": "capture_screenshot",
+            "description": "Capture a screenshot of the current screen",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": []
+            }
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "Take a screenshot and describe what you see."},
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_screenshot_01",
+                "name": "capture_screenshot",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "toolu_screenshot_01",
+                "content": [
+                  {
+                    "type": "image",
+                    "source": {
+                      "type": "base64",
+                      "media_type": "image/png",
+                      "data": "iVBORw0KGgoAAAANS..."
+                    }
+                  },
+                  {
+                    "type": "text",
+                    "text": "Screenshot captured successfully."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "17_tool_result_error": {
+      "description": "工具调用失败（is_error=true）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "tools": [
+          {
+            "name": "get_weather",
+            "description": "Get current weather",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "location": {"type": "string"}
+              },
+              "required": ["location"]
+            }
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "What's the weather in Atlantis?"},
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_01weather",
+                "name": "get_weather",
+                "input": {"location": "Atlantis"}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "toolu_01weather",
+                "is_error": true,
+                "content": "Error: Location 'Atlantis' not found. Please provide a valid city name."
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "18_tool_choice_auto": {
+      "description": "工具选择策略 - auto（模型自行决定）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "tools": [
+          {
+            "name": "calculator",
+            "description": "Perform calculations",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "expression": {"type": "string"}
+              },
+              "required": ["expression"]
+            }
+          }
+        ],
+        "tool_choice": {"type": "auto"},
+        "messages": [
+          {"role": "user", "content": "Hello, how are you?"}
+        ]
+      }
+    },
+
+    "19_tool_choice_any": {
+      "description": "工具选择策略 - any（强制必须使用工具）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "tools": [
+          {
+            "name": "calculator",
+            "description": "Perform calculations",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "expression": {"type": "string"}
+              },
+              "required": ["expression"]
+            }
+          }
+        ],
+        "tool_choice": {"type": "any"},
+        "messages": [
+          {"role": "user", "content": "What is 15 * 23?"}
+        ]
+      }
+    },
+
+    "20_tool_choice_specific": {
+      "description": "工具选择策略 - tool（强制使用指定工具）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "tools": [
+          {
+            "name": "calculator",
+            "description": "Perform calculations",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "expression": {"type": "string"}
+              },
+              "required": ["expression"]
+            }
+          },
+          {
+            "name": "search",
+            "description": "Search the web",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "query": {"type": "string"}
+              },
+              "required": ["query"]
+            }
+          }
+        ],
+        "tool_choice": {"type": "tool", "name": "calculator"},
+        "messages": [
+          {"role": "user", "content": "What is the square root of 144?"}
+        ]
+      }
+    },
+
+    "21_tool_choice_none": {
+      "description": "工具选择策略 - none（禁用工具）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "tools": [
+          {
+            "name": "calculator",
+            "description": "Perform calculations",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "expression": {"type": "string"}
+              },
+              "required": ["expression"]
+            }
+          }
+        ],
+        "tool_choice": {"type": "none"},
+        "messages": [
+          {"role": "user", "content": "What is 2+2?"}
+        ]
+      }
+    },
+
+    "22_disable_parallel_tool_use": {
+      "description": "禁用并行工具调用",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "tools": [
+          {
+            "name": "get_weather",
+            "description": "Get weather",
+            "input_schema": {
+              "type": "object",
+              "properties": {"location": {"type": "string"}},
+              "required": ["location"]
+            }
+          }
+        ],
+        "tool_choice": {"type": "auto", "disable_parallel_tool_use": true},
+        "messages": [
+          {"role": "user", "content": "What's the weather in Beijing and Shanghai?"}
+        ]
+      }
+    },
+
+    "23_extended_thinking": {
+      "description": "扩展思考（Extended Thinking）",
+      "note": "启用 thinking 后, temperature 强制为 1.0, top_p 被忽略",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 16000,
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 10000
+        },
+        "messages": [
+          {"role": "user", "content": "Solve this step by step: A train leaves station A at 60 km/h. Another train leaves station B (300km away) at 80 km/h heading toward station A. At what point do they meet?"}
+        ]
+      }
+    },
+
+    "24_extended_thinking_streaming": {
+      "description": "扩展思考 + 流式输出",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 16000,
+        "stream": true,
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 8000
+        },
+        "messages": [
+          {"role": "user", "content": "Write a detailed proof that the square root of 2 is irrational."}
+        ]
+      }
+    },
+
+    "25_thinking_multi_turn": {
+      "description": "扩展思考多轮对话（需要回传 thinking block）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 16000,
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 10000
+        },
+        "messages": [
+          {"role": "user", "content": "What is 27 * 453?"},
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "thinking",
+                "thinking": "Let me calculate 27 * 453...\n27 * 400 = 10800\n27 * 50 = 1350\n27 * 3 = 81\n10800 + 1350 + 81 = 12231",
+                "signature": "WyIxMjIzMSJd..."
+              },
+              {
+                "type": "text",
+                "text": "27 × 453 = 12,231"
+              }
+            ]
+          },
+          {"role": "user", "content": "Now divide that result by 9."}
+        ]
+      }
+    },
+
+    "26_adaptive_thinking": {
+      "description": "自适应思考（Adaptive Thinking - Claude Opus 4.6 系列）",
+      "request": {
+        "model": "claude-opus-4-6",
+        "max_tokens": 8192,
+        "thinking": {
+          "type": "adaptive"
+        },
+        "output_config": {
+          "effort": "high"
+        },
+        "messages": [
+          {"role": "user", "content": "Analyze the geopolitical implications of quantum computing on global cybersecurity."}
+        ]
+      }
+    },
+
+    "27_prompt_caching_system": {
+      "description": "Prompt 缓存 - 系统提示词缓存",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are an expert legal assistant specialized in contract law. Here is the full text of the legal reference manual that you should use to answer questions:\n\n[... very long legal reference text, thousands of tokens ...]",
+            "cache_control": {"type": "ephemeral"}
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "What are the requirements for a valid contract?"}
+        ]
+      }
+    },
+
+    "28_prompt_caching_conversation": {
+      "description": "Prompt 缓存 - 对话历史缓存",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "system": "You are a helpful assistant.",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Here is a large document for context:\n\n[... thousands of tokens of document content ...]",
+                "cache_control": {"type": "ephemeral"}
+              }
+            ]
+          },
+          {"role": "assistant", "content": "I've reviewed the document. What would you like to know about it?"},
+          {"role": "user", "content": "What are the main conclusions?"}
+        ]
+      }
+    },
+
+    "29_prompt_caching_tools": {
+      "description": "Prompt 缓存 - 工具定义缓存",
+      "note": "当工具定义很多时（如20+个工具），缓存 tools 可显著减少 token 消耗",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "tools": [
+          {
+            "name": "tool_1",
+            "description": "First tool with a very detailed description...",
+            "input_schema": {
+              "type": "object",
+              "properties": {"param": {"type": "string"}},
+              "required": ["param"]
+            }
+          },
+          {
+            "name": "tool_20",
+            "description": "Last tool...",
+            "input_schema": {
+              "type": "object",
+              "properties": {"param": {"type": "string"}},
+              "required": ["param"]
+            },
+            "cache_control": {"type": "ephemeral"}
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "Help me with something."}
+        ]
+      }
+    },
+
+    "30_web_search": {
+      "description": "联网搜索（Web Search Tool - 2025.03）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096,
+        "tools": [
+          {
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 5
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "What are the latest developments in AI as of today?"}
+        ]
+      }
+    },
+
+    "31_web_search_with_location": {
+      "description": "联网搜索（带地理位置）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096,
+        "tools": [
+          {
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 10,
+            "user_location": {
+              "type": "approximate",
+              "timezone": "Asia/Shanghai",
+              "country": "CN",
+              "region": "Shanghai",
+              "city": "Shanghai"
+            }
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "今天上海有什么新闻?"}
+        ]
+      }
+    },
+
+    "32_web_search_with_other_tools": {
+      "description": "联网搜索 + 自定义工具混用",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096,
+        "tools": [
+          {
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 5
+          },
+          {
+            "name": "calculator",
+            "description": "Perform mathematical calculations",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "expression": {"type": "string"}
+              },
+              "required": ["expression"]
+            }
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "Search for the current Bitcoin price, then calculate what 2.5 BTC would be worth."}
+        ]
+      }
+    },
+
+    "33_mcp_servers": {
+      "description": "MCP（Model Context Protocol）远程服务器",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096,
+        "mcp_servers": [
+          {
+            "type": "url",
+            "url": "https://example.com/mcp/sse",
+            "name": "my_mcp_server",
+            "authorization_token": "token_xxx"
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "Use the MCP tools available to help me."}
+        ]
+      }
+    },
+
+    "34_computer_use": {
+      "description": "Computer Use（计算机使用）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096,
+        "tools": [
+          {
+            "type": "computer_20241022",
+            "name": "computer",
+            "display_width_px": 1920,
+            "display_height_px": 1080,
+            "display_number": 1
+          },
+          {
+            "type": "text_editor_20241022",
+            "name": "str_replace_editor"
+          },
+          {
+            "type": "bash_20241022",
+            "name": "bash"
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "Open the browser and navigate to google.com"}
+        ]
+      }
+    },
+
+    "35_computer_use_result": {
+      "description": "Computer Use - 截图结果回传",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096,
+        "tools": [
+          {
+            "type": "computer_20241022",
+            "name": "computer",
+            "display_width_px": 1920,
+            "display_height_px": 1080
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "Click on the search box."},
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_computer_01",
+                "name": "computer",
+                "input": {
+                  "action": "screenshot"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "toolu_computer_01",
+                "content": [
+                  {
+                    "type": "image",
+                    "source": {
+                      "type": "base64",
+                      "media_type": "image/png",
+                      "data": "iVBORw0KGgoAAAANS..."
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "36_metadata": {
+      "description": "带元数据（用户标识）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "metadata": {
+          "user_id": "user_abc123"
+        },
+        "messages": [
+          {"role": "user", "content": "Hello!"}
+        ]
+      }
+    },
+
+    "37_prefill_assistant": {
+      "description": "预填充 Assistant 响应（引导输出格式）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "messages": [
+          {"role": "user", "content": "Extract the name and age from: John is 30 years old."},
+          {"role": "assistant", "content": "{"}
+        ]
+      }
+    },
+
+    "38_json_output_via_prefill": {
+      "description": "JSON 输出（通过 prefill + stop_sequences）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "stop_sequences": ["\n```"],
+        "messages": [
+          {
+            "role": "user",
+            "content": "List 3 programming languages as a JSON array with name and year fields."
+          },
+          {
+            "role": "assistant",
+            "content": "```json\n"
+          }
+        ]
+      }
+    },
+
+    "39_long_context_with_cache": {
+      "description": "长上下文 + 缓存（典型 RAG 场景）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 2048,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are a document analysis assistant. Answer questions based only on the provided documents.",
+            "cache_control": {"type": "ephemeral"}
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "document",
+                "source": {
+                  "type": "base64",
+                  "media_type": "application/pdf",
+                  "data": "JVBERi0xLjQK..."
+                },
+                "cache_control": {"type": "ephemeral"}
+              },
+              {
+                "type": "text",
+                "text": "Based on this document, what are the quarterly revenue figures?"
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "40_image_and_text_mixed": {
+      "description": "图文混合多轮对话",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "image",
+                "source": {
+                  "type": "url",
+                  "url": "https://example.com/chart.png"
+                }
+              },
+              {
+                "type": "text",
+                "text": "What does this chart show?"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "This chart shows monthly revenue data from January to December 2024, with a clear upward trend in Q4."
+          },
+          {
+            "role": "user",
+            "content": "What's the approximate growth rate from Q1 to Q4?"
+          }
+        ]
+      }
+    },
+
+    "41_full_params": {
+      "description": "完整参数示例（尽可能覆盖所有参数）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are a helpful AI assistant.",
+            "cache_control": {"type": "ephemeral"}
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "Hello!"}
+        ],
+        "stream": true,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "top_k": 40,
+        "stop_sequences": ["Human:", "END"],
+        "tools": [
+          {
+            "name": "example_tool",
+            "description": "An example tool",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "param1": {"type": "string"}
+              },
+              "required": ["param1"]
+            }
+          }
+        ],
+        "tool_choice": {"type": "auto"},
+        "metadata": {"user_id": "user_123"},
+        "service_tier": "auto"
+      }
+    },
+
+    "42_thinking_with_tools": {
+      "description": "扩展思考 + 工具调用",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 16000,
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 8000
+        },
+        "tools": [
+          {
+            "name": "execute_python",
+            "description": "Execute Python code and return the result",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "code": {"type": "string", "description": "Python code to execute"}
+              },
+              "required": ["code"]
+            }
+          }
+        ],
+        "messages": [
+          {"role": "user", "content": "Implement a function to find the longest common subsequence of two strings, then test it with 'ABCBDAB' and 'BDCAB'."}
+        ]
+      }
+    },
+
+    "43_citations": {
+      "description": "引用（Citations）- 在文档上下文中引用来源",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "document",
+                "source": {
+                  "type": "base64",
+                  "media_type": "application/pdf",
+                  "data": "JVBERi0xLjQK..."
+                },
+                "citations": {"enabled": true}
+              },
+              {
+                "type": "text",
+                "text": "What does the document say about climate change? Cite your sources."
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "44_output_format_json_schema": {
+      "description": "结构化输出（Output Format - JSON Schema）",
+      "request": {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1024,
+        "output_format": {
+          "type": "json_schema",
+          "json_schema": {
+            "name": "person",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {"type": "string"},
+                "age": {"type": "integer"},
+                "occupation": {"type": "string"}
+              },
+              "required": ["name", "age"]
+            }
+          }
+        },
+        "messages": [
+          {"role": "user", "content": "Extract info: Alice is a 28-year-old software engineer."}
+        ]
+      }
+    }
+  },
+
+  "response_examples": {
+    "non_streaming_basic": {
+      "description": "非流式基础响应",
+      "response": {
+        "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Hello! I'm Claude, an AI assistant made by Anthropic. How can I help you today?"
+          }
+        ],
+        "model": "claude-sonnet-4-20250514",
+        "stop_reason": "end_turn",
+        "stop_sequence": null,
+        "usage": {
+          "input_tokens": 12,
+          "output_tokens": 25,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0
+        }
+      }
+    },
+
+    "tool_use_response": {
+      "description": "工具调用响应",
+      "response": {
+        "id": "msg_01Aq9w938a90dw90q",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "I'll check the weather in Beijing for you."
+          },
+          {
+            "type": "tool_use",
+            "id": "toolu_01A09q90qw90lq917835lq9",
+            "name": "get_weather",
+            "input": {
+              "location": "Beijing",
+              "unit": "celsius"
+            }
+          }
+        ],
+        "model": "claude-sonnet-4-20250514",
+        "stop_reason": "tool_use",
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 65
+        }
+      }
+    },
+
+    "thinking_response": {
+      "description": "扩展思考响应",
+      "response": {
+        "id": "msg_01thinking",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "Let me solve this step by step.\n\nTwo trains traveling toward each other:\n- Train A: 60 km/h from station A\n- Train B: 80 km/h from station B\n- Distance: 300 km\n\nCombined speed: 60 + 80 = 140 km/h\nTime to meet: 300 / 140 ≈ 2.14 hours\nDistance from A: 60 × 2.14 ≈ 128.6 km",
+            "signature": "WyIxMjguNiJd..."
+          },
+          {
+            "type": "text",
+            "text": "The two trains will meet approximately 128.6 km from station A (or 171.4 km from station B), after about 2 hours and 8.5 minutes."
+          }
+        ],
+        "model": "claude-sonnet-4-20250514",
+        "stop_reason": "end_turn",
+        "usage": {
+          "input_tokens": 50,
+          "output_tokens": 280
+        }
+      }
+    },
+
+    "cache_hit_response": {
+      "description": "缓存命中响应（注意 cache_read_input_tokens）",
+      "response": {
+        "id": "msg_cache_hit",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Based on the cached document, the quarterly revenue..."
+          }
+        ],
+        "model": "claude-sonnet-4-20250514",
+        "stop_reason": "end_turn",
+        "usage": {
+          "input_tokens": 50,
+          "output_tokens": 150,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 12000
+        }
+      }
+    },
+
+    "web_search_response": {
+      "description": "联网搜索响应",
+      "response": {
+        "id": "msg_web_search",
+        "type": "message",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Based on my web search, here are the latest AI developments..."
+          }
+        ],
+        "model": "claude-sonnet-4-20250514",
+        "stop_reason": "end_turn",
+        "usage": {
+          "input_tokens": 100,
+          "output_tokens": 500,
+          "server_tool_use": {
+            "web_search_requests": 3
+          }
+        }
+      }
+    },
+
+    "streaming_events": {
+      "description": "流式响应（SSE 格式）",
+      "note": "每个事件以 'event: ' 开头, 数据以 'data: ' 开头",
+      "events": [
+        {
+          "event": "message_start",
+          "data": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+              "type": "message",
+              "role": "assistant",
+              "model": "claude-sonnet-4-20250514",
+              "content": [],
+              "stop_reason": null,
+              "stop_sequence": null,
+              "usage": {
+                "input_tokens": 12,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0
+              }
+            }
+          }
+        },
+        {
+          "event": "content_block_start",
+          "data": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "text",
+              "text": ""
+            }
+          }
+        },
+        {
+          "event": "content_block_delta",
+          "data": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "Hello"
+            }
+          }
+        },
+        {
+          "event": "content_block_delta",
+          "data": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "! How can I help you?"
+            }
+          }
+        },
+        {
+          "event": "content_block_stop",
+          "data": {
+            "type": "content_block_stop",
+            "index": 0
+          }
+        },
+        {
+          "event": "message_delta",
+          "data": {
+            "type": "message_delta",
+            "delta": {
+              "stop_reason": "end_turn",
+              "stop_sequence": null
+            },
+            "usage": {
+              "output_tokens": 8
+            }
+          }
+        },
+        {
+          "event": "message_stop",
+          "data": {
+            "type": "message_stop"
+          }
+        }
+      ]
+    },
+
+    "streaming_thinking": {
+      "description": "扩展思考流式响应",
+      "events_summary": [
+        "event: message_start (含 usage)",
+        "event: content_block_start (index=0, type=thinking)",
+        "event: content_block_delta (type=thinking_delta, thinking='Let me...')",
+        "event: content_block_delta (type=thinking_delta, thinking='...')",
+        "event: content_block_delta (type=signature_delta, signature='WyIx...')",
+        "event: content_block_stop (index=0)",
+        "event: content_block_start (index=1, type=text)",
+        "event: content_block_delta (type=text_delta, text='The answer...')",
+        "event: content_block_stop (index=1)",
+        "event: message_delta (stop_reason=end_turn, usage)",
+        "event: message_stop"
+      ]
+    },
+
+    "streaming_tool_use": {
+      "description": "工具调用流式响应",
+      "events_summary": [
+        "event: message_start",
+        "event: content_block_start (index=0, type=text)",
+        "event: content_block_delta (type=text_delta)",
+        "event: content_block_stop (index=0)",
+        "event: content_block_start (index=1, type=tool_use, id='toolu_...', name='get_weather')",
+        "event: content_block_delta (type=input_json_delta, partial_json='{\"loc')",
+        "event: content_block_delta (type=input_json_delta, partial_json='ation\": \"Beijing\"}')",
+        "event: content_block_stop (index=1)",
+        "event: message_delta (stop_reason=tool_use)",
+        "event: message_stop"
+      ]
+    }
+  },
+
+  "parameter_reference": {
+    "model": {
+      "type": "string",
+      "required": true,
+      "description": "模型 ID",
+      "examples": [
+        "claude-sonnet-4-20250514",
+        "claude-opus-4-20250514",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+        "claude-3-opus-20240229",
+        "claude-opus-4-6",
+        "claude-opus-4-6-high",
+        "claude-opus-4-6-medium",
+        "claude-opus-4-6-low"
+      ]
+    },
+    "messages": {
+      "type": "array",
+      "required": true,
+      "description": "对话消息列表, 必须以 user 消息开始, user/assistant 交替出现",
+      "items": {
+        "role": {
+          "type": "string",
+          "required": true,
+          "enum": ["user", "assistant"],
+          "description": "消息角色 (system 不在 messages 中, 而是用单独的 system 参数)"
+        },
+        "content": {
+          "type": "string | array",
+          "required": true,
+          "description": "消息内容, 纯字符串或内容块数组"
+        }
+      }
+    },
+    "max_tokens": {
+      "type": "integer",
+      "required": true,
+      "description": "最大生成 token 数（Claude API 必填, 不同于 OpenAI 的可选）",
+      "note": "启用 thinking 时, 此值必须包含 thinking budget + 输出 token"
+    },
+    "system": {
+      "type": "string | array",
+      "required": false,
+      "description": "系统提示词。字符串格式或数组格式(支持 cache_control)"
+    },
+    "temperature": {
+      "type": "number",
+      "required": false,
+      "range": "0.0 ~ 1.0",
+      "default": 1.0,
+      "description": "采样温度。⚠️ 启用 thinking 时强制为 1.0"
+    },
+    "top_p": {
+      "type": "number",
+      "required": false,
+      "range": "0.0 ~ 1.0",
+      "description": "核采样阈值。⚠️ 启用 thinking 时被忽略"
+    },
+    "top_k": {
+      "type": "integer",
+      "required": false,
+      "description": "仅从概率最高的 K 个 token 中采样"
+    },
+    "stop_sequences": {
+      "type": "array of strings",
+      "required": false,
+      "description": "自定义停止序列, 模型遇到时停止生成"
+    },
+    "stream": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "是否启用 SSE 流式输出"
+    },
+    "tools": {
+      "type": "array",
+      "required": false,
+      "description": "可用工具列表",
+      "item_types": {
+        "custom_function": {
+          "description": "自定义函数工具",
+          "fields": ["name", "description", "input_schema", "cache_control?"]
+        },
+        "web_search_20250305": {
+          "description": "内置联网搜索工具",
+          "fields": ["type", "name", "max_uses?", "user_location?"]
+        },
+        "computer_20241022": {
+          "description": "计算机使用工具",
+          "fields": ["type", "name", "display_width_px", "display_height_px", "display_number?"]
+        },
+        "text_editor_20241022": {
+          "description": "文本编辑器工具",
+          "fields": ["type", "name"]
+        },
+        "bash_20241022": {
+          "description": "Bash 命令行工具",
+          "fields": ["type", "name"]
+        }
+      }
+    },
+    "tool_choice": {
+      "type": "object",
+      "required": false,
+      "description": "工具选择策略",
+      "values": {
+        "auto": "模型自行决定是否使用工具（默认）",
+        "any": "强制使用任一工具",
+        "tool": "强制使用指定工具 (需提供 name)",
+        "none": "禁用工具调用"
+      },
+      "properties": {
+        "type": "auto | any | tool | none",
+        "name": "工具名称（仅 type=tool 时必填）",
+        "disable_parallel_tool_use": "禁用并行工具调用 (boolean)"
+      }
+    },
+    "thinking": {
+      "type": "object",
+      "required": false,
+      "description": "扩展思考配置",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["enabled", "adaptive"],
+          "description": "enabled=始终思考, adaptive=根据 effort 自适应"
+        },
+        "budget_tokens": {
+          "type": "integer",
+          "min": 1024,
+          "description": "思考 token 预算（仅 type=enabled 时使用）。推荐 max_tokens 的 80%"
+        }
+      },
+      "constraints": [
+        "启用时 temperature 强制为 1.0",
+        "启用时 top_p 被忽略/置空",
+        "budget_tokens 最小 1024",
+        "max_tokens 必须 > budget_tokens"
+      ]
+    },
+    "metadata": {
+      "type": "object",
+      "required": false,
+      "description": "请求元数据",
+      "properties": {
+        "user_id": "终端用户标识, 用于滥用检测"
+      }
+    },
+    "mcp_servers": {
+      "type": "array",
+      "required": false,
+      "description": "MCP 远程服务器配置列表",
+      "item_fields": ["type", "url", "name", "authorization_token?"]
+    },
+    "output_config": {
+      "type": "object",
+      "required": false,
+      "description": "输出配置（Opus 4.6 adaptive thinking 使用）",
+      "properties": {
+        "effort": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "description": "思考深度等级"
+        }
+      }
+    },
+    "output_format": {
+      "type": "object",
+      "required": false,
+      "description": "输出格式约束",
+      "values": {
+        "json_schema": "强制按 JSON Schema 输出"
+      }
+    },
+    "service_tier": {
+      "type": "string",
+      "required": false,
+      "description": "服务等级（默认被过滤, 需渠道设置启用 allow_service_tier）"
+    },
+    "inference_geo": {
+      "type": "string",
+      "required": false,
+      "description": "数据驻留地区（默认被过滤, 需渠道设置启用 allow_inference_geo）"
+    }
+  },
+
+  "content_block_types": {
+    "request_content_types": {
+      "text": {
+        "description": "文本内容块",
+        "fields": {
+          "type": "text",
+          "text": "文本内容",
+          "cache_control": "可选, {\"type\":\"ephemeral\"}"
+        }
+      },
+      "image": {
+        "description": "图片内容块",
+        "supported_media_types": ["image/jpeg", "image/png", "image/gif", "image/webp"],
+        "fields": {
+          "type": "image",
+          "source": {
+            "type": "base64 | url",
+            "media_type": "MIME 类型",
+            "data": "base64 编码数据 (type=base64时)",
+            "url": "图片URL (type=url时)"
+          },
+          "cache_control": "可选"
+        }
+      },
+      "document": {
+        "description": "文档内容块（PDF）",
+        "supported_media_types": ["application/pdf"],
+        "fields": {
+          "type": "document",
+          "source": {
+            "type": "base64 | url",
+            "media_type": "application/pdf",
+            "data": "base64 编码数据",
+            "url": "文档URL"
+          },
+          "cache_control": "可选",
+          "citations": "可选, {\"enabled\": true}"
+        }
+      },
+      "tool_result": {
+        "description": "工具执行结果（仅 role=user 时使用）",
+        "fields": {
+          "type": "tool_result",
+          "tool_use_id": "关联的 tool_use block 的 id",
+          "content": "字符串或内容块数组 (可包含 text、image)",
+          "is_error": "可选 boolean, 标记工具执行失败"
+        }
+      }
+    },
+
+    "response_content_types": {
+      "text": {
+        "description": "文本响应块",
+        "fields": ["type", "text"]
+      },
+      "tool_use": {
+        "description": "工具调用块",
+        "fields": {
+          "type": "tool_use",
+          "id": "工具调用唯一ID (如 toolu_01A09q...)",
+          "name": "工具名称",
+          "input": "工具输入参数 (JSON object)"
+        }
+      },
+      "thinking": {
+        "description": "思考内容块（仅 thinking 启用时出现）",
+        "fields": {
+          "type": "thinking",
+          "thinking": "思考过程文本",
+          "signature": "加密签名（多轮对话时需要回传）"
+        }
+      }
+    }
+  },
+
+  "streaming_events": {
+    "description": "SSE 流式事件类型",
+    "format": "每个事件包含 event 和 data 两行:\nevent: {event_type}\ndata: {json_data}\n\n",
+    "events": {
+      "message_start": {
+        "description": "消息开始, 包含 message 元信息和初始 usage",
+        "contains": "message (id, type, role, model, usage)"
+      },
+      "content_block_start": {
+        "description": "内容块开始",
+        "contains": "index, content_block (type, text='' 或 type='tool_use'/id/name)"
+      },
+      "content_block_delta": {
+        "description": "内容块增量",
+        "contains": "index, delta",
+        "delta_types": {
+          "text_delta": "文本增量 (delta.text)",
+          "input_json_delta": "工具输入JSON增量 (delta.partial_json)",
+          "thinking_delta": "思考增量 (delta.thinking)",
+          "signature_delta": "签名增量 (delta.signature)"
+        }
+      },
+      "content_block_stop": {
+        "description": "内容块结束",
+        "contains": "index"
+      },
+      "message_delta": {
+        "description": "消息增量（含最终 stop_reason 和 output usage）",
+        "contains": "delta.stop_reason, delta.stop_sequence, usage.output_tokens"
+      },
+      "message_stop": {
+        "description": "消息结束（流完毕）"
+      },
+      "ping": {
+        "description": "心跳事件（保持连接）"
+      },
+      "error": {
+        "description": "错误事件"
+      }
+    }
+  },
+
+  "stop_reasons": {
+    "end_turn": "模型自然结束生成",
+    "max_tokens": "达到 max_tokens 上限",
+    "stop_sequence": "遇到 stop_sequences 中定义的停止序列",
+    "tool_use": "模型请求使用工具（需要客户端执行工具并回传结果）",
+    "refusal": "内容政策拒绝（拒绝生成有害内容）"
+  },
+
+  "prompt_caching": {
+    "description": "Prompt 缓存可大幅减少重复发送长上下文的 token 费用",
+    "how_it_works": "在 content block 上添加 cache_control 字段, 标记为可缓存。首次请求会写入缓存（收取写入费用），后续请求命中缓存时只收取缓存读取费用（通常为原始费用的 10%）。",
+    "cache_control_types": {
+      "ephemeral": "短暂缓存（5分钟 TTL）",
+      "ephemeral_1h": "1小时缓存 TTL"
+    },
+    "cacheable_positions": [
+      "system 消息的 content block",
+      "messages 中的 content block",
+      "tools 数组中的 tool 定义（最后一个加 cache_control）"
+    ],
+    "usage_fields": {
+      "cache_creation_input_tokens": "本次写入缓存的 token 数",
+      "cache_read_input_tokens": "本次从缓存读取的 token 数"
+    },
+    "best_practices": [
+      "将不变的长内容（系统提示、文档）放在前面并标记缓存",
+      "变化的内容放在后面",
+      "缓存内容需要足够长（建议 1024+ token）才有效",
+      "同一模型和相同前缀才能命中缓存"
+    ]
+  },
+
+  "important_notes": {
+    "messages_alternation": "messages 数组必须 user/assistant 交替出现, 第一条必须是 user",
+    "max_tokens_required": "max_tokens 在 Claude API 中是必填参数（不同于 OpenAI 的可选）",
+    "no_system_in_messages": "system 不在 messages 中, 而是使用单独的 system 参数",
+    "thinking_constraints": "启用 thinking 时: temperature 强制1.0, top_p 被忽略, budget_tokens >= 1024",
+    "thinking_multi_turn": "多轮对话中回传 assistant 消息时, 需要包含 thinking block 和 signature",
+    "image_size_limit": "单张图片建议不超过 5MB (base64 编码后), 且分辨率有上限",
+    "tool_result_position": "tool_result 必须紧跟在包含对应 tool_use 的 assistant 消息之后的 user 消息中"
+  },
+
+  "error_format": {
+    "description": "Claude API 错误格式",
+    "example": {
+      "type": "error",
+      "error": {
+        "type": "invalid_request_error",
+        "message": "max_tokens: field required"
+      }
+    },
+    "error_types": {
+      "invalid_request_error": "请求格式错误 (400)",
+      "authentication_error": "认证失败 (401)",
+      "permission_error": "权限不足 (403)",
+      "not_found_error": "资源不存在 (404)",
+      "rate_limit_error": "频率限制 (429)",
+      "api_error": "服务器内部错误 (500)",
+      "overloaded_error": "服务过载 (529)"
+    }
+  },
+
+  "differences_from_openai": {
+    "description": "Claude API 与 OpenAI Chat Completions API 的主要区别",
+    "differences": [
+      "max_tokens 必填 vs OpenAI 可选",
+      "system 是独立参数 vs OpenAI 在 messages 中",
+      "roles 只有 user/assistant vs OpenAI 有 system/user/assistant/tool/function",
+      "工具定义用 input_schema vs OpenAI 用 parameters（在 function 嵌套下）",
+      "工具调用结果用 tool_result content block vs OpenAI 用 role=tool 消息",
+      "stop_sequences vs OpenAI 的 stop",
+      "temperature 范围 0-1 vs OpenAI 0-2",
+      "流式事件格式完全不同（Claude 有 message_start 等 vs OpenAI 的 chat.completion.chunk）",
+      "Claude 有 thinking（扩展思考）vs OpenAI 有 reasoning_effort",
+      "Claude 缓存用 cache_control vs OpenAI 无此能力",
+      "Claude 的 tool_choice 类型: auto/any/tool/none vs OpenAI: auto/required/none/{function}"
+    ]
+  }
+}

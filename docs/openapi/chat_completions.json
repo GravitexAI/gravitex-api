@@ -1,0 +1,799 @@
+{
+  "endpoint": "POST /v1/chat/completions",
+  "description": "Creates a model response for the given chat conversation.",
+
+  "examples": {
+    "1_basic": {
+      "description": "基础对话（最简请求）",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {"role": "user", "content": "Hello, who are you?"}
+        ]
+      }
+    },
+
+    "2_multi_turn": {
+      "description": "多轮对话",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {"role": "system", "content": "You are a helpful assistant."},
+          {"role": "user", "content": "What is the capital of France?"},
+          {"role": "assistant", "content": "The capital of France is Paris."},
+          {"role": "user", "content": "What about Germany?"}
+        ]
+      }
+    },
+
+    "3_streaming": {
+      "description": "流式输出",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {"role": "user", "content": "Write a short poem about the sea."}
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      }
+    },
+
+    "4_all_sampling_params": {
+      "description": "完整采样参数",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {"role": "user", "content": "Tell me a creative story."}
+        ],
+        "temperature": 0.8,
+        "top_p": 0.9,
+        "max_tokens": 1024,
+        "max_completion_tokens": 2048,
+        "frequency_penalty": 0.5,
+        "presence_penalty": 0.3,
+        "stop": ["\n\n", "END"],
+        "n": 1,
+        "seed": 42,
+        "logprobs": true,
+        "top_logprobs": 5,
+        "logit_bias": {"1734": -100, "2435": 50},
+        "user": "user-12345"
+      }
+    },
+
+    "5_tool_calling": {
+      "description": "工具调用（Function Calling）",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {"role": "user", "content": "What's the weather like in Beijing today?"}
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_weather",
+              "description": "Get the current weather in a given location",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "location": {
+                    "type": "string",
+                    "description": "The city name, e.g. Beijing"
+                  },
+                  "unit": {
+                    "type": "string",
+                    "enum": ["celsius", "fahrenheit"],
+                    "description": "Temperature unit"
+                  }
+                },
+                "required": ["location"]
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": true
+      }
+    },
+
+    "6_tool_calling_with_result": {
+      "description": "工具调用结果回传（多轮 Tool Use）",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {"role": "user", "content": "What's the weather like in Beijing today?"},
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call_abc123",
+                "type": "function",
+                "function": {
+                  "name": "get_weather",
+                  "arguments": "{\"location\": \"Beijing\", \"unit\": \"celsius\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_abc123",
+            "content": "{\"temperature\": 22, \"condition\": \"sunny\", \"humidity\": 45}"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_weather",
+              "description": "Get the current weather in a given location",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "location": {"type": "string"},
+                  "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+                },
+                "required": ["location"]
+              }
+            }
+          }
+        ]
+      }
+    },
+
+    "7_tool_choice_forced": {
+      "description": "强制使用指定工具",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {"role": "user", "content": "Tell me about Paris"}
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "search_city",
+              "description": "Search for city information",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "city": {"type": "string"}
+                },
+                "required": ["city"]
+              }
+            }
+          }
+        ],
+        "tool_choice": {
+          "type": "function",
+          "function": {"name": "search_city"}
+        }
+      }
+    },
+
+    "8_json_mode": {
+      "description": "JSON 模式输出",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {"role": "system", "content": "You are a helpful assistant that outputs JSON."},
+          {"role": "user", "content": "List 3 popular programming languages with their use cases."}
+        ],
+        "response_format": {
+          "type": "json_object"
+        }
+      }
+    },
+
+    "9_json_schema": {
+      "description": "Structured Output（JSON Schema 约束输出）",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {"role": "user", "content": "Extract the name and age from: John is 30 years old."}
+        ],
+        "response_format": {
+          "type": "json_schema",
+          "json_schema": {
+            "name": "person_info",
+            "description": "Extracted person information",
+            "strict": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {"type": "string"},
+                "age": {"type": "integer"}
+              },
+              "required": ["name", "age"],
+              "additionalProperties": false
+            }
+          }
+        }
+      }
+    },
+
+    "10_vision_image_url": {
+      "description": "图片理解（URL方式）",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "What's in this image?"},
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "https://example.com/image.jpg",
+                  "detail": "high"
+                }
+              }
+            ]
+          }
+        ],
+        "max_tokens": 1024
+      }
+    },
+
+    "11_vision_base64": {
+      "description": "图片理解（Base64方式）",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "Describe this image in detail."},
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "data:image/png;base64,iVBORw0KGgoAAAANS..."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "12_multi_image": {
+      "description": "多图片理解",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "Compare these two images."},
+              {
+                "type": "image_url",
+                "image_url": {"url": "https://example.com/image1.jpg", "detail": "low"}
+              },
+              {
+                "type": "image_url",
+                "image_url": {"url": "https://example.com/image2.jpg", "detail": "low"}
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "13_audio_input": {
+      "description": "音频输入",
+      "request": {
+        "model": "gpt-4o-audio-preview",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "What is being said in this audio?"},
+              {
+                "type": "input_audio",
+                "input_audio": {
+                  "data": "<base64-encoded-audio-data>",
+                  "format": "wav"
+                }
+              }
+            ]
+          }
+        ],
+        "modalities": ["text", "audio"],
+        "audio": {
+          "voice": "alloy",
+          "format": "wav"
+        }
+      }
+    },
+
+    "14_file_input": {
+      "description": "文件输入",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "Summarize this document."},
+              {
+                "type": "file",
+                "file": {
+                  "filename": "report.pdf",
+                  "file_data": "data:application/pdf;base64,JVBERi0xLjQ..."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "15_video_url": {
+      "description": "视频输入",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "Describe what happens in this video."},
+              {
+                "type": "video_url",
+                "video_url": {
+                  "url": "https://example.com/video.mp4"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "16_reasoning_model": {
+      "description": "推理模型（o1/o3等）",
+      "request": {
+        "model": "o3",
+        "messages": [
+          {"role": "developer", "content": "You are a math tutor."},
+          {"role": "user", "content": "Solve: If 3x + 7 = 22, what is x?"}
+        ],
+        "reasoning_effort": "medium",
+        "max_completion_tokens": 8192
+      }
+    },
+
+    "17_prediction": {
+      "description": "Predicted Output（预测输出加速）",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {"role": "user", "content": "Replace 'foo' with 'bar' in the following code:\nfunction foo() { return foo; }"}
+        ],
+        "prediction": {
+          "type": "content",
+          "content": "function bar() { return bar; }"
+        }
+      }
+    },
+
+    "18_web_search": {
+      "description": "Web Search（联网搜索）",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {"role": "user", "content": "What are the latest news today?"}
+        ],
+        "web_search_options": {
+          "search_context_size": "medium",
+          "user_location": {
+            "type": "approximate",
+            "country": "CN",
+            "city": "Shanghai"
+          }
+        }
+      }
+    },
+
+    "19_developer_message": {
+      "description": "Developer 消息（替代 system）",
+      "request": {
+        "model": "o3",
+        "messages": [
+          {"role": "developer", "content": "You are a code reviewer. Be concise and precise."},
+          {"role": "user", "content": "Review this function: function add(a,b){return a+b}"}
+        ]
+      }
+    },
+
+    "20_full_params": {
+      "description": "完整参数示例（尽可能多参数）",
+      "request": {
+        "model": "gpt-4o",
+        "messages": [
+          {"role": "system", "content": "You are a helpful assistant."},
+          {"role": "user", "content": "Hello!"}
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "temperature": 0.7,
+        "top_p": 0.95,
+        "max_tokens": 2048,
+        "max_completion_tokens": 4096,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "stop": ["END"],
+        "n": 1,
+        "seed": 123,
+        "logprobs": true,
+        "top_logprobs": 3,
+        "logit_bias": {},
+        "response_format": {"type": "text"},
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "example_tool",
+              "description": "An example tool",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "param1": {"type": "string"}
+                },
+                "required": ["param1"]
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": true,
+        "user": "user-12345",
+        "store": true,
+        "metadata": {"session_id": "abc123", "source": "web"},
+        "service_tier": "auto"
+      }
+    }
+  },
+
+  "response_examples": {
+    "non_streaming": {
+      "description": "非流式响应",
+      "response": {
+        "id": "chatcmpl-abc123",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o-2024-08-06",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Hello! How can I help you today?"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 20,
+          "completion_tokens": 10,
+          "total_tokens": 30,
+          "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 20,
+            "audio_tokens": 0,
+            "image_tokens": 0
+          },
+          "completion_tokens_details": {
+            "text_tokens": 10,
+            "audio_tokens": 0,
+            "reasoning_tokens": 0
+          }
+        }
+      }
+    },
+
+    "tool_call_response": {
+      "description": "工具调用响应",
+      "response": {
+        "id": "chatcmpl-abc123",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4o-2024-08-06",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call_abc123",
+                  "type": "function",
+                  "function": {
+                    "name": "get_weather",
+                    "arguments": "{\"location\": \"Beijing\", \"unit\": \"celsius\"}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 50,
+          "completion_tokens": 25,
+          "total_tokens": 75
+        }
+      }
+    },
+
+    "reasoning_response": {
+      "description": "推理模型响应（含 reasoning_content）",
+      "response": {
+        "id": "chatcmpl-abc123",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "o3-2025-04-16",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "reasoning_content": "Let me solve this step by step. 3x + 7 = 22, so 3x = 15, x = 5.",
+              "content": "x = 5"
+            },
+            "finish_reason": "stop"
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 30,
+          "completion_tokens": 50,
+          "total_tokens": 80,
+          "completion_tokens_details": {
+            "reasoning_tokens": 35,
+            "text_tokens": 15
+          }
+        }
+      }
+    },
+
+    "streaming": {
+      "description": "流式响应（SSE 格式，每行以 data: 开头）",
+      "events": [
+        "data: {\"id\":\"chatcmpl-abc123\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}",
+        "data: {\"id\":\"chatcmpl-abc123\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}",
+        "data: {\"id\":\"chatcmpl-abc123\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"!\"},\"finish_reason\":null}]}",
+        "data: {\"id\":\"chatcmpl-abc123\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}",
+        "data: {\"id\":\"chatcmpl-abc123\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":2,\"total_tokens\":22}}",
+        "data: [DONE]"
+      ]
+    }
+  },
+
+  "parameter_reference": {
+    "model": {
+      "type": "string",
+      "required": true,
+      "description": "模型ID"
+    },
+    "messages": {
+      "type": "array",
+      "required": true,
+      "description": "对话消息列表",
+      "items": {
+        "role": {
+          "type": "string",
+          "required": true,
+          "enum": ["system", "developer", "user", "assistant", "tool", "function"],
+          "description": "消息角色: system/developer=系统指令, user=用户输入, assistant=模型输出, tool=工具返回结果"
+        },
+        "content": {
+          "type": "string | array | null",
+          "required": true,
+          "description": "消息内容, 可以是纯字符串或多模态内容数组(text/image_url/input_audio/file/video_url)"
+        },
+        "name": {
+          "type": "string",
+          "required": false,
+          "description": "参与者名称, 用于区分同一角色的不同参与者"
+        },
+        "tool_calls": {
+          "type": "array",
+          "required": false,
+          "description": "assistant消息的工具调用列表（仅role=assistant时）"
+        },
+        "tool_call_id": {
+          "type": "string",
+          "required": false,
+          "description": "关联的工具调用ID（仅role=tool时必填）"
+        },
+        "reasoning_content": {
+          "type": "string",
+          "required": false,
+          "description": "推理模型的思考过程内容（仅role=assistant时）"
+        }
+      }
+    },
+    "stream": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "是否启用流式输出"
+    },
+    "stream_options": {
+      "type": "object",
+      "required": false,
+      "description": "流式输出选项（仅stream=true时有效）",
+      "properties": {
+        "include_usage": {
+          "type": "boolean",
+          "description": "是否在流结束时返回 usage 信息"
+        }
+      }
+    },
+    "temperature": {
+      "type": "number",
+      "required": false,
+      "range": "0.0 ~ 2.0",
+      "default": 1.0,
+      "description": "采样温度, 越高越随机"
+    },
+    "top_p": {
+      "type": "number",
+      "required": false,
+      "range": "0.0 ~ 1.0",
+      "default": 1.0,
+      "description": "核采样阈值, 与temperature二选一调整"
+    },
+    "top_k": {
+      "type": "integer",
+      "required": false,
+      "description": "Top-K 采样（部分模型支持）"
+    },
+    "max_tokens": {
+      "type": "integer",
+      "required": false,
+      "description": "最大生成 token 数（旧参数，推荐用 max_completion_tokens）"
+    },
+    "max_completion_tokens": {
+      "type": "integer",
+      "required": false,
+      "description": "最大生成 token 数（含推理token, 推荐使用此参数）"
+    },
+    "reasoning_effort": {
+      "type": "string",
+      "required": false,
+      "enum": ["low", "medium", "high"],
+      "description": "推理模型的思考力度（仅o1/o3等推理模型支持）"
+    },
+    "frequency_penalty": {
+      "type": "number",
+      "required": false,
+      "range": "-2.0 ~ 2.0",
+      "default": 0,
+      "description": "频率惩罚, 正值减少重复已出现的token"
+    },
+    "presence_penalty": {
+      "type": "number",
+      "required": false,
+      "range": "-2.0 ~ 2.0",
+      "default": 0,
+      "description": "存在惩罚, 正值鼓励模型谈论新话题"
+    },
+    "stop": {
+      "type": "string | array",
+      "required": false,
+      "description": "停止序列, 最多4个, 遇到时停止生成"
+    },
+    "n": {
+      "type": "integer",
+      "required": false,
+      "default": 1,
+      "description": "生成几个候选回复"
+    },
+    "seed": {
+      "type": "integer",
+      "required": false,
+      "description": "随机种子, 相同seed尽量产出相同结果（尽力而为）"
+    },
+    "logprobs": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "是否返回 token 的 log probabilities"
+    },
+    "top_logprobs": {
+      "type": "integer",
+      "required": false,
+      "range": "0 ~ 20",
+      "description": "每个位置返回多少个 top log prob（需 logprobs=true）"
+    },
+    "logit_bias": {
+      "type": "object",
+      "required": false,
+      "description": "token ID 到 bias 值(-100~100) 的映射, 影响特定token的生成概率"
+    },
+    "response_format": {
+      "type": "object",
+      "required": false,
+      "description": "输出格式约束",
+      "values": {
+        "text": "默认文本输出",
+        "json_object": "JSON 模式, 强制输出合法 JSON",
+        "json_schema": "Structured Output, 强制匹配指定 JSON Schema"
+      }
+    },
+    "tools": {
+      "type": "array",
+      "required": false,
+      "description": "可用工具列表 (Function Calling)"
+    },
+    "tool_choice": {
+      "type": "string | object",
+      "required": false,
+      "description": "工具选择策略",
+      "values": {
+        "none": "不使用工具",
+        "auto": "模型自行决定（默认）",
+        "required": "必须使用工具",
+        "{type,function}": "强制使用指定工具"
+      }
+    },
+    "parallel_tool_calls": {
+      "type": "boolean",
+      "required": false,
+      "default": true,
+      "description": "是否允许模型并行调用多个工具"
+    },
+    "user": {
+      "type": "string",
+      "required": false,
+      "description": "终端用户唯一标识, 用于滥用检测"
+    },
+    "store": {
+      "type": "boolean",
+      "required": false,
+      "description": "是否允许 OpenAI 存储请求/响应用于模型改进"
+    },
+    "metadata": {
+      "type": "object",
+      "required": false,
+      "description": "自定义元数据, 键值对, 用于筛选和追踪"
+    },
+    "service_tier": {
+      "type": "string",
+      "required": false,
+      "enum": ["auto", "default", "flex"],
+      "description": "服务等级"
+    },
+    "modalities": {
+      "type": "array",
+      "required": false,
+      "description": "输出模态, 如 [\"text\", \"audio\"]"
+    },
+    "audio": {
+      "type": "object",
+      "required": false,
+      "description": "音频输出配置 (voice, format)"
+    },
+    "prediction": {
+      "type": "object",
+      "required": false,
+      "description": "Predicted Output, 提前提供预测内容加速生成"
+    },
+    "web_search_options": {
+      "type": "object",
+      "required": false,
+      "description": "联网搜索选项",
+      "properties": {
+        "search_context_size": "搜索上下文大小: low/medium/high",
+        "user_location": "用户位置 (country, city 等)"
+      }
+    }
+  }
+}

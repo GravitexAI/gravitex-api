@@ -105,6 +105,12 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 			c.Set("video_seconds", n)
 		}
 	}
+	// 保存分辨率到 gin context，供 mergeVideoTaskBillingData 写入 task.Data（计费用）
+	if res, ok := metaData["resolution"]; ok {
+		if s, ok := res.(string); ok && s != "" {
+			c.Set("video_resolution", s)
+		}
+	}
 	v, ok := c.Get("task_request")
 	if !ok {
 		return nil
@@ -294,6 +300,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return "", nil, service.TaskErrorWrapper(fmt.Errorf("missing operation name"), "invalid_response", http.StatusInternalServerError)
 	}
 	localID := encodeLocalTaskID(s.Name)
+	info.PublicTaskID = localID
 	if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
 		if body, err := common.Marshal(gin.H{"task_id": localID}); err == nil {
 			c.Set(relaycommon.TaskSubmitResponseBody, body)
@@ -656,6 +663,8 @@ func vertexSanitizeResolution(metadata map[string]interface{}) string {
 		return "720p"
 	case strings.Contains(res, "1080"):
 		return "1080p"
+	case strings.Contains(res, "4k") || strings.Contains(res, "2160"):
+		return "4k"
 	default:
 		return "1080p"
 	}

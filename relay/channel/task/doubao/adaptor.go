@@ -211,6 +211,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	}
 	c.Set("has_video_input", hasVideoInput)
 
+	// 保存分辨率信息，用于按分辨率维度计费
+	if body.Resolution != "" {
+		c.Set("video_resolution", body.Resolution)
+	}
+
 	info.UpstreamModelName = body.Model
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -491,6 +496,10 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		// 解析 usage 信息用于按倍率计费
 		taskResult.CompletionTokens = resTask.Usage.CompletionTokens
 		taskResult.TotalTokens = resTask.Usage.TotalTokens
+		// 保存上游返回的分辨率（用于按分辨率维度计费）
+		if resTask.Resolution != "" {
+			taskResult.Resolution = resTask.Resolution
+		}
 	case "failed":
 		taskResult.Status = model.TaskStatusFailure
 		taskResult.Progress = "100%"

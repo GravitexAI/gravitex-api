@@ -929,6 +929,7 @@ type TaskInfo struct {
 	ActualSize     string `json:"actual_size,omitempty"`     // 实际分辨率，如 "1280*720"（阿里 wan2.6）
 	ActualSR       int    `json:"actual_sr,omitempty"`       // 实际 SR（分辨率数值，如 720）
 	ActualDuration int    `json:"actual_duration,omitempty"` // 实际输出时长（秒）
+	Resolution     string `json:"resolution,omitempty"`      // 上游返回的分辨率标识，如 "720p"、"1080p"（用于按分辨率维度计费）
 }
 
 func FailTaskInfo(reason string) *TaskInfo {

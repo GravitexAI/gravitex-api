@@ -1,10 +1,13 @@
 package ratio_setting
 
 import (
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 
 	"encoding/json"
+	"math"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -929,6 +932,143 @@ func GetVideoCompletionRatioVideoPricing(name string, hasVideoInput bool) (float
 	return 0, false
 }
 
+// GetVideoCompletionRatioResolutionPricing 获取带分辨率维度的视频定价
+// 优先从分辨率嵌套配置查找，如果没有则回退到扁平 noVideo/video 配置
+func GetVideoCompletionRatioResolutionPricing(name string, hasVideoInput bool, resolution string) (float64, bool) {
+	name = FormatMatchingModelName(name)
+	resolution = normalizeResolution(resolution)
+
+	// 1) 尝试分辨率嵌套配置
+	videoCompletionRatioResolutionMapMutex.RLock()
+	resMap, ok := videoCompletionRatioResolutionMap[name]
+	videoCompletionRatioResolutionMapMutex.RUnlock()
+
+	if ok && len(resMap.Resolutions) > 0 {
+		// 精确匹配分辨率
+		if pricing, found := resMap.Resolutions[resolution]; found {
+			return selectVideoInputPrice(pricing, hasVideoInput, name)
+		}
+		// 最近分辨率回退
+		if pricing, found := findNearestResolution(resMap, resolution); found {
+			return selectVideoInputPrice(pricing, hasVideoInput, name)
+		}
+	}
+
+	// 2) 回退到扁平 noVideo/video 配置（向后兼容）
+	return GetVideoCompletionRatioVideoPricing(name, hasVideoInput)
+}
+
+// HasVideoCompletionRatioResolution 检查模型是否配置了分辨率维度定价
+func HasVideoCompletionRatioResolution(name string) bool {
+	name = FormatMatchingModelName(name)
+	videoCompletionRatioResolutionMapMutex.RLock()
+	resMap, ok := videoCompletionRatioResolutionMap[name]
+	videoCompletionRatioResolutionMapMutex.RUnlock()
+	return ok && len(resMap.Resolutions) > 0
+}
+
+// selectVideoInputPrice 根据是否有视频输入选择对应的价格值
+func selectVideoInputPrice(pricing VideoAudioPricing, hasVideoInput bool, name string) (float64, bool) {
+	value := 0.0
+	if hasVideoInput && pricing.Video > 0 {
+		value = pricing.Video
+	} else if !hasVideoInput && pricing.NoVideo > 0 {
+		value = pricing.NoVideo
+	}
+	// 如果 noVideo/video 维度没有值，尝试 noAudio/audio
+	if value == 0 {
+		if hasVideoInput && pricing.Audio > 0 {
+			value = pricing.Audio
+		} else if !hasVideoInput && pricing.NoAudio > 0 {
+			value = pricing.NoAudio
+		}
+	}
+	if value <= 0 {
+		return 0, false
+	}
+
+	// 检查是否是倍率体系（有 VideoRatio）
+	if vr, hasVR := GetVideoRatio(name); hasVR && vr != 0 {
+		return vr * value, true
+	}
+	return value, true
+}
+
+// normalizeResolution 标准化分辨率字符串 "720P" -> "720p", "1080P" -> "1080p", "4K" -> "4k"
+func normalizeResolution(s string) string {
+	return strings.TrimSpace(strings.ToLower(s))
+}
+
+// resolutionToPixels 将分辨率字符串转为数字像素值，用于最近匹配
+func resolutionToPixels(res string) int {
+	if v, ok := resolutionOrder[res]; ok {
+		return v
+	}
+	// 尝试从字符串中提取数字（如 "1440p" -> 1440）
+	numStr := strings.TrimRight(strings.TrimRight(res, "pkPK"), " ")
+	if v := 0; len(numStr) > 0 {
+		for _, c := range numStr {
+			if c >= '0' && c <= '9' {
+				v = v*10 + int(c-'0')
+			} else {
+				return 0
+			}
+		}
+		return v
+	}
+	return 0
+}
+
+// findNearestResolution 在分辨率配置中找到最近的匹配
+func findNearestResolution(resMap VideoResolutionPricing, targetResolution string) (VideoAudioPricing, bool) {
+	targetPixels := resolutionToPixels(targetResolution)
+	if targetPixels == 0 {
+		// 无法解析目标分辨率，尝试回退到 720p
+		if p, ok := resMap.Resolutions["720p"]; ok {
+			return p, true
+		}
+		// 返回第一个可用的
+		for _, p := range resMap.Resolutions {
+			return p, true
+		}
+		return VideoAudioPricing{}, false
+	}
+
+	// 收集所有配置的分辨率并排序
+	type resEntry struct {
+		resolution string
+		pixels     int
+		pricing    VideoAudioPricing
+	}
+	entries := make([]resEntry, 0, len(resMap.Resolutions))
+	for res, pricing := range resMap.Resolutions {
+		pixels := resolutionToPixels(res)
+		if pixels > 0 {
+			entries = append(entries, resEntry{resolution: res, pixels: pixels, pricing: pricing})
+		}
+	}
+	if len(entries) == 0 {
+		return VideoAudioPricing{}, false
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].pixels < entries[j].pixels
+	})
+
+	// 找到最近的（绝对值差最小）
+	best := entries[0]
+	bestDist := math.Abs(float64(best.pixels - targetPixels))
+	for _, e := range entries[1:] {
+		dist := math.Abs(float64(e.pixels - targetPixels))
+		if dist < bestDist {
+			best = e
+			bestDist = dist
+		}
+	}
+
+	return best.pricing, true
+}
+
 // loadVideoRatioFromDatabase 从数据库加载视频倍率配置（OptionMap["VideoRatio"]）
 func loadVideoRatioFromDatabase() {
 	videoRatioMapMutex.Lock()
@@ -967,6 +1107,8 @@ func loadVideoCompletionRatioFromDatabase() {
 	defer videoCompletionRatioAudioMapMutex.Unlock()
 	videoCompletionRatioRawMapMutex.Lock()
 	defer videoCompletionRatioRawMapMutex.Unlock()
+	videoCompletionRatioResolutionMapMutex.Lock()
+	defer videoCompletionRatioResolutionMapMutex.Unlock()
 
 	common.OptionMapRWMutex.RLock()
 	videoStr, exists := common.OptionMap["VideoCompletionRatio"]
@@ -976,7 +1118,7 @@ func loadVideoCompletionRatioFromDatabase() {
 		var rawMap map[string]interface{}
 		if err := common.Unmarshal([]byte(videoStr), &rawMap); err == nil {
 			videoCompletionRatioRawMap = rawMap
-			videoCompletionRatioPrimaryMap, videoCompletionRatioAudioMap = buildVideoCompletionRatioCaches(rawMap)
+			videoCompletionRatioPrimaryMap, videoCompletionRatioAudioMap, videoCompletionRatioResolutionMap = buildVideoCompletionRatioCaches(rawMap)
 			common.SysLog("Loaded VideoCompletionRatio configuration from database")
 			return
 		}
@@ -985,11 +1127,13 @@ func loadVideoCompletionRatioFromDatabase() {
 	videoCompletionRatioRawMap = make(map[string]interface{})
 	videoCompletionRatioPrimaryMap = make(map[string]float64)
 	videoCompletionRatioAudioMap = make(map[string]VideoAudioPricing)
+	videoCompletionRatioResolutionMap = make(map[string]VideoResolutionPricing)
 }
 
-func buildVideoCompletionRatioCaches(rawMap map[string]interface{}) (map[string]float64, map[string]VideoAudioPricing) {
+func buildVideoCompletionRatioCaches(rawMap map[string]interface{}) (map[string]float64, map[string]VideoAudioPricing, map[string]VideoResolutionPricing) {
 	primary := make(map[string]float64, len(rawMap))
 	audio := make(map[string]VideoAudioPricing)
+	resolution := make(map[string]VideoResolutionPricing)
 
 	for modelName, value := range rawMap {
 		targetKeys := []string{modelName}
@@ -1000,30 +1144,45 @@ func buildVideoCompletionRatioCaches(rawMap map[string]interface{}) (map[string]
 
 		switch v := value.(type) {
 		case map[string]interface{}:
-			pricing := VideoAudioPricing{}
-			if noAudio, ok := extractFloatFromMap(v, "noAudio", "no_audio"); ok {
-				pricing.NoAudio = noAudio
-			}
-			if audioVal, ok := extractFloatFromMap(v, "audio", "withAudio", "with_audio"); ok {
-				pricing.Audio = audioVal
-			}
-			// 有无视频输入维度（UpToken seedance 等）
-			if noVideo, ok := extractFloatFromMap(v, "noVideo", "no_video"); ok {
-				pricing.NoVideo = noVideo
-			}
-			if videoVal, ok := extractFloatFromMap(v, "video", "withVideo", "with_video"); ok {
-				pricing.Video = videoVal
-			}
-			if pricing.NoAudio > 0 || pricing.Audio > 0 || pricing.NoVideo > 0 || pricing.Video > 0 {
-				for _, key := range targetKeys {
-					audio[key] = pricing
+			// 检测是否为分辨率嵌套格式：所有 key 匹配分辨率模式且 value 为 map
+			if isResolutionNestedMap(v) {
+				resPricing := VideoResolutionPricing{
+					Resolutions: make(map[string]VideoAudioPricing),
 				}
-			}
+				for resKey, resVal := range v {
+					normalizedRes := normalizeResolution(resKey)
+					if resMap, ok := resVal.(map[string]interface{}); ok {
+						pricing := parseVideoAudioPricingFromMap(resMap)
+						resPricing.Resolutions[normalizedRes] = pricing
+					}
+				}
+				if len(resPricing.Resolutions) > 0 {
+					for _, key := range targetKeys {
+						resolution[key] = resPricing
+					}
+					// 同时将默认分辨率（720p）的值写入 audio map 作为兼容兜底
+					if defaultPricing, ok := resPricing.Resolutions["720p"]; ok {
+						if defaultPricing.NoVideo > 0 || defaultPricing.Video > 0 || defaultPricing.NoAudio > 0 || defaultPricing.Audio > 0 {
+							for _, key := range targetKeys {
+								audio[key] = defaultPricing
+							}
+						}
+					}
+				}
+			} else {
+				// 原有逻辑：扁平的 noAudio/audio/noVideo/video 结构
+				pricing := parseVideoAudioPricingFromMap(v)
+				if pricing.NoAudio > 0 || pricing.Audio > 0 || pricing.NoVideo > 0 || pricing.Video > 0 {
+					for _, key := range targetKeys {
+						audio[key] = pricing
+					}
+				}
 
-			// 支持 default 字段作为数字回退
-			if def, ok := extractFloatFromMap(v, "default"); ok && def > 0 {
-				for _, key := range targetKeys {
-					primary[key] = def
+				// 支持 default 字段作为数字回退
+				if def, ok := extractFloatFromMap(v, "default"); ok && def > 0 {
+					for _, key := range targetKeys {
+						primary[key] = def
+					}
 				}
 			}
 		default:
@@ -1035,7 +1194,40 @@ func buildVideoCompletionRatioCaches(rawMap map[string]interface{}) (map[string]
 		}
 	}
 
-	return primary, audio
+	return primary, audio, resolution
+}
+
+// isResolutionNestedMap 检测 map 是否为分辨率嵌套格式
+// 判断逻辑：至少有一个 key 匹配分辨率模式（如 720p, 1080p, 4k），且对应 value 为 map
+func isResolutionNestedMap(m map[string]interface{}) bool {
+	hasResKey := false
+	for key, val := range m {
+		if resolutionPattern.MatchString(key) {
+			if _, isMap := val.(map[string]interface{}); isMap {
+				hasResKey = true
+			}
+		}
+	}
+	return hasResKey
+}
+
+// parseVideoAudioPricingFromMap 从 map 解析 VideoAudioPricing 结构
+func parseVideoAudioPricingFromMap(m map[string]interface{}) VideoAudioPricing {
+	pricing := VideoAudioPricing{}
+	if noAudio, ok := extractFloatFromMap(m, "noAudio", "no_audio"); ok {
+		pricing.NoAudio = noAudio
+	}
+	if audioVal, ok := extractFloatFromMap(m, "audio", "withAudio", "with_audio"); ok {
+		pricing.Audio = audioVal
+	}
+	// 有无视频输入维度（UpToken seedance 等）
+	if noVideo, ok := extractFloatFromMap(m, "noVideo", "no_video"); ok {
+		pricing.NoVideo = noVideo
+	}
+	if videoVal, ok := extractFloatFromMap(m, "video", "withVideo", "with_video"); ok {
+		pricing.Video = videoVal
+	}
+	return pricing
 }
 
 func UpdateVideoRatioByJSONString(jsonStr string) error {
@@ -1067,7 +1259,7 @@ func UpdateVideoCompletionRatioByJSONString(jsonStr string) error {
 		return err
 	}
 
-	primary, audio := buildVideoCompletionRatioCaches(rawMap)
+	primary, audio, resolutionData := buildVideoCompletionRatioCaches(rawMap)
 
 	videoCompletionRatioMapMutex.Lock()
 	videoCompletionRatioPrimaryMap = primary
@@ -1080,6 +1272,10 @@ func UpdateVideoCompletionRatioByJSONString(jsonStr string) error {
 	videoCompletionRatioRawMapMutex.Lock()
 	videoCompletionRatioRawMap = rawMap
 	videoCompletionRatioRawMapMutex.Unlock()
+
+	videoCompletionRatioResolutionMapMutex.Lock()
+	videoCompletionRatioResolutionMap = resolutionData
+	videoCompletionRatioResolutionMapMutex.Unlock()
 
 	InvalidateExposedDataCache()
 	return nil
@@ -1107,6 +1303,31 @@ type VideoAudioPricing struct {
 	Video   float64 `json:"video,omitempty"`
 }
 
+// VideoResolutionPricing 分辨率维度的视频定价结构
+// 例如 {"720p": {NoVideo: 7.35, Video: 4.515}, "1080p": {NoVideo: 8.085, Video: 4.935}}
+type VideoResolutionPricing struct {
+	Resolutions map[string]VideoAudioPricing
+}
+
+var (
+	videoCompletionRatioResolutionMap      map[string]VideoResolutionPricing = nil
+	videoCompletionRatioResolutionMapMutex                                   = sync.RWMutex{}
+)
+
+// resolutionPattern 用于检测 key 是否为分辨率格式（如 480p, 720p, 1080p, 4k）
+var resolutionPattern = regexp.MustCompile(`(?i)^\d+[pk]$`)
+
+// resolutionOrder 分辨率排序，数字越大分辨率越高（用于最近匹配）
+var resolutionOrder = map[string]int{
+	"360p":  360,
+	"480p":  480,
+	"720p":  720,
+	"768p":  768,
+	"1080p": 1080,
+	"2k":    1440,
+	"4k":    2160,
+}
+
 // VideoFlashResolutionPricing wan2.6-*-flash：noAudio/audio 各对应 720p/1080p 等分档单价（美元/秒）
 type VideoFlashResolutionPricing struct {
 	NoAudio map[string]float64 `json:"noAudio,omitempty"`
@@ -1129,6 +1350,7 @@ var defaultVideoAudioPricing = map[string]VideoAudioPricing{
 }
 
 // wan2.6 flash：¥0.15/0.25（无声 720P/1080P）、¥0.3/0.5（有声 720P/1080P），按 ¥÷7.0 换算为美元/秒
+// Veo 3.1 系列：按 generateAudio × resolution 分档（美元/秒）
 var defaultVideoFlashResolutionPricing = map[string]VideoFlashResolutionPricing{
 	"wan2.6-i2v-flash": {
 		NoAudio: map[string]float64{"720p": 0.0214, "1080p": 0.0357},
@@ -1137,6 +1359,21 @@ var defaultVideoFlashResolutionPricing = map[string]VideoFlashResolutionPricing{
 	"wan2.6-r2v-flash": {
 		NoAudio: map[string]float64{"720p": 0.0214, "1080p": 0.0357},
 		Audio:   map[string]float64{"720p": 0.0429, "1080p": 0.0714},
+	},
+	// Veo 3.1：720p/1080p 同价，4k 更贵
+	"veo-3.1-generate-001": {
+		NoAudio: map[string]float64{"720p": 0.20, "1080p": 0.20, "4k": 0.40},
+		Audio:   map[string]float64{"720p": 0.40, "1080p": 0.40, "4k": 0.60},
+	},
+	// Veo 3.1 Fast：各分辨率独立定价
+	"veo-3.1-fast-generate-001": {
+		NoAudio: map[string]float64{"720p": 0.08, "1080p": 0.10, "4k": 0.25},
+		Audio:   map[string]float64{"720p": 0.10, "1080p": 0.12, "4k": 0.30},
+	},
+	// Veo 3.1 Lite：仅 720p/1080p
+	"veo-3.1-lite-generate-001": {
+		NoAudio: map[string]float64{"720p": 0.03, "1080p": 0.05},
+		Audio:   map[string]float64{"720p": 0.05, "1080p": 0.08},
 	},
 }
 
@@ -1245,13 +1482,17 @@ func GetImageModelPricePerImage(name string) (float64, bool) {
 	return -1, false
 }
 
-// NormalizeVideoResolutionKey 统一为 480p/720p/1080p 小写
+// NormalizeVideoResolutionKey 统一为 480p/720p/1080p/4k 小写
 func NormalizeVideoResolutionKey(res string) string {
 	s := strings.TrimSpace(strings.ToLower(res))
 	if s == "" {
 		return "720p"
 	}
-	if !strings.HasSuffix(s, "p") {
+	// 4k / 2160p 统一为 "4k"
+	if s == "4k" || s == "2160p" || strings.Contains(s, "2160") {
+		return "4k"
+	}
+	if !strings.HasSuffix(s, "p") && !strings.HasSuffix(s, "k") {
 		s = s + "p"
 	}
 	return s

@@ -1,0 +1,945 @@
+{
+  "endpoint": "POST /v1/responses",
+  "description": "Creates a model response. This is the new API format that supports richer input/output types compared to chat completions.",
+
+  "examples": {
+    "1_basic_string_input": {
+      "description": "最简请求（input 为纯字符串）",
+      "request": {
+        "model": "gpt-4o",
+        "input": "Hello, who are you?"
+      }
+    },
+
+    "2_easy_input_format": {
+      "description": "简写格式（Easy Input）- 不需要 type 和 status",
+      "request": {
+        "model": "gpt-4o",
+        "input": [
+          {"role": "user", "content": "What is the capital of France?"},
+          {"role": "assistant", "content": "The capital of France is Paris."},
+          {"role": "user", "content": "What about Germany?"}
+        ]
+      }
+    },
+
+    "3_full_item_format": {
+      "description": "完整格式（Full Items）- 必须带 type 和 status",
+      "note": "⚠️ 使用完整格式时, assistant 消息必须带 type='message' 和 status='completed', 否则部分提供商(如火山引擎)会报 MissingParameter: input.status 错误",
+      "request": {
+        "model": "gpt-4o",
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "What is the capital of France?"}
+            ]
+          },
+          {
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+              {"type": "output_text", "text": "The capital of France is Paris."}
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "What about Germany?"}
+            ]
+          }
+        ]
+      }
+    },
+
+    "4_streaming": {
+      "description": "流式输出",
+      "request": {
+        "model": "gpt-4o",
+        "input": "Write a short poem about the sea.",
+        "stream": true
+      }
+    },
+
+    "5_with_instructions": {
+      "description": "带系统指令 (instructions)",
+      "request": {
+        "model": "gpt-4o",
+        "instructions": "You are a professional translator. Translate all input to Chinese.",
+        "input": "The weather is beautiful today."
+      }
+    },
+
+    "6_all_sampling_params": {
+      "description": "完整采样参数",
+      "request": {
+        "model": "gpt-4o",
+        "input": "Tell me a creative story.",
+        "temperature": 0.8,
+        "top_p": 0.9,
+        "max_output_tokens": 2048
+      }
+    },
+
+    "7_reasoning_model": {
+      "description": "推理模型 (o1/o3/seed 等)",
+      "request": {
+        "model": "o3",
+        "input": [
+          {"role": "user", "content": "If 3x + 7 = 22, what is x? Show your work."}
+        ],
+        "reasoning": {
+          "effort": "medium",
+          "summary": "detailed"
+        },
+        "max_output_tokens": 8192
+      }
+    },
+
+    "8_reasoning_model_multi_turn": {
+      "description": "推理模型多轮对话（火山引擎 seed 模型场景）",
+      "note": "⚠️ 这是导致 MissingParameter: input.status 报错的典型场景。使用简写格式可避免此问题。",
+      "request_easy_format_RECOMMENDED": {
+        "model": "seed-xxx",
+        "input": [
+          {"role": "user", "content": "who are you?"},
+          {"role": "assistant", "content": "I am a large language model, trained by doubao."},
+          {"role": "user", "content": "can you explain more info?"}
+        ],
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "max_output_tokens": 12288,
+        "reasoning": {"effort": "medium"}
+      },
+      "request_full_format": {
+        "model": "seed-xxx",
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "who are you?"}]
+          },
+          {
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "I am a large language model, trained by doubao."}]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "can you explain more info?"}]
+          }
+        ],
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "max_output_tokens": 12288,
+        "reasoning": {"effort": "medium"}
+      },
+      "request_WRONG_will_cause_error": {
+        "_note": "❌ 这种写法混用了 content type 但没有 type/status, 会导致火山引擎报 MissingParameter: input.status",
+        "model": "seed-xxx",
+        "input": [
+          {"role": "user", "content": [{"type": "input_text", "text": "who are you?"}]},
+          {"role": "assistant", "content": [{"type": "output_text", "text": "I am a large language model, trained by doubao."}]},
+          {"role": "user", "content": [{"type": "input_text", "text": "can you explain more info?"}]}
+        ],
+        "reasoning": {"effort": "medium"}
+      }
+    },
+
+    "9_tool_calling": {
+      "description": "工具调用（Function Calling）",
+      "request": {
+        "model": "gpt-4o",
+        "input": "What's the weather like in Beijing today?",
+        "tools": [
+          {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "location": {
+                  "type": "string",
+                  "description": "The city name, e.g. Beijing"
+                },
+                "unit": {
+                  "type": "string",
+                  "enum": ["celsius", "fahrenheit"]
+                }
+              },
+              "required": ["location"]
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": true
+      }
+    },
+
+    "10_tool_result_easy_format": {
+      "description": "工具调用结果回传（简写格式）",
+      "request": {
+        "model": "gpt-4o",
+        "input": [
+          {"role": "user", "content": "What's the weather like in Beijing?"},
+          {"role": "assistant", "content": "Let me check the weather for you."},
+          {
+            "type": "function_call",
+            "call_id": "call_abc123",
+            "name": "get_weather",
+            "arguments": "{\"location\": \"Beijing\", \"unit\": \"celsius\"}",
+            "status": "completed"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_abc123",
+            "output": "{\"temperature\": 22, \"condition\": \"sunny\"}"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get the current weather",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "location": {"type": "string"},
+                "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+              },
+              "required": ["location"]
+            }
+          }
+        ]
+      }
+    },
+
+    "11_tool_result_full_format": {
+      "description": "工具调用结果回传（完整格式）",
+      "request": {
+        "model": "gpt-4o",
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "What's the weather like in Beijing?"}]
+          },
+          {
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Let me check the weather for you."}]
+          },
+          {
+            "type": "function_call",
+            "id": "fc_abc123",
+            "call_id": "call_abc123",
+            "name": "get_weather",
+            "arguments": "{\"location\": \"Beijing\", \"unit\": \"celsius\"}",
+            "status": "completed"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_abc123",
+            "output": "{\"temperature\": 22, \"condition\": \"sunny\"}"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get the current weather",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "location": {"type": "string"},
+                "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+              },
+              "required": ["location"]
+            }
+          }
+        ]
+      }
+    },
+
+    "12_tool_choice_forced": {
+      "description": "强制使用指定工具",
+      "request": {
+        "model": "gpt-4o",
+        "input": "Tell me about Paris",
+        "tools": [
+          {
+            "type": "function",
+            "name": "search_city",
+            "description": "Search for city information",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "city": {"type": "string"}
+              },
+              "required": ["city"]
+            }
+          }
+        ],
+        "tool_choice": {
+          "type": "function",
+          "name": "search_city"
+        }
+      }
+    },
+
+    "13_web_search_builtin_tool": {
+      "description": "内置 Web Search 工具",
+      "request": {
+        "model": "gpt-4o",
+        "input": "What are the latest AI news today?",
+        "tools": [
+          {
+            "type": "web_search_preview",
+            "search_context_size": "medium",
+            "user_location": {
+              "type": "approximate",
+              "country": "CN",
+              "city": "Shanghai"
+            }
+          }
+        ]
+      }
+    },
+
+    "14_file_search_builtin_tool": {
+      "description": "内置 File Search 工具",
+      "request": {
+        "model": "gpt-4o",
+        "input": "Find information about API rate limits in the uploaded documents.",
+        "tools": [
+          {
+            "type": "file_search",
+            "vector_store_ids": ["vs_abc123"]
+          }
+        ]
+      }
+    },
+
+    "15_image_input": {
+      "description": "图片输入",
+      "request": {
+        "model": "gpt-4o",
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "What's in this image?"},
+              {
+                "type": "input_image",
+                "image_url": "https://example.com/image.jpg",
+                "detail": "high"
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "16_image_base64": {
+      "description": "图片输入（Base64）",
+      "request": {
+        "model": "gpt-4o",
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "Describe this image."},
+              {
+                "type": "input_image",
+                "image_url": "data:image/png;base64,iVBORw0KGgoAAAANS..."
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "17_audio_input": {
+      "description": "音频输入",
+      "request": {
+        "model": "gpt-4o-audio-preview",
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "What is being said?"},
+              {
+                "type": "input_audio",
+                "input_audio": {
+                  "data": "<base64-encoded-audio>",
+                  "format": "wav"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "18_file_input": {
+      "description": "文件输入",
+      "request": {
+        "model": "gpt-4o",
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "Summarize this document."},
+              {
+                "type": "input_file",
+                "file": {
+                  "filename": "report.pdf",
+                  "file_data": "data:application/pdf;base64,JVBERi0xLjQ..."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "19_file_input_by_id": {
+      "description": "文件输入（通过 file_id）",
+      "request": {
+        "model": "gpt-4o",
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "Summarize this document."},
+              {
+                "type": "input_file",
+                "file": {
+                  "file_id": "file-abc123"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "20_video_input": {
+      "description": "视频输入",
+      "request": {
+        "model": "gpt-4o",
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {"type": "input_text", "text": "Describe what happens in this video."},
+              {
+                "type": "input_video",
+                "video_url": "https://example.com/video.mp4"
+              }
+            ]
+          }
+        ]
+      }
+    },
+
+    "21_structured_output": {
+      "description": "Structured Output（JSON Schema 约束输出）",
+      "request": {
+        "model": "gpt-4o",
+        "input": "Extract the name and age from: John is 30 years old.",
+        "text": {
+          "format": {
+            "type": "json_schema",
+            "name": "person_info",
+            "description": "Extracted person information",
+            "strict": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "name": {"type": "string"},
+                "age": {"type": "integer"}
+              },
+              "required": ["name", "age"],
+              "additionalProperties": false
+            }
+          }
+        }
+      }
+    },
+
+    "22_json_object_output": {
+      "description": "JSON Object 输出",
+      "request": {
+        "model": "gpt-4o",
+        "instructions": "Always respond in JSON format.",
+        "input": "List 3 popular programming languages.",
+        "text": {
+          "format": {
+            "type": "json_object"
+          }
+        }
+      }
+    },
+
+    "23_previous_response": {
+      "description": "引用上一次 response（自动拼接上下文）",
+      "request": {
+        "model": "gpt-4o",
+        "input": "What about Python?",
+        "previous_response_id": "resp_abc123"
+      }
+    },
+
+    "24_truncation": {
+      "description": "截断策略",
+      "request": {
+        "model": "gpt-4o",
+        "input": "Summarize our entire conversation.",
+        "truncation": "auto"
+      }
+    },
+
+    "25_full_params": {
+      "description": "完整参数示例（尽可能多参数）",
+      "request": {
+        "model": "gpt-4o",
+        "instructions": "You are a helpful assistant.",
+        "input": [
+          {"role": "user", "content": "Hello!"}
+        ],
+        "stream": true,
+        "temperature": 0.7,
+        "top_p": 0.95,
+        "max_output_tokens": 4096,
+        "reasoning": {
+          "effort": "medium",
+          "summary": "detailed"
+        },
+        "tools": [
+          {
+            "type": "function",
+            "name": "example_tool",
+            "description": "An example tool",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "param1": {"type": "string"}
+              },
+              "required": ["param1"]
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "parallel_tool_calls": true,
+        "max_tool_calls": 10,
+        "text": {
+          "format": {
+            "type": "text"
+          }
+        },
+        "truncation": "auto",
+        "user": "user-12345",
+        "store": true,
+        "metadata": {"session_id": "abc123", "source": "web"},
+        "service_tier": "auto"
+      }
+    }
+  },
+
+  "response_examples": {
+    "non_streaming": {
+      "description": "非流式响应",
+      "response": {
+        "id": "resp_abc123",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "gpt-4o-2024-08-06",
+        "instructions": "You are a helpful assistant.",
+        "max_output_tokens": 4096,
+        "output": [
+          {
+            "type": "message",
+            "id": "msg_abc123",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "Hello! How can I help you today?",
+                "annotations": []
+              }
+            ]
+          }
+        ],
+        "parallel_tool_calls": true,
+        "previous_response_id": null,
+        "reasoning": null,
+        "store": true,
+        "temperature": 0.7,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": 0.95,
+        "truncation": "disabled",
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 10,
+          "total_tokens": 30,
+          "input_tokens_details": {
+            "cached_tokens": 0
+          },
+          "output_tokens_details": {
+            "reasoning_tokens": 0
+          }
+        },
+        "user": "user-12345",
+        "metadata": {"session_id": "abc123"}
+      }
+    },
+
+    "tool_call_response": {
+      "description": "工具调用响应",
+      "response": {
+        "id": "resp_abc123",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "gpt-4o-2024-08-06",
+        "output": [
+          {
+            "type": "message",
+            "id": "msg_abc123",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "Let me check the weather for you.",
+                "annotations": []
+              }
+            ]
+          },
+          {
+            "type": "function_call",
+            "id": "fc_abc123",
+            "status": "completed",
+            "call_id": "call_abc123",
+            "name": "get_weather",
+            "arguments": "{\"location\": \"Beijing\", \"unit\": \"celsius\"}"
+          }
+        ],
+        "usage": {
+          "input_tokens": 50,
+          "output_tokens": 30,
+          "total_tokens": 80
+        }
+      }
+    },
+
+    "reasoning_response": {
+      "description": "推理模型响应",
+      "response": {
+        "id": "resp_abc123",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "o3-2025-04-16",
+        "reasoning": {"effort": "medium", "summary": "detailed"},
+        "output": [
+          {
+            "type": "reasoning",
+            "id": "rs_abc123",
+            "summary": [
+              {
+                "type": "summary_text",
+                "text": "I need to solve 3x + 7 = 22. Subtracting 7 from both sides gives 3x = 15. Dividing by 3 gives x = 5."
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "id": "msg_abc123",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "output_text",
+                "text": "x = 5",
+                "annotations": []
+              }
+            ]
+          }
+        ],
+        "usage": {
+          "input_tokens": 30,
+          "output_tokens": 80,
+          "total_tokens": 110,
+          "output_tokens_details": {
+            "reasoning_tokens": 60
+          }
+        }
+      }
+    },
+
+    "streaming": {
+      "description": "流式响应（SSE 格式, 每行以 data: 开头）",
+      "events": [
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_abc123\",\"object\":\"response\",\"status\":\"in_progress\",\"model\":\"gpt-4o\",\"output\":[]}}",
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_abc123\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}}",
+        "data: {\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}",
+        "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hello\"}",
+        "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"!\"}",
+        "data: {\"type\":\"response.output_text.done\",\"output_index\":0,\"content_index\":0,\"text\":\"Hello!\"}",
+        "data: {\"type\":\"response.content_part.done\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"Hello!\"}}",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_abc123\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hello!\"}]}}",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_abc123\",\"object\":\"response\",\"status\":\"completed\",\"output\":[...],\"usage\":{\"input_tokens\":10,\"output_tokens\":2,\"total_tokens\":12}}}"
+      ]
+    }
+  },
+
+  "input_format_reference": {
+    "description": "input 字段支持3种格式",
+
+    "format_1_string": {
+      "description": "纯字符串（单轮最简写法）",
+      "example": "Hello, who are you?"
+    },
+
+    "format_2_easy_input": {
+      "description": "简写消息数组 - 不需要 type 和 status, content 为字符串",
+      "supported_roles": ["user", "assistant", "system", "developer"],
+      "example": [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there!"},
+        {"role": "user", "content": "How are you?"}
+      ]
+    },
+
+    "format_3_full_items": {
+      "description": "完整 items 数组 - 每个 item 必须带 type, assistant/function_call 必须带 status",
+      "item_types": {
+        "message": {
+          "description": "对话消息",
+          "fields": {
+            "type": {"value": "message", "required": true},
+            "role": {"enum": ["user", "assistant", "system", "developer"], "required": true},
+            "status": {"enum": ["completed", "in_progress"], "required_for": "assistant", "note": "⚠️ assistant 消息必填"},
+            "content": {"type": "array of content parts", "required": true}
+          },
+          "content_types": {
+            "input_text": {"fields": ["type", "text"], "for_role": "user/system/developer"},
+            "output_text": {"fields": ["type", "text"], "for_role": "assistant"},
+            "input_image": {"fields": ["type", "image_url", "detail?"], "for_role": "user"},
+            "input_audio": {"fields": ["type", "input_audio{data,format}"], "for_role": "user"},
+            "input_file": {"fields": ["type", "file{filename?,file_data?,file_id?}"], "for_role": "user"},
+            "input_video": {"fields": ["type", "video_url"], "for_role": "user"}
+          }
+        },
+        "function_call": {
+          "description": "历史工具调用记录（需要回传时使用）",
+          "fields": {
+            "type": {"value": "function_call", "required": true},
+            "id": {"type": "string", "required": false, "description": "function call item ID"},
+            "call_id": {"type": "string", "required": true, "description": "调用ID, 与 function_call_output 关联"},
+            "name": {"type": "string", "required": true, "description": "函数名"},
+            "arguments": {"type": "string", "required": true, "description": "JSON 格式的参数"},
+            "status": {"enum": ["completed", "in_progress"], "required": true, "note": "⚠️ 必填"}
+          }
+        },
+        "function_call_output": {
+          "description": "工具执行结果",
+          "fields": {
+            "type": {"value": "function_call_output", "required": true},
+            "call_id": {"type": "string", "required": true, "description": "关联的 function_call 的 call_id"},
+            "output": {"type": "string", "required": true, "description": "工具执行结果（字符串）"}
+          }
+        },
+        "item_reference": {
+          "description": "引用之前 response 中的 output item",
+          "fields": {
+            "type": {"value": "item_reference", "required": true},
+            "id": {"type": "string", "required": true, "description": "引用的 item ID"}
+          }
+        }
+      }
+    }
+  },
+
+  "parameter_reference": {
+    "model": {
+      "type": "string",
+      "required": true,
+      "description": "模型ID"
+    },
+    "input": {
+      "type": "string | array",
+      "required": true,
+      "description": "输入内容, 支持纯字符串/简写消息数组/完整items数组, 详见 input_format_reference"
+    },
+    "instructions": {
+      "type": "string",
+      "required": false,
+      "description": "系统指令, 等价于 chat completions 的 system message"
+    },
+    "stream": {
+      "type": "boolean",
+      "required": false,
+      "default": false,
+      "description": "是否启用流式输出 (SSE)"
+    },
+    "temperature": {
+      "type": "number",
+      "required": false,
+      "range": "0.0 ~ 2.0",
+      "default": 1.0,
+      "description": "采样温度, 越高越随机"
+    },
+    "top_p": {
+      "type": "number",
+      "required": false,
+      "range": "0.0 ~ 1.0",
+      "default": 1.0,
+      "description": "核采样阈值"
+    },
+    "max_output_tokens": {
+      "type": "integer",
+      "required": false,
+      "description": "最大生成 token 数"
+    },
+    "reasoning": {
+      "type": "object",
+      "required": false,
+      "description": "推理配置（仅推理模型支持）",
+      "properties": {
+        "effort": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "description": "推理力度"
+        },
+        "summary": {
+          "type": "string",
+          "enum": ["auto", "concise", "detailed"],
+          "description": "推理摘要模式"
+        }
+      }
+    },
+    "text": {
+      "type": "object",
+      "required": false,
+      "description": "文本输出格式配置",
+      "properties": {
+        "format": {
+          "type": "object",
+          "description": "格式约束",
+          "values": {
+            "text": "默认文本",
+            "json_object": "JSON 对象",
+            "json_schema": "JSON Schema 约束"
+          }
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "required": false,
+      "description": "可用工具列表",
+      "item_types": {
+        "function": "自定义函数工具 (name, description, parameters)",
+        "web_search_preview": "内置联网搜索工具 (search_context_size, user_location)",
+        "file_search": "内置文件搜索工具 (vector_store_ids)"
+      }
+    },
+    "tool_choice": {
+      "type": "string | object",
+      "required": false,
+      "description": "工具选择策略",
+      "values": {
+        "none": "不使用工具",
+        "auto": "模型自行决定（默认）",
+        "required": "必须使用工具",
+        "{type,name}": "强制使用指定工具"
+      }
+    },
+    "parallel_tool_calls": {
+      "type": "boolean",
+      "required": false,
+      "default": true,
+      "description": "是否允许并行调用多个工具"
+    },
+    "max_tool_calls": {
+      "type": "integer",
+      "required": false,
+      "description": "单次 response 最大工具调用次数"
+    },
+    "truncation": {
+      "type": "string",
+      "required": false,
+      "enum": ["auto", "disabled"],
+      "default": "disabled",
+      "description": "上下文超出模型窗口时是否自动截断"
+    },
+    "previous_response_id": {
+      "type": "string",
+      "required": false,
+      "description": "上一次 response 的 ID, 自动将其 output 拼接到当前 input 之前"
+    },
+    "store": {
+      "type": "boolean",
+      "required": false,
+      "description": "是否允许存储请求/响应数据"
+    },
+    "metadata": {
+      "type": "object",
+      "required": false,
+      "description": "自定义键值对元数据"
+    },
+    "user": {
+      "type": "string",
+      "required": false,
+      "description": "终端用户唯一标识"
+    },
+    "service_tier": {
+      "type": "string",
+      "required": false,
+      "enum": ["auto", "default", "flex"],
+      "description": "服务等级"
+    },
+    "include": {
+      "type": "array",
+      "required": false,
+      "description": "响应中额外包含的信息",
+      "values": ["file_search_call.results", "message.input_image.image_url", "computer_call_output.output.image_url"]
+    },
+    "top_logprobs": {
+      "type": "integer",
+      "required": false,
+      "range": "0 ~ 20",
+      "description": "每个位置返回多少个 top log prob"
+    }
+  },
+
+  "common_errors": {
+    "MissingParameter_input_status": {
+      "error_message": "The request failed because it is missing `***.status` parameter",
+      "error_code": "MissingParameter",
+      "param": "input.status",
+      "cause": "使用完整格式(Full Items)时, assistant 消息或 function_call 缺少 status 字段",
+      "affected_providers": ["volcengine (火山引擎/豆包/seed模型)"],
+      "fix": "方案一: 改用简写格式(Easy Input), content 用纯字符串; 方案二: 给 assistant 消息和 function_call 加上 \"status\": \"completed\" 以及 \"type\": \"message\""
+    }
+  }
+}

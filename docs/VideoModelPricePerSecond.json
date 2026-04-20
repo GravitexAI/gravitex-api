@@ -1,0 +1,57 @@
+{
+  "sora-2": 0.1,
+  "veo-3.1-generate-preview": {
+    "noAudio": 0.2,
+    "audio": 0.4
+  },
+  "veo-3.1-generate-001": {
+    "noAudio": {"720p": 0.20, "1080p": 0.20, "4k": 0.40},
+    "audio": {"720p": 0.40, "1080p": 0.40, "4k": 0.60}
+  },
+  "veo-3.1-fast-generate-preview": {
+    "noAudio": 0.1,
+    "audio": 0.15
+  },
+  "veo-3.1-fast-generate-001": {
+    "noAudio": {"720p": 0.08, "1080p": 0.10, "4k": 0.25},
+    "audio": {"720p": 0.10, "1080p": 0.12, "4k": 0.30}
+  },
+  "veo-3.1-lite-generate-001": {
+    "noAudio": {"720p": 0.03, "1080p": 0.05},
+    "audio": {"720p": 0.05, "1080p": 0.08}
+  },
+  "wan2.6-t2v": {
+    "resolutions": {
+      "720p": 0.086012,
+      "1080p": 0.143353
+    }
+  },
+  "wan2.6-i2v": {
+    "resolutions": {
+      "720p": 0.086012,
+      "1080p": 0.143353
+    }
+  },
+  "wan2.6-r2v": {
+    "resolutions": {
+      "720p": 0.086012,
+      "1080p": 0.143353
+    }
+  },
+  "kling-v3": {
+    "noAudio": 0.084,
+    "audio": 0.126
+  },
+  "kling-v3-pro": {
+    "noAudio": 0.112,
+    "audio": 0.168
+  },
+  "kling-v3-omni": {
+    "noAudio": 0.084,
+    "audio": 0.126
+  },
+  "kling-v3-omni-pro": {
+    "noAudio": 0.112,
+    "audio": 0.168
+  }
+}

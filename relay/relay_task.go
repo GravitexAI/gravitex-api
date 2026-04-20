@@ -11,9 +11,9 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
@@ -658,6 +658,9 @@ func isVideoTokenRatioModel(modelName string) bool {
 	if _, ok := ratio_setting.GetVideoCompletionRatioVideoPricing(modelName, false); ok {
 		return true
 	}
+	if ratio_setting.HasVideoCompletionRatioResolution(modelName) {
+		return true
+	}
 	return false
 }
 
@@ -902,6 +905,12 @@ func mergeVideoTaskBillingData(c *gin.Context, info *relaycommon.RelayInfo, task
 	generateAudio := parseGenerateAudioForQuota(c)
 	dataMap["generate_audio"] = generateAudio
 	dataMap["generateAudio"] = generateAudio
+	// 保存分辨率到 task.Data，用于按秒计费时确定分辨率分档价格（Veo 3.1 等）
+	if v, exists := c.Get("video_resolution"); exists {
+		if s, ok := v.(string); ok && s != "" {
+			dataMap["video_resolution"] = s
+		}
+	}
 	dataMap["billing_processed"] = false
 	merged, err := common.Marshal(dataMap)
 	if err != nil {
@@ -957,6 +966,11 @@ func mergeVideoTokenRatioBillingData(c *gin.Context, info *relaycommon.RelayInfo
 	if v, exists := c.Get("has_video_input"); exists {
 		if b, ok := v.(bool); ok {
 			dataMap["has_video_input"] = b
+		}
+	}
+	if v, exists := c.Get("video_resolution"); exists {
+		if s, ok := v.(string); ok && s != "" {
+			dataMap["video_resolution"] = s
 		}
 	}
 	dataMap["billing_processed"] = false
