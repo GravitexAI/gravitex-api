@@ -41,7 +41,9 @@ type GeminiVideoGenerationConfig struct {
 
 // GeminiVideoRequest represents a single video generation instance
 type GeminiVideoRequest struct {
-	Prompt string `json:"prompt"`
+	Prompt    string         `json:"prompt"`
+	Image     *VeoImageInput `json:"image,omitempty"`
+	LastFrame *VeoImageInput `json:"lastFrame,omitempty"`
 }
 
 // GeminiVideoPayload represents the complete video generation request payload
@@ -197,6 +199,31 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	metadata := req.Metadata
 	if metadata == nil {
 		metadata = make(map[string]interface{})
+	}
+
+	// 首帧图片：URL / data URI / raw base64 → base64
+	if imageVal, ok := metadata["image"]; ok {
+		if imageStr, ok := imageVal.(string); ok {
+			imgInput, err := ParseImageInput(imageStr)
+			if err != nil {
+				return nil, fmt.Errorf("image conversion failed: %w", err)
+			}
+			if imgInput != nil {
+				body.Instances[0].Image = imgInput
+			}
+		}
+	}
+	// 尾帧图片：URL / data URI / raw base64 → base64
+	if lastFrameVal, ok := metadata["lastFrame"]; ok {
+		if lastFrameStr, ok := lastFrameVal.(string); ok {
+			lfInput, err := ParseImageInput(lastFrameStr)
+			if err != nil {
+				return nil, fmt.Errorf("lastFrame conversion failed: %w", err)
+			}
+			if lfInput != nil {
+				body.Instances[0].LastFrame = lfInput
+			}
+		}
 	}
 
 	body.Parameters.DurationSeconds = float64(sanitizeDurationSecondsFromMetadata(metadata))
@@ -469,6 +496,14 @@ func extractVeoParamsFromRequest(m map[string]interface{}) map[string]interface{
 	if v, ok := m["image"]; ok {
 		if s, ok := v.(string); ok && s != "" {
 			out["image"] = s
+		}
+	}
+	for _, key := range []string{"lastFrame", "last_frame"} {
+		if v, ok := m[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				out["lastFrame"] = s
+				break
+			}
 		}
 	}
 	if v, ok := m["negativePrompt"]; ok {

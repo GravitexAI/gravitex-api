@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -226,8 +227,12 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// 首帧图片：文生视频不传；首帧/首尾帧生视频需传到上游
 	if imageVal, ok := metadata["image"]; ok {
 		if imageStr, ok := imageVal.(string); ok && strings.TrimSpace(imageStr) != "" {
+			b64, err := vertexConvertToBase64(imageStr)
+			if err != nil {
+				return nil, fmt.Errorf("image conversion failed: %w", err)
+			}
 			instance["image"] = map[string]any{
-				"bytesBase64Encoded": vertexConvertToBase64(imageStr),
+				"bytesBase64Encoded": b64,
 				"mimeType":           vertexDetectImageMimeType(imageStr),
 			}
 		}
@@ -235,8 +240,12 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	// 尾帧图片：首尾帧生视频
 	if lastFrameVal, ok := metadata["lastFrame"]; ok {
 		if lastFrameStr, ok := lastFrameVal.(string); ok && strings.TrimSpace(lastFrameStr) != "" {
+			b64, err := vertexConvertToBase64(lastFrameStr)
+			if err != nil {
+				return nil, fmt.Errorf("lastFrame conversion failed: %w", err)
+			}
 			instance["lastFrame"] = map[string]any{
-				"bytesBase64Encoded": vertexConvertToBase64(lastFrameStr),
+				"bytesBase64Encoded": b64,
 				"mimeType":           vertexDetectImageMimeType(lastFrameStr),
 			}
 		}
@@ -705,32 +714,33 @@ func vertexSanitizeGenerateAudio(metadata map[string]interface{}, fallback *bool
 }
 
 // vertexConvertToBase64 将 data URI 或 URL 转为纯 base64，供 Vertex instances.image/lastFrame 使用
-func vertexConvertToBase64(input string) string {
+func vertexConvertToBase64(input string) (string, error) {
 	if strings.HasPrefix(input, "data:") {
 		parts := strings.SplitN(input, ",", 2)
 		if len(parts) == 2 {
-			return parts[1]
+			return parts[1], nil
 		}
 	}
 	if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
-		resp, err := http.Get(input)
+		client := &http.Client{Timeout: 60 * time.Second}
+		resp, err := client.Get(input)
 		if err != nil {
-			return input
+			return "", fmt.Errorf("failed to download image from URL: %w", err)
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return input
+			return "", fmt.Errorf("failed to download image from URL: HTTP %d", resp.StatusCode)
 		}
 		imageData, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return input
+			return "", fmt.Errorf("failed to read image data: %w", err)
 		}
-		return base64.StdEncoding.EncodeToString(imageData)
+		return base64.StdEncoding.EncodeToString(imageData), nil
 	}
-	return input
+	return input, nil
 }
 
-// vertexDetectImageMimeType 从 data URI 或 base64 魔数检测 MIME 类型
+// vertexDetectImageMimeType 从 data URI、URL 扩展名或 base64 魔数检测 MIME 类型
 func vertexDetectImageMimeType(input string) string {
 	if strings.HasPrefix(input, "data:") {
 		parts := strings.Split(input, ";")
@@ -740,6 +750,21 @@ func vertexDetectImageMimeType(input string) string {
 				return mimeType
 			}
 		}
+	}
+	// URL — 从扩展名推断
+	if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
+		lower := strings.ToLower(input)
+		switch {
+		case strings.Contains(lower, ".png"):
+			return "image/png"
+		case strings.Contains(lower, ".webp"):
+			return "image/webp"
+		case strings.Contains(lower, ".gif"):
+			return "image/gif"
+		case strings.Contains(lower, ".bmp"):
+			return "image/bmp"
+		}
+		return "image/jpeg"
 	}
 	if len(input) > 10 {
 		if strings.HasPrefix(input, "/9j/") || strings.HasPrefix(input, "/9j4") {

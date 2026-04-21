@@ -2,9 +2,11 @@ package gemini
 
 import (
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -51,27 +53,57 @@ func ExtractMultipartImage(c *gin.Context, info *relaycommon.RelayInfo) *VeoImag
 	}
 }
 
-// ParseImageInput parses an image string (data URI or raw base64) into a
-// VeoImageInput. Returns nil if the input is empty or invalid.
-// TODO: support downloading HTTP URL images and converting to base64
-func ParseImageInput(imageStr string) *VeoImageInput {
+// ParseImageInput parses an image string (data URI, HTTP URL, or raw base64) into a
+// VeoImageInput. Returns (nil, nil) if the input is empty; returns (nil, error) on download failure.
+func ParseImageInput(imageStr string) (*VeoImageInput, error) {
 	imageStr = strings.TrimSpace(imageStr)
 	if imageStr == "" {
-		return nil
+		return nil, nil
 	}
 
 	if strings.HasPrefix(imageStr, "data:") {
-		return parseDataURI(imageStr)
+		return parseDataURI(imageStr), nil
+	}
+
+	// HTTP/HTTPS URL — download and convert to base64
+	if strings.HasPrefix(imageStr, "http://") || strings.HasPrefix(imageStr, "https://") {
+		result, err := downloadImageToBase64(imageStr)
+		if err != nil {
+			return nil, err
+		}
+		return result, nil
 	}
 
 	raw, err := base64.StdEncoding.DecodeString(imageStr)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	return &VeoImageInput{
 		BytesBase64Encoded: imageStr,
 		MimeType:           http.DetectContentType(raw),
+	}, nil
+}
+
+// downloadImageToBase64 downloads an image from a URL and returns a VeoImageInput with base64 data.
+func downloadImageToBase64(url string) (*VeoImageInput, error) {
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download image from URL: %w", err)
 	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to download image from URL: HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read image data: %w", err)
+	}
+	mimeType := http.DetectContentType(data)
+	return &VeoImageInput{
+		BytesBase64Encoded: base64.StdEncoding.EncodeToString(data),
+		MimeType:           mimeType,
+	}, nil
 }
 
 func parseDataURI(uri string) *VeoImageInput {
