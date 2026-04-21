@@ -44,10 +44,10 @@ Content-Type: application/json
 
 ## 模型列表
 
-| 模型 ID | 说明 | 特点 |
-|---------|------|------|
-| `seedance-2-0-pro` | Seedance 2.0 专业版 | 更高质量，适合正式生产 |
-| `seedance-2-0-fast` | Seedance 2.0 快速版 | 更快速度，适合快速迭代 |
+| 模型 ID | 说明 | 支持分辨率 | 特点 |
+|---------|------|-----------|------|
+| `seedance-2-0` | Seedance 2.0 标准版 | `480p`、`720p`、`1080p` | 高质量生成，适合正式生产 |
+| `seedance-2-0-fast` | Seedance 2.0 快速版 | `480p`、`720p` | 更快速度，适合快速迭代，**不支持 1080p** |
 
 ---
 
@@ -59,11 +59,11 @@ Content-Type: application/json
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| `model` | string | **是** | — | 模型 ID：`seedance-2-0-pro` 或 `seedance-2-0-fast` |
+| `model` | string | **是** | — | 模型 ID：`seedance-2-0` 或 `seedance-2-0-fast` |
 | `content` | array | 否* | — | 内容数组，包含文本提示、图片、视频、音频（详见下方） |
 | `prompt` | string | 否* | — | 文本提示词（`content` 的简化替代，两者二选一） |
-| `duration` | integer | 否 | `5` | 视频时长，范围 4~15 秒 |
-| `resolution` | string | 否 | `"720p"` | 分辨率：`480p` 或 `720p` |
+| `duration` | integer | 否 | `5` | 视频时长，`-1`（自动）或 `4`~`15` 秒 |
+| `resolution` | string | 否 | `"720p"` | 分辨率：`480p`、`720p`（标准版还支持 `1080p`，fast 版不支持 `1080p`） |
 | `ratio` | string | 否 | `"16:9"` | 画面比例：`16:9`、`9:16`、`1:1`、`4:3`、`3:4`、`21:9`、`adaptive` |
 | `generate_audio` | boolean | 否 | `true` | 是否自动生成音频 |
 | `seed` | integer | 否 | `-1`（随机） | 随机种子，固定种子可复现结果 |
@@ -95,7 +95,7 @@ Content-Type: application/json
   "id": "ut-abc123def456",
   "task_id": "ut-abc123def456",
   "object": "video",
-  "model": "seedance-2-0-pro",
+  "model": "seedance-2-0",
   "status": "queued",
   "progress": 0,
   "created_at": 1712563200
@@ -123,7 +123,7 @@ Authorization: Bearer sk-{your_token_key}
   "id": "ut-abc123def456",
   "task_id": "ut-abc123def456",
   "object": "video",
-  "model": "seedance-2-0-pro",
+  "model": "seedance-2-0",
   "status": "in_progress",
   "progress": 50,
   "created_at": 1712563200
@@ -137,7 +137,7 @@ Authorization: Bearer sk-{your_token_key}
   "id": "ut-abc123def456",
   "task_id": "ut-abc123def456",
   "object": "video",
-  "model": "seedance-2-0-pro",
+  "model": "seedance-2-0",
   "status": "completed",
   "progress": 100,
   "video_url": "https://uptoken.cc/v1/media/proxy?...",
@@ -163,7 +163,7 @@ Authorization: Bearer sk-{your_token_key}
   "id": "ut-abc123def456",
   "task_id": "ut-abc123def456",
   "object": "video",
-  "model": "seedance-2-0-pro",
+  "model": "seedance-2-0",
   "status": "failed",
   "progress": 100,
   "created_at": 1712563200,
@@ -202,7 +202,7 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
   -H "Authorization: Bearer sk-your_token_key" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "seedance-2-0-pro",
+    "model": "seedance-2-0",
     "content": [
       {"type": "text", "text": "黄金时刻，无人机航拍连绵山脉，云海翻涌，阳光洒落"}
     ],
@@ -220,7 +220,7 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
   -H "Authorization: Bearer sk-your_token_key" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "seedance-2-0-pro",
+    "model": "seedance-2-0",
     "prompt": "黄金时刻，无人机航拍连绵山脉，云海翻涌，阳光洒落",
     "duration": 5,
     "resolution": "720p",
@@ -239,7 +239,7 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
   -H "Authorization: Bearer sk-your_token_key" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "seedance-2-0-pro",
+    "model": "seedance-2-0",
     "content": [
       {"type": "text", "text": "镜头缓慢推进，花瓣随风飘落"},
       {
@@ -267,7 +267,7 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
   -H "Authorization: Bearer sk-your_token_key" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "seedance-2-0-pro",
+    "model": "seedance-2-0",
     "content": [
       {"type": "text", "text": "日出到日落的延时摄影效果"},
       {
@@ -300,7 +300,7 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
   -H "Authorization: Bearer sk-your_token_key" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "seedance-2-0-pro",
+    "model": "seedance-2-0",
     "content": [
       {"type": "text", "text": "一个女孩在樱花树下奔跑"},
       {
@@ -327,7 +327,7 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
   -H "Authorization: Bearer sk-your_token_key" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "seedance-2-0-pro",
+    "model": "seedance-2-0",
     "content": [
       {"type": "text", "text": "一段充满活力的舞蹈视频"},
       {
@@ -403,7 +403,7 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
   -H "Authorization: Bearer sk-your_token_key" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "seedance-2-0-pro",
+    "model": "seedance-2-0",
     "content": [
       {"type": "text", "text": "一个女孩在海边跳舞，阳光明媚"},
       {
@@ -536,9 +536,9 @@ curl -X DELETE https://api.gravitex.ai/v1/assets/ut-asset-7d8c6d3e3b8b4f0db2f6f8
 
 | 参数 | 可选值 | 说明 |
 |------|--------|------|
-| `duration` | `4` ~ `15` | 输出视频时长（秒） |
-| `resolution` | `480p`, `720p` | 输出分辨率 |
-| `ratio` | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `adaptive` | 画面比例 |
+| `duration` | `-1`, `4` ~ `15` | 输出视频时长（秒），`-1` 为自动时长 |
+| `resolution` | `480p`, `720p`, `1080p` | 输出分辨率。⚠️ `seedance-2-0-fast` 仅支持 `480p` 和 `720p`，不支持 `1080p` |
+| `ratio` | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `adaptive` | 画面比例。`adaptive` 在使用首帧图片时自动匹配图片比例；参考模式下不可用 |
 | `generate_audio` | `true`, `false` | 是否自动生成音频 |
 | `seed` | `-1` 或正整数 | 随机种子，`-1` 为随机 |
 
@@ -623,7 +623,7 @@ def generate_video(content, duration=5, resolution="720p", ratio="16:9"):
         f"{BASE_URL}/v1/video/generations",
         headers=HEADERS,
         json={
-            "model": "seedance-2-0-pro",
+            "model": "seedance-2-0",
             "content": content,
             "duration": duration,
             "resolution": resolution,
@@ -744,7 +744,7 @@ async function generateVideo(content, options = {}) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "seedance-2-0-pro",
+      model: "seedance-2-0",
       content,
       duration,
       resolution,
@@ -789,7 +789,7 @@ TASK_ID=$(curl -s -X POST https://api.gravitex.ai/v1/video/generations \
   -H "Authorization: Bearer sk-your_token_key" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "seedance-2-0-pro",
+    "model": "seedance-2-0",
     "content": [{"type": "text", "text": "黄金时刻无人机航拍山脉"}],
     "duration": 5,
     "resolution": "720p",
@@ -840,8 +840,9 @@ done
 取决于视频时长和分辨率。通常：
 - 5 秒 480p：约 30~60 秒
 - 5 秒 720p：约 60~90 秒
+- 5 秒 1080p（仅标准版）：约 90~120 秒
 - 15 秒 720p：约 90~180 秒
-- `fast` 模型通常比 `pro` 模型快 30%~50%
+- `fast` 模型通常比标准版快 30%~50%
 
 ### Q: `ratio` 设为 `adaptive` 是什么意思？
 
@@ -857,3 +858,15 @@ done
 ### Q: 可以使用其他用户的素材吗？
 
 不可以。网关会在提交视频生成任务前验证 `asset://` 引用的素材是否属于当前用户（通过 API Key 识别）。使用他人素材 ID 会返回 `"asset not found or access denied"` 错误。
+
+### Q: `seedance-2-0-fast` 和 `seedance-2-0` 有什么区别？
+
+主要区别：
+- **分辨率**：`seedance-2-0` 支持 `480p`、`720p`、`1080p`；`seedance-2-0-fast` 仅支持 `480p`、`720p`，**不支持 1080p**
+- **速度**：`fast` 版生成速度通常比标准版快 30%~50%
+- **质量**：标准版在细节、稳定性上通常优于 `fast` 版
+- 其他参数（时长、比例、音频、多模态输入等）完全一致
+
+### Q: `duration` 设为 `-1` 是什么意思？
+
+当 `duration` 设为 `-1` 时，模型会根据输入内容和提示词自动决定合适的视频时长，无需手动指定。
