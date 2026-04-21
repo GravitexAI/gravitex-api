@@ -281,6 +281,46 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			taskResult.Url = t.FailReason
 			taskResult.Progress = t.Progress
 			taskResult.Reason = t.FailReason
+			// New API 对外格式使用 OpenAI Video 状态（completed/failed/queued/in_progress），
+			// 而内部使用 SUCCESS/FAILURE/QUEUED/IN_PROGRESS。当上游也是 new-api 实例时，
+			// 返回的是对外格式，需要映射回内部状态，否则后续计费分支无法匹配。
+			switch taskResult.Status {
+			case "completed":
+				taskResult.Status = model.TaskStatusSuccess
+			case "failed":
+				taskResult.Status = model.TaskStatusFailure
+			case "queued":
+				taskResult.Status = model.TaskStatusQueued
+			case "in_progress", "processing":
+				taskResult.Status = model.TaskStatusInProgress
+			}
+			// 从 t.Data（JSON RawMessage）中提取 usage tokens 用于计费
+			// 上游 new-api 返回格式：data.metadata.usage.{completion_tokens, total_tokens}
+			if len(t.Data) > 0 {
+				var dataMap map[string]interface{}
+				if err := common.Unmarshal(t.Data, &dataMap); err == nil {
+					if metadata, ok := dataMap["metadata"].(map[string]interface{}); ok {
+						if usage, ok := metadata["usage"].(map[string]interface{}); ok {
+							if ct, ok := usage["completion_tokens"].(float64); ok && ct > 0 {
+								taskResult.CompletionTokens = int(ct)
+							}
+							if tt, ok := usage["total_tokens"].(float64); ok && tt > 0 {
+								taskResult.TotalTokens = int(tt)
+							}
+						}
+						// 提取分辨率（用于按分辨率维度计费）
+						if res, ok := metadata["resolution"].(string); ok && res != "" {
+							taskResult.Resolution = res
+						}
+					}
+					// 兜底：顶层 seconds 字段（用于按秒计费模型）
+					if sec, ok := dataMap["seconds"].(string); ok && sec != "" {
+						if n, err2 := strconv.Atoi(sec); err2 == nil && n > 0 && taskResult.ActualDuration == 0 {
+							taskResult.ActualDuration = n
+						}
+					}
+				}
+			}
 			task.Data = mergeBillingFieldsIntoTaskData(task.Data, t.Data)
 		} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
 			return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
