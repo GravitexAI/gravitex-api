@@ -596,6 +596,14 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 		usageResp.PromptTokensDetails.ImageTokens += usageResp.InputTokensDetails.ImageTokens
 		usageResp.PromptTokensDetails.TextTokens += usageResp.InputTokensDetails.TextTokens
 	}
+
+	// gpt-image 系列：output_tokens 全部为图片输出，填充到 CompletionTokenDetails.ImageTokens
+	// 以触发 text_quota.go 中的 image output split billing（使用 ImageCompletionRatio 计费）
+	if strings.HasPrefix(info.UpstreamModelName, "gpt-image") || strings.HasPrefix(info.OriginModelName, "gpt-image") {
+		if usageResp.CompletionTokens > 0 && usageResp.CompletionTokenDetails.ImageTokens == 0 {
+			usageResp.CompletionTokenDetails.ImageTokens = usageResp.CompletionTokens
+		}
+	}
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
 	return &usageResp.Usage, nil
 }

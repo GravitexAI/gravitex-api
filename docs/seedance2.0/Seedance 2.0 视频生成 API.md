@@ -66,6 +66,7 @@ Content-Type: application/json
 | `resolution` | string | 否 | `"720p"` | 分辨率：`480p`、`720p`（标准版还支持 `1080p`，fast 版不支持 `1080p`） |
 | `ratio` | string | 否 | `"16:9"` | 画面比例：`16:9`、`9:16`、`1:1`、`4:3`、`3:4`、`21:9`、`adaptive` |
 | `generate_audio` | boolean | 否 | `true` | 是否自动生成音频 |
+| `watermark` | boolean | 否 | `false` | 是否添加水印 |
 | `seed` | integer | 否 | `-1`（随机） | 随机种子，固定种子可复现结果 |
 
 > \* `content` 和 `prompt` 至少提供一个。推荐使用 `content` 数组，功能更强大。
@@ -77,6 +78,7 @@ Content-Type: application/json
 | type | role | 说明 | 数量限制 |
 |------|------|------|----------|
 | `text` | — | 文本提示词，描述想要生成的视频内容 | 1 条 |
+| `image_url` | （可省略） | **图片输入**，不指定 role 时默认作为首帧图片 | 1 张 |
 | `image_url` | `first_frame` | **首帧图片**，视频将以此图片作为第一帧开始生成 | 1 张 |
 | `image_url` | `last_frame` | **尾帧图片**，需搭配 `first_frame` 使用 | 1 张 |
 | `image_url` | `reference_image` | **参考图片**，提供视觉参考风格 | 最多 9 张 |
@@ -244,17 +246,17 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
       {"type": "text", "text": "镜头缓慢推进，花瓣随风飘落"},
       {
         "type": "image_url",
-        "image_url": {"url": "https://example.com/garden.jpg"},
-        "role": "first_frame"
+        "image_url": {"url": "https://example.com/garden.jpg"}
       }
     ],
     "duration": 5,
     "resolution": "720p",
-    "ratio": "16:9"
+    "ratio": "adaptive",
+    "generate_audio": true
   }'
 ```
 
-> **注意**：当使用 `first_frame` 时，`ratio` 参数建议设为 `adaptive`，让模型自动匹配图片比例。
+> **注意**：`image_url` 不指定 `role` 时默认作为首帧图片。使用首帧图片时，`ratio` 参数建议设为 `adaptive`，让模型自动匹配图片比例。
 
 ---
 
@@ -540,6 +542,7 @@ curl -X DELETE https://api.gravitex.ai/v1/assets/ut-asset-7d8c6d3e3b8b4f0db2f6f8
 | `resolution` | `480p`, `720p`, `1080p` | 输出分辨率。⚠️ `seedance-2-0-fast` 仅支持 `480p` 和 `720p`，不支持 `1080p` |
 | `ratio` | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `adaptive` | 画面比例。`adaptive` 在使用首帧图片时自动匹配图片比例；参考模式下不可用 |
 | `generate_audio` | `true`, `false` | 是否自动生成音频 |
+| `watermark` | `true`, `false` | 是否添加水印 |
 | `seed` | `-1` 或正整数 | 随机种子，`-1` 为随机 |
 
 ### 图片输入限制
@@ -675,7 +678,6 @@ generate_video(
         {
             "type": "image_url",
             "image_url": {"url": "https://example.com/garden.jpg"},
-            "role": "first_frame",
         },
     ],
     ratio="adaptive",

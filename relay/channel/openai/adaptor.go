@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"net/textproto"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -443,124 +445,255 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
+	// gpt-image 系列：白名单过滤，只保留支持的参数
+	if strings.HasPrefix(request.Model, "gpt-image") {
+		request.ResponseFormat = ""
+		request.Style = nil
+		request.ExtraFields = nil
+		request.Background = nil
+		request.Moderation = nil
+		request.OutputFormat = nil
+		request.OutputCompression = nil
+		request.PartialImages = nil
+		request.Watermark = nil
+		request.User = nil
+		request.WatermarkEnabled = nil
+		request.UserId = nil
+
+		// Extra 中只保留白名单参数
+		if request.Extra != nil {
+			allowedParams := map[string]bool{
+				"model": true, "prompt": true, "n": true,
+				"size": true, "quality": true, "input_fidelity": true,
+				"image": true, "images": true,
+			}
+			for key := range request.Extra {
+				if !allowedParams[key] {
+					delete(request.Extra, key)
+				}
+			}
+		}
+	}
+
 	switch info.RelayMode {
 	case relayconstant.RelayModeImagesEdits:
-
+		// 图生图：统一转为 multipart/form-data 格式（Azure OpenAI 要求）
 		var requestBody bytes.Buffer
 		writer := multipart.NewWriter(&requestBody)
 
 		writer.WriteField("model", request.Model)
-		// 使用已解析的 multipart 表单，避免重复解析
-		mf := c.Request.MultipartForm
-		if mf == nil {
-			if _, err := c.MultipartForm(); err != nil {
-				return nil, errors.New("failed to parse multipart form")
-			}
-			mf = c.Request.MultipartForm
+		if request.Prompt != "" {
+			writer.WriteField("prompt", request.Prompt)
+		}
+		if request.Size != "" {
+			writer.WriteField("size", request.Size)
+		}
+		if request.Quality != "" {
+			writer.WriteField("quality", request.Quality)
+		}
+		if request.N != nil && *request.N > 0 {
+			writer.WriteField("n", fmt.Sprintf("%d", *request.N))
+		}
+		if request.InputFidelity != "" {
+			writer.WriteField("input_fidelity", request.InputFidelity)
 		}
 
-		// 写入所有非文件字段
-		if mf != nil {
-			for key, values := range mf.Value {
-				if key == "model" {
-					continue
-				}
-				for _, value := range values {
-					writer.WriteField(key, value)
+		// 检测请求格式：JSON 还是 multipart
+		// 注意：不能用 c.GetHeader("Content-Type") 判断，因为重试时 Header 可能已被上一轮修改为 multipart
+		// 改用 request.Image 是否有数据来判断：JSON 请求解析后 Image/Extra 中有图片数据，
+		// 而原生 multipart 请求中图片在 form files 里，Image 字段为空
+		hasImageInDTO := (request.Image != nil && len(request.Image) > 0) ||
+			(request.Extra != nil && (request.Extra["image"] != nil || request.Extra["images"] != nil))
+
+		if hasImageInDTO {
+			// JSON 格式：从 Image 或 Extra 中提取图片，转为 multipart 文件
+			var imageStrings []string
+
+			// 优先从 Image 字段获取（dto 中的 json.RawMessage，支持 string 或 []string）
+			if request.Image != nil && len(request.Image) > 0 {
+				// 先尝试解析为单图字符串
+				var imageStr string
+				if err := common.Unmarshal(request.Image, &imageStr); err == nil && imageStr != "" {
+					imageStrings = append(imageStrings, imageStr)
+				} else {
+					// 再尝试解析为图片数组
+					var imageArr []string
+					if err := common.Unmarshal(request.Image, &imageArr); err == nil && len(imageArr) > 0 {
+						imageStrings = append(imageStrings, imageArr...)
+					}
 				}
 			}
-		}
-
-		if mf != nil && mf.File != nil {
-			// Check if "image" field exists in any form, including array notation
-			var imageFiles []*multipart.FileHeader
-			var exists bool
-
-			// First check for standard "image" field
-			if imageFiles, exists = mf.File["image"]; !exists || len(imageFiles) == 0 {
-				// If not found, check for "image[]" field
-				if imageFiles, exists = mf.File["image[]"]; !exists || len(imageFiles) == 0 {
-					// If still not found, iterate through all fields to find any that start with "image["
-					foundArrayImages := false
-					for fieldName, files := range mf.File {
-						if strings.HasPrefix(fieldName, "image[") && len(files) > 0 {
-							foundArrayImages = true
-							imageFiles = append(imageFiles, files...)
+			// 其次从 Extra["images"] 获取多图
+			if len(imageStrings) == 0 && request.Extra != nil {
+				if imagesData, ok := request.Extra["images"]; ok {
+					var images []string
+					if err := common.Unmarshal(imagesData, &images); err == nil {
+						imageStrings = images
+					}
+				}
+				// 也尝试 Extra["image"]（单图字符串或数组）
+				if len(imageStrings) == 0 {
+					if imageData, ok := request.Extra["image"]; ok {
+						var imageStr string
+						if err := common.Unmarshal(imageData, &imageStr); err == nil && imageStr != "" {
+							imageStrings = append(imageStrings, imageStr)
+						} else {
+							var imageArr []string
+							if err := common.Unmarshal(imageData, &imageArr); err == nil && len(imageArr) > 0 {
+								imageStrings = append(imageStrings, imageArr...)
+							}
 						}
 					}
-
-					// If no image fields found at all
-					if !foundArrayImages && (len(imageFiles) == 0) {
-						return nil, errors.New("image is required")
-					}
 				}
 			}
 
-			// Process all image files
-			for i, fileHeader := range imageFiles {
-				file, err := fileHeader.Open()
+			if len(imageStrings) == 0 {
+				return nil, errors.New("image or images field is required for edits endpoint")
+			}
+
+			logger.LogInfo(c.Request.Context(), fmt.Sprintf("gpt-image edits JSON→multipart: image_count=%d", len(imageStrings)))
+
+			// 处理所有图片：下载 URL 或解码 base64
+			for i, imageStr := range imageStrings {
+				// 日志：图片来源摘要（截断 base64）
+				srcPreview := imageStr
+				if len(srcPreview) > 100 {
+					srcPreview = srcPreview[:100] + "...(truncated)"
+				}
+				logger.LogInfo(c.Request.Context(), fmt.Sprintf("gpt-image edits processing image[%d]: %s", i, srcPreview))
+
+				imageBytes, mimeType, err := downloadOrDecodeImage(imageStr)
 				if err != nil {
-					return nil, fmt.Errorf("failed to open image file %d: %w", i, err)
+					return nil, fmt.Errorf("failed to process image %d: %w", i, err)
 				}
 
-				// If multiple images, use image[] as the field name
-				fieldName := "image"
-				if len(imageFiles) > 1 {
-					fieldName = "image[]"
+				// 根据 MIME 类型确定文件扩展名
+				filename := fmt.Sprintf("image%d.png", i)
+				if mimeType == "image/jpeg" {
+					filename = fmt.Sprintf("image%d.jpg", i)
+				} else if mimeType == "image/webp" {
+					filename = fmt.Sprintf("image%d.webp", i)
 				}
 
-				// Determine MIME type based on file extension
-				mimeType := detectImageMimeType(fileHeader.Filename)
-
-				// Create a form file with the appropriate content type
+				// 统一使用 image[] 字段名
 				h := make(textproto.MIMEHeader)
-				h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fieldName, fileHeader.Filename))
+				h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="image[]"; filename="%s"`, filename))
 				h.Set("Content-Type", mimeType)
 
 				part, err := writer.CreatePart(h)
 				if err != nil {
-					return nil, fmt.Errorf("create form part failed for image %d: %w", i, err)
+					return nil, fmt.Errorf("failed to create form file %d: %w", i, err)
 				}
-
-				if _, err := io.Copy(part, file); err != nil {
-					return nil, fmt.Errorf("copy file failed for image %d: %w", i, err)
+				if _, err := part.Write(imageBytes); err != nil {
+					return nil, fmt.Errorf("failed to write image data %d: %w", i, err)
 				}
-
-				// 复制完立即关闭，避免在循环内使用 defer 占用资源
-				_ = file.Close()
-			}
-
-			// Handle mask file if present
-			if maskFiles, exists := mf.File["mask"]; exists && len(maskFiles) > 0 {
-				maskFile, err := maskFiles[0].Open()
-				if err != nil {
-					return nil, errors.New("failed to open mask file")
-				}
-				// 复制完立即关闭，避免在循环内使用 defer 占用资源
-
-				// Determine MIME type for mask file
-				mimeType := detectImageMimeType(maskFiles[0].Filename)
-
-				// Create a form file with the appropriate content type
-				h := make(textproto.MIMEHeader)
-				h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="mask"; filename="%s"`, maskFiles[0].Filename))
-				h.Set("Content-Type", mimeType)
-
-				maskPart, err := writer.CreatePart(h)
-				if err != nil {
-					return nil, errors.New("create form file failed for mask")
-				}
-
-				if _, err := io.Copy(maskPart, maskFile); err != nil {
-					return nil, errors.New("copy mask file failed")
-				}
-				_ = maskFile.Close()
+				logger.LogInfo(c.Request.Context(), fmt.Sprintf("gpt-image edits image[%d] written: filename=%s, mime=%s, size=%d bytes", i, filename, mimeType, len(imageBytes)))
 			}
 		} else {
-			return nil, errors.New("no multipart form data found")
+			// multipart/form-data 格式：使用已解析的 multipart 表单
+			mf := c.Request.MultipartForm
+			if mf == nil {
+				if _, err := c.MultipartForm(); err != nil {
+					return nil, errors.New("failed to parse multipart form")
+				}
+				mf = c.Request.MultipartForm
+			}
+
+			// 写入非文件字段（跳过已手动写入的字段）
+			if mf != nil {
+				skipFields := map[string]bool{
+					"model": true, "prompt": true, "size": true,
+					"quality": true, "n": true, "input_fidelity": true,
+				}
+				for key, values := range mf.Value {
+					if skipFields[key] {
+						continue
+					}
+					for _, value := range values {
+						writer.WriteField(key, value)
+					}
+				}
+			}
+
+			if mf != nil && mf.File != nil {
+				// 查找 image 文件（支持 image / image[] / image[N] 命名）
+				var imageFiles []*multipart.FileHeader
+				var exists bool
+
+				if imageFiles, exists = mf.File["image"]; !exists || len(imageFiles) == 0 {
+					if imageFiles, exists = mf.File["image[]"]; !exists || len(imageFiles) == 0 {
+						foundArrayImages := false
+						for fieldName, files := range mf.File {
+							if strings.HasPrefix(fieldName, "image[") && len(files) > 0 {
+								foundArrayImages = true
+								imageFiles = append(imageFiles, files...)
+							}
+						}
+						if !foundArrayImages && len(imageFiles) == 0 {
+							return nil, errors.New("image is required")
+						}
+					}
+				}
+
+				// 写入所有图片文件
+				for i, fileHeader := range imageFiles {
+					file, err := fileHeader.Open()
+					if err != nil {
+						return nil, fmt.Errorf("failed to open image file %d: %w", i, err)
+					}
+
+					fieldName := "image"
+					if len(imageFiles) > 1 {
+						fieldName = "image[]"
+					}
+
+					mimeType := detectImageMimeType(fileHeader.Filename)
+					h := make(textproto.MIMEHeader)
+					h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fieldName, fileHeader.Filename))
+					h.Set("Content-Type", mimeType)
+
+					part, err := writer.CreatePart(h)
+					if err != nil {
+						return nil, fmt.Errorf("create form part failed for image %d: %w", i, err)
+					}
+					if _, err := io.Copy(part, file); err != nil {
+						return nil, fmt.Errorf("copy file failed for image %d: %w", i, err)
+					}
+					_ = file.Close()
+				}
+
+				// 处理 mask 文件
+				if maskFiles, exists := mf.File["mask"]; exists && len(maskFiles) > 0 {
+					maskFile, err := maskFiles[0].Open()
+					if err != nil {
+						return nil, errors.New("failed to open mask file")
+					}
+
+					mimeType := detectImageMimeType(maskFiles[0].Filename)
+					h := make(textproto.MIMEHeader)
+					h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="mask"; filename="%s"`, maskFiles[0].Filename))
+					h.Set("Content-Type", mimeType)
+
+					maskPart, err := writer.CreatePart(h)
+					if err != nil {
+						return nil, errors.New("create form file failed for mask")
+					}
+					if _, err := io.Copy(maskPart, maskFile); err != nil {
+						return nil, errors.New("copy mask file failed")
+					}
+					_ = maskFile.Close()
+				}
+			} else {
+				return nil, errors.New("no multipart form data found")
+			}
 		}
 
-		// 关闭 multipart 编写器以设置分界线
+		// 日志：记录发送到上游的 multipart 表单参数摘要
+		logger.LogInfo(c.Request.Context(), fmt.Sprintf("gpt-image edits upstream request: model=%s, prompt=%q, size=%s, quality=%s, n=%v, input_fidelity=%s, content-type=%s, body_size=%d",
+			request.Model, request.Prompt, request.Size, request.Quality,
+			func() string { if request.N != nil { return fmt.Sprintf("%d", *request.N) }; return "nil" }(),
+			request.InputFidelity, writer.FormDataContentType(), requestBody.Len()))
+
 		writer.Close()
 		c.Request.Header.Set("Content-Type", writer.FormDataContentType())
 		return &requestBody, nil
@@ -581,13 +714,90 @@ func detectImageMimeType(filename string) string {
 	case ".webp":
 		return "image/webp"
 	default:
-		// Try to detect from extension if possible
 		if strings.HasPrefix(ext, ".jp") {
 			return "image/jpeg"
 		}
-		// Default to png as a fallback
 		return "image/png"
 	}
+}
+
+// maxImageSize 单张图片最大 50MB
+const maxImageSize = 50 * 1024 * 1024
+
+// downloadOrDecodeImage 下载图片 URL 或解码 base64 图片
+// 返回：图片字节、MIME 类型、错误
+func downloadOrDecodeImage(imageData string) ([]byte, string, error) {
+	if strings.HasPrefix(imageData, "data:image") {
+		// base64 data URI 解码
+		parts := strings.SplitN(imageData, ",", 2)
+		if len(parts) != 2 {
+			return nil, "", errors.New("invalid base64 image format")
+		}
+
+		// 提取 MIME 类型
+		mimeType := "image/png"
+		if strings.Contains(parts[0], "image/jpeg") || strings.Contains(parts[0], "image/jpg") {
+			mimeType = "image/jpeg"
+		} else if strings.Contains(parts[0], "image/png") {
+			mimeType = "image/png"
+		} else if strings.Contains(parts[0], "image/webp") {
+			mimeType = "image/webp"
+		}
+
+		imageBytes, err := base64.StdEncoding.DecodeString(parts[1])
+		if err != nil {
+			// 兼容缺少 padding 的 base64
+			imageBytes, err = base64.RawStdEncoding.DecodeString(parts[1])
+			if err != nil {
+				return nil, "", fmt.Errorf("failed to decode base64: %w", err)
+			}
+		}
+		if len(imageBytes) > maxImageSize {
+			return nil, "", fmt.Errorf("image too large: %d bytes, max %d bytes", len(imageBytes), maxImageSize)
+		}
+		return imageBytes, mimeType, nil
+	} else if strings.HasPrefix(imageData, "http://") || strings.HasPrefix(imageData, "https://") {
+		// URL 下载（30s 超时，限制读取 50MB）
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Get(imageData)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to download image: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, "", fmt.Errorf("failed to download image: status %d", resp.StatusCode)
+		}
+
+		mimeType := resp.Header.Get("Content-Type")
+		if mimeType == "" || mimeType == "application/octet-stream" {
+			mimeType = detectMimeTypeFromURL(imageData)
+		}
+
+		imageBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxImageSize+1))
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to read image: %w", err)
+		}
+		if len(imageBytes) > maxImageSize {
+			return nil, "", fmt.Errorf("image too large: exceeds %d bytes limit", maxImageSize)
+		}
+		return imageBytes, mimeType, nil
+	}
+
+	return nil, "", errors.New("image must be a URL or base64 data URI")
+}
+
+// detectMimeTypeFromURL 从 URL 推断 MIME 类型
+func detectMimeTypeFromURL(url string) string {
+	lower := strings.ToLower(url)
+	if strings.Contains(lower, ".jpg") || strings.Contains(lower, ".jpeg") {
+		return "image/jpeg"
+	} else if strings.Contains(lower, ".png") {
+		return "image/png"
+	} else if strings.Contains(lower, ".webp") {
+		return "image/webp"
+	}
+	return "image/png"
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {

@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
@@ -43,6 +44,59 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
+
+	// gpt-image 系列：当 /v1/images/generations 请求包含 image 字段时，自动升级为 edits 模式
+	if info.RelayMode == relayconstant.RelayModeImagesGenerations && strings.HasPrefix(request.Model, "gpt-image") {
+		hasImage := request.Image != nil && len(request.Image) > 0
+		if !hasImage && request.Extra != nil {
+			_, hasImage = request.Extra["image"]
+			if !hasImage {
+				_, hasImage = request.Extra["images"]
+			}
+		}
+		if hasImage {
+			info.RelayMode = relayconstant.RelayModeImagesEdits
+			info.RequestURLPath = strings.Replace(info.RequestURLPath, "/images/generations", "/images/edits", 1)
+			logger.LogDebug(c, fmt.Sprintf("gpt-image auto-upgrade: generations → edits (model=%s)", request.Model))
+		}
+	}
+
+	// gpt-image 图生图：打印用户入参摘要
+	if strings.HasPrefix(request.Model, "gpt-image") && info.RelayMode == relayconstant.RelayModeImagesEdits {
+		imageCount := 0
+		imageSummary := "none"
+		if request.Image != nil && len(request.Image) > 0 {
+			// 判断 Image 是 string 还是 []string
+			raw := string(request.Image)
+			if len(raw) > 0 && raw[0] == '[' {
+				var arr []interface{}
+				if err := common.Unmarshal(request.Image, &arr); err == nil {
+					imageCount = len(arr)
+				}
+			} else {
+				imageCount = 1
+			}
+			// 截断 base64 数据，只显示前 80 字符
+			if len(raw) > 80 {
+				imageSummary = raw[:80] + "...(truncated)"
+			} else {
+				imageSummary = raw
+			}
+		}
+		n := uint(1)
+		if request.N != nil {
+			n = *request.N
+		}
+		logger.LogInfo(c, fmt.Sprintf("gpt-image edits user request: model=%s, prompt=%q, size=%s, quality=%s, n=%d, input_fidelity=%s, image_count=%d, image_preview=%s",
+			request.Model, request.Prompt, request.Size, request.Quality, n, request.InputFidelity, imageCount, imageSummary))
+	} else if strings.HasPrefix(request.Model, "gpt-image") && info.RelayMode == relayconstant.RelayModeImagesGenerations {
+		n := uint(1)
+		if request.N != nil {
+			n = *request.N
+		}
+		logger.LogInfo(c, fmt.Sprintf("gpt-image generations user request: model=%s, prompt=%q, size=%s, quality=%s, n=%d",
+			request.Model, request.Prompt, request.Size, request.Quality, n))
+	}
 
 	var requestBody io.Reader
 

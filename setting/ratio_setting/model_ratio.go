@@ -65,6 +65,7 @@ var defaultModelRatio = map[string]float64{
 	"gpt-4.1-nano":                     0.05, // $0.1 / 1M tokens
 	"gpt-4.1-nano-2025-04-14":          0.05, // $0.1 / 1M tokens
 	"gpt-image-1":                      2.5,  // $5 / 1M tokens
+	"gpt-image-2":                      2.5,  // $5 / 1M tokens
 	"o1":                               7.5,  // $15 / 1M tokens
 	"o1-2024-12-17":                    7.5,  // $15 / 1M tokens
 	"o1-preview":                       7.5,  // $15 / 1M tokens
@@ -337,6 +338,7 @@ var defaultCompletionRatio = map[string]float64{
 	"gpt-4o-gizmo-*": 3,
 	"gpt-4-all":      2,
 	"gpt-image-1":    8,
+	"gpt-image-2":    6,
 }
 
 // InitRatioSettings initializes all model related settings maps with code defaults.
@@ -681,11 +683,13 @@ func ModelRatio2JSONString() string {
 
 var defaultImageRatio = map[string]float64{
 	"gpt-image-1": 2,
+	"gpt-image-2": 1.6, // $8 / $5 = 1.6x
 }
 
 // defaultImageCompletionRatio 图片输出 token 计费倍率，未配置时 GetImageCompletionRatio 回退到 CompletionRatio
 var defaultImageCompletionRatio = map[string]float64{
 	"gpt-image-1":                8, // 与文本补全倍率一致
+	"gpt-image-2":                6, // $30 / $5 = 6x
 	"gemini-3-pro-image-preview": 6, // Gemini 图片模型输出
 }
 

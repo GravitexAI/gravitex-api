@@ -413,6 +413,17 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["image"] = true
 		other["image_ratio"] = summary.ImageRatio
 		other["image_output"] = summary.ImageTokens
+		// 写入 input_text_tokens 和 input_image_tokens，供前端图像 Token 计价展示
+		other["input_image_tokens"] = summary.ImageTokens
+		inputTextTokens := summary.PromptTokens - summary.ImageTokens - summary.CacheTokens
+		if inputTextTokens < 0 {
+			inputTextTokens = 0
+		}
+		other["input_text_tokens"] = inputTextTokens
+		// 写入绝对价格（$/1M tokens），前端直接使用，无需再次计算
+		inputTextPriceUSD := summary.ModelRatio * 2.0
+		other["input_text_price"] = inputTextPriceUSD
+		other["input_image_price"] = inputTextPriceUSD * summary.ImageRatio
 	}
 	if summary.WebSearchCallCount > 0 {
 		other["web_search"] = true

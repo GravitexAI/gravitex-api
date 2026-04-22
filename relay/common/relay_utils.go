@@ -279,6 +279,19 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 		return createTaskError(err, "invalid_request", http.StatusBadRequest, true)
 	}
 
+	// 当 prompt 为空时，尝试从 content 数组中提取 text 类型的内容作为 prompt
+	// 兼容 OpenAI Video 风格请求：仅提供 content 数组而不提供顶层 prompt 字段
+	if strings.TrimSpace(req.Prompt) == "" && len(req.Content) > 0 {
+		for _, item := range req.Content {
+			if typ, _ := item["type"].(string); typ == "text" {
+				if text, _ := item["text"].(string); strings.TrimSpace(text) != "" {
+					req.Prompt = text
+					break
+				}
+			}
+		}
+	}
+
 	if taskErr := validatePrompt(req.Prompt); taskErr != nil {
 		return taskErr
 	}

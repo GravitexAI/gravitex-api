@@ -29,6 +29,7 @@ var defaultCacheRatio = map[string]float64{
 	"gpt-4.1":                             0.25,
 	"gpt-4.1-mini":                        0.25,
 	"gpt-4.1-nano":                        0.25,
+	"gpt-image-2":                         0.25, // $1.25 / $5 = 0.25x
 	"gpt-5":                               0.1,
 	"gpt-5-2025-08-07":                    0.1,
 	"gpt-5-chat-latest":                   0.1,
