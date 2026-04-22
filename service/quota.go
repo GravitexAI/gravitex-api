@@ -58,12 +58,20 @@ func calculateAudioQuota(info QuotaInfo) int {
 	}
 
 	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(info.ModelName))
-	audioRatio := decimal.NewFromFloat(ratio_setting.GetAudioRatio(info.ModelName))
+	audioRatioF := ratio_setting.GetAudioRatio(info.ModelName)
+	audioRatio := decimal.NewFromFloat(audioRatioF)
 
-	// 音频输出倍率：优先音频输入倍率，无则用文本输入倍率（与图片输出逻辑一致）
-	effectiveAudioOutputRatio := ratio_setting.GetAudioRatio(info.ModelName)
-	if effectiveAudioOutputRatio <= 0 {
-		effectiveAudioOutputRatio = info.ModelRatio
+	// 音频补全倍率：未配置时默认 1.0
+	audioCompletionRatioF := ratio_setting.GetAudioCompletionRatio(info.ModelName)
+	if audioCompletionRatioF <= 0 {
+		audioCompletionRatioF = 1.0
+	}
+
+	// 音频输出倍率 = 音频输入倍率 × 音频补全倍率；无音频输入倍率时回退到 1.0（等同文本输入倍率）
+	// 此值后续会与 modelRatio × groupRatio 相乘，故回退不能用 ModelRatio，否则会导致 ModelRatio 被乘两次
+	effectiveAudioOutputRatio := audioRatioF * audioCompletionRatioF
+	if audioRatioF <= 0 {
+		effectiveAudioOutputRatio = 1.0
 	}
 	dEffectiveAudioOutputRatio := decimal.NewFromFloat(effectiveAudioOutputRatio)
 
@@ -80,7 +88,7 @@ func calculateAudioQuota(info QuotaInfo) int {
 	quota = quota.Add(inputTextTokens.Mul(textRatio))
 	quota = quota.Add(outputTextTokens.Mul(completionRatio).Mul(textRatio))
 
-	// 音频部分：输入用 audioRatio × modelRatio；输出用 effectiveAudioOutputRatio × modelRatio（与文本/图片倍率体系一致）
+	// 音频部分：输入用 audioRatio × modelRatio；输出用 audioRatio × audioCompletionRatio × modelRatio
 	quota = quota.Add(inputAudioTokens.Mul(audioRatio).Mul(textRatio))
 	quota = quota.Add(outputAudioTokens.Mul(dEffectiveAudioOutputRatio).Mul(textRatio))
 
@@ -173,10 +181,14 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	tokenName := ctx.GetString("token_name")
 	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(modelName))
 	audioRatio := ratio_setting.GetAudioRatio(relayInfo.OriginModelName)
-	// 音频输出倍率：优先音频输入倍率，无则用文本输入倍率
-	effectiveAudioOutputRatio := audioRatio
-	if effectiveAudioOutputRatio <= 0 {
-		effectiveAudioOutputRatio = relayInfo.PriceData.ModelRatio
+	audioCompletionRatio := ratio_setting.GetAudioCompletionRatio(relayInfo.OriginModelName)
+	if audioCompletionRatio <= 0 {
+		audioCompletionRatio = 1.0
+	}
+	// 音频输出倍率 = 音频输入倍率 × 音频补全倍率；无音频输入倍率时回退到 1.0
+	effectiveAudioOutputRatio := audioRatio * audioCompletionRatio
+	if audioRatio <= 0 {
+		effectiveAudioOutputRatio = 1.0
 	}
 
 	modelRatio := relayInfo.PriceData.ModelRatio
@@ -232,7 +244,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		logContent += ", " + extraContent
 	}
 	other := GenerateWssOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
-		completionRatio.InexactFloat64(), audioRatio, effectiveAudioOutputRatio, modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+		completionRatio.InexactFloat64(), audioRatio, audioCompletionRatio, modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 
 	// 将系统生成的 request_id 存入 other，request_id 字段改存上游返回的 ID
 	systemRequestId := ctx.GetString(common.RequestIdKey)
@@ -292,10 +304,14 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	tokenName := ctx.GetString("token_name")
 	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(relayInfo.OriginModelName))
 	audioRatioF := ratio_setting.GetAudioRatio(relayInfo.OriginModelName)
-	// 音频输出倍率：优先音频输入倍率，无则用文本输入倍率
-	effectiveAudioOutputRatio := audioRatioF
-	if effectiveAudioOutputRatio <= 0 {
-		effectiveAudioOutputRatio = relayInfo.PriceData.ModelRatio
+	audioCompletionRatioF := ratio_setting.GetAudioCompletionRatio(relayInfo.OriginModelName)
+	if audioCompletionRatioF <= 0 {
+		audioCompletionRatioF = 1.0
+	}
+	// 音频输出倍率 = 音频输入倍率 × 音频补全倍率；无音频输入倍率时回退到 1.0
+	effectiveAudioOutputRatio := audioRatioF * audioCompletionRatioF
+	if audioRatioF <= 0 {
+		effectiveAudioOutputRatio = 1.0
 	}
 
 	modelRatio := relayInfo.PriceData.ModelRatio
@@ -366,7 +382,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logContent += ", " + extraContent
 	}
 	other := GenerateAudioOtherInfo(ctx, relayInfo, usage, modelRatio, groupRatio,
-		completionRatio.InexactFloat64(), audioRatioF, effectiveAudioOutputRatio, modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+		completionRatio.InexactFloat64(), audioRatioF, audioCompletionRatioF, modelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 
 	// 将系统生成的 request_id 存入 other，request_id 字段改存上游返回的 ID
 	systemRequestId := ctx.GetString(common.RequestIdKey)

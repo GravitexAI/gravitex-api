@@ -129,13 +129,14 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	if summary.GeminiTextOutputTokens == 0 {
 		summary.GeminiTextOutputTokens = usage.CompletionTokenDetails.TextTokens
 	}
-	// 图片输出倍率优先级：ImageCompletionRatio → ImageRatio → ModelRatio
+	// 图片输出倍率优先级：ImageCompletionRatio → ImageRatio → 1.0（等同文本输入倍率）
+	// 此值后续会与 modelRatio × groupRatio 相乘，故回退不能用 ModelRatio，否则会导致 ModelRatio 被乘两次
 	summary.EffectiveImageOutputRatio = summary.ImageCompletionRatio
 	if summary.EffectiveImageOutputRatio <= 0 {
 		summary.EffectiveImageOutputRatio = summary.ImageRatio
 	}
 	if summary.EffectiveImageOutputRatio <= 0 {
-		summary.EffectiveImageOutputRatio = summary.ModelRatio
+		summary.EffectiveImageOutputRatio = 1.0
 	}
 	legacyClaudeDerived := isLegacyClaudeDerivedOpenAIUsage(relayInfo, usage)
 	isOpenRouterClaudeBilling := relayInfo.ChannelMeta != nil &&
@@ -475,6 +476,8 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		if summary.EffectiveImageOutputRatio > 0 {
 			other["image_completion_ratio"] = summary.EffectiveImageOutputRatio
 			other["effective_image_output_ratio"] = summary.EffectiveImageOutputRatio
+			// 图片输出绝对价格（$/1M tokens），含 modelRatio，与 input_image_price 模式一致
+			other["output_image_price"] = summary.ModelRatio * 2.0 * summary.EffectiveImageOutputRatio
 			if summary.GeminiImageOutputTokens > 0 {
 				if summary.ImageRatio > 0 {
 					other["image_output_ratio_source"] = "image_input"
