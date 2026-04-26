@@ -363,6 +363,15 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if summary.TotalTokens == 0 {
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
+		// 退还用户预扣额度（与 SettleBilling 退还令牌保持一致）
+		if relayInfo.Billing != nil && relayInfo.BillingSource != BillingSourceSubscription {
+			preConsumed := relayInfo.Billing.GetPreConsumedQuota()
+			if preConsumed > 0 {
+				if err := model.ConsumeUserQuotaSettle(relayInfo.UserId, 0, -preConsumed); err != nil {
+					logger.LogError(ctx, "error refund user quota on zero tokens: "+err.Error())
+				}
+			}
+		}
 	} else {
 		// 有 BillingSession 时：
 		//   - 钱包用户：ConsumeUserQuotaSettle 一次 UPDATE 完成 quota 扣减 + used_quota + request_count

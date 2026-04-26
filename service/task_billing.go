@@ -103,21 +103,29 @@ func taskAdjustFunding(task *model.Task, delta int) error {
 	return model.IncreaseUserQuota(task.UserId, -delta, false)
 }
 
-// taskAdjustTokenQuota 调整任务的令牌额度，delta > 0 表示扣费，delta < 0 表示退还。
+// TaskAdjustTokenQuota 调整任务的令牌额度，delta > 0 表示扣费，delta < 0 表示退还。
 // 需要通过 resolveTokenKey 运行时获取 key（不从 PrivateData 中读取）。
-func taskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
-	if task.PrivateData.TokenId <= 0 || delta == 0 {
+func TaskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
+	if delta == 0 {
 		return
 	}
-	tokenKey := resolveTokenKey(ctx, task.PrivateData.TokenId, task.TaskID)
+	// 优先使用 PrivateData.TokenId，若为 0（JSON 反序列化失败等）则 fallback 到 task.TokenId（INT 列）
+	tokenId := task.PrivateData.TokenId
+	if tokenId <= 0 {
+		tokenId = task.TokenId
+	}
+	if tokenId <= 0 {
+		return
+	}
+	tokenKey := resolveTokenKey(ctx, tokenId, task.TaskID)
 	if tokenKey == "" {
 		return
 	}
 	var err error
 	if delta > 0 {
-		err = model.DecreaseTokenQuota(task.PrivateData.TokenId, tokenKey, delta)
+		err = model.DecreaseTokenQuota(tokenId, tokenKey, delta)
 	} else {
-		err = model.IncreaseTokenQuota(task.PrivateData.TokenId, tokenKey, -delta)
+		err = model.IncreaseTokenQuota(tokenId, tokenKey, -delta)
 	}
 	if err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("调整令牌额度失败 (delta=%d, task=%s): %s", delta, task.TaskID, err.Error()))
@@ -170,7 +178,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 	}
 
 	// 2. 退还令牌额度
-	taskAdjustTokenQuota(ctx, task, -quota)
+	TaskAdjustTokenQuota(ctx, task, -quota)
 
 	// 3. 记录日志
 	other := taskBillingOther(task)
@@ -220,7 +228,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	}
 
 	// 调整令牌额度
-	taskAdjustTokenQuota(ctx, task, quotaDelta)
+	TaskAdjustTokenQuota(ctx, task, quotaDelta)
 
 	task.Quota = actualQuota
 

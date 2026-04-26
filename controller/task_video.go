@@ -213,6 +213,9 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 				task.TaskID, task.UserId, logger.LogQuota(task.Quota)))
 			if err := model.IncreaseUserQuota(task.UserId, task.Quota, false); err != nil {
 				logger.LogWarn(ctx, "Failed to increase user quota: "+err.Error())
+			} else {
+				// 用户额度退还成功后同步退还令牌额度
+				service.TaskAdjustTokenQuota(ctx, task, -task.Quota)
 			}
 			logContent := fmt.Sprintf("Video async task failed %s, refund %s", task.TaskID, logger.LogQuota(task.Quota))
 			model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
@@ -543,6 +546,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 								if err := model.DecreaseUserQuota(task.UserId, quotaDelta, true); err != nil {
 									logger.LogError(ctx, fmt.Sprintf("补扣费失败: %s", err.Error()))
 								} else {
+									// 同步补扣令牌额度
+									service.TaskAdjustTokenQuota(ctx, task, quotaDelta)
 									model.UpdateUserUsedQuotaAndRequestCount(task.UserId, quotaDelta)
 									model.UpdateChannelUsedQuota(task.ChannelId, quotaDelta)
 									task.Quota = actualQuota
@@ -559,6 +564,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 								if err := model.IncreaseUserQuota(task.UserId, refundQuota, false); err != nil {
 									logger.LogError(ctx, fmt.Sprintf("退还预扣费失败: %s", err.Error()))
 								} else {
+									// 同步退还令牌额度
+									service.TaskAdjustTokenQuota(ctx, task, -refundQuota)
 									task.Quota = actualQuota
 									logContent := fmt.Sprintf("视频任务成功退还多扣费用，模型倍率 %.2f，分组倍率 %.2f，tokens %d，预扣费 %s，实际扣费 %s，退还 %s",
 										modelRatio, finalGroupRatio, taskResult.TotalTokens,
@@ -646,6 +653,9 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			task.TaskID, task.UserId, logger.LogQuota(quota)))
 		if err := model.IncreaseUserQuota(task.UserId, quota, false); err != nil {
 			logger.LogWarn(ctx, "Failed to increase user quota: "+err.Error())
+		} else {
+			// 用户额度退还成功后同步退还令牌额度
+			service.TaskAdjustTokenQuota(ctx, task, -quota)
 		}
 		logContent := fmt.Sprintf("Video async task failed %s, refund %s", task.TaskID, logger.LogQuota(quota))
 		model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
@@ -1370,6 +1380,8 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		if err := model.DecreaseUserQuota(task.UserId, actualQuota, true); err != nil {
 			return fmt.Errorf("handleSora2TaskBilling: DecreaseUserQuota failed: %w", err)
 		}
+		// 同步扣除令牌额度
+		service.TaskAdjustTokenQuota(ctx, task, actualQuota)
 	}
 
 	// 获取用户名（用于日志）
@@ -1681,6 +1693,8 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		if err := model.DecreaseUserQuota(task.UserId, actualQuota, true); err != nil {
 			return fmt.Errorf("handleVideoTokenRatioBilling: DecreaseUserQuota failed: %w", err)
 		}
+		// 同步扣除令牌额度
+		service.TaskAdjustTokenQuota(ctx, task, actualQuota)
 	}
 
 	// 获取用户名（用于日志）
