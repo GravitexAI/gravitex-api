@@ -354,6 +354,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 				"billing_token_name", "billing_token_id", "billing_processed",
 				"generate_audio", "generateAudio",
 				"has_video_input",
+				"video_resolution",
 				"billing_cost_discount",
 			}
 
@@ -950,6 +951,10 @@ func isVideoTokenRatioModel(name string) bool {
 		return true
 	}
 	if _, ok := ratio_setting.GetVideoCompletionRatioVideoPricing(name, false); ok {
+		return true
+	}
+	// 分辨率维度（720p/1080p/4K 等）
+	if ratio_setting.HasVideoCompletionRatioResolution(name) {
 		return true
 	}
 	return false
