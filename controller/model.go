@@ -87,10 +87,6 @@ func init() {
 			OwnedBy: "midjourney",
 		})
 	}
-	openAIModelsMap = make(map[string]dto.OpenAIModels)
-	for _, aiModel := range openAIModels {
-		openAIModelsMap[aiModel.Id] = aiModel
-	}
 	channelId2Models = make(map[int][]string)
 	for i := 1; i <= constant.ChannelTypeDummy; i++ {
 		apiType, success := common.ChannelType2APIType(i)
@@ -104,9 +100,15 @@ func init() {
 		adaptor.Init(meta)
 		channelId2Models[i] = adaptor.GetModelList()
 	}
+	// 先去重（保留首次出现的，即优先级最高的渠道），再构建 map
+	// 避免后遍历的渠道（如 vertex-ai）覆盖先遍历的渠道（如 claude）的 owned_by
 	openAIModels = lo.UniqBy(openAIModels, func(m dto.OpenAIModels) string {
 		return m.Id
 	})
+	openAIModelsMap = make(map[string]dto.OpenAIModels)
+	for _, aiModel := range openAIModels {
+		openAIModelsMap[aiModel.Id] = aiModel
+	}
 }
 
 func ListModels(c *gin.Context, modelType int) {
