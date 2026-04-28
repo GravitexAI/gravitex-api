@@ -1041,6 +1041,16 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 			usage.PromptTokensDetails.TextTokens += detail.TokenCount
 		}
 	}
+	for _, detail := range metadata.CandidatesTokensDetails {
+		switch detail.Modality {
+		case "IMAGE":
+			usage.CompletionTokenDetails.ImageTokens += detail.TokenCount
+		case "AUDIO":
+			usage.CompletionTokenDetails.AudioTokens += detail.TokenCount
+		case "TEXT":
+			usage.CompletionTokenDetails.TextTokens += detail.TokenCount
+		}
+	}
 
 	// 从 CandidatesTokensDetails 拆出图片/音频/文本输出 token，供计费与日志使用（modality 大小写不敏感）
 	for _, detail := range metadata.CandidatesTokensDetails {
