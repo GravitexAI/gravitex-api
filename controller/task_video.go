@@ -582,6 +582,13 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 				}
 			}
 		}
+
+		// 保底计费：当正常计费路由未能识别模型且 quota 仍为 0 时，尝试从 upstream_request_body 解析参数并重新计费
+		if task.Quota == 0 && billingRoute == "pre_deduction_settle" {
+			logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] fallback triggered: task=%s model=%s billingRoute=%s quota=0, attempting fallback billing",
+				taskId, taskModelName, billingRoute))
+			handleFallbackBilling(ctx, task, taskResult, taskModelName)
+		}
 	case model.TaskStatusFailure:
 		task.Status = model.TaskStatusFailure
 		task.Progress = "100%"
@@ -1090,6 +1097,13 @@ func CompleteVideoTaskOnUpstreamSuccess(ctx context.Context, task *model.Task, c
 			}).Error
 			return err
 		}
+	}
+	// GET 路径保底计费：正常路由都未识别且 quota 仍为 0
+	if taskResult.Status == model.TaskStatusSuccess && task.Quota == 0 &&
+		!isVideoPerSecondModel(taskModelName) && !isVideoTokenRatioModel(taskModelName) {
+		logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] GET path fallback triggered: task=%s model=%s quota=0",
+			task.TaskID, taskModelName))
+		handleFallbackBilling(ctx, task, taskResult, taskModelName)
 	}
 	return nil
 }
@@ -1816,4 +1830,123 @@ func getVideoTaskProjectID(task *model.Task) string {
 		}
 	}
 	return extractProjectFromTaskID(task.TaskID)
+}
+
+// handleFallbackBilling 保底计费：当正常计费路由未能识别模型（billingRoute=pre_deduction_settle 且 quota=0）时，
+// 尝试从 upstream_request_body 解析参数并调用按秒/按量计费函数，同时记录系统日志。
+// 即使保底计费也失败，也会记录系统日志到 logs 表以便管理员排查。
+func handleFallbackBilling(ctx context.Context, task *model.Task, taskResult *relaycommon.TaskInfo, taskModelName string) {
+	username, _ := model.GetUsernameById(task.UserId, false)
+
+	// 尝试1：检查按秒计费配置是否存在，存在则调用按秒计费
+	// 先检查配置再调用，避免 DB 级计费锁被错误占用
+	if _, hasPerSecondPrice := ratio_setting.GetVideoModelPricePerSecond(taskModelName); hasPerSecondPrice {
+		if err := handleSora2TaskBilling(ctx, task); err == nil {
+			// err==nil 表示计费流程正常完成（即使 quota=0 也表示"零费用"而非"计费失败"），不再尝试第二条路径
+			if task.Quota > 0 {
+				logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] fallback per_second success: task=%s model=%s quota=%d",
+					task.TaskID, taskModelName, task.Quota))
+			} else {
+				logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] fallback per_second completed with zero quota: task=%s model=%s",
+					task.TaskID, taskModelName))
+			}
+			sysLog := &model.Log{
+				UserId:    task.UserId,
+				Username:  username,
+				CreatedAt: common.GetTimestamp(),
+				Type:      model.LogTypeSystem,
+				Content: fmt.Sprintf("[保底计费] 视频任务 %s 正常计费路由未识别模型 %s，保底按秒计费成功，扣费 %s",
+					task.TaskID, taskModelName, logger.LogQuota(task.Quota)),
+				ChannelId: task.ChannelId,
+				ModelName: taskModelName,
+				TokenName: task.TokenName,
+				TokenId:   task.TokenId,
+				Group:     task.Group,
+				RequestId: task.TaskID,
+				Other: common.MapToJsonStr(map[string]interface{}{
+					"fallback_type":   "per_second",
+					"fallback_reason": "billing_route_miss",
+					"fallback_quota":  task.Quota,
+				}),
+			}
+			model.CreateLog(sysLog)
+			return
+		} else if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] fallback per_second failed: task=%s model=%s err=%v", task.TaskID, taskModelName, err))
+		}
+	}
+
+	// 尝试2：检查按量计费配置是否存在（VideoCompletionRatio），存在则调用按量计费
+	hasTokenRatioConfig := false
+	if _, ok := ratio_setting.GetVideoRatio(taskModelName); ok {
+		hasTokenRatioConfig = true
+	} else if _, ok := ratio_setting.GetVideoCompletionRatioPricing(taskModelName, true); ok {
+		hasTokenRatioConfig = true
+	} else if _, ok := ratio_setting.GetVideoCompletionRatioPricing(taskModelName, false); ok {
+		hasTokenRatioConfig = true
+	} else if _, ok := ratio_setting.GetVideoCompletionRatioVideoPricing(taskModelName, true); ok {
+		hasTokenRatioConfig = true
+	} else if _, ok := ratio_setting.GetVideoCompletionRatioVideoPricing(taskModelName, false); ok {
+		hasTokenRatioConfig = true
+	} else if ratio_setting.HasVideoCompletionRatioResolution(taskModelName) {
+		hasTokenRatioConfig = true
+	}
+	if hasTokenRatioConfig {
+		if err := handleVideoTokenRatioBilling(ctx, task, taskResult); err == nil {
+			if task.Quota > 0 {
+				logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] fallback token_ratio success: task=%s model=%s quota=%d",
+					task.TaskID, taskModelName, task.Quota))
+			} else {
+				logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] fallback token_ratio completed with zero quota: task=%s model=%s",
+					task.TaskID, taskModelName))
+			}
+			sysLog := &model.Log{
+				UserId:    task.UserId,
+				Username:  username,
+				CreatedAt: common.GetTimestamp(),
+				Type:      model.LogTypeSystem,
+				Content: fmt.Sprintf("[保底计费] 视频任务 %s 正常计费路由未识别模型 %s，保底按量计费成功，扣费 %s",
+					task.TaskID, taskModelName, logger.LogQuota(task.Quota)),
+				ChannelId: task.ChannelId,
+				ModelName: taskModelName,
+				TokenName: task.TokenName,
+				TokenId:   task.TokenId,
+				Group:     task.Group,
+				RequestId: task.TaskID,
+				Other: common.MapToJsonStr(map[string]interface{}{
+					"fallback_type":   "token_ratio",
+					"fallback_reason": "billing_route_miss",
+					"fallback_quota":  task.Quota,
+				}),
+			}
+			model.CreateLog(sysLog)
+			return
+		} else if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] fallback token_ratio failed: task=%s model=%s err=%v", task.TaskID, taskModelName, err))
+		}
+	}
+
+	// 两种保底计费都失败，记录系统警告日志
+	logger.LogError(ctx, fmt.Sprintf("[VideoBilling] fallback billing FAILED: task=%s model=%s, no pricing config found",
+		task.TaskID, taskModelName))
+	sysLog := &model.Log{
+		UserId:    task.UserId,
+		Username:  username,
+		CreatedAt: common.GetTimestamp(),
+		Type:      model.LogTypeSystem,
+		Content: fmt.Sprintf("[保底计费失败] 视频任务 %s 模型 %s 无法计费：正常路由和保底路由均未找到定价配置，任务成功但未扣费",
+			task.TaskID, taskModelName),
+		ChannelId: task.ChannelId,
+		ModelName: taskModelName,
+		TokenName: task.TokenName,
+		TokenId:   task.TokenId,
+		Group:     task.Group,
+		RequestId: task.TaskID,
+		Other: common.MapToJsonStr(map[string]interface{}{
+			"fallback_type":   "none",
+			"fallback_reason": "no_pricing_config",
+			"warning":         "task_completed_without_billing",
+		}),
+	}
+	model.CreateLog(sysLog)
 }

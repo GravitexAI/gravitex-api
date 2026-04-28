@@ -1099,8 +1099,15 @@ func loadVideoRatioFromDatabase() {
 		}
 	}
 
-	// 默认无配置：保持空 map，表示没有启用 VideoRatio 体系
-	videoRatioMap = m
+	// 使用代码默认值兜底
+	videoRatioMap = make(map[string]float64)
+	for k, v := range defaultVideoRatio {
+		videoRatioMap[k] = v
+		formatted := FormatMatchingModelName(k)
+		if formatted != k {
+			videoRatioMap[formatted] = v
+		}
+	}
 }
 
 // loadVideoCompletionRatioFromDatabase 从数据库加载视频补全倍率/价格（OptionMap["VideoCompletionRatio"]）
@@ -1132,6 +1139,17 @@ func loadVideoCompletionRatioFromDatabase() {
 	videoCompletionRatioPrimaryMap = make(map[string]float64)
 	videoCompletionRatioAudioMap = make(map[string]VideoAudioPricing)
 	videoCompletionRatioResolutionMap = make(map[string]VideoResolutionPricing)
+	// 使用代码默认值兜底
+	for k, v := range defaultVideoCompletionRatioAudio {
+		targetKeys := []string{k}
+		formatted := FormatMatchingModelName(k)
+		if formatted != k {
+			targetKeys = append(targetKeys, formatted)
+		}
+		for _, key := range targetKeys {
+			videoCompletionRatioAudioMap[key] = v
+		}
+	}
 }
 
 func buildVideoCompletionRatioCaches(rawMap map[string]interface{}) (map[string]float64, map[string]VideoAudioPricing, map[string]VideoResolutionPricing) {
@@ -1289,13 +1307,14 @@ func UpdateVideoCompletionRatioByJSONString(jsonStr string) error {
 // 优先级：先读数据库 OptionMap["VideoModelPricePerSecond"]，仅当无配置或解析失败时才用下方默认值兜底。
 
 var defaultVideoModelPricePerSecond = map[string]float64{
-	"sora-2":     0.1,  // $0.1/秒
-	"sora-2-pro": 0.15, // $0.15/秒
-	// wan2.6 系列（720P/480P 基准价，按秒计费，分辨率倍率通过 ProcessAliOtherRatios 处理）
-	// 价格来源：阿里云官方定价，RMB÷7.3 转美元
-	"wan2.6-t2v": 0.0192, // ¥0.14/s÷7.3，720P 基准
-	"wan2.6-i2v": 0.0048, // ¥0.035/s÷7.3，720P 基准
-	"wan2.6-r2v": 0.0192, // ¥0.14/s÷7.3，720P 基准
+	"sora-2": 0.1, // $0.1/秒
+}
+
+// defaultVideoResolutionPricing wan2.6 系列按分辨率分档每秒价格（$/秒）
+var defaultVideoResolutionPricing = map[string]map[string]float64{
+	"wan2.6-t2v": {"720p": 0.086012, "1080p": 0.143353},
+	"wan2.6-i2v": {"720p": 0.086012, "1080p": 0.143353},
+	"wan2.6-r2v": {"720p": 0.086012, "1080p": 0.143353},
 }
 
 // VideoAudioPricing 带音频/无音频的视频定价结构（Veo：generateAudio true 用 audio，否则用 noAudio）
@@ -1339,18 +1358,27 @@ type VideoFlashResolutionPricing struct {
 }
 
 // Veo 模型（含 generate / fast）：按 parameters.generateAudio 选 noAudio 或 audio 价
+// Kling V3 系列：按 generate_audio / sound 选 noAudio 或 audio 价（官方单位：USD/秒）
 var defaultVideoAudioPricing = map[string]VideoAudioPricing{
-	"veo-3.0-generate-preview":      {NoAudio: 0.2, Audio: 0.4},
 	"veo-3.1-generate-preview":      {NoAudio: 0.2, Audio: 0.4},
-	"veo-3.0-fast-generate-001":     {NoAudio: 0.1, Audio: 0.15},
 	"veo-3.1-fast-generate-preview": {NoAudio: 0.1, Audio: 0.15},
-	// Kling V3 系列：按 generate_audio 选 noAudio 或 audio 价（官方单位：USD/秒）
-	// 标准模式：$0.084(无音频) / $0.126(有音频)
-	// 专业模式（kling-v3-pro）：$0.112(无音频) / $0.168(有音频)
-	"kling-v3":          {NoAudio: 0.084, Audio: 0.126},
-	"kling-v3-pro":      {NoAudio: 0.112, Audio: 0.168},
-	"kling-v3-omni":     {NoAudio: 0.084, Audio: 0.126},
-	"kling-v3-omni-pro": {NoAudio: 0.112, Audio: 0.168},
+	"kling-v3":                      {NoAudio: 0.084, Audio: 0.126},
+	"kling-v3-pro":                  {NoAudio: 0.112, Audio: 0.168},
+	"kling-v3-omni":                 {NoAudio: 0.084, Audio: 0.126},
+	"kling-v3-omni-pro":             {NoAudio: 0.112, Audio: 0.168},
+}
+
+// defaultVideoCompletionRatioAudio seedance 系列的 VideoCompletionRatio 默认值（按音频/视频输入维度）
+// 当 VideoRatio 存在且 == 0 时，此值直接作为 $/M tokens 计费
+var defaultVideoCompletionRatioAudio = map[string]VideoAudioPricing{
+	"seedance-1-5-pro-251215": {NoAudio: 1.2, Audio: 2.4},
+	"seedance-2-0-pro":        {NoVideo: 7.0, Video: 4.3},
+	"seedance-2-0-fast":       {NoVideo: 5.6, Video: 3.3},
+}
+
+// defaultVideoRatio 视频倍率默认值（VideoRatio=0 表示 VideoCompletionRatio 直接作为 $/M tokens 价格）
+var defaultVideoRatio = map[string]float64{
+	"seedance-1-5-pro-251215": 0,
 }
 
 // wan2.6 flash：¥0.15/0.25（无声 720P/1080P）、¥0.3/0.5（有声 720P/1080P），按 ¥÷7.0 换算为美元/秒
@@ -1899,6 +1927,16 @@ func loadVideoModelPricePerSecondFromDatabase() {
 			},
 		}
 		if m := minFlashResolutionPrice(v); m > 0 {
+			videoModelPricePerSecondMap[k] = m
+		}
+	}
+	// 按分辨率定价的模型（wan2.6-t2v/i2v/r2v 等）
+	for k, v := range defaultVideoResolutionPricing {
+		videoResolutionPricePerSecondMap[k] = v
+		videoModelPricePerSecondRawMap[k] = map[string]interface{}{
+			"resolutions": v,
+		}
+		if m := minResolutionPrice(v); m > 0 {
 			videoModelPricePerSecondMap[k] = m
 		}
 	}
