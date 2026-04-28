@@ -1667,11 +1667,11 @@ export function renderModelPrice(
   displayMode = 'price',
 ) {
   const { ratio: effectiveGroupRatio, label: ratioLabel } = getEffectiveRatio(
-    _groupRatio,
+    groupRatio,
     user_group_ratio,
   );
-  let groupRatio = effectiveGroupRatio;
-  const completionRatio = _completionRatio ?? 0;
+  groupRatio = effectiveGroupRatio;
+  completionRatio = completionRatio ?? 0;
 
   const { symbol, rate } = getCurrencyConfig();
 
