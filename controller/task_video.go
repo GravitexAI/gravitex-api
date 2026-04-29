@@ -583,8 +583,9 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			}
 		}
 
-		// 保底计费：当正常计费路由未能识别模型且 quota 仍为 0 时，尝试从 upstream_request_body 解析参数并重新计费
-		if task.Quota == 0 && billingRoute == "pre_deduction_settle" {
+		// 保底计费：当正常计费路由执行后 quota 仍为 0 时，尝试从 upstream_request_body 解析参数并重新计费
+		// 覆盖所有计费路由：per_second/token_ratio 计费函数可能因定价未配置等原因失败，也需要兜底
+		if task.Quota == 0 {
 			logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] fallback triggered: task=%s model=%s billingRoute=%s quota=0, attempting fallback billing",
 				taskId, taskModelName, billingRoute))
 			handleFallbackBilling(ctx, task, taskResult, taskModelName)
@@ -648,11 +649,33 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	if taskResult.Progress != "" {
 		task.Progress = taskResult.Progress
 	}
-	logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] before task.Update(): task=%s status=%s",
-		taskId, task.Status))
-	if err := task.Update(); err != nil {
-		common.SysLog("UpdateVideoTask task error: " + err.Error())
-		shouldRefund = false
+
+	// 终态（SUCCESS/FAILURE）使用 CAS 保护，防止多节点或多路径竞态导致重复计费/退款
+	// 非终态（IN_PROGRESS/QUEUED 等）仍用 Update() 直接覆盖
+	isDone := task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure
+	if isDone && preStatus != task.Status {
+		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] before UpdateWithStatus: task=%s from=%s to=%s",
+			taskId, preStatus, task.Status))
+		won, err := task.UpdateWithStatus(preStatus)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("[TaskPoll] UpdateWithStatus failed for task %s: %s", taskId, err.Error()))
+			shouldRefund = false
+		} else if !won {
+			logger.LogWarn(ctx, fmt.Sprintf("[TaskPoll] task=%s already transitioned by another process (from=%s), skip billing/refund", taskId, preStatus))
+			shouldRefund = false
+			// 如果 handleSora2TaskBilling 已经设置了 quota=-1 锁但 CAS 失败，需要回滚锁
+			// 但由于 billing lock 是独立的原子操作（检查 quota=0），CAS 失败意味着另一个进程已处理
+			// 此处无需额外操作
+		}
+	} else if !isDone {
+		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] before task.Update(): task=%s status=%s",
+			taskId, task.Status))
+		if err := task.Update(); err != nil {
+			common.SysLog("UpdateVideoTask task error: " + err.Error())
+		}
+	} else {
+		// isDone && preStatus == task.Status → 状态未变，跳过更新
+		logger.LogDebug(ctx, fmt.Sprintf("[TaskPoll] task=%s status unchanged (%s), skip update", taskId, task.Status))
 	}
 
 	if shouldRefund {
@@ -1151,6 +1174,15 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s already billed (DB guard), skip", modelName, task.TaskID))
 		return nil
 	}
+	// 已获得计费锁（quota=-1），若后续计费失败则需释放锁（回滚为 0），允许 fallback 重试
+	billingLockClaimed := true
+	defer func() {
+		if billingLockClaimed {
+			// 计费成功前发生错误，释放 DB 级锁
+			model.DB.Model(&model.Task{}).Where("id = ? AND quota = -1", task.ID).Update("quota", 0)
+			logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s billing lock released due to error", modelName, task.TaskID))
+		}
+	}()
 
 	// 读取关键字段：requested_seconds（最高优先级 upstream_request_body，再 task.Data，再 Properties）
 	// Gemini/Veo 上游体结构：顶层无 durationSeconds 时在 parameters 或 instances[0] 中
@@ -1402,6 +1434,8 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		// 同步扣除令牌额度
 		service.TaskAdjustTokenQuota(ctx, task, actualQuota)
 	}
+	// 扣费成功（或 actualQuota==0 无需扣费），标记计费锁已消费，defer 不再回滚
+	billingLockClaimed = false
 
 	// 获取用户名（用于日志）
 	username := ""
@@ -1541,6 +1575,14 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s already billed (DB guard), skip", modelName, task.TaskID))
 		return nil
 	}
+	// 已获得计费锁（quota=-1），若后续计费失败则需释放锁（回滚为 0），允许 fallback 重试
+	billingLockClaimed := true
+	defer func() {
+		if billingLockClaimed {
+			model.DB.Model(&model.Task{}).Where("id = ? AND quota = -1", task.ID).Update("quota", 0)
+			logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s billing lock released due to error", modelName, task.TaskID))
+		}
+	}()
 
 	if taskResult == nil {
 		return fmt.Errorf("handleVideoTokenRatioBilling: taskResult is nil")
@@ -1715,6 +1757,8 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		// 同步扣除令牌额度
 		service.TaskAdjustTokenQuota(ctx, task, actualQuota)
 	}
+	// 扣费成功（或 actualQuota==0 无需扣费），标记计费锁已消费，defer 不再回滚
+	billingLockClaimed = false
 
 	// 获取用户名（用于日志）
 	username := ""
