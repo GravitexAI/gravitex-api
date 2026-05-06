@@ -35,6 +35,11 @@ type TaskPollingAdaptor interface {
 // 打破 service -> relay -> relay/channel -> service 的循环依赖。
 var GetTaskAdaptorFunc func(platform constant.TaskPlatform) TaskPollingAdaptor
 
+// SettleVideoTaskBillingOnSuccessFunc is injected by main to let the service
+// polling loop reuse controller-owned video billing logic without introducing
+// an import cycle.
+var SettleVideoTaskBillingOnSuccessFunc func(context.Context, *model.Task, *relaycommon.TaskInfo) (bool, error)
+
 // sweepTimedOutTasks 在主轮询之前独立清理超时任务。
 // 每次最多处理 100 条，剩余的下个周期继续处理。
 // 使用 per-task CAS (UpdateWithStatus) 防止覆盖被正常轮询已推进的任务。
@@ -543,6 +548,15 @@ func truncateBase64(s string) string {
 //  2. taskResult.TotalTokens > 0 → 按 token 重算
 //  3. 都不满足 → 保持预扣额度不变
 func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo) {
+	if SettleVideoTaskBillingOnSuccessFunc != nil {
+		handled, err := SettleVideoTaskBillingOnSuccessFunc(ctx, task, taskResult)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("任务 %s 视频计费结算失败: %v", task.TaskID, err))
+		}
+		if handled {
+			return
+		}
+	}
 	// 0. 按次计费的任务不做差额结算
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.PerCallBilling {
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过差额结算", task.TaskID))

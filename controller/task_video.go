@@ -825,6 +825,39 @@ func CompleteVideoTaskOnUpstreamSuccess(ctx context.Context, task *model.Task, c
 	return nil
 }
 
+// SettleVideoTaskBillingOnSuccess is used by the service polling loop after it
+// has won the terminal SUCCESS transition. Keep the special post-completion
+// video billing rules in this package so the service layer does not import
+// controller-specific pricing helpers.
+func SettleVideoTaskBillingOnSuccess(ctx context.Context, task *model.Task, taskResult *relaycommon.TaskInfo) (bool, error) {
+	taskModelName := task.Properties.OriginModelName
+	if taskModelName == "" {
+		taskModelName = task.Properties.UpstreamModelName
+	}
+	var err error
+	switch {
+	case isVideoPerSecondModel(taskModelName):
+		err = handleSora2TaskBilling(ctx, task)
+	case isVideoTokenRatioModel(taskModelName):
+		err = handleVideoTokenRatioBilling(ctx, task, taskResult)
+	default:
+		return false, nil
+	}
+	if err == nil {
+		return true, nil
+	}
+	failReason := fmt.Sprintf("billing_failed: %v", err)
+	if updateErr := model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+		"status":      model.TaskStatusFailure,
+		"fail_reason": failReason,
+	}).Error; updateErr != nil {
+		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] task=%s failed to persist billing failure: %v", task.TaskID, updateErr))
+	}
+	task.Status = model.TaskStatusFailure
+	task.FailReason = failReason
+	return true, err
+}
+
 // handleSora2TaskBilling 处理按秒计费视频模型的轮询成功计费逻辑（Sora-2 等）
 // 计费公式: actualQuota = videoPrice × requestedSeconds × QuotaPerUnit × groupRatio
 func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {

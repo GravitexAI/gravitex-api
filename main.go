@@ -124,6 +124,7 @@ func main() {
 
 	// GET /v1/videos 收到上游终态时落库并计费（与轮询一致），避免 Vertex 轮询仅返回 {"name":"..."} 时任务永不完成
 	relay.CompleteVideoTaskOnUpstreamSuccessFn = controller.CompleteVideoTaskOnUpstreamSuccess
+	service.SettleVideoTaskBillingOnSuccessFunc = controller.SettleVideoTaskBillingOnSuccess
 
 	// Task polling goroutines (MJ / async video tasks).
 	// Enabled by default; can be disabled via ENABLE_TASK_POLLING=false|0.
