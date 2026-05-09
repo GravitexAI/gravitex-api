@@ -482,6 +482,16 @@ export const useLogsData = () => {
 
         let content = '';
         if (!isViolationFeeLog && other?.billing_mode !== 'tiered_expr') {
+          // 音频 / Claude 两条分支共用一个对象式参数；显式 token 字段需要从 logs[i] 注入，
+          // 因为 other 里没有保存 prompt/completion tokens（它们直接落在 logs 行上）。
+          // 历史 merge 曾把这段一同删掉，导致 renderAudioModelPrice / renderClaudeModelPrice
+          // 出现 "ReferenceError: logOpts is not defined"。
+          const logOpts = {
+            ...other,
+            prompt_tokens: logs[i].prompt_tokens,
+            completion_tokens: logs[i].completion_tokens,
+            displayMode: billingDisplayMode,
+          };
           if (other?.billing_type === 'per_second') {
             const pricePerSec =
               other?.video_price_per_second ??
