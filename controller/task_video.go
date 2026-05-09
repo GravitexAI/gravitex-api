@@ -583,8 +583,8 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			}
 		}
 
-		// 保底计费：当任何计费路由（per_second/token_ratio/pre_deduction_settle）未能成功计费且 quota 仍为 0 时，
-		// 尝试从 upstream_request_body 解析参数并重新计费（计费锁释放后 quota 回到 0，fallback 可兜底重试）
+		// 保底计费：当正常计费路由执行后 quota 仍为 0 时，尝试从 upstream_request_body 解析参数并重新计费
+		// 覆盖所有计费路由：per_second/token_ratio 计费函数可能因定价未配置等原因失败，也需要兜底
 		if task.Quota == 0 {
 			logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] fallback triggered: task=%s model=%s billingRoute=%s quota=0, attempting fallback billing",
 				taskId, taskModelName, billingRoute))
@@ -663,6 +663,9 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		} else if !won {
 			logger.LogWarn(ctx, fmt.Sprintf("[TaskPoll] task=%s already transitioned by another process (from=%s), skip billing/refund", taskId, preStatus))
 			shouldRefund = false
+			// 如果 handleSora2TaskBilling 已经设置了 quota=-1 锁但 CAS 失败，需要回滚锁
+			// 但由于 billing lock 是独立的原子操作（检查 quota=0），CAS 失败意味着另一个进程已处理
+			// 此处无需额外操作
 		}
 	} else if !isDone {
 		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] before task.Update(): task=%s status=%s",
