@@ -97,6 +97,37 @@ Content-Type: application/json
 - `last_frame` 必须搭配 `first_frame`
 - `reference_audio` 需搭配图片或视频输入
 
+> ⚠️ **`asset://` 引用必须按 `asset_type` 严格分流到对应字段**
+>
+> 同一个 `asset_url` 在素材库 `GET /v1/assets` 返回的 `asset_type` 是什么类型，组装到 `content[]` 时就必须用对应的 `type` / 字段名 / `role`，**不能统一塞到 `image_url`**。否则上游会返回：
+> ```json
+> {"error":{"code":"InvalidParameter","message":"the specified asset is not an image","param":"content[N].image_url.url","type":"BadRequest"}}
+> ```
+>
+> | 素材的 `asset_type` | `type` | 字段 | `role` |
+> |---|---|---|---|
+> | `Image` | `image_url` | `image_url.url` | `reference_image`（或 `first_frame` / `last_frame`） |
+> | `Video` | `video_url` | `video_url.url` | `reference_video` |
+> | `Audio` | `audio_url` | `audio_url.url` | `reference_audio` |
+>
+> ✅ 正确（用图片素材 + 音频素材）：
+> ```json
+> [
+>   {"type":"text","text":"素材1 用素材2唱歌"},
+>   {"type":"image_url","image_url":{"url":"asset://asset-xxx-image"},"role":"reference_image"},
+>   {"type":"audio_url","audio_url":{"url":"asset://asset-xxx-audio"},"role":"reference_audio"}
+> ]
+> ```
+>
+> ❌ 错误（音频素材塞 image_url，触发 InvalidParameter）：
+> ```json
+> [
+>   {"type":"text","text":"素材1 用素材2唱歌"},
+>   {"type":"image_url","image_url":{"url":"asset://asset-xxx-image"},"role":"reference_image"},
+>   {"type":"image_url","image_url":{"url":"asset://asset-xxx-audio"},"role":"reference_image"}
+> ]
+> ```
+
 ### 响应
 
 ```json
@@ -544,7 +575,7 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `name` | string | **是** | 素材组名称 |
-| `description` | string | 否 | 描述 |
+| `description` | string | 否 | 描述。**省略或传空串时，网关自动用调用 API Key 所属用户的 `username` 兜底**，便于在火山方舟控制台识别归属 |
 | `channel_id` | integer | 否 | 指定上游渠道 ID，省略则自动选择 |
 | `group_type` | string | 否 | `aigc`（默认）。**`liveness_face` 不能在此创建**，需走 `POST /v1/visual-validate/session` |
 
@@ -631,9 +662,11 @@ curl -X DELETE https://api.gravitex.ai/v1/asset-groups/group-20260508120000-abcd
 | `url` | string | **是** | 素材内容，支持公网 URL、Data URI、纯 Base64 字符串 |
 | `group_id` | string | **是** | 素材组 ID（来自 `POST /v1/asset-groups` 或 `/v1/visual-validate/session`） |
 | `asset_type` | string | 否 | `Image`（默认）/ `Video` / `Audio`，大小写不敏感 |
-| `name` | string | 否 | 素材名称（用于素材库 UI 展示与模糊搜索） |
+| `name` | string | 否 | 素材名称（仅用于素材库 UI 展示和 `ListAssets` 模糊搜索，**不参与模型推理**） |
 
 > 自 2026-05 起，**虚拟人（aigc）与真人（liveness_face）两类素材库均支持图片、视频、音频三种 `asset_type`**。网关会根据 URL 后缀做基础格式校验，最终内容审核与转码由 BytePlus 异步完成。
+
+> ℹ️ **关于 `description`：火山方舟 `CreateAsset` 接口本身不支持单素材级别的描述字段**。如需对一组素材打统一标签，请在「素材组」级别使用 `description`（见 [创建素材组](#创建素材组)）。
 
 **`url` 字段支持的三种格式：**
 
@@ -843,9 +876,11 @@ curl -X DELETE https://api.gravitex.ai/v1/assets/asset-20260508120145-pqwhc \
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `name` | string | **是** | 素材组名称（用于落库） |
-| `description` | string | 否 | 描述 |
+| `name` | string | **是** | 素材组名称（用于落库 + 回写到火山方舟控制台） |
+| `description` | string | 否 | 描述。同 `POST /v1/asset-groups`，缺省时网关自动用 `username` 兜底 |
 | `channel_id` | integer | 否 | 指定上游渠道 ID，省略则自动选择 |
+
+> 网关在拿到火山返回的 `GroupId` 后，会立刻调用 `UpdateAssetGroup` 把上面的 `name` / `description` 回写到火山控制台（火山的 `CreateVisualValidateSession` 接口本身不接受这两个字段）。
 
 ```bash
 curl -X POST https://api.gravitex.ai/v1/visual-validate/session \
@@ -867,6 +902,57 @@ curl -X POST https://api.gravitex.ai/v1/visual-validate/session \
 ```
 
 > 客户端通常只需把 `h5_link` 在 popup 中打开，并监听 `window.message` 的 `gravitex-asset-validate-result`；`state` 字段已被网关内置回调页自动转发，业务侧无需自行调用 `/v1/visual-validate/result`。
+
+#### 客户端监听 postMessage 的 payload
+
+回调页（`/asset-validate-callback.html`）会向 `window.opener` 投递如下结构的消息（`targetOrigin = '*'`）：
+
+**核验成功：**
+
+```json
+{
+  "type": "gravitex-asset-validate-result",
+  "ok": true,
+  "group_id": "group-20260512083014-zyxwv",
+  "name": "真人A",
+  "channel_id": 123,
+  "group_type": "liveness_face"
+}
+```
+
+**核验失败：**
+
+```json
+{
+  "type": "gravitex-asset-validate-result",
+  "ok": false,
+  "result_code": "10003",
+  "error": "活体核验未通过：人脸与底图不匹配"
+}
+```
+
+**最小客户端示例：**
+
+```js
+const popup = window.open(session.h5_link, 'asset-validate', 'width=480,height=720');
+
+const listener = (event) => {
+  // 回调页与主页若不同源（如 maas:80 ↔ api:3000），origin 会不同；
+  // 业务侧建议通过 type 字段而非 event.origin 识别。
+  const data = event.data;
+  if (!data || data.type !== 'gravitex-asset-validate-result') return;
+
+  window.removeEventListener('message', listener);
+  if (data.ok) {
+    console.log('素材组创建成功:', data.group_id);
+  } else {
+    console.error('核验失败:', data.error, data.result_code);
+  }
+};
+window.addEventListener('message', listener);
+```
+
+> H5 链接默认 120 秒内有效；建议在客户端侧设置一个略大的超时（例如 130s）兜底，超时后关闭 popup + 移除 listener。
 
 ---
 
@@ -940,6 +1026,8 @@ curl -X POST https://api.gravitex.ai/v1/visual-validate/session \
 
 ### 错误响应格式
 
+网关自身校验失败：
+
 ```json
 {
   "error": {
@@ -948,6 +1036,30 @@ curl -X POST https://api.gravitex.ai/v1/visual-validate/session \
   }
 }
 ```
+
+**火山方舟上游错误透传**——当请求到达上游再被拒（例如内容审核、参数类型不匹配），网关会原样转发火山的错误结构：
+
+```json
+{
+  "error": {
+    "code": "InvalidParameter",
+    "message": "The parameter `content[2].image_url.url` specified in the request is not valid: the specified asset is not an image. Request id: 02177850...",
+    "param": "content[2].image_url.url",
+    "type": "BadRequest"
+  }
+}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `code` | 火山方舟错误码（如 `InvalidParameter` / `InternalServiceError` / `RateLimitExceeded`） |
+| `param` | 出错字段的点路径定位（如 `content[2].image_url.url`），可直接对照请求 body 排查 |
+| `Request id` | 火山请求 ID，反馈火山工单时必带 |
+
+> 常见 `InvalidParameter` 触发点：
+> - `asset://` 引用塞错字段（详见 [Content 数组详解](#content-数组详解)）
+> - 视频尺寸/时长超出限制
+> - 内容安全审核未通过
 
 ---
 
