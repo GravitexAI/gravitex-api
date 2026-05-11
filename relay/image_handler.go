@@ -172,8 +172,14 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return newAPIError
 	}
 
+	// 按张计费：优先使用上游返回的 usage.generated_images（实际生成数量），
+	// 其次回退到请求入参的 N，兜底为 1。
+	// 解决场景：用户请求 n=4，但上游（如 seedream-5）实际只返回 1 张图，
+	// 不应该按 4 张计费。
 	imageN := uint(1)
-	if request.N != nil {
+	if u, ok := usage.(*dto.Usage); ok && u != nil && u.GeneratedImages > 0 {
+		imageN = uint(u.GeneratedImages)
+	} else if request.N != nil && *request.N > 0 {
 		imageN = *request.N
 	}
 
@@ -194,17 +200,16 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		usage.(*dto.Usage).PromptTokens = 1
 	}
 
-	// 按张计费：根据上游实际生成的图片数量校正扣费金额
-	// 优先使用上游返回的 generated_images，其次使用请求中的 N
+	// 按张计费：ImagePriceMultiplier 仅作日志/展示用途，反映「尺寸/质量倍率 × 实际张数」。
+	// 注意：不要在此处用张数覆盖 ModelPrice —— ModelPrice 在 price.go 中已是
+	// `unit_price × size_ratio × quality_ratio`，张数已通过 OtherRatios["n"] 一次性参与计费，
+	// 否则会丢失 size/quality 倍率，并与 OtherRatios["n"] 双重计算。
 	if info.PriceData.PerImageUnitPrice > 0 {
-		actualImages := usage.(*dto.Usage).GeneratedImages
-		if actualImages <= 0 && request.N != nil && *request.N > 0 {
-			actualImages = int(*request.N)
+		sizeQualityMultiplier := info.PriceData.ImagePriceMultiplier
+		if sizeQualityMultiplier <= 0 {
+			sizeQualityMultiplier = 1
 		}
-		if actualImages > 0 {
-			info.PriceData.ModelPrice = info.PriceData.PerImageUnitPrice * float64(actualImages)
-			info.PriceData.ImagePriceMultiplier = float64(actualImages)
-		}
+		info.PriceData.ImagePriceMultiplier = sizeQualityMultiplier * float64(imageN)
 	}
 
 	quality := "standard"

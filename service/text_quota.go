@@ -499,6 +499,19 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["image_generation_call"] = true
 		other["image_generation_call_price"] = summary.ImageGenerationCallPrice
 	}
+	// 按张计费（per_image）：写入 per_call_price / per_call_image_multiplier 供下游
+	// （Java 后端 BillingDetailService / 前端 LogsExpense 页面）识别为按张计费并正确渲染。
+	// - per_call_price：单张有效价格 = unit_price × size_ratio × quality_ratio（即 PriceData.ModelPrice）
+	// - per_call_image_multiplier：实际生成张数（来自 OtherRatios["n"]，由 image_handler 优先用
+	//   上游返回的 usage.generated_images 计算，回退到 request.N，再回退到 1）
+	if relayInfo.PriceData.PerImageUnitPrice > 0 {
+		imageCount := 1.0
+		if n, ok := relayInfo.PriceData.OtherRatios["n"]; ok && n > 0 {
+			imageCount = n
+		}
+		other["per_call_price"] = relayInfo.PriceData.ModelPrice
+		other["per_call_image_multiplier"] = imageCount
+	}
 	if summary.CacheCreationTokens > 0 {
 		other["cache_creation_tokens"] = summary.CacheCreationTokens
 		other["cache_creation_ratio"] = summary.CacheCreationRatio
