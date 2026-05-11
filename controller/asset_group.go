@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -129,6 +130,17 @@ func CreateAssetGroup(c *gin.Context) {
 	}
 
 	cfg := getByteplusAssetConfig(ch)
+
+	// Mirror the H5 / liveness-face flow: when the client doesn't supply a
+	// description, default it to the requesting user's username so the BytePlus
+	// console always shows who owns the group. An explicit description from the
+	// client is left untouched.
+	req.Description = strings.TrimSpace(req.Description)
+	if req.Description == "" {
+		if username, uerr := model.GetUsernameById(userId, false); uerr == nil && username != "" {
+			req.Description = username
+		}
+	}
 
 	// Combined quota across both AIGC and LivenessFace, capped per (user, channel).
 	limit := system_setting.GetByteplusAssetGroupLimit()
