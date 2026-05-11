@@ -104,11 +104,122 @@ func isAllowedImageType(ct string) bool {
 
 // ---------- BytePlus mode: create asset request ----------
 
+// AssetType values understood by BytePlus's CreateAsset API. The gateway accepts
+// the lower-case form (`image|video|audio`) for ergonomics and normalises to
+// the upstream's title-case ("Image"/"Video"/"Audio") before calling BytePlus.
+const (
+	AssetTypeImage = "Image"
+	AssetTypeVideo = "Video"
+	AssetTypeAudio = "Audio"
+)
+
+// Format whitelists per BytePlus virtual portrait library docs (2026-05).
+// Source: docs/seedance2.0/Private virtual portrait library.md
+//   - Image: jpeg / jpg / png / webp / bmp / tiff / gif / heic / heif (≤ 30 MB)
+//   - Video: mp4 / mov
+//   - Audio: mp3 / wav
+var (
+	imageContentTypes = map[string]struct{}{
+		"image/jpeg": {}, "image/jpg": {}, "image/png": {}, "image/webp": {},
+		"image/bmp": {}, "image/tiff": {}, "image/gif": {},
+		"image/heic": {}, "image/heif": {},
+	}
+	imageExts = map[string]struct{}{
+		".jpg": {}, ".jpeg": {}, ".png": {}, ".webp": {}, ".bmp": {},
+		".tif": {}, ".tiff": {}, ".gif": {}, ".heic": {}, ".heif": {},
+	}
+	videoContentTypes = map[string]struct{}{
+		"video/mp4": {}, "video/quicktime": {}, "video/x-quicktime": {}, "video/mov": {},
+	}
+	videoExts = map[string]struct{}{
+		".mp4": {}, ".mov": {},
+	}
+	audioContentTypes = map[string]struct{}{
+		"audio/mpeg": {}, "audio/mp3": {}, "audio/wav": {}, "audio/wave": {}, "audio/x-wav": {},
+	}
+	audioExts = map[string]struct{}{
+		".mp3": {}, ".wav": {},
+	}
+)
+
 type createAssetRequest struct {
 	URL       string `json:"url" binding:"required"`
 	GroupId   string `json:"group_id" binding:"required"`
-	AssetType string `json:"asset_type"` // defaults to "Image"
+	AssetType string `json:"asset_type"` // "Image" | "Video" | "Audio"; case-insensitive; defaults to "Image"
 	Name      string `json:"name"`
+}
+
+// normalizeAssetType maps user-supplied / inferred asset type to one of the
+// BytePlus title-case values. Empty string or unknown values fall back to "Image".
+// Returns ("", false) if the value is non-empty but unknown — caller should reject.
+func normalizeAssetType(s string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "image":
+		return AssetTypeImage, true
+	case "video":
+		return AssetTypeVideo, true
+	case "audio":
+		return AssetTypeAudio, true
+	default:
+		return "", false
+	}
+}
+
+// validateAssetUrlForType performs lightweight format whitelisting based on the
+// URL's path extension. We deliberately do NOT HEAD the remote URL — BytePlus
+// itself does the authoritative content sniffing during async preprocessing,
+// and adding an upstream HEAD here would slow the API materially.
+//
+// Returns nil on success or a 400-eligible error describing the mismatch.
+func validateAssetUrlForType(rawURL, assetType string) error {
+	lower := strings.ToLower(rawURL)
+	// strip query string for extension matching
+	if idx := strings.IndexByte(lower, '?'); idx >= 0 {
+		lower = lower[:idx]
+	}
+	ext := ""
+	if idx := strings.LastIndexByte(lower, '.'); idx >= 0 {
+		ext = lower[idx:]
+	}
+	if ext == "" {
+		// No extension we can match — let BytePlus arbitrate. Don't reject here.
+		return nil
+	}
+	switch assetType {
+	case AssetTypeImage:
+		if _, ok := imageExts[ext]; !ok {
+			return fmt.Errorf("file extension %q not supported for image asset (allowed: jpg/jpeg/png/webp/bmp/tiff/gif/heic/heif)", ext)
+		}
+	case AssetTypeVideo:
+		if _, ok := videoExts[ext]; !ok {
+			return fmt.Errorf("file extension %q not supported for video asset (allowed: mp4/mov)", ext)
+		}
+	case AssetTypeAudio:
+		if _, ok := audioExts[ext]; !ok {
+			return fmt.Errorf("file extension %q not supported for audio asset (allowed: mp3/wav)", ext)
+		}
+	}
+	return nil
+}
+
+// inferAssetTypeFromContentType maps a MIME type (e.g. from multipart upload or
+// a HEAD request) to the BytePlus asset type. Returns empty string if not a
+// known media type.
+func inferAssetTypeFromContentType(ct string) string {
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	if _, ok := imageContentTypes[ct]; ok {
+		return AssetTypeImage
+	}
+	if _, ok := videoContentTypes[ct]; ok {
+		return AssetTypeVideo
+	}
+	if _, ok := audioContentTypes[ct]; ok {
+		return AssetTypeAudio
+	}
+	return ""
 }
 
 // CreateAsset handles asset creation in dual mode:
@@ -154,9 +265,15 @@ func createAssetByteplus(c *gin.Context) {
 
 	cfg := getByteplusAssetConfig(ch)
 
-	assetType := req.AssetType
-	if assetType == "" {
-		assetType = "Image"
+	assetType, ok := normalizeAssetType(req.AssetType)
+	if !ok {
+		assetErrorResponse(c, http.StatusBadRequest, "Invalid asset_type, expected image|video|audio")
+		return
+	}
+
+	if err := validateAssetUrlForType(req.URL, assetType); err != nil {
+		assetErrorResponse(c, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): channel=%d group=%s url=%s type=%s", ch.Id, req.GroupId, req.URL, assetType))
@@ -177,6 +294,7 @@ func createAssetByteplus(c *gin.Context) {
 		VirtualId: assetId,
 		AssetUrl:  "asset://" + assetId,
 		Filename:  req.Name,
+		AssetType: assetType,
 		Status:    "pending", // BytePlus "Processing" → internal "pending"
 	}
 	if err := model.InsertUserAsset(userAsset); err != nil {
@@ -187,6 +305,7 @@ func createAssetByteplus(c *gin.Context) {
 		"virtual_id": assetId,
 		"asset_url":  "asset://" + assetId,
 		"group_id":   req.GroupId,
+		"asset_type": assetType,
 		"status":     "pending",
 	})
 }
@@ -375,10 +494,20 @@ func inferImageContentType(filename string) string {
 // ListAssets returns assets belonging to the current user across all BytePlus-enabled channels
 // accessible by the token's group. For pending assets, it refreshes status from upstream.
 // Note: only BytePlus channels are listed; uptoken assets are excluded from the asset library.
+//
+// Supports optional ?group_type=aigc|liveness_face|all to filter by the owning group's type.
+// Defaults to no group_type filter when only ?group_id is provided (the group itself already
+// disambiguates the type). Defaults to no filter at all when neither is provided.
 func ListAssets(c *gin.Context) {
 	userId := c.GetInt("id")
 	group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 	groupIdFilter := c.Query("group_id") // optional: filter by BytePlus asset group
+
+	groupType, ok := normalizeAssetGroupType(c.Query("group_type"))
+	if !ok {
+		assetErrorResponse(c, http.StatusBadRequest, "Invalid group_type")
+		return
+	}
 
 	// Only list assets from BytePlus-enabled channels (skip uptoken channels)
 	channels, err := getByteplusEnabledChannels(group)
@@ -407,9 +536,12 @@ func ListAssets(c *gin.Context) {
 
 	var assets []model.UserAsset
 	var err2 error
-	if groupIdFilter != "" {
+	switch {
+	case groupIdFilter != "":
 		assets, err2 = model.GetUserAssetsByGroupId(userId, groupIdFilter)
-	} else {
+	case groupType != "" && groupType != "all":
+		assets, err2 = model.GetUserAssetsByUserIdChannelIdsAndGroupType(userId, channelIds, groupType)
+	default:
 		assets, err2 = model.GetUserAssetsByUserIdAndChannelIds(userId, channelIds)
 	}
 	if err2 != nil {
@@ -418,26 +550,38 @@ func ListAssets(c *gin.Context) {
 		return
 	}
 
-	// Refresh status for pending/ready assets from upstream via BytePlus SDK
+	// Refresh status / url / asset_type for pending/ready or type-less assets from upstream.
+	// Type backfill covers rows persisted before the asset_type column existed (default "Image").
 	for i := range assets {
-		if assets[i].Status == "pending" || assets[i].Status == "ready" {
-			ch, ok := channelMap[assets[i].ChannelId]
-			if !ok {
-				continue
-			}
-			cfg := getByteplusAssetConfig(ch)
-			info, err := service.ByteplusGetAsset(cfg, assets[i].VirtualId)
-			if err == nil && info != nil {
-				newStatus := service.ByteplusStatusToInternal(info.Status)
-				if newStatus != assets[i].Status || info.URL != assets[i].Url {
-					_ = model.UpdateUserAssetFields(assets[i].VirtualId, map[string]interface{}{
-						"status": newStatus,
-						"url":    info.URL,
-					})
-					assets[i].Status = newStatus
-					assets[i].Url = info.URL
-				}
-			}
+		needRefresh := assets[i].Status == "pending" || assets[i].Status == "ready" || assets[i].AssetType == ""
+		if !needRefresh {
+			continue
+		}
+		ch, ok := channelMap[assets[i].ChannelId]
+		if !ok {
+			continue
+		}
+		cfg := getByteplusAssetConfig(ch)
+		info, err := service.ByteplusGetAsset(cfg, assets[i].VirtualId)
+		if err != nil || info == nil {
+			continue
+		}
+		updates := map[string]interface{}{}
+		newStatus := service.ByteplusStatusToInternal(info.Status)
+		if newStatus != assets[i].Status {
+			updates["status"] = newStatus
+			assets[i].Status = newStatus
+		}
+		if info.URL != "" && info.URL != assets[i].Url {
+			updates["url"] = info.URL
+			assets[i].Url = info.URL
+		}
+		if info.AssetType != "" && info.AssetType != assets[i].AssetType {
+			updates["asset_type"] = info.AssetType
+			assets[i].AssetType = info.AssetType
+		}
+		if len(updates) > 0 {
+			_ = model.UpdateUserAssetFields(assets[i].VirtualId, updates)
 		}
 	}
 

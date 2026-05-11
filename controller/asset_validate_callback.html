@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>真人活体核验 / Liveness Verification</title>
+    <style>
+      :root { color-scheme: light dark; }
+      html, body {
+        margin: 0; padding: 0; height: 100%;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        background: #f5f7fa; color: #1a1a1a;
+      }
+      @media (prefers-color-scheme: dark) {
+        html, body { background: #0f1115; color: #e6e6e6; }
+        .card { background: #181c24 !important; box-shadow: 0 6px 32px rgba(0,0,0,0.5) !important; }
+      }
+      body { display: flex; align-items: center; justify-content: center; }
+      .card {
+        background: #fff; border-radius: 14px; padding: 32px 28px; max-width: 380px;
+        width: calc(100% - 32px);
+        box-shadow: 0 6px 32px rgba(20,30,60,0.12); text-align: center;
+      }
+      .icon { font-size: 56px; line-height: 1; margin-bottom: 8px; }
+      h1 { font-size: 18px; margin: 8px 0 4px; }
+      p { font-size: 14px; line-height: 1.6; opacity: 0.8; margin: 6px 0; }
+      .err { color: #d12c2c; }
+      .ok { color: #2c8e3f; }
+      .progress {
+        margin-top: 14px; height: 4px; background: rgba(127,127,127,0.18); border-radius: 2px;
+        overflow: hidden;
+      }
+      .progress::after {
+        content: ''; display: block; height: 100%; width: 30%;
+        background: #4d7cff;
+        animation: indeterminate 1s ease-in-out infinite;
+      }
+      @keyframes indeterminate {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(380%); }
+      }
+      .small { font-size: 12px; opacity: 0.6; margin-top: 12px; }
+      code { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="card" id="card">
+      <div class="icon" id="icon">⏳</div>
+      <h1 id="title">正在完成真人核验…</h1>
+      <p id="msg">请稍候，正在与服务器同步核验结果。</p>
+      <div class="progress" id="progress"></div>
+      <div class="small" id="hint"></div>
+    </div>
+    <script>
+      (function () {
+        var qs = new URLSearchParams(window.location.search);
+        var state = qs.get('state') || '';
+        var bytedToken = qs.get('bytedToken') || qs.get('BytedToken') || '';
+        var resultCode = qs.get('resultCode') || qs.get('ResultCode') || '';
+        var algoCode = qs.get('algorithmBaseRespCode') || '';
+
+        var iconEl = document.getElementById('icon');
+        var titleEl = document.getElementById('title');
+        var msgEl = document.getElementById('msg');
+        var progressEl = document.getElementById('progress');
+        var hintEl = document.getElementById('hint');
+
+        function postBack(payload) {
+          try {
+            if (window.opener && !window.opener.closed) {
+              window.opener.postMessage(
+                Object.assign({ type: 'gravitex-asset-validate-result' }, payload),
+                '*'
+              );
+            }
+          } catch (e) { /* ignore */ }
+        }
+
+        function showSuccess(groupId) {
+          iconEl.textContent = '✅';
+          iconEl.className = 'icon ok';
+          titleEl.textContent = '核验成功';
+          msgEl.textContent = '真人素材组已创建，3 秒后自动关闭本窗口。';
+          hintEl.innerHTML = 'Group ID: <code>' + escapeHtml(groupId) + '</code>';
+          progressEl.style.display = 'none';
+          setTimeout(function () { try { window.close(); } catch (e) {} }, 3000);
+        }
+
+        function showError(message, opts) {
+          opts = opts || {};
+          iconEl.textContent = '⚠️';
+          iconEl.className = 'icon err';
+          titleEl.textContent = opts.title || '核验失败';
+          msgEl.textContent = message;
+          progressEl.style.display = 'none';
+          var hints = [];
+          if (resultCode) hints.push('resultCode=' + resultCode);
+          if (algoCode) hints.push('algorithmBaseRespCode=' + algoCode);
+          if (hints.length) hintEl.textContent = hints.join(' · ');
+        }
+
+        function escapeHtml(s) {
+          return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+          });
+        }
+
+        if (!state) {
+          showError('缺少 state 参数，无法完成核验。请重新发起核验流程。');
+          postBack({ ok: false, error: 'missing_state' });
+          return;
+        }
+        if (!bytedToken) {
+          showError('缺少 bytedToken 参数，可能是回调链接被截断。');
+          postBack({ ok: false, error: 'missing_byted_token' });
+          return;
+        }
+        if (resultCode && resultCode !== '10000') {
+          var errMsg = '真人活体核验未通过 (resultCode=' + resultCode + ')，请重试。';
+          showError(errMsg);
+          postBack({ ok: false, error: 'liveness_failed', result_code: resultCode });
+          return;
+        }
+
+        // POST to gateway, exchange BytedToken for the new GroupId.
+        fetch('/v1/visual-validate/result', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({ state: state, byted_token: bytedToken })
+        })
+          .then(function (resp) {
+            return resp.json().then(function (data) { return { status: resp.status, data: data }; });
+          })
+          .then(function (r) {
+            if (r.status >= 200 && r.status < 300 && r.data && r.data.group_id) {
+              showSuccess(r.data.group_id);
+              postBack({ ok: true, group_id: r.data.group_id, name: r.data.name, channel_id: r.data.channel_id });
+            } else {
+              var errMsg = (r.data && r.data.error && r.data.error.message) || ('请求失败 (HTTP ' + r.status + ')');
+              showError(errMsg);
+              postBack({ ok: false, error: errMsg });
+            }
+          })
+          .catch(function (e) {
+            showError('网络错误：' + (e && e.message ? e.message : e));
+            postBack({ ok: false, error: 'network_error' });
+          });
+      })();
+    </script>
+  </body>
+</html>

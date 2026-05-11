@@ -9,28 +9,40 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 
 	"github.com/gin-gonic/gin"
 )
 
 // ---------- request / response types ----------
 
-// MaxAssetGroupsPerUserPerChannel limits how many asset groups a single user
-// can create on one upstream channel (one AK/SK account).
-// BytePlus does not document an explicit limit, but upstream resources are shared
-// across all gateway users routed to the same channel, so we cap it defensively.
-const MaxAssetGroupsPerUserPerChannel = 5
-
 type createAssetGroupRequest struct {
 	Name        string `json:"name" binding:"required"`
 	Description string `json:"description"`
-	ChannelId   int    `json:"channel_id"` // optional, auto-select if 0
+	ChannelId   int    `json:"channel_id"`           // optional, auto-select if 0
+	GroupType   string `json:"group_type,omitempty"` // "aigc" (default) | "liveness_face" (requires H5 verification, rejected here)
 }
 
 type assetGroupListItem struct {
 	model.UserAssetGroup
 	SpaceLabel string `json:"space_label"`
 	AssetCount int64  `json:"asset_count"`
+}
+
+// normalizeAssetGroupType maps the public group_type string into an internal value.
+// Empty string defaults to "aigc" for backward compatibility.
+// Returns ("", false) for unknown values.
+func normalizeAssetGroupType(gt string) (string, bool) {
+	switch gt {
+	case "", model.GroupTypeAIGC:
+		return model.GroupTypeAIGC, true
+	case model.GroupTypeLivenessFace:
+		return model.GroupTypeLivenessFace, true
+	case "all":
+		return "all", true
+	default:
+		return "", false
+	}
 }
 
 // ---------- helpers ----------
@@ -69,6 +81,8 @@ func getByteplusEnabledChannels(group string) ([]*model.Channel, error) {
 // ---------- handlers ----------
 
 // CreateAssetGroup creates a new asset group on BytePlus and records it locally.
+// For real-human portrait (group_type="liveness_face") the request is rejected:
+// real-person groups must be created via POST /v1/visual-validate/session (H5 flow).
 func CreateAssetGroup(c *gin.Context) {
 	userId := c.GetInt("id")
 	group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
@@ -76,6 +90,17 @@ func CreateAssetGroup(c *gin.Context) {
 	var req createAssetGroupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		assetErrorResponse(c, http.StatusBadRequest, "Invalid request: "+err.Error())
+		return
+	}
+
+	groupType, ok := normalizeAssetGroupType(req.GroupType)
+	if !ok || groupType == "all" {
+		assetErrorResponse(c, http.StatusBadRequest, "Invalid group_type")
+		return
+	}
+	if groupType == model.GroupTypeLivenessFace {
+		assetErrorResponse(c, http.StatusBadRequest,
+			"Real-human portrait groups can only be created via POST /v1/visual-validate/session (H5 liveness verification)")
 		return
 	}
 
@@ -105,31 +130,31 @@ func CreateAssetGroup(c *gin.Context) {
 
 	cfg := getByteplusAssetConfig(ch)
 
-	// Check per-user group limit on this channel
-	count, err := model.CountUserAssetGroupsByChannel(userId, ch.Id)
+	// Combined quota across both AIGC and LivenessFace, capped per (user, channel).
+	limit := system_setting.GetByteplusAssetGroupLimit()
+	count, err := model.CountUserAssetGroupsByChannel(userId, ch.Id, "")
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAssetGroup: count check failed: %s", err.Error()))
 		assetErrorResponse(c, http.StatusInternalServerError, "Failed to check group limit")
 		return
 	}
-	if count >= MaxAssetGroupsPerUserPerChannel {
-		assetErrorResponse(c, http.StatusForbidden, fmt.Sprintf("Asset group limit reached (%d)", MaxAssetGroupsPerUserPerChannel))
+	if int(count) >= limit {
+		assetErrorResponse(c, http.StatusForbidden, fmt.Sprintf("Asset group limit reached (%d)", limit))
 		return
 	}
 
-	// Call BytePlus API
-	groupId, err := service.ByteplusCreateAssetGroup(cfg, req.Name, req.Description)
+	groupId, err := service.ByteplusCreateAssetGroup(cfg, req.Name, req.Description, service.ByteplusGroupTypeAIGC)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAssetGroup: byteplus error: %s", err.Error()))
 		assetErrorResponse(c, http.StatusBadGateway, "Failed to create asset group on upstream: "+err.Error())
 		return
 	}
 
-	// Save locally
 	assetGroup := &model.UserAssetGroup{
 		UserId:      userId,
 		ChannelId:   ch.Id,
 		GroupId:     groupId,
+		GroupType:   model.GroupTypeAIGC,
 		Name:        req.Name,
 		Description: req.Description,
 		ProjectName: cfg.ProjectName,
@@ -144,13 +169,22 @@ func CreateAssetGroup(c *gin.Context) {
 		"name":        req.Name,
 		"description": req.Description,
 		"channel_id":  ch.Id,
+		"group_type":  model.GroupTypeAIGC,
 	})
 }
 
 // ListAssetGroups lists the user's asset groups across all BytePlus-enabled channels.
+// Supports optional ?group_type=aigc|liveness_face|all filtering. Defaults to "aigc"
+// for backward compatibility (existing clients see only the virtual library).
 func ListAssetGroups(c *gin.Context) {
 	userId := c.GetInt("id")
 	group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+
+	groupType, ok := normalizeAssetGroupType(c.Query("group_type"))
+	if !ok {
+		assetErrorResponse(c, http.StatusBadRequest, "Invalid group_type")
+		return
+	}
 
 	channels, err := getByteplusEnabledChannels(group)
 	if err != nil {
@@ -173,7 +207,11 @@ func ListAssetGroups(c *gin.Context) {
 		channelIds[i] = ch.Id
 	}
 
-	groups, err := model.GetUserAssetGroupsByUserIdAndChannelIds(userId, channelIds)
+	dbFilter := groupType
+	if dbFilter == "all" {
+		dbFilter = ""
+	}
+	groups, err := model.GetUserAssetGroupsByUserIdChannelIdsAndType(userId, channelIds, dbFilter)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("ListAssetGroups: DB query failed: %s", err.Error()))
 		assetErrorResponse(c, http.StatusInternalServerError, "Failed to list asset groups")

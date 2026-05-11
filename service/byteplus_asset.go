@@ -11,6 +11,14 @@ import (
 	"github.com/byteplus-sdk/byteplus-go-sdk-v2/byteplus/universal"
 )
 
+// BytePlus Ark `GroupType` values used by the asset library API.
+const (
+	// ByteplusGroupTypeAIGC is the private virtual avatar (AIGC) library — the existing default.
+	ByteplusGroupTypeAIGC = "AIGC"
+	// ByteplusGroupTypeLivenessFace is the real-human portrait library, gated behind H5 liveness verification.
+	ByteplusGroupTypeLivenessFace = "LivenessFace"
+)
+
 // ByteplusAssetConfig holds credentials for BytePlus Asset API calls.
 type ByteplusAssetConfig struct {
 	AK          string
@@ -81,12 +89,16 @@ type ByteplusAssetGroupInfo struct {
 	UpdateTime  string `json:"UpdateTime"`
 }
 
-// ByteplusCreateAssetGroup creates an asset group and returns the group ID.
-func ByteplusCreateAssetGroup(cfg ByteplusAssetConfig, name, description string) (string, error) {
+// ByteplusCreateAssetGroup creates an asset group of the given type and returns the group ID.
+// groupType must be one of ByteplusGroupTypeAIGC or ByteplusGroupTypeLivenessFace.
+func ByteplusCreateAssetGroup(cfg ByteplusAssetConfig, name, description, groupType string) (string, error) {
+	if groupType == "" {
+		groupType = ByteplusGroupTypeAIGC
+	}
 	body := map[string]interface{}{
 		"Name":        name,
 		"Description": description,
-		"GroupType":   "AIGC",
+		"GroupType":   groupType,
 		"ProjectName": cfg.ProjectName,
 	}
 	resp, err := byteplusCall(cfg, "CreateAssetGroup", body)
@@ -128,10 +140,14 @@ func extractStringField(resp *map[string]interface{}, key string) string {
 	return ""
 }
 
-// ByteplusListAssetGroups lists asset groups with pagination.
-func ByteplusListAssetGroups(cfg ByteplusAssetConfig, groupIds []string, pageNum, pageSize int) ([]ByteplusAssetGroupInfo, int, error) {
+// ByteplusListAssetGroups lists asset groups with pagination, filtered by group type.
+// Pass empty groupType to default to AIGC for backward compatibility.
+func ByteplusListAssetGroups(cfg ByteplusAssetConfig, groupType string, groupIds []string, pageNum, pageSize int) ([]ByteplusAssetGroupInfo, int, error) {
+	if groupType == "" {
+		groupType = ByteplusGroupTypeAIGC
+	}
 	filter := map[string]interface{}{
-		"GroupType": "AIGC",
+		"GroupType": groupType,
 	}
 	if len(groupIds) > 0 {
 		filter["GroupIds"] = groupIds
@@ -162,6 +178,36 @@ func ByteplusDeleteAssetGroup(cfg ByteplusAssetConfig, groupId string) error {
 		"ProjectName": cfg.ProjectName,
 	}
 	_, err := byteplusCall(cfg, "DeleteAssetGroup", body)
+	return err
+}
+
+// ByteplusUpdateAssetGroup overwrites the Name / Description of an existing
+// asset group on BytePlus side. Used after liveness verification creates a
+// LivenessFace group with no name/description, so the gateway can backfill
+// the user-supplied label into the BytePlus console.
+//
+// Empty name and description are skipped so callers can update one field at
+// a time. ProjectName is always included since BytePlus scopes resources by
+// project.
+func ByteplusUpdateAssetGroup(cfg ByteplusAssetConfig, groupId, name, description string) error {
+	if groupId == "" {
+		return fmt.Errorf("UpdateAssetGroup: empty groupId")
+	}
+	body := map[string]interface{}{
+		"Id":          groupId,
+		"ProjectName": cfg.ProjectName,
+	}
+	if name != "" {
+		body["Name"] = name
+	}
+	if description != "" {
+		body["Description"] = description
+	}
+	if len(body) == 2 {
+		// Only Id + ProjectName — nothing to update.
+		return nil
+	}
+	_, err := byteplusCall(cfg, "UpdateAssetGroup", body)
 	return err
 }
 
@@ -222,10 +268,14 @@ func ByteplusGetAsset(cfg ByteplusAssetConfig, assetId string) (*ByteplusAssetIn
 	return &result, nil
 }
 
-// ByteplusListAssets lists assets with optional group and status filtering.
-func ByteplusListAssets(cfg ByteplusAssetConfig, groupId string, statuses []string, pageNum, pageSize int) ([]ByteplusAssetInfo, int, error) {
+// ByteplusListAssets lists assets with optional group and status filtering, filtered by group type.
+// Pass empty groupType to default to AIGC for backward compatibility.
+func ByteplusListAssets(cfg ByteplusAssetConfig, groupType, groupId string, statuses []string, pageNum, pageSize int) ([]ByteplusAssetInfo, int, error) {
+	if groupType == "" {
+		groupType = ByteplusGroupTypeAIGC
+	}
 	filter := map[string]interface{}{
-		"GroupType": "AIGC",
+		"GroupType": groupType,
 	}
 	if groupId != "" {
 		filter["GroupIds"] = []string{groupId}
@@ -276,4 +326,52 @@ func ByteplusStatusToInternal(bpStatus string) string {
 	default:
 		return "pending"
 	}
+}
+
+// ---------- Real-human portrait library: H5 liveness verification ----------
+
+// ByteplusCreateVisualValidateSession launches a BytePlus liveness verification session
+// and returns the H5 page link plus a `BytedToken` used to fetch the resulting GroupId
+// once the end user finishes verification.
+//
+// The CallbackURL is invoked by BytePlus with `?bytedToken=...&resultCode=10000` appended
+// after verification completes; the gateway must persist the original BytedToken so it can
+// later call ByteplusGetVisualValidateResult to materialize the new asset group.
+func ByteplusCreateVisualValidateSession(cfg ByteplusAssetConfig, callbackURL string) (h5Link, bytedToken string, err error) {
+	body := map[string]interface{}{
+		"CallbackURL": callbackURL,
+		"ProjectName": cfg.ProjectName,
+	}
+	resp, err := byteplusCall(cfg, "CreateVisualValidateSession", body)
+	if err != nil {
+		return "", "", err
+	}
+	bytedToken = extractStringField(resp, "BytedToken")
+	h5Link = extractStringField(resp, "H5Link")
+	if bytedToken == "" {
+		return "", "", fmt.Errorf("CreateVisualValidateSession returned empty BytedToken, raw: %v", resp)
+	}
+	if h5Link == "" {
+		return "", "", fmt.Errorf("CreateVisualValidateSession returned empty H5Link, raw: %v", resp)
+	}
+	return h5Link, bytedToken, nil
+}
+
+// ByteplusGetVisualValidateResult exchanges a `BytedToken` for the GroupId created by the
+// liveness verification session. Must be called after the end user finishes the H5 flow
+// (and within 120 seconds of obtaining the token, per BytePlus docs).
+func ByteplusGetVisualValidateResult(cfg ByteplusAssetConfig, bytedToken string) (groupId string, err error) {
+	body := map[string]interface{}{
+		"BytedToken":  bytedToken,
+		"ProjectName": cfg.ProjectName,
+	}
+	resp, err := byteplusCall(cfg, "GetVisualValidateResult", body)
+	if err != nil {
+		return "", err
+	}
+	groupId = extractStringField(resp, "GroupId")
+	if groupId == "" {
+		return "", fmt.Errorf("GetVisualValidateResult returned empty GroupId, raw: %v", resp)
+	}
+	return groupId, nil
 }

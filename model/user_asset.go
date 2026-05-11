@@ -14,10 +14,14 @@ type UserAsset struct {
 	Url         string `json:"url" gorm:"type:text"`
 	Filename    string `json:"filename" gorm:"type:varchar(256)"`
 	ContentType string `json:"content_type" gorm:"type:varchar(64)"`
-	SizeBytes   int64  `json:"size_bytes"`
-	Status      string `json:"status" gorm:"type:varchar(20);default:'pending'"`
-	CreatedAt   int64  `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt   int64  `json:"updated_at" gorm:"autoUpdateTime"`
+	// AssetType mirrors BytePlus's `AssetType` ("Image" / "Video" / "Audio").
+	// Stored locally so the asset list can render type-specific UI without an
+	// upstream round-trip per asset.
+	AssetType string `json:"asset_type" gorm:"type:varchar(16);default:'Image';index"`
+	SizeBytes int64  `json:"size_bytes"`
+	Status    string `json:"status" gorm:"type:varchar(20);default:'pending'"`
+	CreatedAt int64  `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt int64  `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 func (UserAsset) TableName() string {
@@ -41,6 +45,33 @@ func GetUserAssetsByUserIdAndChannelIds(userId int, channelIds []int) ([]UserAss
 		return assets, nil
 	}
 	err := DB.Where("user_id = ? AND channel_id IN ?", userId, channelIds).Order("created_at DESC").Find(&assets).Error
+	return assets, err
+}
+
+// GetUserAssetsByUserIdChannelIdsAndGroupType returns assets across the given channels filtered by the
+// owning asset group's group_type. Implementation does the filtering in two queries (group ids first,
+// then assets) to keep cross-DB compatibility (avoid raw JOIN syntax differences).
+// If groupType is empty, no filter is applied (returns the same result as GetUserAssetsByUserIdAndChannelIds).
+func GetUserAssetsByUserIdChannelIdsAndGroupType(userId int, channelIds []int, groupType string) ([]UserAsset, error) {
+	if len(channelIds) == 0 {
+		return nil, nil
+	}
+	if groupType == "" {
+		return GetUserAssetsByUserIdAndChannelIds(userId, channelIds)
+	}
+	// Fetch matching group ids first.
+	var groupIds []string
+	if err := DB.Model(&UserAssetGroup{}).
+		Where("user_id = ? AND channel_id IN ? AND group_type = ?", userId, channelIds, groupType).
+		Pluck("group_id", &groupIds).Error; err != nil {
+		return nil, err
+	}
+	if len(groupIds) == 0 {
+		return nil, nil
+	}
+	var assets []UserAsset
+	err := DB.Where("user_id = ? AND group_id IN ?", userId, groupIds).
+		Order("created_at DESC").Find(&assets).Error
 	return assets, err
 }
 

@@ -1,5 +1,13 @@
 package model
 
+// Asset group types correspond to BytePlus Ark `GroupType`.
+//   - GroupTypeAIGC:         private virtual avatar library (existing default)
+//   - GroupTypeLivenessFace: real-human portrait library (created via H5 liveness verification)
+const (
+	GroupTypeAIGC         = "aigc"
+	GroupTypeLivenessFace = "liveness_face"
+)
+
 // UserAssetGroup maps gateway users to BytePlus AssetGroups.
 // Each group belongs to a specific channel (upstream BytePlus account) and user.
 type UserAssetGroup struct {
@@ -7,6 +15,7 @@ type UserAssetGroup struct {
 	UserId      int    `json:"user_id" gorm:"index;not null"`
 	ChannelId   int    `json:"channel_id" gorm:"index;not null"`
 	GroupId     string `json:"group_id" gorm:"type:varchar(128);uniqueIndex;not null"` // e.g. "group-20260318033332-xxxxx"
+	GroupType   string `json:"group_type" gorm:"type:varchar(32);default:'aigc';index"` // "aigc" or "liveness_face"
 	Name        string `json:"name" gorm:"type:varchar(256)"`
 	Description string `json:"description" gorm:"type:text"`
 	ProjectName string `json:"project_name" gorm:"type:varchar(64);default:'default'"`
@@ -28,6 +37,21 @@ func GetUserAssetGroupsByUserIdAndChannelIds(userId int, channelIds []int) ([]Us
 		return groups, nil
 	}
 	err := DB.Where("user_id = ? AND channel_id IN ?", userId, channelIds).Order("created_at DESC").Find(&groups).Error
+	return groups, err
+}
+
+// GetUserAssetGroupsByUserIdChannelIdsAndType returns asset groups filtered by user, channels and group_type.
+// If groupType is empty, no type filter is applied.
+func GetUserAssetGroupsByUserIdChannelIdsAndType(userId int, channelIds []int, groupType string) ([]UserAssetGroup, error) {
+	var groups []UserAssetGroup
+	if len(channelIds) == 0 {
+		return groups, nil
+	}
+	q := DB.Where("user_id = ? AND channel_id IN ?", userId, channelIds)
+	if groupType != "" {
+		q = q.Where("group_type = ?", groupType)
+	}
+	err := q.Order("created_at DESC").Find(&groups).Error
 	return groups, err
 }
 
@@ -64,9 +88,14 @@ func CountAssetsByGroupId(groupId string) (int64, error) {
 	return count, err
 }
 
-// CountUserAssetGroupsByChannel returns the number of asset groups the user has on the given channel.
-func CountUserAssetGroupsByChannel(userId, channelId int) (int64, error) {
+// CountUserAssetGroupsByChannel returns the number of asset groups the user has on the given channel,
+// optionally filtered by group_type. Pass empty string for groupType to count all groups regardless of type.
+func CountUserAssetGroupsByChannel(userId, channelId int, groupType string) (int64, error) {
 	var count int64
-	err := DB.Model(&UserAssetGroup{}).Where("user_id = ? AND channel_id = ?", userId, channelId).Count(&count).Error
+	q := DB.Model(&UserAssetGroup{}).Where("user_id = ? AND channel_id = ?", userId, channelId)
+	if groupType != "" {
+		q = q.Where("group_type = ?", groupType)
+	}
+	err := q.Count(&count).Error
 	return count, err
 }

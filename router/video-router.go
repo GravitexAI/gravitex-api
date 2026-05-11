@@ -29,7 +29,19 @@ func SetVideoRouter(router *gin.Engine) {
 		assetV1Router.POST("/asset-groups", controller.CreateAssetGroup)
 		assetV1Router.GET("/asset-groups", controller.ListAssetGroups)
 		assetV1Router.DELETE("/asset-groups/:group_id", controller.DeleteAssetGroup)
+
+		// Real-human portrait library: H5 liveness verification session lifecycle.
+		// /session needs TokenAuth (binds the verification to the calling user/channel).
+		assetV1Router.POST("/visual-validate/session", controller.CreateVisualValidateSession)
 	}
+
+	// /visual-validate/result is invoked anonymously by the gateway-hosted callback page;
+	// authority comes from the HMAC-signed `state` token rather than a user session.
+	router.POST("/v1/visual-validate/result", middleware.RouteTag("relay"), controller.SubmitVisualValidateResult)
+
+	// Gateway-hosted callback landing page that BytePlus redirects to after H5 verification.
+	// The HTML asset is embedded into the binary (see controller/visual_validate_callback.go).
+	router.GET(controller.VisualValidateCallbackPath, controller.ServeVisualValidateCallbackPage)
 
 	videoV1Router := router.Group("/v1")
 	videoV1Router.Use(middleware.RouteTag("relay"))
