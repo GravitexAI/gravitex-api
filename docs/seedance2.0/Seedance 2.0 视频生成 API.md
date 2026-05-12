@@ -19,13 +19,16 @@ Seedance 2.0 是一款先进的 AI 视频生成模型，支持文生视频、图
   - [多模态参考生成](#4-多模态参考生成)
   - [面部一致性（素材库）](#5-面部一致性素材库)
 - [素材库 API](#素材库-api)
-  - [创建素材组](#创建素材组)
+  - [接口总览](#接口总览)
+  - [创建虚拟素材组（aigc）](#创建素材组)
+  - [真人素材组：H5 活体核验（liveness_face）](#真人素材组h5-活体核验)
   - [列出素材组](#列出素材组)
   - [删除素材组](#删除素材组)
   - [创建素材](#创建素材)
   - [列出素材](#列出素材)
   - [查询单个素材](#查询单个素材)
   - [删除素材](#删除素材)
+  - [素材状态](#素材状态)
 - [参数参考](#参数参考)
 - [错误处理](#错误处理)
 - [完整代码示例](#完整代码示例)
@@ -400,27 +403,29 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
 
 | 库类型 | `group_type` | 创建方式 | 典型用途 |
 |---|---|---|---|
-| 虚拟人素材库（默认） | `aigc` | `POST /v1/asset-groups` 直接创建 | 任意非真人画风的角色/物品 |
-| 真人素材库 | `liveness_face` | `POST /v1/visual-validate/session` H5 活体核验后创建 | 真人写真，仅可上传同一真人不同照片 |
+| 虚拟素材库（默认） | `aigc` | `POST /v1/asset-groups` 直接创建 | 任意人物 / 动物 / 风景 / 物品的图片、视频、音频 |
+| 真人素材库 | `liveness_face` | `POST /v1/visual-validate/session` H5 活体核验后创建 | 真人写真，**首次创建必须通过本人活体核验**；后续追加图/视/音不再校验人脸 |
 
 **完整流程：**
 
 ```
 1. 创建素材组         → POST /v1/asset-groups   或   /v1/visual-validate/session
-2. 创建素材           → POST /v1/assets          （JSON：URL / Base64 / Data URI）
+2. 创建素材           → POST /v1/assets          （JSON：仅接受公网 https URL）
 3. 等待状态变为 active → GET  /v1/assets         （轮询）
 4. 在视频生成中引用    → POST /v1/video/generations（使用 asset:// URL）
 ```
 
-> **请求格式说明**：所有素材库接口均使用 `Content-Type: application/json`，**不再支持 multipart 文件上传**。素材本体通过 `url` 字段提交，支持公网 URL 或 Base64。
+> **请求格式说明**：所有素材库接口均使用 `Content-Type: application/json`，**不再支持 multipart 文件上传**。素材本体通过 `url` 字段提交，**只支持 BytePlus 能直接拉取的公网 https URL**；本地文件请先放到任意对象存储拿到 URL 再调本接口（不支持 Base64 / Data URI 直传）。
+>
+> ℹ️ **历史变更**：火山方舟 `CreateAsset` 早期版本曾支持 Base64 / Data URI 直传，**自 2026 起已正式下线**（参见火山官方文档 [Create an Asset](https://docs.byteplus.com/en/docs/ModelArk/CreateAsset) 中的 "*For image/video/audio assets, only URL upload is supported. Base64 is not supported.*"）。如果你的老代码还在传 Data URI，请改造为先上传到对象存储再用 URL。
 
-**支持的素材类型与格式（虚拟人 / 真人 两类素材库均一致）：**
+**支持的素材类型与格式（虚拟 / 真人 两类素材库均一致，约束以火山方舟官方为准）：**
 
-| `asset_type` | 支持格式 | 大小约束 |
-|---|---|---|
-| `Image`（默认） | jpg / jpeg / png / webp / bmp / tiff / gif / heic / heif | 单文件 ≤ 30 MB；长宽比 0.4–2.5；宽高 300–6000 px |
-| `Video` | mp4 / mov | 上游异步预处理，建议短片段 |
-| `Audio` | mp3 / wav | 用于音色/旁白参考 |
+| `asset_type` | 支持格式 | 单文件大小 | 其他约束 |
+|---|---|---|---|
+| `Image`（默认） | jpeg / png / webp / bmp / tiff / gif / heic / heif | < 30 MB | 长宽比 0.4–2.5；宽高 300–6000 px |
+| `Video` | mp4 / mov | ≤ 50 MB | 分辨率 480p / 720p；时长 2–15 秒；FPS 24–60；长宽比 0.4–2.5；宽高 300–6000 px；总像素 409600–927408 |
+| `Audio` | mp3 / wav | ≤ 15 MB | 时长 2–15 秒 |
 
 > 真人素材库（`liveness_face`）虽可上传图/视/音三类，但首次创建时仍需以**真人正脸图片**完成 H5 活体核验；后续追加视频/音频不会再触发人脸比对。
 
@@ -447,21 +452,13 @@ curl -X POST https://api.gravitex.ai/v1/asset-groups \
 }
 ```
 
-> 创建成功后请保存 `group_id`，后续上传素材都需要用到。每个 API Key 在每个上游空间最多可创建 **5 个素材组**。
+> 创建成功后请保存 `group_id`，后续上传素材都需要用到。**每个用户最多可创建 5 个虚拟素材组、5 个真人素材组**（两类配额独立计数）。
 
 #### 步骤 2：创建素材（JSON 方式）
 
-`POST /v1/assets` 的 `url` 字段支持三种格式，三种方式任选其一：
+`POST /v1/assets` 的 `url` 字段**只接受可被 BytePlus 公网访问的 HTTP(S) URL**——网关会把这个 URL 原样透传给上游，不做任何解码或转存。
 
-| 格式 | 示例 | 适用场景 |
-|------|------|---------|
-| **公网 URL**（推荐） | `https://your-cdn.com/face.jpg` | 已有图床/OSS，性能最好 |
-| **Data URI** | `data:image/png;base64,iVBORw0KGgoAAAANS...` | 本地图片，无需图床 |
-| **纯 Base64 字符串** | `iVBORw0KGgoAAAANS...` | 同上，自动按 PNG 处理 |
-
-> Base64/Data URI 提交后，上游会自动落到对象存储再返回信号 URL，全过程对调用方透明。
-
-**方式 A：使用公网 URL**
+> ⚠️ **不支持 Base64 / Data URI 直传**。如果要使用本地文件，请先把文件上传到任一对象存储（OSS / TOS / S3 等）拿到一个公网可访问的 https URL（带或不带签名都可以，只要 BytePlus 能拉取到即可），再调用本接口。
 
 ```bash
 curl -X POST https://api.gravitex.ai/v1/assets \
@@ -475,23 +472,6 @@ curl -X POST https://api.gravitex.ai/v1/assets \
   }'
 ```
 
-**方式 B：使用 Base64 / Data URI**
-
-```bash
-# 把本地图片编码成 base64
-B64=$(base64 -i portrait.jpg | tr -d '\n')
-
-curl -X POST https://api.gravitex.ai/v1/assets \
-  -H "Authorization: Bearer sk-your_token_key" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"url\": \"data:image/jpeg;base64,${B64}\",
-    \"group_id\": \"group-20260508120000-abcde\",
-    \"asset_type\": \"Image\",
-    \"name\": \"portrait.jpg\"
-  }"
-```
-
 响应：
 
 ```json
@@ -499,6 +479,7 @@ curl -X POST https://api.gravitex.ai/v1/assets \
   "virtual_id": "asset-20260508120145-pqwhc",
   "asset_url": "asset://asset-20260508120145-pqwhc",
   "group_id": "group-20260508120000-abcde",
+  "asset_type": "Image",
   "status": "pending"
 }
 ```
@@ -507,6 +488,8 @@ curl -X POST https://api.gravitex.ai/v1/assets \
 |------|------|
 | `virtual_id` | 素材唯一 ID |
 | `asset_url` | 在视频生成中引用素材时使用的 URL（`asset://` 协议） |
+| `asset_type` | 实际入库的素材类型，已规整为 `Image` / `Video` / `Audio` |
+| `group_id` | 回显请求里的 `group_id` |
 | `status` | 素材状态：`pending` → `active`（成功）或 `failed`（失败） |
 
 #### 步骤 3：等待素材处理完成
@@ -556,11 +539,11 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/v1/asset-groups` | 创建素材组（虚拟人 `aigc`） |
-| `GET` | `/v1/asset-groups` | 列出素材组，支持 `?group_type=aigc\|liveness_face\|all` |
+| `POST` | `/v1/asset-groups` | 创建素材组（虚拟 `aigc`） |
+| `GET` | `/v1/asset-groups` | 列出素材组，支持 `?group_type=aigc\|liveness_face\|all`；**未指定时默认仅返回 `aigc` 素材组** |
 | `DELETE` | `/v1/asset-groups/{group_id}` | 删除素材组（级联删除组内所有素材） |
-| `POST` | `/v1/assets` | 创建素材（URL / Base64 / Data URI；支持 `Image`/`Video`/`Audio`） |
-| `GET` | `/v1/assets` | 列出素材，支持 `?group_id=`、`?group_type=` 过滤 |
+| `POST` | `/v1/assets` | 创建素材（**仅接受公网 https URL**；支持 `Image`/`Video`/`Audio`） |
+| `GET` | `/v1/assets` | 列出素材，支持 `?group_id=`、`?group_type=aigc\|liveness_face\|all` 过滤；**未指定 `group_type` 时默认仅返回 `aigc` 类素材** |
 | `GET` | `/v1/assets/{virtual_id}` | 查询单个素材，自动刷新上游状态 |
 | `DELETE` | `/v1/assets/{virtual_id}` | 删除素材 |
 | `POST` | `/v1/visual-validate/session` | 真人素材组：发起 H5 活体核验 |
@@ -579,7 +562,7 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
 | `channel_id` | integer | 否 | 指定上游渠道 ID，省略则自动选择 |
 | `group_type` | string | 否 | `aigc`（默认）。**`liveness_face` 不能在此创建**，需走 `POST /v1/visual-validate/session` |
 
-**限额**：每个用户在每个上游渠道（同一 AK/SK 账号）下最多 5 个素材组（`aigc` 与 `liveness_face` 合计；可通过 `BYTEPLUS_ASSET_GROUP_LIMIT` 环境变量调整）。
+**限额**：同一个用户下，**虚拟素材组（`aigc`）与真人素材组（`liveness_face`）各最多 5 个**，两类配额相互独立、不共用。例如用户已经创建了 5 个虚拟素材组，仍可继续通过 H5 活体核验创建至多 5 个真人素材组。
 
 ```bash
 curl -X POST https://api.gravitex.ai/v1/asset-groups \
@@ -595,9 +578,124 @@ curl -X POST https://api.gravitex.ai/v1/asset-groups \
   "group_id": "group-20260508120000-abcde",
   "name": "角色A",
   "description": "测试角色",
-  "channel_id": 123
+  "channel_id": 123,
+  "group_type": "aigc"
 }
 ```
+
+| 字段 | 说明 |
+|---|---|
+| `group_id` | 后续 `POST /v1/assets`、`DELETE /v1/asset-groups/{group_id}` 都用这个 |
+| `description` | 网关回填后的实际入库值（用户传空 → 兜底为 username） |
+| `channel_id` | 实际选中的上游渠道（自动选择时返回所选渠道的 ID） |
+| `group_type` | 固定为 `aigc`；`liveness_face` 不在本接口创建 |
+
+---
+
+### 真人素材组：H5 活体核验
+
+真人素材库不能直接通过 `POST /v1/asset-groups` 创建——必须先在 BytePlus H5 页面完成真人活体核验。
+
+**两步流程：**
+
+```
+1. 客户端发起核验  → POST /v1/visual-validate/session
+   ↓ 返回 {h5_link, state}
+2. 客户端打开 popup(h5_link)，用户完成核验
+   ↓ BytePlus 重定向至 网关 /asset-validate-callback.html?state=…&bytedToken=…&resultCode=10000
+3. 回调页自动 fetch /v1/visual-validate/result，落库 group_type=liveness_face
+   ↓ window.opener.postMessage({type:'gravitex-asset-validate-result', ok, group_id, …})
+4. 客户端拿到 group_id，后续上传素材完全复用 POST /v1/assets（同样支持 Image/Video/Audio）
+```
+
+#### POST /v1/visual-validate/session
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | string | **是** | 素材组名称（用于落库 + 回写到火山方舟控制台） |
+| `description` | string | 否 | 描述。同 `POST /v1/asset-groups`，缺省时网关自动用 `username` 兜底 |
+| `channel_id` | integer | 否 | 指定上游渠道 ID，省略则自动选择 |
+
+> 网关在拿到火山返回的 `GroupId` 后，会立刻调用 `UpdateAssetGroup` 把上面的 `name` / `description` 回写到火山控制台（火山的 `CreateVisualValidateSession` 接口本身不接受这两个字段）。
+
+```bash
+curl -X POST https://api.gravitex.ai/v1/visual-validate/session \
+  -H "Authorization: Bearer sk-your_token_key" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "真人A"}'
+```
+
+响应：
+
+```json
+{
+  "h5_link": "https://verify.byteplus.com/h5/?token=…&lang=zh-CN&lng=zh",
+  "state": "<base64url>.<hmac>",
+  "channel_id": 123,
+  "byted_token": "bp-token-xxxxxxxx",
+  "expires_in": 900
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `h5_link` | BytePlus 活体核验 H5 页面 URL；网关已强制附加 `lang=zh-CN&lng=zh` 以默认显示简体中文 |
+| `state` | 网关签发的 HMAC `state` 令牌（HMAC-SHA256），已绑定 `user/channel/group_name/byted_token`，回调页自动用它换取结果 |
+| `byted_token` | 火山方舟下发的本次核验唯一凭据；回调页校验时也会用它和 `state` 内的值比对 |
+| `expires_in` | **`state` 令牌的有效期（秒）**，固定 `900`（15 分钟）。**注意：这并不是 H5 页面本身的寿命**——BytePlus 的 H5 链接只在约 120 秒内有效，超时后 `byted_token` 会被火山作废，必须重新调用本接口拿新链接 |
+
+> 客户端通常只需把 `h5_link` 在 popup 中打开，并监听 `window.message` 的 `gravitex-asset-validate-result`；`state` 字段已被网关内置回调页自动转发，业务侧无需自行调用 `/v1/visual-validate/result`。
+
+#### 客户端监听 postMessage 的 payload
+
+回调页（`/asset-validate-callback.html`）会向 `window.opener` 投递如下结构的消息（`targetOrigin = '*'`）：
+
+**核验成功：**
+
+```json
+{
+  "type": "gravitex-asset-validate-result",
+  "ok": true,
+  "group_id": "group-20260512083014-zyxwv",
+  "name": "真人A",
+  "channel_id": 123,
+  "group_type": "liveness_face"
+}
+```
+
+**核验失败：**
+
+```json
+{
+  "type": "gravitex-asset-validate-result",
+  "ok": false,
+  "result_code": "10003",
+  "error": "活体核验未通过：人脸与底图不匹配"
+}
+```
+
+**最小客户端示例：**
+
+```js
+const popup = window.open(session.h5_link, 'asset-validate', 'width=480,height=720');
+
+const listener = (event) => {
+  // 回调页与主页若不同源（如 maas:80 ↔ api:3000），origin 会不同；
+  // 业务侧建议通过 type 字段而非 event.origin 识别。
+  const data = event.data;
+  if (!data || data.type !== 'gravitex-asset-validate-result') return;
+
+  window.removeEventListener('message', listener);
+  if (data.ok) {
+    console.log('素材组创建成功:', data.group_id);
+  } else {
+    console.error('核验失败:', data.error, data.result_code);
+  }
+};
+window.addEventListener('message', listener);
+```
+
+> H5 链接默认 120 秒内有效（BytePlus 上游限制，与网关返回的 `expires_in: 900` 是两个概念）；建议在客户端侧设置一个略大的超时（例如 130s）兜底，超时后关闭 popup + 移除 listener，并在用户重试时调用 `POST /v1/visual-validate/session` 拿新链接。
 
 ---
 
@@ -605,8 +703,23 @@ curl -X POST https://api.gravitex.ai/v1/asset-groups \
 
 **GET** `https://api.gravitex.ai/v1/asset-groups`
 
+**Query 参数：**
+
+| 名称 | 可选值 | 默认 | 说明 |
+|---|---|---|---|
+| `group_type` | `aigc` / `liveness_face` / `all` | `aigc` | 按素材组类型过滤。**未传时默认只返回虚拟素材组**——要看真人素材组请显式传 `liveness_face` 或 `all` |
+
 ```bash
+# 默认只返回虚拟素材组
 curl https://api.gravitex.ai/v1/asset-groups \
+  -H "Authorization: Bearer sk-your_token_key"
+
+# 仅查看真人素材组
+curl "https://api.gravitex.ai/v1/asset-groups?group_type=liveness_face" \
+  -H "Authorization: Bearer sk-your_token_key"
+
+# 一次拿全部（虚拟 + 真人）
+curl "https://api.gravitex.ai/v1/asset-groups?group_type=all" \
   -H "Authorization: Bearer sk-your_token_key"
 ```
 
@@ -620,6 +733,7 @@ curl https://api.gravitex.ai/v1/asset-groups \
       "user_id": 100,
       "channel_id": 123,
       "group_id": "group-20260508120000-abcde",
+      "group_type": "aigc",
       "name": "角色A",
       "description": "测试角色",
       "project_name": "default",
@@ -634,8 +748,11 @@ curl https://api.gravitex.ai/v1/asset-groups \
 }
 ```
 
-> `space_label`（A/B/C…）用于在多上游空间场景下区分不同的渠道，无需关心内部 channel_id。
-
+| 字段 | 说明 |
+|---|---|
+| `group_type` | `aigc` 或 `liveness_face` |
+| `space_label` | A / B / C…，用于多上游空间场景下区分不同渠道 |
+| `asset_count` | 该组当前的素材数量 |
 ---
 
 ### 删除素材组
@@ -659,30 +776,52 @@ curl -X DELETE https://api.gravitex.ai/v1/asset-groups/group-20260508120000-abcd
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `url` | string | **是** | 素材内容，支持公网 URL、Data URI、纯 Base64 字符串 |
+| `url` | string | **是** | 素材的 **公网 https URL**（BytePlus 必须能直接拉取到）。**不支持 Base64 / Data URI / 本地文件直传**（火山方舟官方已明确下线，详见下方"历史变更"） |
 | `group_id` | string | **是** | 素材组 ID（来自 `POST /v1/asset-groups` 或 `/v1/visual-validate/session`） |
 | `asset_type` | string | 否 | `Image`（默认）/ `Video` / `Audio`，大小写不敏感 |
-| `name` | string | 否 | 素材名称（仅用于素材库 UI 展示和 `ListAssets` 模糊搜索，**不参与模型推理**） |
+| `name` | string | 否 | 素材名称（≤ 64 字符，仅用于素材库 UI 展示和 `ListAssets` 模糊搜索，**不参与模型推理**） |
 
-> 自 2026-05 起，**虚拟人（aigc）与真人（liveness_face）两类素材库均支持图片、视频、音频三种 `asset_type`**。网关会根据 URL 后缀做基础格式校验，最终内容审核与转码由 BytePlus 异步完成。
+> 自 2026-05 起，**虚拟（aigc）与真人（liveness_face）两类素材库均支持图片、视频、音频三种 `asset_type`**。网关会根据 URL 后缀做基础格式校验，最终内容审核与转码由 BytePlus 异步完成。
 
 > ℹ️ **关于 `description`：火山方舟 `CreateAsset` 接口本身不支持单素材级别的描述字段**。如需对一组素材打统一标签，请在「素材组」级别使用 `description`（见 [创建素材组](#创建素材组)）。
 
-**`url` 字段支持的三种格式：**
+> ⚠️ **关于本地文件：** 网关只把 `url` 透传给 BytePlus，自身不做 base64 解码或落盘。如果素材在本地，请先上传到任一对象存储（OSS / TOS / S3 等）拿到公网 https URL（带或不带签名都可以，只要 BytePlus 服务端能拉取到），再调用本接口。
 
-| 格式 | 示例 | 备注 |
-|------|------|------|
-| 公网 HTTP(S) URL | `https://your-cdn.com/face.jpg` | 性能最好，推荐（视频/音频建议必走 URL） |
-| Data URI（带 MIME） | `data:image/png;base64,iVBORw0KGgo...` | 自动落对象存储；不建议用于大体积视频/音频 |
-| 纯 Base64 字符串 | `iVBORw0KGgo...` | 默认按图片处理 |
+> 📜 **历史变更（重要）：** 火山方舟 `CreateAsset` 早期版本的 `URL` 字段曾接受 Base64 / Data URI 直传（部分老文档或老 SDK 也是这么写的）。**自 2026 年起官方已下线该能力**，新文档（[Create an Asset](https://docs.byteplus.com/en/docs/ModelArk/CreateAsset)）明确写："*For image/video/audio assets, only URL upload is supported. Base64 is not supported.*" 因此本网关接口也只接受公网 URL。如老代码传了 Data URI，会被火山以 `InvalidParameter` 类错误拒绝。
 
-**素材格式与大小约束：**
+**素材格式与大小约束（与火山方舟官方 [`CreateAsset`](https://docs.byteplus.com/en/docs/ModelArk/CreateAsset) 完全一致）：**
 
-| `asset_type` | 支持后缀 | 单文件大小 | 备注 |
-|---|---|---|---|
-| `Image` | jpg / jpeg / png / webp / bmp / tiff / gif / heic / heif | ≤ 30 MB | 长宽比 0.4–2.5；宽高 300–6000 px |
-| `Video` | mp4 / mov | 网关默认 ≤ 200 MB（前端校验） | 上游异步转码，建议 < 60 秒短片段 |
-| `Audio` | mp3 / wav | ≤ 30 MB | 用于音色/旁白参考 |
+#### 图片 (`asset_type: "Image"`)
+
+| 项目 | 限制 |
+|---|---|
+| 格式 | jpeg / png / webp / bmp / tiff / gif / heic / heif |
+| 大小 | < 30 MB / 张 |
+| 长宽比（W/H） | 0.4 ~ 2.5 |
+| 宽高（像素） | 300 ~ 6000 |
+
+#### 视频 (`asset_type: "Video"`)
+
+| 项目 | 限制 |
+|---|---|
+| 格式 | mp4 / mov |
+| 大小 | ≤ 50 MB / 个 |
+| 分辨率 | 480p、720p（不支持 1080p+） |
+| 时长 | 2 ~ 15 秒 |
+| FPS | 24 ~ 60 |
+| 长宽比（W/H） | 0.4 ~ 2.5 |
+| 宽高（像素） | 300 ~ 6000 |
+| 总像素（W×H） | 409600 ~ 927408（如 640×640=409600、834×1112=927408） |
+
+#### 音频 (`asset_type: "Audio"`)
+
+| 项目 | 限制 |
+|---|---|
+| 格式 | mp3 / wav |
+| 大小 | ≤ 15 MB / 个 |
+| 时长 | 2 ~ 15 秒 |
+
+> 网关只对 URL 后缀做基本格式校验，**真正的尺寸 / 时长 / 像素 / 帧率检查全部在 BytePlus 异步预处理阶段完成**。如果素材不达标，最终 `GET /v1/assets` 会得到 `status: "failed"`。
 
 **示例 — 公网 URL（图片）：**
 
@@ -726,20 +865,6 @@ curl -X POST https://api.gravitex.ai/v1/assets \
   }'
 ```
 
-**示例 — Data URI（图片）：**
-
-```bash
-curl -X POST https://api.gravitex.ai/v1/assets \
-  -H "Authorization: Bearer sk-your_token_key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEA...",
-    "group_id": "group-20260508120000-abcde",
-    "asset_type": "Image",
-    "name": "portrait.jpg"
-  }'
-```
-
 响应：
 
 ```json
@@ -752,6 +877,13 @@ curl -X POST https://api.gravitex.ai/v1/assets \
 }
 ```
 
+| 字段 | 说明 |
+|---|---|
+| `virtual_id` | 素材唯一 ID（同时也是 `asset_url` 中 `asset://` 后的部分） |
+| `asset_url` | 在 `POST /v1/video/generations` 的 `content` 数组中以 `image_url.url` / `video_url.url` / `audio_url.url` 形式引用的 URL |
+| `asset_type` | 实际入库的类型，`Image` / `Video` / `Audio` |
+| `status` | `pending`（上游异步处理中）/ `active`（可用）/ `failed`（处理失败） |
+
 ---
 
 ### 列出素材
@@ -762,22 +894,26 @@ curl -X POST https://api.gravitex.ai/v1/assets \
 
 **Query 参数：**
 
-| 名称 | 说明 |
-|---|---|
-| `group_id` | 按素材组 ID 过滤 |
-| `group_type` | `aigc` / `liveness_face` / `all`，按所属素材组的类型过滤；未指定时返回全部 |
+| 名称 | 可选值 | 默认 | 说明 |
+|---|---|---|---|
+| `group_id` | 任意素材组 ID | — | 按素材组 ID 过滤；**指定后会忽略 `group_type`**（`group_id` 已经隐含类型） |
+| `group_type` | `aigc` / `liveness_face` / `all` | `aigc` | 按素材所属组的类型过滤。**未传时默认只返回虚拟素材组里的素材**——要看真人素材请显式传 `liveness_face` 或 `all` |
 
 ```bash
-# 列出所有素材
+# 默认只返回虚拟素材库下的素材
 curl https://api.gravitex.ai/v1/assets \
   -H "Authorization: Bearer sk-your_token_key"
 
-# 按素材组过滤
+# 仅看某个素材组（无论虚拟还是真人）
 curl "https://api.gravitex.ai/v1/assets?group_id=group-20260508120000-abcde" \
   -H "Authorization: Bearer sk-your_token_key"
 
 # 仅列出真人素材库的全部素材
 curl "https://api.gravitex.ai/v1/assets?group_type=liveness_face" \
+  -H "Authorization: Bearer sk-your_token_key"
+
+# 一次拿全部（虚拟 + 真人）
+curl "https://api.gravitex.ai/v1/assets?group_type=all" \
   -H "Authorization: Bearer sk-your_token_key"
 ```
 
@@ -856,106 +992,6 @@ curl -X DELETE https://api.gravitex.ai/v1/assets/asset-20260508120145-pqwhc \
 
 ---
 
-### 真人素材组：H5 活体核验
-
-真人素材库不能直接通过 `POST /v1/asset-groups` 创建——必须先在 BytePlus H5 页面完成真人活体核验，由网关回调结束后落库。
-
-**两步流程：**
-
-```
-1. 客户端发起核验  → POST /v1/visual-validate/session
-   ↓ 返回 {h5_link, state}
-2. 客户端打开 popup(h5_link)，用户完成核验
-   ↓ BytePlus 重定向至 网关 /asset-validate-callback.html?state=…&bytedToken=…&resultCode=10000
-3. 回调页自动 fetch /v1/visual-validate/result，落库 group_type=liveness_face
-   ↓ window.opener.postMessage({type:'gravitex-asset-validate-result', ok, group_id, …})
-4. 客户端拿到 group_id，后续上传素材完全复用 POST /v1/assets（同样支持 Image/Video/Audio）
-```
-
-#### POST /v1/visual-validate/session
-
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `name` | string | **是** | 素材组名称（用于落库 + 回写到火山方舟控制台） |
-| `description` | string | 否 | 描述。同 `POST /v1/asset-groups`，缺省时网关自动用 `username` 兜底 |
-| `channel_id` | integer | 否 | 指定上游渠道 ID，省略则自动选择 |
-
-> 网关在拿到火山返回的 `GroupId` 后，会立刻调用 `UpdateAssetGroup` 把上面的 `name` / `description` 回写到火山控制台（火山的 `CreateVisualValidateSession` 接口本身不接受这两个字段）。
-
-```bash
-curl -X POST https://api.gravitex.ai/v1/visual-validate/session \
-  -H "Authorization: Bearer sk-your_token_key" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "真人A"}'
-```
-
-响应：
-
-```json
-{
-  "h5_link": "https://verify.byteplus.com/h5/?token=…",
-  "state": "<base64url>.<hmac>",
-  "channel_id": 123,
-  "byted_token": "bp-token-xxxxxxxx",
-  "expires_in": 900
-}
-```
-
-> 客户端通常只需把 `h5_link` 在 popup 中打开，并监听 `window.message` 的 `gravitex-asset-validate-result`；`state` 字段已被网关内置回调页自动转发，业务侧无需自行调用 `/v1/visual-validate/result`。
-
-#### 客户端监听 postMessage 的 payload
-
-回调页（`/asset-validate-callback.html`）会向 `window.opener` 投递如下结构的消息（`targetOrigin = '*'`）：
-
-**核验成功：**
-
-```json
-{
-  "type": "gravitex-asset-validate-result",
-  "ok": true,
-  "group_id": "group-20260512083014-zyxwv",
-  "name": "真人A",
-  "channel_id": 123,
-  "group_type": "liveness_face"
-}
-```
-
-**核验失败：**
-
-```json
-{
-  "type": "gravitex-asset-validate-result",
-  "ok": false,
-  "result_code": "10003",
-  "error": "活体核验未通过：人脸与底图不匹配"
-}
-```
-
-**最小客户端示例：**
-
-```js
-const popup = window.open(session.h5_link, 'asset-validate', 'width=480,height=720');
-
-const listener = (event) => {
-  // 回调页与主页若不同源（如 maas:80 ↔ api:3000），origin 会不同；
-  // 业务侧建议通过 type 字段而非 event.origin 识别。
-  const data = event.data;
-  if (!data || data.type !== 'gravitex-asset-validate-result') return;
-
-  window.removeEventListener('message', listener);
-  if (data.ok) {
-    console.log('素材组创建成功:', data.group_id);
-  } else {
-    console.error('核验失败:', data.error, data.result_code);
-  }
-};
-window.addEventListener('message', listener);
-```
-
-> H5 链接默认 120 秒内有效；建议在客户端侧设置一个略大的超时（例如 130s）兜底，超时后关闭 popup + 移除 listener。
-
----
-
 ### 素材状态
 
 | 状态 | 说明 |
@@ -978,6 +1014,10 @@ window.addEventListener('message', listener);
 | `generate_audio` | `true`, `false` | 是否自动生成音频 |
 | `watermark` | `true`, `false` | 是否添加水印 |
 | `seed` | `-1` 或正整数 | 随机种子，`-1` 为随机 |
+
+> 以下三张表是 **`POST /v1/video/generations` 的 `content` 数组里 `image_url` / `video_url` / `audio_url` 直接裸传 URL 时**，火山方舟对资源本身的限制。
+>
+> 通过 `asset://` 引用素材库素材时**也是这套硬约束**（火山方舟全平台共享）；素材库的「图片」`asset_type` 在格式上更宽容一些，能多收 bmp/tiff/gif/heic/heif 这些后缀，但单文件大小、宽高、像素总数等数值与下方完全一致——详见 [创建素材](#创建素材) 中的"素材格式与大小约束"小节。
 
 ### 图片输入限制
 
@@ -1146,9 +1186,6 @@ generate_video(
 # === 示例 3：面部一致性视频 ===
 print("\n--- 面部一致性视频（素材库） ---")
 
-import base64
-import mimetypes
-
 
 def get_or_create_group(name: str) -> str:
     """获取或创建素材组，返回 group_id"""
@@ -1169,37 +1206,18 @@ def get_or_create_group(name: str) -> str:
     return create_resp["group_id"]
 
 
-def create_asset_by_url(group_id: str, image_url: str, name: str = "") -> dict:
-    """通过公网 URL 创建素材"""
+def create_asset_by_url(
+    group_id: str, asset_url: str, asset_type: str = "Image", name: str = ""
+) -> dict:
+    """通过公网 https URL 创建素材（仅支持此种方式；本地文件请先上传到对象存储）"""
     resp = requests.post(
         f"{BASE_URL}/v1/assets",
         headers=HEADERS,
         json={
-            "url": image_url,
+            "url": asset_url,
             "group_id": group_id,
-            "asset_type": "Image",
+            "asset_type": asset_type,
             "name": name,
-        },
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def create_asset_by_file(group_id: str, file_path: str) -> dict:
-    """通过本地文件创建素材（自动转 Base64 Data URI）"""
-    mime = mimetypes.guess_type(file_path)[0] or "image/jpeg"
-    with open(file_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("ascii")
-    data_uri = f"data:{mime};base64,{b64}"
-
-    resp = requests.post(
-        f"{BASE_URL}/v1/assets",
-        headers=HEADERS,
-        json={
-            "url": data_uri,
-            "group_id": group_id,
-            "asset_type": "Image",
-            "name": file_path.split("/")[-1],
         },
     )
     resp.raise_for_status()
@@ -1210,11 +1228,13 @@ def create_asset_by_file(group_id: str, file_path: str) -> dict:
 group_id = get_or_create_group("角色A")
 print(f"素材组: {group_id}")
 
-# 3b. 创建素材（任选其一）
-#   方式 A：使用公网 URL
-# asset = create_asset_by_url(group_id, "https://your-cdn.com/portrait.jpg", "portrait.jpg")
-#   方式 B：使用本地文件 → 自动转 Base64
-asset = create_asset_by_file(group_id, "portrait.jpg")
+# 3b. 创建素材（用你已上传到 OSS / TOS / S3 等对象存储的公网 https URL）
+asset = create_asset_by_url(
+    group_id,
+    "https://your-cdn.com/portrait.jpg",
+    asset_type="Image",
+    name="portrait.jpg",
+)
 asset_url = asset["asset_url"]
 print(f"素材已创建: {asset_url}, 状态: {asset['status']}")
 
@@ -1356,31 +1376,27 @@ done
 使用**素材库**功能：
 
 1. 通过 `POST /v1/asset-groups` 创建一个素材组（仅首次需要，可复用）
-2. 通过 `POST /v1/assets` 提交人像照片（JSON 格式，`url` 字段支持公网 URL 或 Base64）
+2. 通过 `POST /v1/assets` 提交人像照片的**公网 https URL**（不接受 Base64；本地文件请先放到对象存储）
 3. 轮询 `GET /v1/assets` 等待 `status` 变为 `active`
 4. 在视频生成时使用 `asset://` URL 引用该素材，并设置 `role` 为 `reference_image`
 
 ### Q: 素材库支持哪些上传格式？可以直接传 Base64 吗？
 
-`POST /v1/assets` 接口的 `url` 字段支持以下三种格式（任选其一）：
+**不能直接传 Base64**。`POST /v1/assets` 接口的 `url` 字段**只接受 BytePlus 服务端能直接拉取的公网 https URL**（带或不带签名都可以）。如果素材在本地，请先上传到任意对象存储（OSS / TOS / S3 等）拿到公网 URL 再调用本接口。
 
-- **公网 HTTP(S) URL**（推荐）：性能最好，适合大文件，**视频/音频请优先用 URL**
-- **Data URI**：`data:image/png;base64,xxx...`，适合本地图片快速上传
-- **纯 Base64 字符串**：自动按图片解析
+通过 `asset_type` 字段声明素材类型，限制以火山方舟官方为准（完整版见 [创建素材 → 素材格式与大小约束](#创建素材)）：
 
-并通过 `asset_type` 字段声明素材类型：
+| `asset_type` | 支持后缀 | 单文件大小 | 关键约束 |
+|---|---|---|---|
+| `Image`（默认） | jpeg / png / webp / bmp / tiff / gif / heic / heif | < 30 MB | 长宽比 0.4–2.5；宽高 300–6000 px |
+| `Video` | mp4 / mov | ≤ 50 MB | 480p / 720p；时长 2–15 秒；FPS 24–60；总像素 409600–927408 |
+| `Audio` | mp3 / wav | ≤ 15 MB | 时长 2–15 秒 |
 
-| `asset_type` | 支持后缀 | 大小约束 |
-|---|---|---|
-| `Image`（默认） | jpg / jpeg / png / webp / bmp / tiff / gif / heic / heif | ≤ 30 MB |
-| `Video` | mp4 / mov | 网关默认 ≤ 200 MB |
-| `Audio` | mp3 / wav | ≤ 30 MB |
-
-> 不再支持 `multipart/form-data` 文件上传。如果你之前用 `-F file=@xxx.jpg` 调用会得到 `No file-upload channel available...` 错误，请改为 JSON 格式提交。
+> 不再支持 `multipart/form-data` 文件上传。如果你之前用 `-F file=@xxx.jpg` 调用会得到 `No file-upload channel available...` 错误，请改为 JSON 格式提交、`url` 字段填写一个公网可访问的 https URL。
 
 ### Q: 真人素材库（liveness_face）能传视频或音频吗？
 
-可以。**首次创建素材组时**仍需通过 `POST /v1/visual-validate/session` 走 H5 真人活体核验（核验只看脸部图片）；**核验通过后向该组追加素材**，与虚拟人素材库完全一致：`POST /v1/assets` 同时支持 `Image` / `Video` / `Audio`，不会再触发人脸比对。
+可以。**首次创建素材组时**仍需通过 `POST /v1/visual-validate/session` 走 H5 真人活体核验（核验只看脸部图片）；**核验通过后向该组追加素材**，与虚拟素材库完全一致：`POST /v1/assets` 同时支持 `Image` / `Video` / `Audio`，不会再触发人脸比对。
 
 ### Q: `generate_audio` 和 `reference_audio` 如何配合？
 
