@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"net/url"
 
 	"github.com/QuantumNous/new-api/common"
 
@@ -354,7 +355,34 @@ func ByteplusCreateVisualValidateSession(cfg ByteplusAssetConfig, callbackURL st
 	if h5Link == "" {
 		return "", "", fmt.Errorf("CreateVisualValidateSession returned empty H5Link, raw: %v", resp)
 	}
+	// Force Simplified Chinese on the H5 page. BytePlus's H5 reads either `lang`
+	// (per their public docs) or `lng` (seen in some links they hand back); we
+	// set both to be robust to upstream changes. We also intentionally *override*
+	// any pre-existing lang/lng so users always see zh-CN on first paint.
+	h5Link = forceH5LinkChinese(h5Link)
 	return h5Link, bytedToken, nil
+}
+
+// forceH5LinkChinese rewrites the BytePlus liveness H5 link so the verification
+// page defaults to Simplified Chinese instead of inheriting the browser locale
+// (which has been observed to land on English even though the docs claim `zh`
+// is the default). On parse failure we fall back to a string append so the
+// caller still gets a usable link.
+func forceH5LinkChinese(h5Link string) string {
+	u, err := url.Parse(h5Link)
+	if err != nil {
+		// Best-effort fallback: append params raw.
+		sep := "?"
+		if u != nil && u.RawQuery != "" {
+			sep = "&"
+		}
+		return h5Link + sep + "lang=zh-CN&lng=zh"
+	}
+	q := u.Query()
+	q.Set("lang", "zh-CN")
+	q.Set("lng", "zh")
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // ByteplusGetVisualValidateResult exchanges a `BytedToken` for the GroupId created by the

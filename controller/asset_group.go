@@ -142,16 +142,18 @@ func CreateAssetGroup(c *gin.Context) {
 		}
 	}
 
-	// Combined quota across both AIGC and LivenessFace, capped per (user, channel).
+	// Per-type quota: AIGC and LivenessFace are counted independently so that
+	// reaching the cap on virtual groups doesn't lock the user out of creating
+	// real-person groups (and vice versa).
 	limit := system_setting.GetByteplusAssetGroupLimit()
-	count, err := model.CountUserAssetGroupsByChannel(userId, ch.Id, "")
+	count, err := model.CountUserAssetGroupsByChannel(userId, ch.Id, model.GroupTypeAIGC)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAssetGroup: count check failed: %s", err.Error()))
 		assetErrorResponse(c, http.StatusInternalServerError, "Failed to check group limit")
 		return
 	}
 	if int(count) >= limit {
-		assetErrorResponse(c, http.StatusForbidden, fmt.Sprintf("Asset group limit reached (%d)", limit))
+		assetErrorResponse(c, http.StatusForbidden, fmt.Sprintf("Virtual asset group limit reached (%d)", limit))
 		return
 	}
 

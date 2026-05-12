@@ -72,15 +72,17 @@ func CreateVisualValidateSession(c *gin.Context) {
 		}
 	}
 
+	// Per-type quota: real-person (liveness_face) groups are counted independently
+	// from virtual (aigc) groups — see CreateAssetGroup for the mirror check.
 	limit := system_setting.GetByteplusAssetGroupLimit()
-	count, err := model.CountUserAssetGroupsByChannel(userId, ch.Id, "")
+	count, err := model.CountUserAssetGroupsByChannel(userId, ch.Id, model.GroupTypeLivenessFace)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("CreateVisualValidateSession: count check failed: %s", err.Error()))
 		assetErrorResponse(c, http.StatusInternalServerError, "Failed to check group limit")
 		return
 	}
 	if int(count) >= limit {
-		assetErrorResponse(c, http.StatusForbidden, fmt.Sprintf("Asset group limit reached (%d)", limit))
+		assetErrorResponse(c, http.StatusForbidden, fmt.Sprintf("Real-person asset group limit reached (%d)", limit))
 		return
 	}
 
