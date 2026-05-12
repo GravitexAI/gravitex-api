@@ -8,7 +8,7 @@ import "github.com/QuantumNous/new-api/common"
 // BytePlus does not document an explicit limit, but upstream resources are shared across
 // all gateway users routed to the same channel, so we cap defensively. The limit can be
 // overridden via the BYTEPLUS_ASSET_GROUP_LIMIT environment variable at startup.
-var ByteplusAssetGroupLimit = 5
+var ByteplusAssetGroupLimit = 100
 
 // initialized lazily so tests can adjust the value without env vars
 var byteplusAssetInited = false
@@ -21,7 +21,7 @@ func GetByteplusAssetGroupLimit() int {
 		byteplusAssetInited = true
 	}
 	if ByteplusAssetGroupLimit <= 0 {
-		return 5
+		return ByteplusAssetGroupLimit
 	}
 	return ByteplusAssetGroupLimit
 }
