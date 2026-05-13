@@ -21,7 +21,7 @@ Seedance 2.0 是一款先进的 AI 视频生成模型，支持文生视频、图
 - [素材库 API](#素材库-api)
   - [接口总览](#接口总览)
   - [创建虚拟素材组（aigc）](#创建素材组)
-  - [真人素材组：H5 活体核验（liveness_face）](#真人素材组h5-活体核验)
+  - [真人素材组：H5 真人核验（liveness_face）](#真人素材组h5-真人核验)
   - [列出素材组](#列出素材组)
   - [删除素材组](#删除素材组)
   - [创建素材](#创建素材)
@@ -404,7 +404,7 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
 | 库类型 | `group_type` | 创建方式 | 典型用途 |
 |---|---|---|---|
 | 虚拟素材库（默认） | `aigc` | `POST /v1/asset-groups` 直接创建 | 任意人物 / 动物 / 风景 / 物品的图片、视频、音频 |
-| 真人素材库 | `liveness_face` | `POST /v1/visual-validate/session` H5 活体核验后创建 | 真人写真，**首次创建必须通过本人活体核验**；后续追加图/视/音不再校验人脸 |
+| 真人素材库 | `liveness_face` | `POST /v1/visual-validate/session` H5 真人核验后创建 | 真人写真，**首次创建必须通过本人真人核验**；后续追加图/视/音不再校验人脸 |
 
 **完整流程：**
 
@@ -427,7 +427,7 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
 | `Video` | mp4 / mov | ≤ 50 MB | 分辨率 480p / 720p；时长 2–15 秒；FPS 24–60；长宽比 0.4–2.5；宽高 300–6000 px；总像素 409600–927408 |
 | `Audio` | mp3 / wav | ≤ 15 MB | 时长 2–15 秒 |
 
-> 真人素材库（`liveness_face`）虽可上传图/视/音三类，但首次创建时仍需以**真人正脸图片**完成 H5 活体核验；后续追加视频/音频不会再触发人脸比对。
+> 真人素材库（`liveness_face`）虽可上传图/视/音三类，但首次创建时仍需以**真人正脸图片**完成 H5 真人核验；后续追加视频/音频不会再触发人脸比对。
 
 #### 步骤 1：创建素材组（首次使用时执行一次）
 
@@ -452,7 +452,7 @@ curl -X POST https://api.gravitex.ai/v1/asset-groups \
 }
 ```
 
-> 创建成功后请保存 `group_id`，后续上传素材都需要用到。**每个用户最多可创建 5 个虚拟素材组、5 个真人素材组**（两类配额独立计数）。
+> 创建成功后请保存 `group_id`，后续上传素材都需要用到。**每个用户最多可创建 100 个虚拟素材组、100 个真人素材组**（两类配额独立计数）。
 
 #### 步骤 2：创建素材（JSON 方式）
 
@@ -546,7 +546,7 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
 | `GET` | `/v1/assets` | 列出素材，支持 `?group_id=`、`?group_type=aigc\|liveness_face\|all` 过滤；**未指定 `group_type` 时默认仅返回 `aigc` 类素材** |
 | `GET` | `/v1/assets/{virtual_id}` | 查询单个素材，自动刷新上游状态 |
 | `DELETE` | `/v1/assets/{virtual_id}` | 删除素材 |
-| `POST` | `/v1/visual-validate/session` | 真人素材组：发起 H5 活体核验 |
+| `POST` | `/v1/visual-validate/session` | 真人素材组：发起 H5 真人核验 |
 | `POST` | `/v1/visual-validate/result` | 真人素材组：H5 回调内部使用，业务侧无需直接调用 |
 
 ---
@@ -562,7 +562,7 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
 | `channel_id` | integer | 否 | 指定上游渠道 ID，省略则自动选择 |
 | `group_type` | string | 否 | `aigc`（默认）。**`liveness_face` 不能在此创建**，需走 `POST /v1/visual-validate/session` |
 
-**限额**：同一个用户下，**虚拟素材组（`aigc`）与真人素材组（`liveness_face`）各最多 5 个**，两类配额相互独立、不共用。例如用户已经创建了 5 个虚拟素材组，仍可继续通过 H5 活体核验创建至多 5 个真人素材组。
+**限额**：同一个用户下，**虚拟素材组（`aigc`）与真人素材组（`liveness_face`）各最多 100 个**，两类配额相互独立、不共用。例如用户已经创建了 100 个虚拟素材组，仍可继续通过 H5 真人核验创建至多 100 个真人素材组。
 
 ```bash
 curl -X POST https://api.gravitex.ai/v1/asset-groups \
@@ -592,9 +592,9 @@ curl -X POST https://api.gravitex.ai/v1/asset-groups \
 
 ---
 
-### 真人素材组：H5 活体核验
+### 真人素材组：H5 真人核验
 
-真人素材库不能直接通过 `POST /v1/asset-groups` 创建——必须先在 BytePlus H5 页面完成真人活体核验。
+真人素材库不能直接通过 `POST /v1/asset-groups` 创建——必须先在 BytePlus H5 页面完成真人真人核验。
 
 **两步流程：**
 
@@ -639,7 +639,7 @@ curl -X POST https://api.gravitex.ai/v1/visual-validate/session \
 
 | 字段 | 说明 |
 |---|---|
-| `h5_link` | BytePlus 活体核验 H5 页面 URL；网关已强制附加 `lang=zh-CN&lng=zh` 以默认显示简体中文 |
+| `h5_link` | BytePlus 真人核验 H5 页面 URL；网关已强制附加 `lang=zh-CN&lng=zh` 以默认显示简体中文 |
 | `state` | 网关签发的 HMAC `state` 令牌（HMAC-SHA256），已绑定 `user/channel/group_name/byted_token`，回调页自动用它换取结果 |
 | `byted_token` | 火山方舟下发的本次核验唯一凭据；回调页校验时也会用它和 `state` 内的值比对 |
 | `expires_in` | **`state` 令牌的有效期（秒）**，固定 `900`（15 分钟）。**注意：这并不是 H5 页面本身的寿命**——BytePlus 的 H5 链接只在约 120 秒内有效，超时后 `byted_token` 会被火山作废，必须重新调用本接口拿新链接 |
@@ -670,7 +670,7 @@ curl -X POST https://api.gravitex.ai/v1/visual-validate/session \
   "type": "gravitex-asset-validate-result",
   "ok": false,
   "result_code": "10003",
-  "error": "活体核验未通过：人脸与底图不匹配"
+  "error": "真人核验未通过：人脸与底图不匹配"
 }
 ```
 
@@ -1396,7 +1396,7 @@ done
 
 ### Q: 真人素材库（liveness_face）能传视频或音频吗？
 
-可以。**首次创建素材组时**仍需通过 `POST /v1/visual-validate/session` 走 H5 真人活体核验（核验只看脸部图片）；**核验通过后向该组追加素材**，与虚拟素材库完全一致：`POST /v1/assets` 同时支持 `Image` / `Video` / `Audio`，不会再触发人脸比对。
+可以。**首次创建素材组时**仍需通过 `POST /v1/visual-validate/session` 走 H5 真人核验（核验只看脸部图片）；**核验通过后向该组追加素材**，与虚拟素材库完全一致：`POST /v1/assets` 同时支持 `Image` / `Video` / `Audio`，不会再触发人脸比对。
 
 ### Q: `generate_audio` 和 `reference_audio` 如何配合？
 
