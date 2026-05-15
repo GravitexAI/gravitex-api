@@ -1104,17 +1104,30 @@ func responseGeminiChat2OpenAI(c *gin.Context, response *dto.GeminiChatResponse)
 			FinishReason: constant.FinishReasonStop,
 		}
 		if len(candidate.Content.Parts) > 0 {
-			var texts []string
+			// CHZ-PATCH(gemini-image-content-v2): 含 inlineData(image/*) 时把 message.content
+			// 改成 OpenAI v2 多模态数组（[{type:text}, {type:image_url, image_url:{url:"data:..."}}]）；
+			// 不含图片时保持原有字符串格式，按 "\n" 拼接 text/executable code/非图片 media 文本回退，
+			// 维持纯文本、tool_call、reasoning 场景下的向后兼容。
+			var mediaParts []dto.MediaContent
 			var toolCalls []dto.ToolCallResponse
+			hasImage := false
+			appendText := func(text string) {
+				mediaParts = append(mediaParts, dto.MediaContent{Type: dto.ContentTypeText, Text: text})
+			}
 			for _, part := range candidate.Content.Parts {
 				if part.InlineData != nil {
-					// 媒体内容
 					if strings.HasPrefix(part.InlineData.MimeType, "image") {
-						imgText := "![image](data:" + part.InlineData.MimeType + ";base64," + part.InlineData.Data + ")"
-						texts = append(texts, imgText)
+						hasImage = true
+						mediaParts = append(mediaParts, dto.MediaContent{
+							Type: dto.ContentTypeImageURL,
+							ImageUrl: &dto.MessageImageUrl{
+								Url:      "data:" + part.InlineData.MimeType + ";base64," + part.InlineData.Data,
+								MimeType: part.InlineData.MimeType,
+							},
+						})
 					} else {
-						// 其他媒体类型，直接显示链接
-						texts = append(texts, fmt.Sprintf("[media](data:%s;base64,%s)", part.InlineData.MimeType, part.InlineData.Data))
+						// 非图片媒体（音频等）：仍以 markdown 文本承载，避免引入额外 DTO 字段
+						appendText(fmt.Sprintf("[media](data:%s;base64,%s)", part.InlineData.MimeType, part.InlineData.Data))
 					}
 				} else if part.FunctionCall != nil {
 					choice.FinishReason = constant.FinishReasonToolCalls
@@ -1125,14 +1138,12 @@ func responseGeminiChat2OpenAI(c *gin.Context, response *dto.GeminiChatResponse)
 					choice.Message.ReasoningContent = part.Text
 				} else {
 					if part.ExecutableCode != nil {
-						texts = append(texts, "```"+part.ExecutableCode.Language+"\n"+part.ExecutableCode.Code+"\n```")
+						appendText("```" + part.ExecutableCode.Language + "\n" + part.ExecutableCode.Code + "\n```")
 					} else if part.CodeExecutionResult != nil {
-						texts = append(texts, "```output\n"+part.CodeExecutionResult.Output+"\n```")
-					} else {
-						// 过滤掉空行
-						if part.Text != "\n" {
-							texts = append(texts, part.Text)
-						}
+						appendText("```output\n" + part.CodeExecutionResult.Output + "\n```")
+					} else if part.Text != "\n" {
+						// 过滤掉纯换行 part
+						appendText(part.Text)
 					}
 				}
 			}
@@ -1140,8 +1151,17 @@ func responseGeminiChat2OpenAI(c *gin.Context, response *dto.GeminiChatResponse)
 				choice.Message.SetToolCalls(toolCalls)
 				isToolCall = true
 			}
-			choice.Message.SetStringContent(strings.Join(texts, "\n"))
-
+			if hasImage {
+				choice.Message.SetMediaContent(mediaParts)
+			} else {
+				texts := make([]string, 0, len(mediaParts))
+				for _, mp := range mediaParts {
+					if mp.Type == dto.ContentTypeText {
+						texts = append(texts, mp.Text)
+					}
+				}
+				choice.Message.SetStringContent(strings.Join(texts, "\n"))
+			}
 		}
 		if candidate.FinishReason != nil {
 			switch *candidate.FinishReason {
