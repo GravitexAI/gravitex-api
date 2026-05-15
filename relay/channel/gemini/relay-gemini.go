@@ -1036,41 +1036,40 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 	usage.CompletionTokenDetails.ReasoningTokens = metadata.ThoughtsTokenCount
 	usage.PromptTokensDetails.CachedTokens = metadata.CachedContentTokenCount
 
+	// CHZ-PATCH(gemini-usage-fix): prompt 端补 IMAGE 分支，避免多模态输入 token 落入空分类
 	for _, detail := range metadata.PromptTokensDetails {
 		mod := strings.TrimSpace(detail.Modality)
-		if strings.EqualFold(mod, "AUDIO") {
+		switch {
+		case strings.EqualFold(mod, "AUDIO"):
 			usage.PromptTokensDetails.AudioTokens += detail.TokenCount
-		} else if strings.EqualFold(mod, "TEXT") {
+		case strings.EqualFold(mod, "TEXT"):
 			usage.PromptTokensDetails.TextTokens += detail.TokenCount
+		case strings.EqualFold(mod, "IMAGE"):
+			usage.PromptTokensDetails.ImageTokens += detail.TokenCount
 		}
 	}
 	for _, detail := range metadata.ToolUsePromptTokensDetails {
 		mod := strings.TrimSpace(detail.Modality)
-		if strings.EqualFold(mod, "AUDIO") {
+		switch {
+		case strings.EqualFold(mod, "AUDIO"):
 			usage.PromptTokensDetails.AudioTokens += detail.TokenCount
-		} else if strings.EqualFold(mod, "TEXT") {
+		case strings.EqualFold(mod, "TEXT"):
 			usage.PromptTokensDetails.TextTokens += detail.TokenCount
+		case strings.EqualFold(mod, "IMAGE"):
+			usage.PromptTokensDetails.ImageTokens += detail.TokenCount
 		}
 	}
-	for _, detail := range metadata.CandidatesTokensDetails {
-		switch detail.Modality {
-		case "IMAGE":
-			usage.CompletionTokenDetails.ImageTokens += detail.TokenCount
-		case "AUDIO":
-			usage.CompletionTokenDetails.AudioTokens += detail.TokenCount
-		case "TEXT":
-			usage.CompletionTokenDetails.TextTokens += detail.TokenCount
-		}
-	}
-
-	// 从 CandidatesTokensDetails 拆出图片/音频/文本输出 token，供计费与日志使用（modality 大小写不敏感）
+	// CHZ-PATCH(gemini-usage-fix): 原代码对 CandidatesTokensDetails 写了两个循环导致
+	// completion_tokens_details.{Image,Audio,Text}Tokens 被双重累加。这里只保留一个，
+	// 同时 modality 用 EqualFold + TrimSpace 做大小写不敏感匹配，覆盖上游可能的 "image" 小写写法。
 	for _, detail := range metadata.CandidatesTokensDetails {
 		mod := strings.TrimSpace(detail.Modality)
-		if strings.EqualFold(mod, "IMAGE") {
+		switch {
+		case strings.EqualFold(mod, "IMAGE"):
 			usage.CompletionTokenDetails.ImageTokens += detail.TokenCount
-		} else if strings.EqualFold(mod, "AUDIO") {
+		case strings.EqualFold(mod, "AUDIO"):
 			usage.CompletionTokenDetails.AudioTokens += detail.TokenCount
-		} else if strings.EqualFold(mod, "TEXT") {
+		case strings.EqualFold(mod, "TEXT"):
 			usage.CompletionTokenDetails.TextTokens += detail.TokenCount
 		}
 	}
@@ -1299,6 +1298,9 @@ func handleFinalStream(c *gin.Context, info *relaycommon.RelayInfo, resp *dto.Ch
 func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response, callback func(data string, geminiResponse *dto.GeminiChatResponse) bool) (*dto.Usage, *types.NewAPIError) {
 	var usage = &dto.Usage{}
 	var imageCount int
+	// CHZ-PATCH(gemini-usage-fix): 记录流中是否真的产出过 image inlineData，
+	// 供下方 candidatesTokenCount 兜底归类时判断是图片输出还是文本输出
+	var hasImagePart bool
 	responseText := strings.Builder{}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
@@ -1315,11 +1317,14 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", *geminiResponse.PromptFeedback.BlockReason))
 		}
 
-		// 统计图片数量
+		// 统计图片数量；CHZ-PATCH(gemini-usage-fix): 同时标记是否真的产出过 image inlineData
 		for _, candidate := range geminiResponse.Candidates {
 			for _, part := range candidate.Content.Parts {
 				if part.InlineData != nil && part.InlineData.MimeType != "" {
 					imageCount++
+					if strings.HasPrefix(part.InlineData.MimeType, "image") {
+						hasImagePart = true
+					}
 				}
 				if part.Text != "" {
 					responseText.WriteString(part.Text)
@@ -1329,6 +1334,12 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 
 		// 更新使用量统计
 		if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
+			// CHZ-PATCH(gemini-usage-fix): 打印上游 usageMetadata 原文，便于对账核对
+			// prompt/candidates/thoughts/modality 拆分是否准确
+			if metaJSON, jerr := common.Marshal(geminiResponse.UsageMetadata); jerr == nil {
+				logger.LogInfo(c, fmt.Sprintf("gemini upstream usageMetadata (responseId=%s, model=%s): %s",
+					geminiResponse.ResponseId, info.UpstreamModelName, string(metaJSON)))
+			}
 			mappedUsage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
 			*usage = mappedUsage
 			// 流式最后一包：从 CandidatesTokensDetails 拆出图片/音频/文本输出 token，供计费与日志使用（modality 大小写不敏感）
@@ -1343,10 +1354,17 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 					textOutputTokens += detail.TokenCount
 				}
 			}
-			if imageOutputTokens == 0 && geminiResponse.UsageMetadata.CandidatesTokenCount > 0 &&
-				strings.Contains(strings.ToLower(info.OriginModelName), "image") {
-				imageOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
-				textOutputTokens = 0
+			// CHZ-PATCH(gemini-usage-fix): 上游未提供 CandidatesTokensDetails 拆分时，
+			// 根据流中累计是否产出过 image inlineData 归类：
+			//   - 实际产生图片  → 算图片输出
+			//   - 实际只产出文本 → 算文本输出（避免多模态模型纯文本响应被误按图片计费）
+			if imageOutputTokens == 0 && audioOutputTokens == 0 && textOutputTokens == 0 &&
+				geminiResponse.UsageMetadata.CandidatesTokenCount > 0 {
+				if hasImagePart {
+					imageOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
+				} else {
+					textOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
+				}
 			}
 			usage.CompletionTokenDetails.ImageTokens = imageOutputTokens
 			usage.CompletionTokenDetails.AudioTokens = audioOutputTokens
@@ -1488,6 +1506,13 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	}
 	info.UpstreamResponseId = geminiResponse.ResponseId
 
+	// CHZ-PATCH(gemini-usage-fix): 打印上游 usageMetadata 原文，便于对账核对
+	// prompt/candidates/thoughts/modality 拆分是否准确
+	if metaJSON, jerr := common.Marshal(geminiResponse.UsageMetadata); jerr == nil {
+		logger.LogInfo(c, fmt.Sprintf("gemini upstream usageMetadata (responseId=%s, model=%s): %s",
+			geminiResponse.ResponseId, info.UpstreamModelName, string(metaJSON)))
+	}
+
 	if len(geminiResponse.Candidates) == 0 {
 		usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
 
@@ -1539,11 +1564,30 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 			textOutputTokens += detail.TokenCount
 		}
 	}
-	// 图片模型若未从 candidatesTokensDetails 解析出 IMAGE，用 candidatesTokenCount 作为图片 token 回退（与 usageMetadata 一致）
-	if imageOutputTokens == 0 && geminiResponse.UsageMetadata.CandidatesTokenCount > 0 &&
-		strings.Contains(strings.ToLower(info.OriginModelName), "image") {
-		imageOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
-		textOutputTokens = 0
+	// CHZ-PATCH(gemini-usage-fix): 上游未提供 CandidatesTokensDetails 拆分时，
+	// 根据 candidate 实际产出的内容归类 candidatesTokenCount：
+	//   - 实际产生 image inlineData → 算图片输出（按图片单价计费）
+	//   - 实际只产出文本          → 算文本输出（避免把 banana 等多模态模型的纯文本响应误按图片计费）
+	// 不再使用 "OriginModelName 含 image" 这种基于模型名的兜底（会误伤纯文本响应）。
+	if imageOutputTokens == 0 && audioOutputTokens == 0 && textOutputTokens == 0 &&
+		geminiResponse.UsageMetadata.CandidatesTokenCount > 0 {
+		hasImagePart := false
+		for _, candidate := range geminiResponse.Candidates {
+			for _, part := range candidate.Content.Parts {
+				if part.InlineData != nil && strings.HasPrefix(part.InlineData.MimeType, "image") {
+					hasImagePart = true
+					break
+				}
+			}
+			if hasImagePart {
+				break
+			}
+		}
+		if hasImagePart {
+			imageOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
+		} else {
+			textOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
+		}
 	}
 	usage.CompletionTokenDetails.ImageTokens = imageOutputTokens
 	usage.CompletionTokenDetails.AudioTokens = audioOutputTokens
