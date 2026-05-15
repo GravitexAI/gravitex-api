@@ -400,6 +400,19 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if summary.ImageGenerationCallPrice > 0 {
 		extraContent = append(extraContent, fmt.Sprintf("Image Generation Call 花费 %s", decimal.NewFromFloat(summary.ImageGenerationCallPrice).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).String()))
 	}
+	if summary.ImageTokens > 0 && !relayInfo.PriceData.UsePrice {
+		imageInputQuota := decimal.NewFromInt(int64(summary.ImageTokens)).
+			Mul(decimal.NewFromFloat(summary.ImageRatio)).
+			Mul(decimal.NewFromFloat(summary.ModelRatio)).
+			Mul(decimal.NewFromFloat(summary.GroupRatio))
+		if len(relayInfo.PriceData.OtherRatios) > 0 {
+			for _, otherRatio := range relayInfo.PriceData.OtherRatios {
+				imageInputQuota = imageInputQuota.Mul(decimal.NewFromFloat(otherRatio))
+			}
+		}
+		imageInputPrice := summary.ModelRatio * 2.0 * summary.ImageRatio
+		extraContent = append(extraContent, fmt.Sprintf("图片输入 %d tokens，图片输入价格 %.6f / 1M tokens，图片输入倍率 %.2f，图片输入花费 %s", summary.ImageTokens, imageInputPrice, summary.ImageRatio, imageInputQuota.String()))
+	}
 
 	if summary.TotalTokens == 0 {
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")

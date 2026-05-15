@@ -285,17 +285,25 @@ func createAssetByteplus(c *gin.Context) {
 		return
 	}
 
+	tokenKey := c.Request.Header.Get("Authorization")
+	gravitexUrl, err := service.UploadByImageURL(req.URL, tokenKey)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): upload by image URL failed: %s", err.Error()))
+		// Don't fail the whole request if the Gravitex upload fails — the asset is still created on BytePlus and can be retried later.
+		assetErrorResponse(c, http.StatusAccepted, "Asset created but failed to upload to Gravitex: "+err.Error())
+	}
 	// Save locally
 	userAsset := &model.UserAsset{
-		UserId:    userId,
-		TokenId:   tokenId,
-		ChannelId: ch.Id,
-		GroupId:   req.GroupId,
-		VirtualId: assetId,
-		AssetUrl:  "asset://" + assetId,
-		Filename:  req.Name,
-		AssetType: assetType,
-		Status:    "pending", // BytePlus "Processing" → internal "pending"
+		UserId:      userId,
+		TokenId:     tokenId,
+		ChannelId:   ch.Id,
+		GroupId:     req.GroupId,
+		VirtualId:   assetId,
+		AssetUrl:    "asset://" + assetId,
+		Filename:    req.Name,
+		AssetType:   assetType,
+		Status:      "pending", // BytePlus "Processing" → internal "pending"
+		GravitexUrl: *gravitexUrl,
 	}
 	if err := model.InsertUserAsset(userAsset); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): save failed: %s", err.Error()))

@@ -172,10 +172,7 @@ function renderType(type, t) {
 
 function buildStreamStatusTooltip(ss, t) {
   if (!ss) return null;
-  const lines = [
-    t('流状态') + '：' + t('异常'),
-    (ss.end_reason || 'unknown'),
-  ];
+  const lines = [t('流状态') + '：' + t('异常'), ss.end_reason || 'unknown'];
   if (ss.error_count > 0) {
     lines.push(`${t('软错误')}: ${ss.error_count}`);
   }
@@ -213,11 +210,7 @@ function renderIsStream(bool, t, streamStatus) {
                 userSelect: 'none',
               }}
             >
-              <CircleAlert
-                size={14}
-                strokeWidth={2.5}
-                color='currentColor'
-              />
+              <CircleAlert size={14} strokeWidth={2.5} color='currentColor' />
             </span>
           </Tooltip>
         )}
@@ -869,16 +862,26 @@ export const getLogsColumns = ({
       title: t('原厂花费'),
       dataIndex: 'quota',
       render: (text, record, index) => {
-        if (!isAdminUser || !(record.type === 2 || record.type === 5 || record.type === 7)) {
+        if (
+          !isAdminUser ||
+          !(record.type === 2 || record.type === 5 || record.type === 7)
+        ) {
           return <></>;
         }
         const other = getLogOther(record.other);
         // Prefer backend-computed official_quota; fall back to quota/groupRatio for old logs
         if (other?.official_quota != null && other.official_quota > 0) {
-          return <>{other.official_quota === 0 ? '0' : renderQuota(other.official_quota, 8)}</>;
+          return (
+            <>
+              {other.official_quota === 0
+                ? '0'
+                : renderQuota(other.official_quota, 8)}
+            </>
+          );
         }
         const groupRatio = getEffectiveGroupRatio(other);
-        if (groupRatio <= 0) return <>{text === 0 ? '0' : renderQuota(text, 8)}</>;
+        if (groupRatio <= 0)
+          return <>{text === 0 ? '0' : renderQuota(text, 8)}</>;
         const vendorQuota = text / groupRatio;
         return <>{vendorQuota === 0 ? '0' : renderQuota(vendorQuota, 8)}</>;
       },
@@ -888,7 +891,10 @@ export const getLogsColumns = ({
       title: t('成本/折扣'),
       dataIndex: 'quota',
       render: (text, record, index) => {
-        if (!isAdminUser || !(record.type === 2 || record.type === 5 || record.type === 7)) {
+        if (
+          !isAdminUser ||
+          !(record.type === 2 || record.type === 5 || record.type === 7)
+        ) {
           return <></>;
         }
         const other = getLogOther(record.other);
@@ -917,7 +923,10 @@ export const getLogsColumns = ({
       title: t('利润'),
       dataIndex: 'quota',
       render: (text, record, index) => {
-        if (!isAdminUser || !(record.type === 2 || record.type === 5 || record.type === 7)) {
+        if (
+          !isAdminUser ||
+          !(record.type === 2 || record.type === 5 || record.type === 7)
+        ) {
           return <></>;
         }
         const other = getLogOther(record.other);
@@ -934,9 +943,14 @@ export const getLogsColumns = ({
         }
         const actualCost = vendorQuota * costDiscount;
         const profit = text - actualCost;
-        const color = profit >= 0 ? 'var(--semi-color-success)' : 'var(--semi-color-danger)';
+        const color =
+          profit >= 0
+            ? 'var(--semi-color-success)'
+            : 'var(--semi-color-danger)';
         return (
-          <span style={{ color }}>{profit === 0 ? '0' : renderQuota(profit, 8)}</span>
+          <span style={{ color }}>
+            {profit === 0 ? '0' : renderQuota(profit, 8)}
+          </span>
         );
       },
     },

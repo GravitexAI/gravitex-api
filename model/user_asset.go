@@ -12,6 +12,7 @@ type UserAsset struct {
 	VirtualId   string `json:"virtual_id" gorm:"type:varchar(128);uniqueIndex;not null"`
 	AssetUrl    string `json:"asset_url" gorm:"type:varchar(256)"`
 	Url         string `json:"url" gorm:"type:text"`
+	GravitexUrl string `json:"gravitex_url" gorm:"type:text"`
 	Filename    string `json:"filename" gorm:"type:varchar(256)"`
 	ContentType string `json:"content_type" gorm:"type:varchar(64)"`
 	// AssetType mirrors BytePlus's `AssetType` ("Image" / "Video" / "Audio").
