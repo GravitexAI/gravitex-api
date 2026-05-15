@@ -1077,7 +1077,8 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 
 func responseGeminiChat2OpenAI(c *gin.Context, response *dto.GeminiChatResponse) *dto.OpenAITextResponse {
 	fullTextResponse := dto.OpenAITextResponse{
-		Id:      helper.GetResponseID(c),
+		// CHZ-PATCH(gemini-resp-id): 用上游 responseId 作为 response.id，与日志 request_id 对齐
+		Id:      helper.GetResponseIDFromUpstream(c, response.ResponseId),
 		Object:  "chat.completion",
 		Created: common.GetTimestamp(),
 		Choices: make([]dto.OpenAITextResponseChoice, 0, len(response.Candidates)),
@@ -1375,6 +1376,11 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	usage, err := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
 		response, isStop := streamResponseGeminiChat2OpenAI(geminiResponse)
 
+		// CHZ-PATCH(gemini-resp-id): 二步策略——首包用本地 chatcmpl-*，
+		// 拿到上游 responseId 后改写 id 并应用到后续所有 chunk + 末尾 usage 帧
+		if geminiResponse != nil && geminiResponse.ResponseId != "" && id != geminiResponse.ResponseId {
+			id = geminiResponse.ResponseId
+		}
 		response.Id = id
 		response.Created = createAt
 		response.Model = info.UpstreamModelName

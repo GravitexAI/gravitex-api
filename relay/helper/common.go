@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -158,6 +159,17 @@ func WssError(c *gin.Context, ws *websocket.Conn, openaiError types.OpenAIError)
 func GetResponseID(c *gin.Context) string {
 	logID := c.GetString(common.RequestIdKey)
 	return fmt.Sprintf("chatcmpl-%s", logID)
+}
+
+// CHZ-PATCH(gemini-resp-id): 私有补丁，与上游同步时需保留。
+// GetResponseIDFromUpstream 优先使用上游真实 responseId 作为客户端响应 id，
+// 使得客户端拿到的 response.id 与日志里 request_id（=UpstreamResponseId）一致。
+// 上游未返回 id 时回退到本地 chatcmpl-<system_request_id>。
+func GetResponseIDFromUpstream(c *gin.Context, upstreamID string) string {
+	if strings.TrimSpace(upstreamID) != "" {
+		return upstreamID
+	}
+	return GetResponseID(c)
 }
 
 func GetLocalRealtimeID(c *gin.Context) string {
