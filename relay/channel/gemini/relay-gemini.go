@@ -200,6 +200,17 @@ func ThinkingAdaptor(geminiRequest *dto.GeminiChatRequest, info *relaycommon.Rel
 // Setting safety to the lowest possible values since Gemini is already powerless enough
 func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, info *relaycommon.RelayInfo) (*dto.GeminiChatRequest, error) {
 
+	// CHZ-PATCH(gemini-imagine-no-stream): Gemini imagine 模型（nano banana 等）官方不支持流式输出，
+	// 客户端若传 stream:true 在此自动降级为非流式：上游走 :generateContent，下游走 GeminiChatHandler。
+	// 放在 CovertOpenAI2Gemini 入口处，Gemini + Vertex 两个通道一次覆盖。
+	if model_setting.IsGeminiModelSupportImagine(info.UpstreamModelName) && info.IsStream {
+		info.IsStream = false
+		textRequest.Stream = nil
+		if textRequest.StreamOptions != nil {
+			textRequest.StreamOptions = nil
+		}
+	}
+
 	geminiRequest := dto.GeminiChatRequest{
 		Contents: make([]dto.GeminiChatContent, 0, len(textRequest.Messages)),
 		GenerationConfig: dto.GeminiChatGenerationConfig{
