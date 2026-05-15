@@ -198,7 +198,16 @@ func ThinkingAdaptor(geminiRequest *dto.GeminiChatRequest, info *relaycommon.Rel
 }
 
 // Setting safety to the lowest possible values since Gemini is already powerless enough
-func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, info *relaycommon.RelayInfo) (*dto.GeminiChatRequest, error) {
+//
+// CHZ-PATCH(gemini-extra-body-passthrough): 返回值统一为 any——
+//   - 通常情况下返回 *dto.GeminiChatRequest 结构体（向后兼容）。
+//   - 当 textRequest.ExtraBody.google 非空时，返回 map[string]any —— 把 extra_body.google.*
+//     全量深度合并到上游 Gemini 请求（无 schema 校验，由调用方按 Gemini 原生字段名书写），
+//     用于完全透传 generationConfig / safetySettings / tools / systemInstruction 等任意字段。
+//
+// 调用方（gemini/adaptor.go、vertex/adaptor.go）均通过 `:=` 接收且直接 `return geminiRequest, nil`，
+// 不依赖具体类型，签名扩宽到 any 不破坏现有调用。
+func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, info *relaycommon.RelayInfo) (any, error) {
 
 	// CHZ-PATCH(gemini-imagine-no-stream): Gemini imagine 模型（nano banana 等）官方不支持流式输出，
 	// 客户端若传 stream:true 在此自动降级为非流式：上游走 :generateContent，下游走 GeminiChatHandler。
@@ -260,36 +269,23 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 
 		// eg. {"google":{"thinking_config":{"thinking_budget":5324,"include_thoughts":true}}}
 		if googleBody, ok := extraBody["google"].(map[string]interface{}); ok {
+			// CHZ-PATCH(gemini-extra-body-passthrough): 只要传了 extra_body.google 就关闭自动
+			// ThinkingAdaptor，把控制权完全交给调用方。snake_case 白名单路径保留兜底，camelCase
+			// 字段通过末尾的 applyExtraBodyGooglePatch 全量透传给上游 Gemini。
+			adaptorWithExtraBody = true
 			if !strings.HasSuffix(info.UpstreamModelName, "-nothinking") {
-				adaptorWithExtraBody = true
-				// check error param name like thinkingConfig, should be thinking_config
-				if _, hasErrorParam := googleBody["thinkingConfig"]; hasErrorParam {
-					return nil, errors.New("extra_body.google.thinkingConfig is not supported, use extra_body.google.thinking_config instead")
-				}
 
 				if thinkingConfig, ok := googleBody["thinking_config"].(map[string]interface{}); ok {
-					// check error param name like thinkingBudget, should be thinking_budget
-					if _, hasErrorParam := thinkingConfig["thinkingBudget"]; hasErrorParam {
-						return nil, errors.New("extra_body.google.thinking_config.thinkingBudget is not supported, use extra_body.google.thinking_config.thinking_budget instead")
-					}
 					var hasThinkingConfig bool
 					var tempThinkingConfig dto.GeminiThinkingConfig
 
 					if thinkingBudget, exists := thinkingConfig["thinking_budget"]; exists {
-						switch v := thinkingBudget.(type) {
-						case float64:
+						// 非 float64（含 camelCase 透传分支）静默跳过，由末尾 patch 走原生路径
+						if v, ok := thinkingBudget.(float64); ok {
 							budgetInt := int(v)
 							tempThinkingConfig.ThinkingBudget = common.GetPointer(budgetInt)
-							if budgetInt > 0 {
-								// 有正数预算
-								tempThinkingConfig.IncludeThoughts = true
-							} else {
-								// 存在但为0或负数，禁用思考
-								tempThinkingConfig.IncludeThoughts = false
-							}
+							tempThinkingConfig.IncludeThoughts = budgetInt > 0
 							hasThinkingConfig = true
-						default:
-							return nil, errors.New("extra_body.google.thinking_config.thinking_budget must be an integer")
 						}
 					}
 
@@ -297,16 +293,12 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 						if v, ok := includeThoughts.(bool); ok {
 							tempThinkingConfig.IncludeThoughts = v
 							hasThinkingConfig = true
-						} else {
-							return nil, errors.New("extra_body.google.thinking_config.include_thoughts must be a boolean")
 						}
 					}
 					if thinkingLevel, exists := thinkingConfig["thinking_level"]; exists {
 						if v, ok := thinkingLevel.(string); ok {
 							tempThinkingConfig.ThinkingLevel = v
 							hasThinkingConfig = true
-						} else {
-							return nil, errors.New("extra_body.google.thinking_config.thinking_level must be a string")
 						}
 					}
 
@@ -328,21 +320,7 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 				}
 			}
 
-			// check error param name like imageConfig, should be image_config
-			if _, hasErrorParam := googleBody["imageConfig"]; hasErrorParam {
-				return nil, errors.New("extra_body.google.imageConfig is not supported, use extra_body.google.image_config instead")
-			}
-
 			if imageConfig, ok := googleBody["image_config"].(map[string]interface{}); ok {
-				// check error param name like aspectRatio, should be aspect_ratio
-				if _, hasErrorParam := imageConfig["aspectRatio"]; hasErrorParam {
-					return nil, errors.New("extra_body.google.image_config.aspectRatio is not supported, use extra_body.google.image_config.aspect_ratio instead")
-				}
-				// check error param name like imageSize, should be image_size
-				if _, hasErrorParam := imageConfig["imageSize"]; hasErrorParam {
-					return nil, errors.New("extra_body.google.image_config.imageSize is not supported, use extra_body.google.image_config.image_size instead")
-				}
-
 				// convert snake_case to camelCase for Gemini API
 				geminiImageConfig := make(map[string]interface{})
 				if aspectRatio, ok := imageConfig["aspect_ratio"]; ok {
@@ -652,7 +630,74 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 		}
 	}
 
+	// CHZ-PATCH(gemini-extra-body-passthrough): 完全透传 extra_body.google.* 中的任意字段
+	// （generationConfig / safetySettings / tools / systemInstruction 等）到上游 Gemini 请求：
+	//   - 无 schema 校验，由调用方按 Gemini 原生字段名（camelCase）书写；
+	//   - 已被前面 snake_case 白名单逻辑处理过的 thinking_config / image_config 不会再次叠加；
+	//   - patch 中相同 key：map 递归合并，标量/数组直接覆盖（patch 优先）；
+	//   - 命中 patch 时返回 map[string]any（绕过 *dto.GeminiChatRequest 结构体限制），
+	//     调用方拿到后会被 common.Marshal 成 JSON 发给上游，效果等同于"原生 Gemini 调用"。
+	patched, err := applyExtraBodyGooglePatch(&geminiRequest, textRequest.ExtraBody)
+	if err != nil {
+		return nil, err
+	}
+	if patched != nil {
+		return patched, nil
+	}
 	return &geminiRequest, nil
+}
+
+// CHZ-PATCH(gemini-extra-body-passthrough): 把 extra_body.google.* 深度合并到 Gemini 请求 JSON。
+// 没有 extra_body 或无 google 字段时返回 nil, nil（外层用结构体原样返回）。
+func applyExtraBodyGooglePatch(geminiReq *dto.GeminiChatRequest, extraBody json.RawMessage) (any, error) {
+	if len(extraBody) == 0 {
+		return nil, nil
+	}
+	var eb map[string]any
+	if err := common.Unmarshal(extraBody, &eb); err != nil {
+		return nil, fmt.Errorf("invalid extra_body json: %w", err)
+	}
+	google, ok := eb["google"].(map[string]any)
+	if !ok || len(google) == 0 {
+		return nil, nil
+	}
+	// 已被旧白名单逻辑处理过的 snake_case 键不再透传，避免与上游 Gemini 字段名混淆
+	patch := make(map[string]any, len(google))
+	for k, v := range google {
+		if k == "thinking_config" || k == "image_config" {
+			continue
+		}
+		patch[k] = v
+	}
+	if len(patch) == 0 {
+		return nil, nil
+	}
+	rawJSON, err := common.Marshal(geminiReq)
+	if err != nil {
+		return nil, err
+	}
+	var base map[string]any
+	if err := common.Unmarshal(rawJSON, &base); err != nil {
+		return nil, err
+	}
+	deepMergeMap(base, patch)
+	return base, nil
+}
+
+// CHZ-PATCH(gemini-extra-body-passthrough): 将 src 深度合并进 dst：
+// 相同 key 的 map 递归合并，标量/数组等其它类型直接覆盖（src 优先）。
+func deepMergeMap(dst, src map[string]any) {
+	for k, v := range src {
+		if existing, exists := dst[k]; exists {
+			if dm, dOk := existing.(map[string]any); dOk {
+				if sm, sOk := v.(map[string]any); sOk {
+					deepMergeMap(dm, sm)
+					continue
+				}
+			}
+		}
+		dst[k] = v
+	}
 }
 
 // parseStopSequences 解析停止序列，支持字符串或字符串数组
