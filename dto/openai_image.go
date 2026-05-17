@@ -174,9 +174,29 @@ type ImageResponse struct {
 	Data     []ImageData     `json:"data"`
 	Created  int64           `json:"created"`
 	Metadata json.RawMessage `json:"metadata,omitempty"`
+	// CHZ-PATCH(image-usage): OpenAI gpt-image-1 / Gemini imagine 等生图模型返回的 token 用量。
+	// omitempty 保证旧通道（不填 Usage）的响应字段不变。
+	Usage *ImageUsage `json:"usage,omitempty"`
 }
 type ImageData struct {
 	Url           string `json:"url"`
 	B64Json       string `json:"b64_json"`
 	RevisedPrompt string `json:"revised_prompt"`
+}
+
+// ImageUsage 与 OpenAI gpt-image-1 `/v1/images/generations` 响应的 usage 字段对齐：
+//
+//	{
+//	  "total_tokens": 100,
+//	  "input_tokens": 50,
+//	  "output_tokens": 50,
+//	  "input_tokens_details":  { "text_tokens": 10, "image_tokens": 40 },
+//	  "output_tokens_details": { "image_tokens": 50 }
+//	}
+type ImageUsage struct {
+	TotalTokens         int                 `json:"total_tokens"`
+	InputTokens         int                 `json:"input_tokens"`
+	OutputTokens        int                 `json:"output_tokens"`
+	InputTokensDetails  *InputTokenDetails  `json:"input_tokens_details,omitempty"`
+	OutputTokensDetails *OutputTokenDetails `json:"output_tokens_details,omitempty"`
 }

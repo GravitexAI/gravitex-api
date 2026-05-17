@@ -1783,6 +1783,318 @@ func GeminiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	return usage, nil
 }
 
+// CHZ-PATCH(gemini-imagine-images-generations): nano banana 等 imagine 模型可以通过
+// /v1/images/generations 调用——底层走 :generateContent，把 OpenAI ImageRequest 翻译为
+// 一个最小的 GeminiChatRequest（user prompt + 可选输入图）；响应通过
+// GeminiImagineImageHandler 把 GeminiChatResponse 中的 inlineData(image/*) 还原为
+// OpenAI ImageResponse 的 b64_json 数组，文本输出（描述、修订 prompt 等）合并写入 metadata。
+//
+// 维护要点：
+//   - imagine 模型清单在 setting/model_setting/gemini.go → SupportedImagineModels；
+//   - URL 仍由 GetRequestURL 自动选择（imagen→:predict，imagine→默认 :generateContent）；
+//   - 计费按上游实际生成的图片数 (usage.GeneratedImages) 由 image_handler.go 统一处理。
+func convertImagineImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (*dto.GeminiChatRequest, error) {
+	prompt := strings.TrimSpace(request.Prompt)
+	if prompt == "" {
+		return nil, errors.New("prompt is required for image generation")
+	}
+
+	parts := []dto.GeminiPart{{Text: prompt}}
+
+	// 图生图：v1/images/generations 也允许通过 image 字段传入参考图（与 gpt-image 系列保持一致）
+	imageParts, err := buildImagineInputImageParts(c, request.Image)
+	if err != nil {
+		return nil, err
+	}
+	parts = append(parts, imageParts...)
+
+	geminiReq := &dto.GeminiChatRequest{
+		Contents: []dto.GeminiChatContent{
+			{
+				Role:  "user",
+				Parts: parts,
+			},
+		},
+		GenerationConfig: dto.GeminiChatGenerationConfig{
+			ResponseModalities: []string{"TEXT", "IMAGE"},
+		},
+	}
+
+	// 平台默认 safety
+	safetySettings := make([]dto.GeminiChatSafetySettings, 0, len(SafetySettingList))
+	for _, category := range SafetySettingList {
+		safetySettings = append(safetySettings, dto.GeminiChatSafetySettings{
+			Category:  category,
+			Threshold: model_setting.GetGeminiSafetySetting(category),
+		})
+	}
+	geminiReq.SafetySettings = safetySettings
+
+	// size → aspectRatio / quality → imageSize 复用 imagen 那边的映射规则
+	imageConfig := map[string]string{}
+	if ar := imagineAspectRatioFromSize(request.Size); ar != "" {
+		imageConfig["aspectRatio"] = ar
+	}
+	if request.Quality != "" {
+		imageConfig["imageSize"] = imagineImageSizeFromQuality(request.Quality)
+	}
+	if len(imageConfig) > 0 {
+		raw, marshalErr := common.Marshal(imageConfig)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("failed to marshal image_config: %w", marshalErr)
+		}
+		geminiReq.GenerationConfig.ImageConfig = raw
+	}
+
+	return geminiReq, nil
+}
+
+// buildImagineInputImageParts 解析 OpenAI ImageRequest.Image（json.RawMessage），
+// 支持 string / []string / 嵌套对象等多种形式，逐项转成 Gemini inlineData part；
+// 不存在或为空时返回 nil（即纯文生图）。
+func buildImagineInputImageParts(c *gin.Context, raw json.RawMessage) ([]dto.GeminiPart, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil, nil
+	}
+
+	refs := make([]string, 0, 4)
+	switch trimmed[0] {
+	case '"':
+		var single string
+		if err := common.Unmarshal(raw, &single); err != nil {
+			return nil, fmt.Errorf("invalid image field: %w", err)
+		}
+		if single != "" {
+			refs = append(refs, single)
+		}
+	case '[':
+		var arr []string
+		if err := common.Unmarshal(raw, &arr); err != nil {
+			// 数组里不是字符串时直接拒绝，避免静默吞错
+			return nil, fmt.Errorf("invalid image field (expected []string): %w", err)
+		}
+		for _, item := range arr {
+			if item != "" {
+				refs = append(refs, item)
+			}
+		}
+	default:
+		// 其它形式（比如对象 {"url": "..."}）暂不支持
+		return nil, fmt.Errorf("invalid image field: unsupported shape, expected string or []string")
+	}
+
+	if len(refs) == 0 {
+		return nil, nil
+	}
+
+	parts := make([]dto.GeminiPart, 0, len(refs))
+	for _, ref := range refs {
+		// NewFileSourceFromData 自动判定：以 http(s):// 开头 → URLSource；
+		// 否则按 base64 处理（data URI 前缀会在 service.loadFromBase64 中解析出 mime type）
+		source := types.NewFileSourceFromData(ref, "")
+		if source == nil {
+			continue
+		}
+		base64Data, mimeType, err := service.GetBase64Data(c, source, "formatting image for Gemini imagine")
+		if err != nil {
+			return nil, fmt.Errorf("get image data from '%s' failed: %w", source.GetIdentifier(), err)
+		}
+		if _, ok := geminiSupportedMimeTypes[strings.ToLower(mimeType)]; !ok {
+			return nil, fmt.Errorf("mime type is not supported by Gemini: '%s', url: '%s'", mimeType, source.GetIdentifier())
+		}
+		parts = append(parts, dto.GeminiPart{
+			InlineData: &dto.GeminiInlineData{
+				MimeType: mimeType,
+				Data:     base64Data,
+			},
+		})
+	}
+	return parts, nil
+}
+
+func imagineAspectRatioFromSize(size string) string {
+	size = strings.TrimSpace(size)
+	if size == "" {
+		return ""
+	}
+	if strings.Contains(size, ":") {
+		return size
+	}
+	switch size {
+	case "256x256", "512x512", "1024x1024":
+		return "1:1"
+	case "1536x1024":
+		return "3:2"
+	case "1024x1536":
+		return "2:3"
+	case "1024x1792":
+		return "9:16"
+	case "1792x1024":
+		return "16:9"
+	}
+	return ""
+}
+
+func imagineImageSizeFromQuality(quality string) string {
+	switch quality {
+	case "hd", "high", "2K":
+		return "2K"
+	case "standard", "medium", "low", "auto", "1K", "":
+		return "1K"
+	}
+	return "1K"
+}
+
+// GeminiImagineImageHandler 把 nano banana 等 imagine 模型 :generateContent 的响应
+// 转成 OpenAI v1/images/generations 的 ImageResponse 格式。
+//   - candidates[].content.parts 里 inlineData(image/*) → ImageData{B64Json: ...}
+//   - 文本 part → 合并到第一张图片的 revised_prompt（仿 dall-e-3 行为），同时整体 prompt
+//     也写入 ImageResponse.Metadata.text 字段，便于客户端拿到模型描述。
+//   - usage 用 buildUsageFromGeminiMetadata 复用与 chat 一致的对账口径，并设置
+//     GeneratedImages，让 image_handler.go 按实际生成张数计费（避免 n=4 但只出 1 张时多扣费）。
+func GeminiImagineImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	defer service.CloseResponseBodyGracefully(resp)
+
+	responseBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, types.NewOpenAIError(readErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	}
+
+	var geminiResponse dto.GeminiChatResponse
+	if jsonErr := common.Unmarshal(responseBody, &geminiResponse); jsonErr != nil {
+		return nil, types.NewOpenAIError(jsonErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	}
+	info.UpstreamResponseId = geminiResponse.ResponseId
+
+	// 与 GeminiChatHandler 保持一致：打印上游 usageMetadata 原文便于对账
+	if metaJSON, jerr := common.Marshal(geminiResponse.UsageMetadata); jerr == nil {
+		logger.LogInfo(c, fmt.Sprintf("gemini imagine images generations upstream usageMetadata (responseId=%s, model=%s): %s",
+			geminiResponse.ResponseId, info.UpstreamModelName, string(metaJSON)))
+	}
+
+	imageResponse := dto.ImageResponse{
+		Created: common.GetTimestamp(),
+		Data:    make([]dto.ImageData, 0, 1),
+	}
+
+	textBuilder := strings.Builder{}
+	for _, candidate := range geminiResponse.Candidates {
+		for _, part := range candidate.Content.Parts {
+			if part.InlineData != nil && strings.HasPrefix(part.InlineData.MimeType, "image") {
+				imageResponse.Data = append(imageResponse.Data, dto.ImageData{
+					B64Json: part.InlineData.Data,
+				})
+			} else if part.Text != "" && !part.Thought {
+				if textBuilder.Len() > 0 {
+					textBuilder.WriteByte('\n')
+				}
+				textBuilder.WriteString(part.Text)
+			}
+		}
+	}
+
+	if len(imageResponse.Data) == 0 {
+		var newAPIError *types.NewAPIError
+		if geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
+			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", *geminiResponse.PromptFeedback.BlockReason))
+			newAPIError = types.NewOpenAIError(
+				fmt.Errorf("request blocked by Gemini API: %s", *geminiResponse.PromptFeedback.BlockReason),
+				types.ErrorCodePromptBlocked,
+				http.StatusBadRequest,
+			)
+		} else {
+			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, "gemini_imagine_no_image")
+			newAPIError = types.NewOpenAIError(
+				errors.New("no images generated by gemini imagine model"),
+				types.ErrorCodeEmptyResponse,
+				http.StatusBadGateway,
+			)
+		}
+		return nil, newAPIError
+	}
+
+	// 把模型同时返回的文本内容（描述/修订 prompt 等）作为 revised_prompt 与 metadata.text 透出
+	if textBuilder.Len() > 0 {
+		text := textBuilder.String()
+		imageResponse.Data[0].RevisedPrompt = text
+		if metaRaw, mErr := common.Marshal(map[string]string{"text": text}); mErr == nil {
+			imageResponse.Metadata = metaRaw
+		}
+	}
+
+	// 计算 usage：先按 chat 口径解析 GeminiUsageMetadata，再映射成 OpenAI image API 的 usage 字段
+	usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
+	usage.GeneratedImages = len(imageResponse.Data)
+	if usage.PromptTokens == 0 {
+		usage.PromptTokens = info.GetEstimatePromptTokens()
+	}
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+
+	// CHZ-PATCH(image-usage): 把 token 用量按 OpenAI gpt-image-1 风格写进响应体的 usage 字段，
+	// 让客户端在 /v1/images/generations 返回里也能拿到 input/output/total tokens 与 modality 拆分。
+	imageResponse.Usage = buildImageUsageFromGeminiUsage(&usage)
+
+	jsonResponse, jsonErr := common.Marshal(imageResponse)
+	if jsonErr != nil {
+		return nil, types.NewError(jsonErr, types.ErrorCodeBadResponseBody)
+	}
+
+	c.Writer.Header().Set("Content-Type", "application/json")
+	c.Writer.WriteHeader(resp.StatusCode)
+	_, _ = c.Writer.Write(jsonResponse)
+
+	return &usage, nil
+}
+
+// buildImageUsageFromGeminiUsage 把 dto.Usage（chat 口径：prompt_tokens/completion_tokens
+// + prompt_tokens_details/completion_tokens_details）映射成 OpenAI gpt-image-1 风格的
+// dto.ImageUsage（input_tokens/output_tokens + input_tokens_details/output_tokens_details）。
+//
+// 字段对应关系：
+//
+//	prompt_tokens                              -> input_tokens
+//	completion_tokens                          -> output_tokens
+//	total_tokens                               -> total_tokens
+//	prompt_tokens_details.{text,image}_tokens  -> input_tokens_details.{text,image}_tokens
+//	prompt_tokens_details.cached_tokens        -> input_tokens_details.cached_tokens
+//	completion_tokens_details.image_tokens     -> output_tokens_details.image_tokens
+func buildImageUsageFromGeminiUsage(u *dto.Usage) *dto.ImageUsage {
+	if u == nil {
+		return nil
+	}
+	usage := &dto.ImageUsage{
+		TotalTokens:  u.TotalTokens,
+		InputTokens:  u.PromptTokens,
+		OutputTokens: u.CompletionTokens,
+	}
+	inputDetails := u.PromptTokensDetails
+	if inputDetails.TextTokens > 0 || inputDetails.ImageTokens > 0 ||
+		inputDetails.AudioTokens > 0 || inputDetails.CachedTokens > 0 {
+		usage.InputTokensDetails = &dto.InputTokenDetails{
+			TextTokens:   inputDetails.TextTokens,
+			ImageTokens:  inputDetails.ImageTokens,
+			AudioTokens:  inputDetails.AudioTokens,
+			CachedTokens: inputDetails.CachedTokens,
+		}
+	}
+	outputDetails := u.CompletionTokenDetails
+	if outputDetails.TextTokens > 0 || outputDetails.ImageTokens > 0 ||
+		outputDetails.AudioTokens > 0 {
+		usage.OutputTokensDetails = &dto.OutputTokenDetails{
+			TextTokens:  outputDetails.TextTokens,
+			ImageTokens: outputDetails.ImageTokens,
+			AudioTokens: outputDetails.AudioTokens,
+		}
+	}
+	return usage
+}
+
 type GeminiModelsResponse struct {
 	Models        []dto.GeminiModel `json:"models"`
 	NextPageToken string            `json:"nextPageToken"`

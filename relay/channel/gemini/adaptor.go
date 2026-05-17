@@ -58,33 +58,28 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
-	if !strings.HasPrefix(info.UpstreamModelName, "imagen") {
-		return nil, errors.New("not supported model for image generation, only imagen models are supported")
+	// imagen 系列：走 :predict（原 Imagen 协议）
+	if strings.HasPrefix(info.UpstreamModelName, "imagen") {
+		return convertImagenRequest(request)
 	}
 
-	// convert size to aspect ratio but allow user to specify aspect ratio
-	aspectRatio := "1:1" // default aspect ratio
-	size := strings.TrimSpace(request.Size)
-	if size != "" {
-		if strings.Contains(size, ":") {
-			aspectRatio = size
-		} else {
-			switch size {
-			case "256x256", "512x512", "1024x1024":
-				aspectRatio = "1:1"
-			case "1536x1024":
-				aspectRatio = "3:2"
-			case "1024x1536":
-				aspectRatio = "2:3"
-			case "1024x1792":
-				aspectRatio = "9:16"
-			case "1792x1024":
-				aspectRatio = "16:9"
-			}
-		}
+	// CHZ-PATCH(gemini-imagine-images-generations): nano banana 等 imagine 模型支持
+	// 通过 /v1/images/generations 调用，底层走 :generateContent，构造 GeminiChatRequest，
+	// 响应在 DoResponse 阶段由 GeminiImagineImageHandler 转回 OpenAI ImageResponse。
+	if model_setting.IsGeminiModelSupportImagine(info.UpstreamModelName) {
+		return convertImagineImageRequest(c, info, request)
 	}
 
-	// build gemini imagen request
+	return nil, errors.New("not supported model for image generation, only imagen / imagine (nano banana) models are supported")
+}
+
+// convertImagenRequest 构造 Imagen 系列模型的请求体（走 :predict）
+func convertImagenRequest(request dto.ImageRequest) (any, error) {
+	aspectRatio := imagineAspectRatioFromSize(request.Size)
+	if aspectRatio == "" {
+		aspectRatio = "1:1"
+	}
+
 	geminiRequest := dto.GeminiImageRequest{
 		Instances: []dto.GeminiImageInstance{
 			{
@@ -94,7 +89,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		Parameters: dto.GeminiImageParameters{
 			SampleCount:      int(lo.FromPtrOr(request.N, uint(1))),
 			AspectRatio:      aspectRatio,
-			PersonGeneration: "allow_adult", // default allow adult
+			PersonGeneration: "allow_adult",
 		},
 	}
 
@@ -105,19 +100,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	// https://ai.google.dev/gemini-api/docs/imagen
 	// https://platform.openai.com/docs/api-reference/images/create
 	if request.Quality != "" {
-		imageSize := "1K" // default
-		switch request.Quality {
-		case "hd", "high":
-			imageSize = "2K"
-		case "2K":
-			imageSize = "2K"
-		case "standard", "medium", "low", "auto", "1K":
-			imageSize = "1K"
-		default:
-			// unknown quality value, default to 1K
-			imageSize = "1K"
-		}
-		geminiRequest.Parameters.ImageSize = imageSize
+		geminiRequest.Parameters.ImageSize = imagineImageSizeFromQuality(request.Quality)
 	}
 
 	return geminiRequest, nil
@@ -261,6 +244,16 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 
 	if strings.HasPrefix(info.UpstreamModelName, "imagen") {
 		return GeminiImageHandler(c, info, resp)
+	}
+
+	// CHZ-PATCH(gemini-imagine-images-generations): nano banana 等 imagine 模型在
+	// /v1/images/generations 与 /v1/images/edits 入口下都走 :generateContent，响应需翻译为
+	// OpenAI ImageResponse；对 imagine 来说 generations 与 edits 在协议层没有区别（均通过
+	// contents[].parts 的 inlineData 承载输入参考图，输出走 responseModalities）。
+	if (info.RelayMode == constant.RelayModeImagesGenerations ||
+		info.RelayMode == constant.RelayModeImagesEdits) &&
+		model_setting.IsGeminiModelSupportImagine(info.UpstreamModelName) {
+		return GeminiImagineImageHandler(c, info, resp)
 	}
 
 	// check if the model is an embedding model

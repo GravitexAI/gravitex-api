@@ -392,6 +392,15 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 				if strings.HasPrefix(info.UpstreamModelName, "imagen") {
 					return gemini.GeminiImageHandler(c, info, resp)
 				}
+				// CHZ-PATCH(gemini-imagine-images-generations): nano banana 等 imagine
+				// 模型在 /v1/images/generations 与 /v1/images/edits 入口下都走 :generateContent，
+				// 响应需翻译为 OpenAI ImageResponse；其它（chat/completions 等）保持走
+				// GeminiChatHandler。
+				if (info.RelayMode == constant.RelayModeImagesGenerations ||
+					info.RelayMode == constant.RelayModeImagesEdits) &&
+					model_setting.IsGeminiModelSupportImagine(info.UpstreamModelName) {
+					return gemini.GeminiImagineImageHandler(c, info, resp)
+				}
 				return gemini.GeminiChatHandler(c, info, resp)
 			}
 		case RequestModeOpenSource:
