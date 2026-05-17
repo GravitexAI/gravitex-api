@@ -206,6 +206,7 @@ const EditChannelModal = (props) => {
     byteplus_asset_sk: '',
     byteplus_asset_region: 'ap-southeast-1',
     byteplus_asset_project_name: 'default',
+    enable_moderation_query: false,
     // 企业账户设置
     is_enterprise_account: false,
     // 字段透传控制默认值
@@ -910,6 +911,8 @@ const EditChannelModal = (props) => {
           data.byteplus_asset_sk = parsedSettings.byteplus_asset_sk || '';
           data.byteplus_asset_region = parsedSettings.byteplus_asset_region || 'ap-southeast-1';
           data.byteplus_asset_project_name = parsedSettings.byteplus_asset_project_name || 'default';
+          data.enable_moderation_query =
+            parsedSettings.enable_moderation_query === true;
           // 读取企业账户设置
           data.is_enterprise_account =
             parsedSettings.openrouter_enterprise === true;
@@ -950,6 +953,7 @@ const EditChannelModal = (props) => {
           data.byteplus_asset_sk = '';
           data.byteplus_asset_region = 'ap-southeast-1';
           data.byteplus_asset_project_name = 'default';
+          data.enable_moderation_query = false;
           data.is_enterprise_account = false;
           data.allow_service_tier = false;
           data.disable_store = false;
@@ -972,6 +976,7 @@ const EditChannelModal = (props) => {
         data.byteplus_asset_sk = '';
         data.byteplus_asset_region = 'ap-southeast-1';
         data.byteplus_asset_project_name = 'default';
+        data.enable_moderation_query = false;
         data.is_enterprise_account = false;
         data.allow_service_tier = false;
         data.disable_store = false;
@@ -1805,6 +1810,8 @@ const EditChannelModal = (props) => {
       if (localInputs.byteplus_asset_sk) settings.byteplus_asset_sk = localInputs.byteplus_asset_sk;
       if (localInputs.byteplus_asset_region) settings.byteplus_asset_region = localInputs.byteplus_asset_region;
       if (localInputs.byteplus_asset_project_name) settings.byteplus_asset_project_name = localInputs.byteplus_asset_project_name;
+      settings.enable_moderation_query =
+        localInputs.enable_moderation_query === true;
     }
 
     // type === 41 (Vertex): 始终保存 vertex_key_type 到 settings，避免编辑时被重置
@@ -1874,6 +1881,7 @@ const EditChannelModal = (props) => {
     delete localInputs.byteplus_asset_sk;
     delete localInputs.byteplus_asset_region;
     delete localInputs.byteplus_asset_project_name;
+    delete localInputs.enable_moderation_query;
     // 清理字段透传控制的临时字段
     delete localInputs.allow_service_tier;
     delete localInputs.disable_store;
@@ -2812,6 +2820,21 @@ const EditChannelModal = (props) => {
                           }
                           showClear
                           extraText={t('BytePlus 项目名称，默认 default')}
+                        />
+                        <Form.Switch
+                          field='enable_moderation_query'
+                          label={t('启用审核拦截原因查询（需 BytePlus 白名单）')}
+                          checkedText={t('开')}
+                          uncheckedText={t('关')}
+                          onChange={(value) =>
+                            handleChannelOtherSettingsChange(
+                              'enable_moderation_query',
+                              value,
+                            )
+                          }
+                          extraText={t(
+                            '开启后允许调用 BytePlus GetModerationResult API 查询 Seedance 2.0 失败任务的审核拦截原因。需要先联系火山方舟商务申请白名单，否则上游会返回 NotFound.Id。',
+                          )}
                         />
                       </>
                     )}

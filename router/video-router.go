@@ -33,6 +33,13 @@ func SetVideoRouter(router *gin.Engine) {
 		// Real-human portrait library: H5 liveness verification session lifecycle.
 		// /session needs TokenAuth (binds the verification to the calling user/channel).
 		assetV1Router.POST("/visual-validate/session", controller.CreateVisualValidateSession)
+
+		// Seedance 2.0 moderation block-reason query (opt-in per channel, BytePlus whitelist required).
+		// Lives on the TokenAuth-only group because the handler resolves the channel from the
+		// task record itself — Distribute() would re-route to a possibly different channel.
+		// Path uses `/moderation-result/:task_id` (segment-before-id) so it doesn't shadow the
+		// existing `/video/generations/:task_id` GET handler when Gin's router resolves params.
+		assetV1Router.GET("/video/generations/moderation-result/:task_id", controller.QueryModerationResult)
 	}
 
 	// /visual-validate/result is invoked anonymously by the gateway-hosted callback page;

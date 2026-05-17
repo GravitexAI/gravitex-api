@@ -48,6 +48,11 @@ type ChannelOtherSettings struct {
 	ByteplusAssetSK          string `json:"byteplus_asset_sk,omitempty"`
 	ByteplusAssetRegion      string `json:"byteplus_asset_region,omitempty"`       // e.g. "ap-southeast-1"
 	ByteplusAssetProjectName string `json:"byteplus_asset_project_name,omitempty"` // e.g. "default"
+
+	// Whether this channel is whitelisted by BytePlus for the GetModerationResult API.
+	// Admins must enable this explicitly after applying through BytePlus business contact;
+	// otherwise calls return 404 NotFound.Id which pollutes logs and confuses users.
+	EnableModerationQuery bool `json:"enable_moderation_query,omitempty"`
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {
@@ -73,4 +78,11 @@ func (s ChannelOtherSettings) GetByteplusAssetProjectName() string {
 		return "default"
 	}
 	return s.ByteplusAssetProjectName
+}
+
+// IsModerationQueryEnabled reports whether the channel has BytePlus AK/SK
+// configured and the admin has explicitly opted-in to the GetModerationResult
+// API (which requires a BytePlus whitelist).
+func (s ChannelOtherSettings) IsModerationQueryEnabled() bool {
+	return s.HasByteplusAssetConfig() && s.EnableModerationQuery
 }

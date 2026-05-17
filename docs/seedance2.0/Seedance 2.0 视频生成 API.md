@@ -31,6 +31,7 @@ Seedance 2.0 是一款先进的 AI 视频生成模型，支持文生视频、图
   - [素材状态](#素材状态)
 - [参数参考](#参数参考)
 - [错误处理](#错误处理)
+- [查询审核拦截原因](#查询审核拦截原因)
 - [完整代码示例](#完整代码示例)
 - [常见问题](#常见问题)
 
@@ -228,7 +229,7 @@ queued → in_progress → completed / failed
 | `queued` | 任务已提交，排队中 |
 | `in_progress` | 正在生成 |
 | `completed` | 生成成功，`video_url` 字段可用 |
-| `failed` | 生成失败，查看 `error.message` 获取原因 |
+| `failed` | 生成失败，查看 `error.message` 获取原因；如果是 Seedance 2.0 被审核拦截，还可以调用 [查询审核拦截原因](#查询审核拦截原因) 拿到具体分类 |
 
 **建议轮询间隔**：每 5 秒查询一次，视频通常在 30~120 秒内生成完毕。
 
@@ -1100,6 +1101,112 @@ curl -X DELETE https://api.gravitex.ai/v1/assets/asset-20260508120145-pqwhc \
 > - `asset://` 引用塞错字段（详见 [Content 数组详解](#content-数组详解)）
 > - 视频尺寸/时长超出限制
 > - 内容安全审核未通过
+
+---
+
+## 查询审核拦截原因
+
+当 Seedance 2.0 任务因为**内容安全 / 版权 / 公众人物 / 真人脸**等审核策略被拦截时，`GET /v1/video/generations/{task_id}` 只会告诉你 `status: failed`，错误信息比较笼统。可以使用本接口主动查询上游具体的拦截分类与子原因。
+
+> ⚠️ **本接口默认关闭**——上游 BytePlus 要求**白名单授权**才能调用。请联系火山方舟商务申请，再让平台管理员在对应渠道的「BytePlus 素材库配置」里勾选「启用审核拦截原因查询」。未开通时调用会返回 `403 channel_not_whitelisted`。
+
+### 限制
+
+| 限制 | 说明 |
+|---|---|
+| 模型范围 | 仅 `seedance-2-0` / `seedance-2-0-fast` 失败任务可查 |
+| 时间窗口 | 任务创建后 **14 天内**可查；超时返回 `400 query_window_expired` |
+| 任务状态 | 仅 `failed` 任务有意义；其他状态返回 `400 invalid_task_status` |
+| 任务归属 | 只能查询自己 token 创建的任务（按 `user_id + task_id` 限定） |
+| 频率限制 | 每个渠道 **10 QPM**（与上游 QPM 一致）；超限返回 `429 rate_limited` |
+| 自动缓存 | 首次查询成功后结果会持久化到任务记录里，重复查询不消耗 QPM，响应中带 `"cached": true` |
+
+### 请求
+
+**GET** `https://api.gravitex.ai/v1/video/generations/moderation-result/{task_id}`
+
+```bash
+curl https://api.gravitex.ai/v1/video/generations/moderation-result/cgt-20260430135030-xxxxx \
+  -H "Authorization: Bearer sk-your_token_key"
+```
+
+### 响应 — 拦截原因列表
+
+```json
+{
+  "task_id": "cgt-20260430135030-xxxxx",
+  "block_reasons": [
+    {
+      "label": "Celebrity",
+      "sub_label": "Celebrity",
+      "detail": "Potentially contains Public Figures."
+    },
+    {
+      "label": "Copyright",
+      "sub_label": "IP",
+      "detail": "Potential copyright restriction. Potentially related content: Spider-Man: Homecoming-Peter Parker"
+    }
+  ],
+  "cached": false,
+  "queried_at": 1715140800
+}
+```
+
+### `block_reasons` 字段说明（对齐火山官方枚举）
+
+| 字段 | 说明 |
+|---|---|
+| `label` | 拦截大类，枚举值：`Safety`（内容安全）/ `Copyright`（版权）/ `Celebrity`（公众人物）/ `Deepfake`（真人脸） |
+| `sub_label` | 子分类：`Safety` 大类下为 `Safety`；`Copyright` 下为 `IP` / `Other`；`Celebrity` 下为 `Celebrity`；`Deepfake` 下为 `RealHuman` |
+| `detail` | 自然语言描述，可能包含命中的具体 IP / 公众人物名称（如 "Spider-Man: Homecoming-Peter Parker"） |
+
+### 错误响应
+
+| HTTP | `error.type` | 含义 |
+|------|---|---|
+| `400` | `invalid_request` | 缺少 `task_id` |
+| `400` | `invalid_task_status` | 任务不是 `failed` 状态，无拦截原因可查 |
+| `400` | `unsupported_model` | 任务不属于 seedance-2-0 系列 |
+| `400` | `query_window_expired` | 任务已超出 14 天可查询窗口 |
+| `403` | `channel_not_whitelisted` | 渠道未开启审核拦截原因查询开关 |
+| `404` | `not_found` | 任务不存在，或上游返回 `NotFound.Id`（任务未被审核拦截 / ID 无效 / 渠道未真正进入白名单） |
+| `429` | `rate_limited` | 当前渠道触发 10 QPM 限流，请稍后重试 |
+| `502` | `upstream_error` | 上游返回非 404 的错误，详细原因在 `error.message` 中透传 |
+
+错误体格式与其他接口一致：
+
+```json
+{
+  "error": {
+    "message": "moderation query is not enabled on this channel; please contact admin to apply for BytePlus whitelist activation",
+    "type": "channel_not_whitelisted"
+  }
+}
+```
+
+### 典型集成流程
+
+```python
+import requests
+
+def explain_failed_task(task_id: str) -> str:
+    """轮询拿到 status=failed 后再调本接口，把人类可读的拦截原因拼出来"""
+    resp = requests.get(
+        f"{BASE_URL}/v1/video/generations/moderation-result/{task_id}",
+        headers=HEADERS,
+    )
+    if resp.status_code == 403:
+        return "渠道未开通审核拦截原因查询，请联系管理员"
+    if resp.status_code == 404:
+        return "未查到拦截记录（可能不是被审核拦截，或已超 14 天）"
+    resp.raise_for_status()
+    data = resp.json()
+    if not data.get("block_reasons"):
+        return "任务失败但未被审核拦截"
+    return "；".join(
+        f"{r['label']}/{r['sub_label']}: {r['detail']}" for r in data["block_reasons"]
+    )
+```
 
 ---
 

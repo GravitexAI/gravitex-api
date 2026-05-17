@@ -1,12 +1,14 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 
 	"github.com/QuantumNous/new-api/common"
 
 	"github.com/byteplus-sdk/byteplus-go-sdk-v2/byteplus"
+	"github.com/byteplus-sdk/byteplus-go-sdk-v2/byteplus/bytepluserr"
 	"github.com/byteplus-sdk/byteplus-go-sdk-v2/byteplus/credentials"
 	"github.com/byteplus-sdk/byteplus-go-sdk-v2/byteplus/session"
 	"github.com/byteplus-sdk/byteplus-go-sdk-v2/byteplus/universal"
@@ -402,4 +404,88 @@ func ByteplusGetVisualValidateResult(cfg ByteplusAssetConfig, bytedToken string)
 		return "", fmt.Errorf("GetVisualValidateResult returned empty GroupId, raw: %v", resp)
 	}
 	return groupId, nil
+}
+
+// ---------- Moderation Block Reason Query ----------
+
+// BytePlus `GetModerationResult` Id types — used to tell the upstream how to
+// interpret the supplied `Id` (PDF p.2).
+const (
+	ByteplusModerationIdTypeTaskId    = "task_id"
+	ByteplusModerationIdTypeAssetId   = "asset_id"
+	ByteplusModerationIdTypeRequestId = "request_id"
+)
+
+// ByteplusModerationBlockReason represents a single content moderation block
+// reason returned by the upstream `GetModerationResult` API.
+//
+// `Label` is one of: Safety / Copyright / Celebrity / Deepfake.
+// `SubLabel` is a finer-grained classification (e.g. IP / Other / RealHuman).
+// `Detail` is a free-form description that may include matched IP / public
+// figure names (e.g. "Spider-Man: Homecoming-Peter Parker").
+type ByteplusModerationBlockReason struct {
+	Label    string `json:"label"`
+	SubLabel string `json:"sub_label"`
+	Detail   string `json:"detail"`
+}
+
+// ByteplusGetModerationResult queries the upstream BytePlus Ark
+// `GetModerationResult` API for content moderation block reasons of a single
+// task / asset / request ID. The caller must have whitelist access on the
+// BytePlus side; otherwise the upstream returns 404 NotFound.Id.
+//
+// `idType` must be one of ByteplusModerationIdType{TaskId,AssetId,RequestId}.
+// Empty `idType` defaults to TaskId.
+func ByteplusGetModerationResult(cfg ByteplusAssetConfig, id, idType string) ([]ByteplusModerationBlockReason, error) {
+	if id == "" {
+		return nil, fmt.Errorf("GetModerationResult: empty id")
+	}
+	if idType == "" {
+		idType = ByteplusModerationIdTypeTaskId
+	}
+	body := map[string]interface{}{
+		"Id":          id,
+		"Type":        idType,
+		"ProjectName": cfg.ProjectName,
+	}
+	resp, err := byteplusCall(cfg, "GetModerationResult", body)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		BlockReasons []ByteplusModerationBlockReason `json:"block_reasons"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+	return result.BlockReasons, nil
+}
+
+// IsByteplusNotFoundError reports whether the given upstream error corresponds
+// to a `NotFound.Id` failure (HTTP 404). For `GetModerationResult` this maps to
+// any of the three documented cases (PDF p.3):
+//   - invalid ID
+//   - request was not blocked by moderation
+//   - request exceeds the 14-day query range
+//
+// Callers should surface a friendly, ambiguous message to the user rather than
+// guessing which sub-case applies.
+func IsByteplusNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var reqFailure bytepluserr.RequestFailure
+	if errors.As(err, &reqFailure) {
+		if reqFailure.StatusCode() == 404 {
+			return true
+		}
+		if reqFailure.Code() == "NotFound.Id" {
+			return true
+		}
+	}
+	var bpErr bytepluserr.Error
+	if errors.As(err, &bpErr) && bpErr.Code() == "NotFound.Id" {
+		return true
+	}
+	return false
 }
