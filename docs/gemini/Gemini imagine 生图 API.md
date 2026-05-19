@@ -1,6 +1,6 @@
 # Gemini imagine 生图 API 用户文档
 
-Gemini imagine 系列（包含 Google 官方"nano banana"等可同时返回**文本 + 图片**的多模态生图模型）通过 Gravitex AI 网关，可用 OpenAI 兼容的 `/v1/images/generations` 与 `/v1/images/edits` 接口直接调用——无需 Google 账号、无需切换 SDK，只要把 `base_url` 指到 Gravitex AI 即可立即使用。
+Gemini imagine 系列（包含 Google 官方"nano banana"等可同时返回**文本 + 图片**的多模态生图模型）通过 Gravitex AI，可用 OpenAI 兼容的 `/v1/images/generations` 与 `/v1/images/edits` 接口直接调用。
 
 **Base URL**：`https://api.gravitex.ai`
 
