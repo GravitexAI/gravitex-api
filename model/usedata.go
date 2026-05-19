@@ -64,6 +64,111 @@ func LogQuotaData(userId int, username string, modelName string, quota int, crea
 	logQuotaDataCache(userId, username, modelName, quota, createdAt, tokenUsed)
 }
 
+func RecordQuotaData(userId int, username string, modelName string, quota int, createdAt int64, tokenUsed int) error {
+	// 只精确到小时
+	createdAt = createdAt - (createdAt % 3600)
+
+	quotaDataDB := &QuotaData{}
+	err := DB.Table("quota_data").Where("user_id = ? and username = ? and model_name = ? and created_at = ?",
+		userId, username, modelName, createdAt).First(quotaDataDB).Error
+	if err == nil && quotaDataDB.Id > 0 {
+		increaseQuotaData(userId, username, modelName, 1, quota, createdAt, tokenUsed)
+		common.SysLog(fmt.Sprintf("[QuotaData] increased user=%d username=%s model=%s created_at=%d quota=%d token_used=%d",
+			userId, username, modelName, createdAt, quota, tokenUsed))
+		return nil
+	}
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return err
+	}
+
+	quotaData := &QuotaData{
+		UserID:    userId,
+		Username:  username,
+		ModelName: modelName,
+		CreatedAt: createdAt,
+		TokenUsed: tokenUsed,
+		Count:     1,
+		Quota:     quota,
+	}
+	if err := DB.Table("quota_data").Create(quotaData).Error; err != nil {
+		return err
+	}
+	common.SysLog(fmt.Sprintf("[QuotaData] created user=%d username=%s model=%s created_at=%d quota=%d token_used=%d",
+		userId, username, modelName, createdAt, quota, tokenUsed))
+	return nil
+}
+
+func SyncQuotaDataFromConsumeLogsByRequestId(requestId string) error {
+	if requestId == "" {
+		return nil
+	}
+	consumeLog := &Log{}
+	err := LOG_DB.Where("request_id = ? AND type = ?", requestId, LogTypeConsume).
+		Order("id desc").
+		First(consumeLog).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	createdAt := consumeLog.CreatedAt - (consumeLog.CreatedAt % 3600)
+	type quotaDataAgg struct {
+		Count     int
+		Quota     int
+		TokenUsed int
+	}
+	agg := quotaDataAgg{}
+	err = LOG_DB.Model(&Log{}).
+		Select("count(*) as count, COALESCE(sum(quota), 0) as quota, COALESCE(sum(prompt_tokens + completion_tokens), 0) as token_used").
+		Where("type = ? AND user_id = ? AND username = ? AND model_name = ? AND created_at >= ? AND created_at < ?",
+			LogTypeConsume, consumeLog.UserId, consumeLog.Username, consumeLog.ModelName, createdAt, createdAt+3600).
+		Scan(&agg).Error
+	if err != nil {
+		return err
+	}
+	if agg.Count <= 0 {
+		return nil
+	}
+
+	quotaDataDB := &QuotaData{}
+	err = DB.Table("quota_data").Where("user_id = ? and username = ? and model_name = ? and created_at = ?",
+		consumeLog.UserId, consumeLog.Username, consumeLog.ModelName, createdAt).First(quotaDataDB).Error
+	if err == nil && quotaDataDB.Id > 0 {
+		err = DB.Table("quota_data").Where("id = ?", quotaDataDB.Id).Updates(map[string]interface{}{
+			"count":      agg.Count,
+			"quota":      agg.Quota,
+			"token_used": agg.TokenUsed,
+		}).Error
+		if err != nil {
+			return err
+		}
+		common.SysLog(fmt.Sprintf("[QuotaData] synced user=%d username=%s model=%s created_at=%d count=%d quota=%d token_used=%d",
+			consumeLog.UserId, consumeLog.Username, consumeLog.ModelName, createdAt, agg.Count, agg.Quota, agg.TokenUsed))
+		return nil
+	}
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return err
+	}
+
+	quotaData := &QuotaData{
+		UserID:    consumeLog.UserId,
+		Username:  consumeLog.Username,
+		ModelName: consumeLog.ModelName,
+		CreatedAt: createdAt,
+		TokenUsed: agg.TokenUsed,
+		Count:     agg.Count,
+		Quota:     agg.Quota,
+	}
+	if err := DB.Table("quota_data").Create(quotaData).Error; err != nil {
+		return err
+	}
+	common.SysLog(fmt.Sprintf("[QuotaData] synced created user=%d username=%s model=%s created_at=%d count=%d quota=%d token_used=%d",
+		consumeLog.UserId, consumeLog.Username, consumeLog.ModelName, createdAt, agg.Count, agg.Quota, agg.TokenUsed))
+	return nil
+}
+
 func SaveQuotaDataCache() {
 	CacheQuotaDataLock.Lock()
 	defer CacheQuotaDataLock.Unlock()

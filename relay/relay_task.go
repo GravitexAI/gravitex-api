@@ -442,6 +442,11 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	adaptor := GetTaskAdaptor(originTask.Platform)
 	if adaptor != nil {
 		if converter, ok := adaptor.(channel.OpenAIVideoConverter); ok {
+			if originTask.Status == model.TaskStatusSuccess {
+				if err := model.SyncQuotaDataFromConsumeLogsByRequestId(originTask.TaskID); err != nil {
+					common.SysLog(fmt.Sprintf("[QuotaData] sync from logs failed task=%s err=%v", originTask.TaskID, err))
+				}
+			}
 			openAIVideoData, err := converter.ConvertToOpenAIVideo(originTask)
 			if err != nil {
 				taskResp = service.TaskErrorWrapper(err, "convert_to_openai_video_failed", http.StatusInternalServerError)
@@ -484,15 +489,15 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	return
 }
 
-// tryRealtimeFetch 尝试从上游实时拉取 Gemini/Vertex 任务状态。
-// 仅当渠道类型为 Gemini 或 Vertex 时触发；其他渠道或出错时返回 nil。
+// tryRealtimeFetch 尝试从上游实时拉取视频任务状态。
 // 当非 OpenAI Video API 时，还会构建自定义格式的响应体。
 func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
-	channelModel, err := model.GetChannelById(task.ChannelId, true)
-	if err != nil {
+	if task.Status == model.TaskStatusFailure || (task.Status == model.TaskStatusSuccess && task.Quota != 0) {
 		return nil
 	}
-	if channelModel.Type != constant.ChannelTypeVertexAi && channelModel.Type != constant.ChannelTypeGemini {
+
+	channelModel, err := model.GetChannelById(task.ChannelId, true)
+	if err != nil {
 		return nil
 	}
 
@@ -522,6 +527,42 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	ti, err := adaptor.ParseTaskResult(body)
 	if err != nil || ti == nil {
 		return nil
+	}
+	common.SysLog(fmt.Sprintf("[VideoFetch] task=%s upstream_status=%s progress=%s completion_tokens=%d total_tokens=%d",
+		task.TaskID, ti.Status, ti.Progress, ti.CompletionTokens, ti.TotalTokens))
+
+	if ti.Status == model.TaskStatusSuccess || ti.Status == model.TaskStatusFailure {
+		if CompleteVideoTaskOnUpstreamSuccessFn != nil && (task.Status != model.TaskStatus(ti.Status) || task.Quota == 0) {
+			if err := CompleteVideoTaskOnUpstreamSuccessFn(context.Background(), task, channelModel, ti, body); err != nil {
+				common.SysLog(fmt.Sprintf("[VideoFetch] task=%s complete handler failed: %v", task.TaskID, err))
+				return nil
+			}
+		}
+		if ti.Status == model.TaskStatusSuccess {
+			if err := model.SyncQuotaDataFromConsumeLogsByRequestId(task.TaskID); err != nil {
+				common.SysLog(fmt.Sprintf("[QuotaData] sync from logs failed task=%s err=%v", task.TaskID, err))
+			}
+		}
+		if isOpenAIVideoAPI {
+			return nil
+		}
+		if _, ok := adaptor.(channel.OpenAIVideoConverter); ok {
+			return nil
+		}
+		format := detectVideoFormat(body)
+		out := map[string]any{
+			"error":    nil,
+			"format":   format,
+			"metadata": nil,
+			"status":   mapTaskStatusToSimple(task.Status),
+			"task_id":  task.TaskID,
+			"url":      task.GetResultURL(),
+		}
+		respBody, _ := common.Marshal(dto.TaskResponse[any]{
+			Code: "success",
+			Data: out,
+		})
+		return respBody
 	}
 
 	snap := task.Snapshot()

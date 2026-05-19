@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -1508,6 +1509,10 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	}
 	if err := model.CreateLog(consumeLog); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed to insert consume log: %v", modelName, task.TaskID, err))
+	} else if common.DataExportEnabled {
+		if err := model.RecordQuotaData(task.UserId, username, modelName, actualQuota, consumeLog.CreatedAt, consumeLog.PromptTokens+consumeLog.CompletionTokens); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed to record quota data: %v", modelName, task.TaskID, err))
+		}
 	}
 
 	// 更新用量统计
@@ -1594,6 +1599,12 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		tokens = taskResult.CompletionTokens
 	} else if taskResult.TotalTokens > 0 {
 		tokens = taskResult.TotalTokens
+	}
+	if tokens <= 0 {
+		tokens = extractVideoUsageTokensFromTaskData(taskData)
+		if tokens > 0 {
+			logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio task=%s recovered tokens=%d from task.Data usage", task.TaskID, tokens))
+		}
 	}
 	if tokens <= 0 {
 		// mock 环境不会返回用量信息，此时跳过计费而不报错，避免任务被标记为失败
@@ -1821,6 +1832,10 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	}
 	if err := model.CreateLog(consumeLog); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to insert consume log: %v", modelName, task.TaskID, err))
+	} else if common.DataExportEnabled {
+		if err := model.RecordQuotaData(task.UserId, username, modelName, actualQuota, consumeLog.CreatedAt, consumeLog.PromptTokens+consumeLog.CompletionTokens); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to record quota data: %v", modelName, task.TaskID, err))
+		}
 	}
 
 	model.UpdateUserUsedQuotaAndRequestCount(task.UserId, actualQuota)
@@ -1838,6 +1853,44 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to persist billing result: %v", modelName, task.TaskID, err))
 	}
 	return nil
+}
+
+func extractVideoUsageTokensFromTaskData(taskData map[string]interface{}) int {
+	tokenFromValue := func(value interface{}) int {
+		switch v := value.(type) {
+		case int:
+			return v
+		case int64:
+			return int(v)
+		case float64:
+			return int(v)
+		case json.Number:
+			n, _ := v.Int64()
+			return int(n)
+		}
+		return 0
+	}
+	var extractFromUsage func(map[string]interface{}) int
+	extractFromUsage = func(data map[string]interface{}) int {
+		if data == nil {
+			return 0
+		}
+		if usage, ok := data["usage"].(map[string]interface{}); ok {
+			if tokens := tokenFromValue(usage["completion_tokens"]); tokens > 0 {
+				return tokens
+			}
+			if tokens := tokenFromValue(usage["total_tokens"]); tokens > 0 {
+				return tokens
+			}
+		}
+		if metadata, ok := data["metadata"].(map[string]interface{}); ok {
+			if tokens := extractFromUsage(metadata); tokens > 0 {
+				return tokens
+			}
+		}
+		return 0
+	}
+	return extractFromUsage(taskData)
 }
 
 // extractProjectFromTaskID 从 Vertex AI 视频任务的 taskID 中提取 project ID。
