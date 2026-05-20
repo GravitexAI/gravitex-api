@@ -33,6 +33,12 @@ func UpdateQuotaData() {
 
 var CacheQuotaData = make(map[string]*QuotaData)
 var CacheQuotaDataLock = sync.Mutex{}
+var quotaDataSyncLocks sync.Map
+
+func getQuotaDataSyncLock(key string) *sync.Mutex {
+	lock, _ := quotaDataSyncLocks.LoadOrStore(key, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
 
 func logQuotaDataCache(userId int, username string, modelName string, quota int, createdAt int64, tokenUsed int) {
 	key := fmt.Sprintf("%d-%s-%s-%d", userId, username, modelName, createdAt)
@@ -64,40 +70,6 @@ func LogQuotaData(userId int, username string, modelName string, quota int, crea
 	logQuotaDataCache(userId, username, modelName, quota, createdAt, tokenUsed)
 }
 
-func RecordQuotaData(userId int, username string, modelName string, quota int, createdAt int64, tokenUsed int) error {
-	// 只精确到小时
-	createdAt = createdAt - (createdAt % 3600)
-
-	quotaDataDB := &QuotaData{}
-	err := DB.Table("quota_data").Where("user_id = ? and username = ? and model_name = ? and created_at = ?",
-		userId, username, modelName, createdAt).First(quotaDataDB).Error
-	if err == nil && quotaDataDB.Id > 0 {
-		increaseQuotaData(userId, username, modelName, 1, quota, createdAt, tokenUsed)
-		common.SysLog(fmt.Sprintf("[QuotaData] increased user=%d username=%s model=%s created_at=%d quota=%d token_used=%d",
-			userId, username, modelName, createdAt, quota, tokenUsed))
-		return nil
-	}
-	if err != nil && err != gorm.ErrRecordNotFound {
-		return err
-	}
-
-	quotaData := &QuotaData{
-		UserID:    userId,
-		Username:  username,
-		ModelName: modelName,
-		CreatedAt: createdAt,
-		TokenUsed: tokenUsed,
-		Count:     1,
-		Quota:     quota,
-	}
-	if err := DB.Table("quota_data").Create(quotaData).Error; err != nil {
-		return err
-	}
-	common.SysLog(fmt.Sprintf("[QuotaData] created user=%d username=%s model=%s created_at=%d quota=%d token_used=%d",
-		userId, username, modelName, createdAt, quota, tokenUsed))
-	return nil
-}
-
 func SyncQuotaDataFromConsumeLogsByRequestId(requestId string) error {
 	if requestId == "" {
 		return nil
@@ -114,6 +86,11 @@ func SyncQuotaDataFromConsumeLogsByRequestId(requestId string) error {
 	}
 
 	createdAt := consumeLog.CreatedAt - (consumeLog.CreatedAt % 3600)
+	lockKey := fmt.Sprintf("%d-%s-%s-%d", consumeLog.UserId, consumeLog.Username, consumeLog.ModelName, createdAt)
+	lock := getQuotaDataSyncLock(lockKey)
+	lock.Lock()
+	defer lock.Unlock()
+
 	type quotaDataAgg struct {
 		Count     int
 		Quota     int
