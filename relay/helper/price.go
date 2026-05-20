@@ -218,7 +218,7 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 			usePrice = true
 		} else if videoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecond(info.OriginModelName); hasVideoPrice && videoPrice > 0 {
 			// 视频按秒计费模型（如 kling-v3, sora-2, veo 等）：提交阶段使用每秒单价作为预扣估算，
-			// 实际按秒结算在轮询成功后由 handleSora2TaskBilling 完成。
+			// 实际按秒结算在轮询成功后由 handleVideoPerSecondBilling 完成。
 			modelPrice = videoPrice
 			usePrice = true
 		} else if _, hasVideoCompletionRatio := ratio_setting.GetVideoCompletionRatioPricing(info.OriginModelName, false); hasVideoCompletionRatio {

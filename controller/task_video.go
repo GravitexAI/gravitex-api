@@ -508,7 +508,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 
 		if isVideoPerSecondModel(taskModelName) {
 			// 按秒计费：轮询成功后根据 task.Data 中保存的信息计费并写消费日志
-			if err := handleSora2TaskBilling(ctx, task); err != nil {
+			if err := handleVideoPerSecondBilling(ctx, task); err != nil {
 				logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed: %v", taskModelName, task.TaskID, err))
 				// 计费失败仅记录日志，不覆盖任务状态，视频已生成应正常返回给用户
 			}
@@ -664,7 +664,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		} else if !won {
 			logger.LogWarn(ctx, fmt.Sprintf("[TaskPoll] task=%s already transitioned by another process (from=%s), skip billing/refund", taskId, preStatus))
 			shouldRefund = false
-			// 如果 handleSora2TaskBilling 已经设置了 quota=-1 锁但 CAS 失败，需要回滚锁
+			// 如果 handleVideoPerSecondBilling 已经设置了 quota=-1 锁但 CAS 失败，需要回滚锁
 			// 但由于 billing lock 是独立的原子操作（检查 quota=0），CAS 失败意味着另一个进程已处理
 			// 此处无需额外操作
 		}
@@ -1085,7 +1085,7 @@ func CompleteVideoTaskOnUpstreamSuccess(ctx context.Context, task *model.Task, c
 			task.FailReason = strings.TrimSpace(taskResult.Reason)
 		}
 	}
-	// 只更新状态相关字段，绝不碰 quota —— quota 由 handleSora2TaskBilling / handleVideoTokenRatioBilling
+	// 只更新状态相关字段，绝不碰 quota —— quota 由 handleVideoPerSecondBilling / handleVideoTokenRatioBilling
 	// 的 DB 原子 guard（WHERE quota=0）独占更新。使用 DB.Save 全量写回会把后台轮询已更新的 quota 覆盖回 0，
 	// 导致 DB guard 被绕过、重复计费。
 	updateFields := map[string]interface{}{
@@ -1103,7 +1103,7 @@ func CompleteVideoTaskOnUpstreamSuccess(ctx context.Context, task *model.Task, c
 		taskModelName = task.Properties.UpstreamModelName
 	}
 	if taskResult.Status == model.TaskStatusSuccess && isVideoPerSecondModel(taskModelName) {
-		if err := handleSora2TaskBilling(ctx, task); err != nil {
+		if err := handleVideoPerSecondBilling(ctx, task); err != nil {
 			logger.LogError(ctx, fmt.Sprintf("[VideoBilling] GET path model=%s task=%s failed: %v", taskModelName, task.TaskID, err))
 			_ = model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
 				"status":      model.TaskStatusFailure,
@@ -1132,9 +1132,9 @@ func CompleteVideoTaskOnUpstreamSuccess(ctx context.Context, task *model.Task, c
 	return nil
 }
 
-// handleSora2TaskBilling 处理按秒计费视频模型的轮询成功计费逻辑（Sora-2 等）
+// handleVideoPerSecondBilling 处理按秒计费视频模型的轮询成功计费逻辑（Veo / Sora-2 / kling-v3 / wan2.6 等所有按秒价模型）
 // 计费公式: actualQuota = videoPrice × requestedSeconds × QuotaPerUnit × groupRatio
-func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
+func handleVideoPerSecondBilling(ctx context.Context, task *model.Task) error {
 	modelName := task.Properties.OriginModelName
 	if modelName == "" {
 		modelName = task.Properties.UpstreamModelName
@@ -1152,7 +1152,7 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	var taskData map[string]interface{}
 	if len(task.Data) > 0 {
 		if err := common.Unmarshal(task.Data, &taskData); err != nil {
-			return fmt.Errorf("handleSora2TaskBilling: unmarshal task.Data failed: %w", err)
+			return fmt.Errorf("handleVideoPerSecondBilling: unmarshal task.Data failed: %w", err)
 		}
 	}
 	if taskData == nil {
@@ -1169,7 +1169,7 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	// 后台轮询和 GET /v1/videos 路径可能并发调用此函数，内存级检查无法防止竞态
 	claimResult := model.DB.Model(&model.Task{}).Where("id = ? AND quota = 0", task.ID).Update("quota", -1)
 	if claimResult.Error != nil {
-		return fmt.Errorf("handleSora2TaskBilling: failed to claim billing lock: %w", claimResult.Error)
+		return fmt.Errorf("handleVideoPerSecondBilling: failed to claim billing lock: %w", claimResult.Error)
 	}
 	if claimResult.RowsAffected == 0 {
 		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s already billed (DB guard), skip", modelName, task.TaskID))
@@ -1386,7 +1386,7 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	officialVideoPrice, hasVideoPrice := ratio_setting.GetVideoModelPricePerSecondForBillingWithResolution(modelName, generateAudio, resKey)
 	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s billing_resolution=%s", task.TaskID, resKey))
 	if !hasVideoPrice || officialVideoPrice <= 0 {
-		return fmt.Errorf("handleSora2TaskBilling: video price per second not configured for model: %s", modelName)
+		return fmt.Errorf("handleVideoPerSecondBilling: video price per second not configured for model: %s", modelName)
 	}
 
 	// 对于 wan2.6 系列，优先使用 usage.output_video_duration（实际输出时长），其次 usage.duration，再回退到 requestedSeconds
@@ -1430,7 +1430,7 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	// 执行扣费
 	if actualQuota > 0 {
 		if err := model.DecreaseUserQuota(task.UserId, actualQuota, true); err != nil {
-			return fmt.Errorf("handleSora2TaskBilling: DecreaseUserQuota failed: %w", err)
+			return fmt.Errorf("handleVideoPerSecondBilling: DecreaseUserQuota failed: %w", err)
 		}
 		// 同步扣除令牌额度
 		service.TaskAdjustTokenQuota(ctx, task, actualQuota)
@@ -1938,7 +1938,7 @@ func handleFallbackBilling(ctx context.Context, task *model.Task, taskResult *re
 	// 尝试1：检查按秒计费配置是否存在，存在则调用按秒计费
 	// 先检查配置再调用，避免 DB 级计费锁被错误占用
 	if _, hasPerSecondPrice := ratio_setting.GetVideoModelPricePerSecond(taskModelName); hasPerSecondPrice {
-		if err := handleSora2TaskBilling(ctx, task); err == nil {
+		if err := handleVideoPerSecondBilling(ctx, task); err == nil {
 			// err==nil 表示计费流程正常完成（即使 quota=0 也表示"零费用"而非"计费失败"），不再尝试第二条路径
 			if task.Quota > 0 {
 				logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] fallback per_second success: task=%s model=%s quota=%d",

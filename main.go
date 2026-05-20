@@ -126,7 +126,7 @@ func main() {
 	relay.CompleteVideoTaskOnUpstreamSuccessFn = controller.CompleteVideoTaskOnUpstreamSuccess
 
 	// 视频任务轮询使用 controller 层的 UpdateVideoTaskAll 引擎
-	// 支持 handleSora2TaskBilling（按秒计费）和 handleVideoTokenRatioBilling（按量计费）
+	// 支持 handleVideoPerSecondBilling（按秒计费）和 handleVideoTokenRatioBilling（按量计费）
 	service.UpdateVideoTasksFn = controller.UpdateVideoTaskAll
 
 	// Channel upstream model update check task

@@ -35,7 +35,7 @@ sequenceDiagram
         Adaptor-->>Poll: TaskInfo
         Poll->>DB: UpdateVideoSingleTask → task.Update()
         alt status=SUCCESS
-            Poll->>Poll: handleSora2TaskBilling → 扣费 + 写消费日志
+            Poll->>Poll: handleVideoPerSecondBilling → 扣费 + 写消费日志
             Poll->>DB: task.Quota, task.Data(billing_processed=true)
         else status=FAILURE
             Poll->>LogDB: 写入错误日志
@@ -170,7 +170,7 @@ sequenceDiagram
    - **SUCCESS**：  
      - progress=100%，`finish_time` 若为 0 则设为当前时间。  
      - Veo 模型（名称前缀 `veo-`）：不传 OSS，直接把 `taskResult.RemoteUrl` 或 `taskResult.Url` 写入 **task.FailReason**（复用该字段存视频 URL 或 data URI）。  
-     - 若是按秒计费模型：调用 **handleSora2TaskBilling**（见下）。  
+     - 若是按秒计费模型：调用 **handleVideoPerSecondBilling**（见下）。  
    - **FAILURE**：  
      - progress=100%，`finish_time` 同上。  
      - **task.FailReason = taskResult.Reason**（上游错误信息）。  
@@ -192,12 +192,12 @@ sequenceDiagram
 | finish_time | 进入 SUCCESS 或 FAILURE 时 |
 | fail_reason | SUCCESS 时存视频 URL（Veo 不传 OSS 则 base64 data URI 或 GCS URL）；FAILURE 时存上游错误信息 |
 | data | 上游响应与 existingData 合并，保留 preservedFields，再写回 |
-| quota | 仅当 SUCCESS 且按秒计费时，在 handleSora2TaskBilling 中设为实际扣费值 |
+| quota | 仅当 SUCCESS 且按秒计费时，在 handleVideoPerSecondBilling 中设为实际扣费值 |
 | user_request_body, upstream_request_body | **轮询不修改**，保持提交时写入的值 |
 
 ---
 
-## 四、按秒计费与消费日志（handleSora2TaskBilling）
+## 四、按秒计费与消费日志（handleVideoPerSecondBilling）
 
 仅在 **轮询到 status=SUCCESS** 且该任务为按秒计费模型（options 中配置了 VideoModelPricePerSecond）时调用。
 
@@ -273,7 +273,7 @@ sequenceDiagram
 | status / progress | 初始 NOT_START / 0% | 每次轮询更新 | 终态 SUCCESS/FAILURE 才扣费或退款 |
 | fail_reason | 空 | SUCCESS 存视频 URL，FAILURE 存错误信息 | 前端通过 ConvertToOpenAIVideo 的 url/error 返回 |
 | data | 提交响应+计费字段 | 合并上游响应并保留 preservedFields | 计费与 billing_processed 依赖此 JSON |
-| quota | 0（按秒计费） | SUCCESS 后改为实际扣费值 | 扣费在 handleSora2TaskBilling 中完成 |
+| quota | 0（按秒计费） | SUCCESS 后改为实际扣费值 | 扣费在 handleVideoPerSecondBilling 中完成 |
 | properties | OriginModelName, UpstreamModelName, RequestedSeconds | 不变 | 计费兜底用 RequestedSeconds |
 | user_request_body | 用户原始 JSON（截断 base64） | **不更新** | 仅存留，计费不依赖 |
 | upstream_request_body | 上游请求 JSON（截断 base64） | **不更新** | 计费优先从此取 durationSeconds |

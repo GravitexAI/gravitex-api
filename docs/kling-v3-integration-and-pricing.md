@@ -524,7 +524,7 @@ relay.RelayTaskSubmit()
   → GET https://api.klingai.com/v1/videos/text2video/{task_id}
   → task_status = "succeed"
   → ParseTaskResult() → video.url, video.duration 取出
-  → handleSora2TaskBilling()
+  → handleVideoPerSecondBilling()
      isVideoPerSecondModel("kling-v3-pro") = true（已配置 VideoModelPricePerSecond）
      parseGenerateAudioFromUpstreamBody() → generate_audio=false → noAudio
      GetVideoModelPricePerSecondForBillingWithResolution("kling-v3-pro", false, "") → 0.112

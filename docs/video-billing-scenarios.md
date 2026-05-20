@@ -9,7 +9,7 @@
 
 | 模型 | 计费路由 | 计费函数 | 防重复机制 |
 |------|----------|----------|-----------|
-| kling-v3 | `per_second` | `handleSora2TaskBilling` | DB CAS: `WHERE id=? AND quota=0 UPDATE quota=-1` |
+| kling-v3 | `per_second` | `handleVideoPerSecondBilling` | DB CAS: `WHERE id=? AND quota=0 UPDATE quota=-1` |
 | seedance-2-0 | `token_ratio` | `handleVideoTokenRatioBilling` | DB CAS: `WHERE id=? AND quota=0 UPDATE quota=-1` |
 | seedance-2-0-fast | `token_ratio` | `handleVideoTokenRatioBilling` | DB CAS: `WHERE id=? AND quota=0 UPDATE quota=-1` |
 
@@ -31,7 +31,7 @@ actualQuota = officialVideoPrice × requestedSeconds × QuotaPerUnit × groupRat
 
 ```
 提交 → isVideoPerSecondModel=true → billingRoute="per_second" → 不预扣
-轮询成功 → isVideoPerSecondModel=true → handleSora2TaskBilling:
+轮询成功 → isVideoPerSecondModel=true → handleVideoPerSecondBilling:
   1. DB CAS 抢锁: quota 0→-1 ✓
   2. 解析 upstream_request_body.duration → requestedSeconds=5
   3. 读取价格: 0.084（noAudio）
@@ -51,7 +51,7 @@ actualQuota = officialVideoPrice × requestedSeconds × QuotaPerUnit × groupRat
   → billingRoute="pre_deduction_settle" → 正常路由不扣费 → task.Quota=0
   → 进入保底: handleFallbackBilling
     → 检查 GetVideoModelPricePerSecond("kling-v3") → 找到 (代码硬编码 0.084)
-    → 调用 handleSora2TaskBilling:
+    → 调用 handleVideoPerSecondBilling:
       1. DB CAS 抢锁: quota 0→-1 ✓
       2. 解析 upstream_request_body.duration → requestedSeconds=5
       3. 价格: 0.084
@@ -70,12 +70,12 @@ actualQuota = officialVideoPrice × requestedSeconds × QuotaPerUnit × groupRat
 
 ```
 保底失败路径 (理论上):
-  handleSora2TaskBilling → 配置检查通过 → DB CAS 抢锁成功
+  handleVideoPerSecondBilling → 配置检查通过 → DB CAS 抢锁成功
   → requestedSeconds 解析: 0 → 兜底 4s（代码 1262-1268 行）
   → 仍能正常计费（4s × 0.084 × 500000 × groupRatio）
 ```
 
-**实际上**: kling-v3 的 `handleSora2TaskBilling` 有 requestedSeconds=0 时兜底 4s 的逻辑，所以**不会真正失败**。唯一失败可能是 `DecreaseUserQuota` 报错（用户余额不足），此时：
+**实际上**: kling-v3 的 `handleVideoPerSecondBilling` 有 requestedSeconds=0 时兜底 4s 的逻辑，所以**不会真正失败**。唯一失败可能是 `DecreaseUserQuota` 报错（用户余额不足），此时：
 - task.Quota 停留在 -1（计费中锁）
 - 用户不被重复扣费
 - 记录系统日志 "[保底计费失败]"
@@ -286,7 +286,7 @@ video_resolution 解析链:
 ```
 任务轮询/GET 成功
     │
-    ├── isVideoPerSecondModel? ──YES──→ handleSora2TaskBilling (kling-v3)
+    ├── isVideoPerSecondModel? ──YES──→ handleVideoPerSecondBilling (kling-v3)
     │                                         │
     │                                    DB CAS 抢锁
     │                                         │
@@ -306,7 +306,7 @@ video_resolution 解析链:
               │
               └── 保底触发: handleFallbackBilling
                         │
-                        ├── 有 per_second 配置? → handleSora2TaskBilling → 成功则 return
+                        ├── 有 per_second 配置? → handleVideoPerSecondBilling → 成功则 return
                         │
                         ├── 有 token_ratio 配置? → handleVideoTokenRatioBilling → 成功则 return
                         │

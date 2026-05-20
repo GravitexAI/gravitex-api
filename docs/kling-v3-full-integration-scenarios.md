@@ -39,7 +39,7 @@ kling-v3 系列已加入 Go 后端 `defaultVideoAudioPricing`，无需手动配�
 | `kling-v3-omni` | **$0.084** | **$0.126** |
 | `kling-v3-omni-pro` | **$0.112** | **$0.168** |
 
-**计费触发条件**：`isVideoPerSecondModel("kling-v3-pro")` → `true`（已在 `videoModelAudioPricePerSecondMap` 中），轮询到 `succeed` 时由 `handleSora2TaskBilling` 自动扣费。
+**计费触发条件**：`isVideoPerSecondModel("kling-v3-pro")` → `true`（已在 `videoModelAudioPricePerSecondMap` 中），轮询到 `succeed` 时由 `handleVideoPerSecondBilling` 自动扣费。
 
 **默认 generate_audio = false**：前端 kling 分支固定传 `generate_audio: false`，对应 `noAudio` 定价。若未来需支持含音频版本，可在请求 metadata 中覆盖。
 
@@ -96,7 +96,7 @@ requestPayload{
       ▼ 写入 tasks 表 → 返回前端 { id:"xxx", status:"queued" }
 
 [后台轮询，succeed 后]
-handleSora2TaskBilling()
+handleVideoPerSecondBilling()
   → parseGenerateAudioFromUpstreamBody → generate_audio=false → noAudio
   → GetVideoModelPricePerSecondForBillingWithResolution("kling-v3-pro", false, "")
     → videoModelAudioPricePerSecondMap["kling-v3-pro"].NoAudio = 0.112
@@ -147,7 +147,7 @@ requestPayload{
       │
       ▼ 可灵处理首帧 → 返回 task_id
       │
-      ▼ 轮询成功 → handleSora2TaskBilling
+      ▼ 轮询成功 → handleVideoPerSecondBilling
   → noAudio → 0.084 × 5 × 500 = 210 quota
 ```
 
@@ -231,7 +231,7 @@ model.includes('seedream')         // doubao-seedream-4-0 等图生图模型
 
 解析路径（`buildVideoModelPriceCaches`）：
 - 值为 `{noAudio: N, audio: N}` → `videoModelAudioPricePerSecondMap[key] = VideoAudioPricing{NoAudio, Audio}`
-- `isVideoPerSecondModel` 返回 `true` → `handleSora2TaskBilling` 走按秒计费路径
+- `isVideoPerSecondModel` 返回 `true` → `handleVideoPerSecondBilling` 走按秒计费路径
 
 ---
 
@@ -281,7 +281,7 @@ model.includes('seedream')         // doubao-seedream-4-0 等图生图模型
 
 1. **`-pro` 模型名不透传给可灵上游**：前端传 `kling-v3-pro`，Go adaptor 会自动剥离为 `kling-v3` + `mode=pro`，可灵 API 只接受原生模型名。
 
-2. **billing_processed 幂等保护**：`handleSora2TaskBilling` 首先检查 `task.Data["billing_processed"]`，重复轮询不会重复扣费。
+2. **billing_processed 幂等保护**：`handleVideoPerSecondBilling` 首先检查 `task.Data["billing_processed"]`，重复轮询不会重复扣费。
 
 3. **OSS-first 仅对支持 token 的用户有效**：`uploadService.uploadFile` 调用 `POST /resource/oss/upload` 需要登录 token，若用户未登录会失败并自动降级为 base64，不影响功能可用性。
 

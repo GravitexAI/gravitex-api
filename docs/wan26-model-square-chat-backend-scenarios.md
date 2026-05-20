@@ -182,9 +182,9 @@ flowchart LR
 ### 6.2 成功分支（`SUCCESS`）
 
 1. 视频 URL 写入任务展示字段（含 OSS 上传逻辑；Veo 等例外见代码；**ali wan2.6 通道不经过 OSS**，直接存阿里 CDN URL）。
-2. 若 **`isVideoPerSecondModel`**（即 **`VideoModelPricePerSecond` 已配置该模型**），调用 **`handleSora2TaskBilling`**（函数名历史原因，实际覆盖所有「按秒价」视频模型，含 wan2.6）。
+2. 若 **`isVideoPerSecondModel`**（即 **`VideoModelPricePerSecond` 已配置该模型**），调用 **`handleVideoPerSecondBilling`**（覆盖所有「按秒价」视频模型，包括 wan2.6 / Veo / Sora-2 / kling-v3 等）。
 
-### 6.3 `handleSora2TaskBilling` 要点
+### 6.3 `handleVideoPerSecondBilling` 要点
 
 - **防重复**：`task.Data["billing_processed"] === true` 则跳过。
 - **秒数**：按顺序从 **`UpstreamRequestBody`**（查 `durationSeconds` 和 `parameters.duration`）、`task.Data`（`requested_seconds` 等）、**`task.Properties.RequestedSeconds`** 解析；全部为 0 时 veo 系列兜底 4 秒，其他模型报错。
@@ -195,7 +195,7 @@ flowchart LR
 
 ### 6.4 计费失败
 
-- **`handleSora2TaskBilling` 返回错误**时，任务被标为 **`FAILURE`**，`fail_reason` 含 **`billing_failed:`**，避免未扣费却展示成功（见 `updateVideoSingleTask` / `CompleteVideoTaskOnUpstreamSuccess` 分支）。
+- **`handleVideoPerSecondBilling` 返回错误**时，任务被标为 **`FAILURE`**，`fail_reason` 含 **`billing_failed:`**，避免未扣费却展示成功（见 `updateVideoSingleTask` / `CompleteVideoTaskOnUpstreamSuccess` 分支）。
 
 ### 6.5 日志前缀速查
 
@@ -208,7 +208,7 @@ flowchart LR
 
 ### 6.6 GET 终态与轮询等价路径
 
-- **`CompleteVideoTaskOnUpstreamSuccess`**：在 **`GET /v1/videos/:id`** 已拿到上游终态时合并数据并调用 **`handleSora2TaskBilling`**，与后台 **`UpdateVideoTaskAll` 轮询** 成功分支一致，避免仅返回极简 JSON 时任务不结束。
+- **`CompleteVideoTaskOnUpstreamSuccess`**：在 **`GET /v1/videos/:id`** 已拿到上游终态时合并数据并调用 **`handleVideoPerSecondBilling`**，与后台 **`UpdateVideoTaskAll` 轮询** 成功分支一致，避免仅返回极简 JSON 时任务不结束。
 
 ---
 
@@ -221,7 +221,7 @@ sequenceDiagram
   participant G as gravitex-api RelayTask
   participant A as 阿里 DashScope
   participant P as 轮询/GET 终态
-  participant B as handleSora2TaskBilling
+  participant B as handleVideoPerSecondBilling
 
   U->>C: 选 wan2.6 / 参数 / 发送
   Note over C: audio_url 放 metadata 子对象<br/>i2v 图片用 input_reference 字段
