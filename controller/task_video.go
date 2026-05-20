@@ -1509,10 +1509,6 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 	}
 	if err := model.CreateLog(consumeLog); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed to insert consume log: %v", modelName, task.TaskID, err))
-	} else if common.DataExportEnabled {
-		if err := model.RecordQuotaData(task.UserId, username, modelName, actualQuota, consumeLog.CreatedAt, consumeLog.PromptTokens+consumeLog.CompletionTokens); err != nil {
-			logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed to record quota data: %v", modelName, task.TaskID, err))
-		}
 	}
 
 	// 更新用量统计
@@ -1531,6 +1527,9 @@ func handleSora2TaskBilling(ctx context.Context, task *model.Task) error {
 		"data":  task.Data,
 	}).Error; err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed to persist billing result: %v", modelName, task.TaskID, err))
+	}
+	if err := model.SyncQuotaDataFromConsumeLogsByRequestId(task.TaskID); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed to sync quota data: %v", modelName, task.TaskID, err))
 	}
 
 	return nil
@@ -1832,10 +1831,6 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	}
 	if err := model.CreateLog(consumeLog); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to insert consume log: %v", modelName, task.TaskID, err))
-	} else if common.DataExportEnabled {
-		if err := model.RecordQuotaData(task.UserId, username, modelName, actualQuota, consumeLog.CreatedAt, consumeLog.PromptTokens+consumeLog.CompletionTokens); err != nil {
-			logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to record quota data: %v", modelName, task.TaskID, err))
-		}
 	}
 
 	model.UpdateUserUsedQuotaAndRequestCount(task.UserId, actualQuota)
@@ -1851,6 +1846,9 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		"data":  task.Data,
 	}).Error; err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to persist billing result: %v", modelName, task.TaskID, err))
+	}
+	if err := model.SyncQuotaDataFromConsumeLogsByRequestId(task.TaskID); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to sync quota data: %v", modelName, task.TaskID, err))
 	}
 	return nil
 }
