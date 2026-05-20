@@ -1,0 +1,29 @@
+{
+    "seedance-1-5-pro-251215": {
+      "noAudio": 1.2,
+      "audio": 2.4
+    },
+    "seedance-1-5-pro-251215-nsfw": {
+      "noAudio": 1.2,
+      "audio": 2.4
+    },
+    "seedance-2-0": {
+      "480p": { "noVideo": 7.35, "video": 4.515 },
+      "720p": { "noVideo": 7.35, "video": 4.515 },
+      "1080p": { "noVideo": 8.085, "video": 4.935 }
+    },
+    "seedance-2-0-NSFW": {
+      "480p": { "noVideo": 7.35, "video": 4.515 },
+      "720p": { "noVideo": 7.35, "video": 4.515 },
+      "1080p": { "noVideo": 8.085, "video": 4.935 }
+    },
+    "seedance-2-0-pro": {
+      "480p": { "noVideo": 7.35, "video": 4.515 },
+      "720p": { "noVideo": 7.35, "video": 4.515 },
+      "1080p": { "noVideo": 8.085, "video": 4.935 }
+    },
+    "seedance-2-0-fast": {
+      "480p": { "noVideo": 5.88, "video": 3.465 },
+      "720p": { "noVideo": 5.88, "video": 3.465 }
+    }
+  }
