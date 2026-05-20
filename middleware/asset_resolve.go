@@ -54,7 +54,7 @@ func AssetResolveChannel() gin.HandlerFunc {
 		userId := c.GetInt("id")
 		channelMap, err := model.GetAssetChannelIdByVirtualIds(userId, virtualIds)
 		if err != nil {
-			abortWithOpenAiMessage(c, http.StatusInternalServerError, "素材引用校验失败 / Failed to validate asset references")
+			abortWithOpenAiMessage(c, http.StatusInternalServerError, "Failed to validate asset references")
 			return
 		}
 
@@ -67,7 +67,7 @@ func AssetResolveChannel() gin.HandlerFunc {
 		}
 		if len(missing) > 0 {
 			abortWithOpenAiMessage(c, http.StatusBadRequest,
-				fmt.Sprintf("素材未找到或无权访问 / Asset not found or access denied: %s", strings.Join(missing, ", ")))
+				fmt.Sprintf("Asset not found or access denied: %s", strings.Join(missing, ", ")))
 			return
 		}
 
@@ -80,7 +80,7 @@ func AssetResolveChannel() gin.HandlerFunc {
 				first = false
 			} else if chId != targetChannelId {
 				abortWithOpenAiMessage(c, http.StatusBadRequest,
-					"同一请求中的素材必须来自同一素材组 / All assets in a single request must belong to the same asset group")
+					"All assets in a single request must belong to the same asset group")
 				return
 			}
 		}

@@ -586,7 +586,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 
 		// 保底计费：当正常计费路由执行后 quota 仍为 0 时，尝试从 upstream_request_body 解析参数并重新计费
 		// 覆盖所有计费路由：per_second/token_ratio 计费函数可能因定价未配置等原因失败，也需要兜底
-		if task.Quota == 0 {
+		if task.Quota == 0 && shouldRunVideoFallbackBilling(ctx, task) {
 			logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] fallback triggered: task=%s model=%s billingRoute=%s quota=0, attempting fallback billing",
 				taskId, taskModelName, billingRoute))
 			handleFallbackBilling(ctx, task, taskResult, taskModelName)
@@ -1123,13 +1123,50 @@ func CompleteVideoTaskOnUpstreamSuccess(ctx context.Context, task *model.Task, c
 		}
 	}
 	// GET 路径保底计费：正常路由都未识别且 quota 仍为 0
-	if taskResult.Status == model.TaskStatusSuccess && task.Quota == 0 &&
-		!isVideoPerSecondModel(taskModelName) && !isVideoTokenRatioModel(taskModelName) {
+	if taskResult.Status == model.TaskStatusSuccess &&
+		!isVideoPerSecondModel(taskModelName) && !isVideoTokenRatioModel(taskModelName) &&
+		shouldRunVideoFallbackBilling(ctx, task) {
 		logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] GET path fallback triggered: task=%s model=%s quota=0",
 			task.TaskID, taskModelName))
 		handleFallbackBilling(ctx, task, taskResult, taskModelName)
 	}
 	return nil
+}
+
+func shouldRunVideoFallbackBilling(ctx context.Context, task *model.Task) bool {
+	if task == nil || task.ID == 0 {
+		return false
+	}
+	if task.Quota != 0 {
+		return false
+	}
+	var currentTaskData map[string]interface{}
+	if len(task.Data) > 0 {
+		if err := common.Unmarshal(task.Data, &currentTaskData); err == nil {
+			if processed, ok := currentTaskData["billing_processed"].(bool); ok && processed {
+				return false
+			}
+		}
+	}
+	var latest model.Task
+	if err := model.DB.Select("id", "quota", "data").Where("id = ?", task.ID).First(&latest).Error; err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] fallback guard query failed: task=%s err=%v", task.TaskID, err))
+		return false
+	}
+	if latest.Quota != 0 {
+		task.Quota = latest.Quota
+		return false
+	}
+	var taskData map[string]interface{}
+	if len(latest.Data) > 0 {
+		if err := common.Unmarshal(latest.Data, &taskData); err == nil {
+			if processed, ok := taskData["billing_processed"].(bool); ok && processed {
+				task.Data = latest.Data
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // handleVideoPerSecondBilling 处理按秒计费视频模型的轮询成功计费逻辑（Veo / Sora-2 / kling-v3 / wan2.6 等所有按秒价模型）
