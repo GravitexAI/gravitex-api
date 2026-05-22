@@ -1333,6 +1333,9 @@ var defaultVideoModelPricePerSecond = map[string]float64{
 
 // defaultVideoResolutionPricing wan2.6 系列按分辨率分档每秒价格（$/秒）
 var defaultVideoResolutionPricing = map[string]map[string]float64{
+	"wan2.7-t2v": {"720p": 0.086012, "1080p": 0.143353},
+	"wan2.7-i2v": {"720p": 0.086012, "1080p": 0.143353},
+	"wan2.7-r2v": {"720p": 0.086012, "1080p": 0.143353},
 	"wan2.6-t2v": {"720p": 0.086012, "1080p": 0.143353},
 	"wan2.6-i2v": {"720p": 0.086012, "1080p": 0.143353},
 	"wan2.6-r2v": {"720p": 0.086012, "1080p": 0.143353},
