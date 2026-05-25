@@ -45,7 +45,7 @@ type Model struct {
 	EnableGroups  []string       `json:"enable_groups,omitempty" gorm:"-"`
 	QuotaTypes    []int          `json:"quota_types,omitempty" gorm:"-"`
 	NameRule      int            `json:"name_rule" gorm:"default:0"`
-	ModelNickName string         `json:"model_nick_name,omitempty" gorm:"-"`
+	ModelNickName string         `json:"model_nick_name,omitempty" gorm:"->"`
 	MatchedModels []string       `json:"matched_models,omitempty" gorm:"-"`
 	MatchedCount  int            `json:"matched_count,omitempty" gorm:"-"`
 }
