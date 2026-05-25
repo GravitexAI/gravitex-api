@@ -31,8 +31,8 @@ type Model struct {
 	TagsEn        string         `json:"tags_en,omitempty" gorm:"type:varchar(255)"`
 	TagsId        string         `json:"tags_id,omitempty" gorm:"type:varchar(255)"`
 	ShowTab       int            `json:"show_tab,omitempty" gorm:"default:0"`
-	Flag          int            `json:"flag,omitempty" gorm:"type:int;default:0"`       // 1-新发布 2-最先进 3-火爆
-	SortOrder     int            `json:"sort_order,omitempty" gorm:"type:int;default:0"` // 越小优先级越高
+	Flag          int            `json:"flag,omitempty" gorm:"type:int;default:0"` // 1-新发布 2-最先进 3-火爆
+	SortOrder     int            `json:"sort_order" gorm:"type:int;default:0"`     // 越小优先级越高
 	VendorID      int            `json:"vendor_id,omitempty" gorm:"index"`
 	Endpoints     string         `json:"endpoints,omitempty" gorm:"type:text"`
 	Status        int            `json:"status" gorm:"default:1"`
@@ -45,9 +45,9 @@ type Model struct {
 	EnableGroups  []string       `json:"enable_groups,omitempty" gorm:"-"`
 	QuotaTypes    []int          `json:"quota_types,omitempty" gorm:"-"`
 	NameRule      int            `json:"name_rule" gorm:"default:0"`
-
-	MatchedModels []string `json:"matched_models,omitempty" gorm:"-"`
-	MatchedCount  int      `json:"matched_count,omitempty" gorm:"-"`
+	ModelNikeName string         `json:"model_nike_name,omitempty" gorm:"-"`
+	MatchedModels []string       `json:"matched_models,omitempty" gorm:"-"`
+	MatchedCount  int            `json:"matched_count,omitempty" gorm:"-"`
 }
 
 func (mi *Model) Insert() error {
