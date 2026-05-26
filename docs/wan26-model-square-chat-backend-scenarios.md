@@ -190,7 +190,7 @@ flowchart LR
 - **秒数**：按顺序从 **`UpstreamRequestBody`**（查 `durationSeconds` 和 `parameters.duration`）、`task.Data`（`requested_seconds` 等）、**`task.Properties.RequestedSeconds`** 解析；全部为 0 时 veo 系列兜底 4 秒，其他模型报错。
 - **单价**：**`GetVideoModelPricePerSecondForBillingWithResolution(modelName, generateAudio, resKey)`**，其中 **`resKey`** 来自 **`ParseBillingResolutionKeyFromUpstreamJSON(UpstreamRequestBody)`**（与提交时 Ali `parameters` 一致）。
 - **`generateAudio`**：优先从 `UpstreamRequestBody` 解析 `parameters.generateAudio` / `generate_audio`；否则用 `task.Data`；与 Flash 的 `audio` 在 **`mergeVideoTaskBillingData` 阶段已写入 `generate_audio`** 对齐预检逻辑。
-- **扣费**：`DecreaseUserQuota`；**消费日志**：`model.Log` 类型 **`LogTypeConsume`**，**`CompletionTokens` 存秒数**，**`Other` JSON** 含 `billing_type: per_second`、`official_video_price_per_second`、`video_price_per_second`、`group_ratio`、`oem_user_discount` 等。
+- **扣费**：`DecreaseUserQuota`；**消费日志**：`model.Log` 类型 **`LogTypeConsume`**，**`CompletionTokens` 存秒数**，**`Other` JSON** 含 `billing_type: per_second`、`official_video_price_per_second`、`video_price_per_second`、`group_ratio` 等。
 - 成功后 **`billing_processed: true`** 写回 **`task.Data`**。
 
 ### 6.4 计费失败

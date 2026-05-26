@@ -113,7 +113,7 @@ Gravitex Go 后端 (gravitex-api)
 
 ---
 
-## 4. 计费（按张、数量、OEM 折扣）
+## 4. 计费（按张、数量）
 
 ### 4.1 按张计费与数量
 
@@ -125,11 +125,10 @@ Gravitex Go 后端 (gravitex-api)
   - 使用「价格计费」时：若模型配置了 `ImagePriceRatio`（如 dall-e），则 `modelPrice = modelPrice * meta.ImagePriceRatio`；doubao 当前走倍率路径，**数量通过 N 体现**。
 - **结论**：计费已按「张数」体现（N 写入 PromptTokens/TotalTokens），无需再改。
 
-### 4.2 OEM 折扣
+### 4.2 分组折扣
 
-- **GroupRatio**：`relay/helper/price.go` 中 `ModelPriceHelper` 调用 `HandleGroupRatio(c, info)` 得到 `groupRatioInfo`，其中已包含 OEM 分组折扣。
-- **OEM 用户折扣**：`service.GetOemUserDiscountForQuota(c, info.OriginModelName)` 在价格/倍率上会再乘用户级 OEM 折扣。
-- 扣费时使用的 `ratio` 为 `modelRatio * groupRatio`（再乘用户折扣），因此 **OEM 折扣已参与计费**。
+- **GroupRatio**：`relay/helper/price.go` 中 `ModelPriceHelper` 调用 `HandleGroupRatio(c, info)` 得到 `groupRatioInfo`，包含分组倍率。
+- 扣费时使用的 `ratio` 为 `modelRatio * groupRatio`。
 
 ### 4.3 预扣费与结算
 
@@ -149,8 +148,6 @@ Gravitex Go 后端 (gravitex-api)
 
 - `image_ratio`：图片倍率（若有）。
 - `image_generation_call` / `image_generation_call_price`：若为 GPT 图片按次计费则会有。
-- `oem_code`：OEM 标识（如 gravitex）。
-- `oem_user_discount`：用户 OEM 折扣。
 - `image_output_tokens` / `effective_image_output_ratio` 等：Gemini 类图片输出时会写。
 
 对 doubao-seedream-5-0，主要依赖通用 token 数（即 N）、model、group、price_chain 等即可满足对账与计费展示。
@@ -176,7 +173,7 @@ Gravitex Go 后端 (gravitex-api)
 | Go 解析 | dto.ImageRequest + Extra | 已支持 |
 | 上游 body | 已知字段 + Extra 一起序列化 | 需 VolcEngine 合并 Extra |
 | 计费按张 | Usage 用 N 填充，quota 与 N 相关 | 已实现 |
-| OEM 折扣 | groupRatio + GetOemUserDiscountForQuota | 已实现 |
+| 分组折扣 | groupRatio 倍率 | 已实现 |
 | 消费日志 | RecordConsumeLog（含 quota、tokens、other、price_chain） | 已实现 |
 | Debug 日志 | image request body 打印 | 已实现 |
 
@@ -188,4 +185,4 @@ Gravitex Go 后端 (gravitex-api)
 - Go 通过 VolcEngine Adaptor 的 `DoResponse` 解析并原样或标准化后返回给客户端。
 - 客户端从 `result.data` 取图片 URL 或 b64_json 展示。
 
-以上为 doubao-seedream-5-0 图片生成从前端参数、Go 适配、上游请求、计费到日志的完整流程说明；所有参数、按张计费与 OEM 折扣、日志均覆盖。
+以上为 doubao-seedream-5-0 图片生成从前端参数、Go 适配、上游请求、计费到日志的完整流程说明；所有参数、按张计费与分组折扣、日志均覆盖。
