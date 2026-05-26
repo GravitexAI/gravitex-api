@@ -94,7 +94,7 @@ sequenceDiagram
 
 8. **mergeVideoTaskBillingData**  
    按秒计费时，把计费所需字段合并进 `taskData`（即将写入 `task.Data`），包括：  
-   - `billing_model_name`, `billing_group`, `billing_oem_code`, `billing_oem_user_discount`, `billing_effective_group_ratio`  
+   - `billing_model_name`, `billing_group`, `billing_effective_group_ratio`  
    - `billing_token_name`, `billing_token_id`  
    - `requested_seconds`（来自 context 的 video_seconds 或从 upstream body 解析）  
    - `generate_audio` / `generateAudio`  
@@ -159,7 +159,7 @@ sequenceDiagram
 4. **合并 task.Data（保留计费字段）**  
    - 将本次上游响应解析为 `newData`，与库里的 `task.Data`（existingData）合并。  
    - **preservedFields**：  
-     `requested_seconds`, `billing_requested_seconds`, `billing_model_name`, `billing_group`, `billing_oem_code`, `billing_oem_user_discount`, `billing_effective_group_ratio`, `billing_token_name`, `billing_token_id`, `billing_processed`, `generate_audio`, `generateAudio`  
+     `requested_seconds`, `billing_requested_seconds`, `billing_model_name`, `billing_group`, `billing_effective_group_ratio`, `billing_token_name`, `billing_token_id`, `billing_processed`, `generate_audio`, `generateAudio`  
    - 这些键从 existingData 拷贝到 newData，再写回 `task.Data`，避免被上游响应覆盖。  
    - **注意**：`user_request_body`、`upstream_request_body` 是独立列，轮询只读写 `task.Data`，不会改这两列。
 
@@ -216,11 +216,9 @@ sequenceDiagram
 ### 4.3 价格与扣费公式
 
 - **官方单价**：`ratio_setting.GetVideoModelPricePerSecondForBilling(modelName, generateAudio)`（options 中 VideoModelPricePerSecond，Veo 非 fast 按 noAudio/audio 区分）。  
-- **OEM 用户折扣**：从 task.Data 的 `billing_oem_user_discount` 或按用户重新取。  
 - **分组倍率**：从 task.Data 的 `billing_effective_group_ratio` 或回退到 group 配置。  
 - 公式：  
-  `effectiveVideoPrice = officialVideoPrice × oemUserDiscount`  
-  `actualQuota = effectiveVideoPrice × requestedSeconds × QuotaPerUnit × groupRatio`  
+  `actualQuota = officialVideoPrice × requestedSeconds × QuotaPerUnit × groupRatio`  
   再取整为 int。
 
 ### 4.4 执行动作
