@@ -991,8 +991,10 @@ func isVideoTokenRatioModel(name string) bool {
 	return false
 }
 
-// mergeVideoTaskDataWithUpstreamResponse 将上游响应合并进 task.Data，保留计费字段；供轮询与 GET 终态分支共用
-func mergeVideoTaskDataWithUpstreamResponse(task *model.Task, responseBody []byte) {
+// MergeVideoTaskDataWithUpstreamResponse 将上游响应合并进 task.Data，保留计费字段；供轮询与 GET 终态分支共用。
+// 导出以便 relay 层在 in-progress 分支通过函数指针注入复用，与 SUCCESS 路径共享同一份 preservedFields 白名单，
+// 避免 in-progress 合并时把 billing_*/generate_audio/has_video_input 等字段冲掉导致 SUCCESS 扣费链路读不到必备字段。
+func MergeVideoTaskDataWithUpstreamResponse(task *model.Task, responseBody []byte) {
 	preservedFields := []string{
 		"requested_seconds", "billing_requested_seconds",
 		"billing_model_name", "billing_group",
@@ -1046,7 +1048,7 @@ func mergeVideoTaskDataWithUpstreamResponse(task *model.Task, responseBody []byt
 
 // CompleteVideoTaskOnUpstreamSuccess 在 GET /v1/videos 收到上游终态（SUCCESS/FAILURE）时落库并计费，与轮询路径一致，避免仅轮询返回 {"name":"..."} 时任务永不完成
 func CompleteVideoTaskOnUpstreamSuccess(ctx context.Context, task *model.Task, channel *model.Channel, taskResult *relaycommon.TaskInfo, responseBody []byte) error {
-	mergeVideoTaskDataWithUpstreamResponse(task, responseBody)
+	MergeVideoTaskDataWithUpstreamResponse(task, responseBody)
 	now := time.Now().Unix()
 	task.Status = model.TaskStatus(taskResult.Status)
 	task.Progress = taskResult.Progress

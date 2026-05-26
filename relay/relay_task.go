@@ -29,6 +29,12 @@ import (
 // between relay and controller packages.
 var CompleteVideoTaskOnUpstreamSuccessFn func(ctx context.Context, task *model.Task, channel *model.Channel, taskResult *relaycommon.TaskInfo, responseBody []byte) error
 
+// MergeVideoTaskDataWithUpstreamResponseFn is set by main.go (binds to controller.MergeVideoTaskDataWithUpstreamResponse)
+// so the relay layer can reuse the controller's preservedFields whitelist when merging upstream body into task.Data
+// during the in-progress polling branch — keeping in-progress and SUCCESS paths in lockstep so billing-required fields
+// (billing_*, requested_seconds, generate_audio, has_video_input, ...) survive into the SUCCESS settlement.
+var MergeVideoTaskDataWithUpstreamResponseFn func(task *model.Task, responseBody []byte)
+
 type TaskSubmitResult struct {
 	UpstreamTaskID string
 	TaskData       []byte
@@ -583,12 +589,27 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		task.PrivateData.ResultURL = taskcommon.BuildProxyURL(task.TaskID)
 	}
 
+	// 把上游 in-progress 响应体合并进 task.Data（复用 controller 的 preservedFields 白名单），
+	// 让后续 ConvertToOpenAIVideo 能从 task.Data 里取到完整上游字段灌入 metadata；同时保留所有
+	// billing_*/generate_audio/has_video_input 等计费字段，避免冲掉后 SUCCESS 路径扣费失败。
+	if MergeVideoTaskDataWithUpstreamResponseFn != nil && len(body) > 0 {
+		MergeVideoTaskDataWithUpstreamResponseFn(task, body)
+	}
+
 	if !snap.Equal(task.Snapshot()) {
 		_, _ = task.UpdateWithStatus(snap.Status)
 	}
 
 	// OpenAI Video API 由调用者的 ConvertToOpenAIVideo 分支处理
 	if isOpenAIVideoAPI {
+		return nil
+	}
+
+	// 实现了 OpenAIVideoConverter 的渠道（doubao / gemini / vertex / kling / hailuo / vidu / jimeng /
+	// ali / azurevideo / sora / uptoken 等所有现役视频渠道）回到外层 ConvertToOpenAIVideo 路径，
+	// 输出标准 OpenAIVideo 结构（status=in_progress、metadata 含上游字段）。
+	// 兜底的简化响应分支仅留给未实现 converter 的 legacy 渠道。
+	if _, ok := adaptor.(channel.OpenAIVideoConverter); ok {
 		return nil
 	}
 

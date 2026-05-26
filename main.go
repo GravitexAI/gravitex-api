@@ -124,6 +124,8 @@ func main() {
 
 	// GET /v1/videos 收到上游终态时落库并计费（与轮询一致），避免 Vertex 轮询仅返回 {"name":"..."} 时任务永不完成
 	relay.CompleteVideoTaskOnUpstreamSuccessFn = controller.CompleteVideoTaskOnUpstreamSuccess
+	// in-progress 轮询时复用同一份 preservedFields 合并规则，保证后续 SUCCESS 扣费链路读得到计费字段
+	relay.MergeVideoTaskDataWithUpstreamResponseFn = controller.MergeVideoTaskDataWithUpstreamResponse
 
 	// 视频任务轮询使用 controller 层的 UpdateVideoTaskAll 引擎
 	// 支持 handleVideoPerSecondBilling（按秒计费）和 handleVideoTokenRatioBilling（按量计费）

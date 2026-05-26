@@ -58,6 +58,8 @@ type responseTask struct {
 		Message string `json:"message"`
 		Code    string `json:"code"`
 	} `json:"error,omitempty"`
+	// Metadata: 透传上游原始响应体，对齐 "上游返回统一进 metadata" 的设计约定。
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // ============================
@@ -381,6 +383,12 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	// 使用上游真实 ID 作为公开 ID（避免依赖 private_data.upstream_task_id）
 	upstreamTaskID := dResp.ID
 	info.PublicTaskID = upstreamTaskID
+
+	// 将上游 Azure 返回的原始响应体灌入 metadata，对齐 "上游返回统一进 metadata" 的设计约定。
+	var meta map[string]any
+	if err := common.Unmarshal(responseBody, &meta); err == nil && len(meta) > 0 {
+		dResp.Metadata = meta
+	}
 
 	if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
 		if body, err := common.Marshal(dResp); err == nil {

@@ -265,6 +265,15 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	ov.CreatedAt = time.Now().Unix()
 	ov.Model = info.OriginModelName
 
+	// 将上游返回的原始响应体灌入 metadata，对齐 "上游返回统一进 metadata" 的设计约定，
+	// 让 submit / in-progress 轮询 / completed 三种响应格式保持一致。
+	var meta map[string]any
+	if err := common.Unmarshal(responseBody, &meta); err == nil {
+		for k, v := range meta {
+			ov.SetMetadata(k, v)
+		}
+	}
+
 	c.JSON(http.StatusOK, ov)
 	return dResp.ID, responseBody, nil
 }

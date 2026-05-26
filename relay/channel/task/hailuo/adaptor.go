@@ -117,6 +117,14 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	ov.CreatedAt = time.Now().Unix()
 	ov.Model = info.OriginModelName
 
+	// 将上游 Hailuo 返回的原始响应体灌入 metadata，对齐 "上游返回统一进 metadata" 的设计约定。
+	var meta map[string]any
+	if err := common.Unmarshal(responseBody, &meta); err == nil {
+		for k, v := range meta {
+			ov.SetMetadata(k, v)
+		}
+	}
+
 	c.JSON(http.StatusOK, ov)
 	return hResp.TaskID, responseBody, nil
 }

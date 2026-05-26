@@ -310,13 +310,29 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	}
 	localID := encodeLocalTaskID(s.Name)
 	info.PublicTaskID = localID
+
+	ov := dto.NewOpenAIVideo()
+	ov.ID = info.PublicTaskID
+	ov.TaskID = info.PublicTaskID
+	ov.CreatedAt = time.Now().Unix()
+	ov.Model = info.OriginModelName
+
+	// 将上游 Vertex 返回的原始字段灌入 metadata，对齐 "上游返回统一进 metadata" 的设计约定，
+	// 让 submit / in-progress 轮询 / completed 三种响应格式保持一致（与 doubao / gemini 等渠道对齐）。
+	var meta map[string]any
+	if err := common.Unmarshal(responseBody, &meta); err == nil {
+		for k, v := range meta {
+			ov.SetMetadata(k, v)
+		}
+	}
+
 	if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
-		if body, err := common.Marshal(gin.H{"task_id": localID}); err == nil {
+		if body, err := common.Marshal(ov); err == nil {
 			c.Set(relaycommon.TaskSubmitResponseBody, body)
 		}
 		return localID, responseBody, nil
 	}
-	c.JSON(http.StatusOK, gin.H{"task_id": localID})
+	c.JSON(http.StatusOK, ov)
 	return localID, responseBody, nil
 }
 

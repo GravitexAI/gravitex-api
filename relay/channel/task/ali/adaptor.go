@@ -686,6 +686,15 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	openAIResp.Status = convertAliStatus(aliResp.Output.TaskStatus)
 	openAIResp.CreatedAt = common.GetTimestamp()
 
+	// 将上游返回的原始响应体灌入 metadata，对齐 "上游返回统一进 metadata" 的设计约定，
+	// 让 submit / in-progress 轮询 / completed 三种响应格式保持一致（与 doubao / vertex / gemini 等渠道对齐）。
+	var meta map[string]any
+	if err := common.Unmarshal(responseBody, &meta); err == nil {
+		for k, v := range meta {
+			openAIResp.SetMetadata(k, v)
+		}
+	}
+
 	// 返回 OpenAI 格式
 	c.JSON(http.StatusOK, openAIResp)
 
