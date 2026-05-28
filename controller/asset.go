@@ -308,6 +308,23 @@ func createAssetByteplus(c *gin.Context) {
 	assetId, err := service.ByteplusCreateAsset(cfg, req.GroupId, req.URL, assetType, req.Name)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): %s", err.Error()))
+		username, _ := model.GetUsernameById(userId, false)
+		errLog := &model.Log{
+			UserId:    userId,
+			Username:  username,
+			CreatedAt: common.GetTimestamp(),
+			Type:      model.LogTypeError,
+			Content:   fmt.Sprintf("Failed to upload %s asset: %s", assetType, err.Error()),
+			ChannelId: ch.Id,
+			ModelName: "BytePlusAsset",
+			TokenName: c.GetString("token_name"),
+			TokenId:   tokenId,
+			Group:     common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+			RequestId: c.GetString(common.RequestIdKey),
+		}
+		if logErr := model.CreateLog(errLog); logErr != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): failed to record error log: %s", logErr.Error()))
+		}
 		assetErrorResponse(c, http.StatusBadGateway, "Failed to create asset on upstream: "+err.Error())
 		return
 	}
