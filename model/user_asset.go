@@ -21,6 +21,7 @@ type UserAsset struct {
 	AssetType string `json:"asset_type" gorm:"type:varchar(16);default:'Image';index"`
 	SizeBytes int64  `json:"size_bytes"`
 	Status    string `json:"status" gorm:"type:varchar(20);default:'pending'"`
+	ErrorMsg  string `json:"error_msg" gorm:"type:text"`
 	CreatedAt int64  `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt int64  `json:"updated_at" gorm:"autoUpdateTime"`
 }

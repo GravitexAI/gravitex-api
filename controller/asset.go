@@ -638,6 +638,10 @@ func ListAssets(c *gin.Context) {
 			updates["asset_type"] = info.AssetType
 			assets[i].AssetType = info.AssetType
 		}
+		if newStatus == "failed" && info.Error != "" && info.Error != assets[i].ErrorMsg {
+			updates["error_msg"] = info.Error
+			assets[i].ErrorMsg = info.Error
+		}
 		if len(updates) > 0 {
 			_ = model.UpdateUserAssetFields(assets[i].VirtualId, updates)
 		}
@@ -702,11 +706,21 @@ func GetAsset(c *gin.Context) {
 			return
 		}
 		newStatus := service.ByteplusStatusToInternal(info.Status)
-		if newStatus != asset.Status || info.URL != asset.Url {
-			_ = model.UpdateUserAssetFields(virtualId, map[string]interface{}{
-				"status": newStatus,
-				"url":    info.URL,
-			})
+		updates := map[string]interface{}{}
+		if newStatus != asset.Status {
+			updates["status"] = newStatus
+			asset.Status = newStatus
+		}
+		if info.URL != asset.Url {
+			updates["url"] = info.URL
+			asset.Url = info.URL
+		}
+		if newStatus == "failed" && info.Error != "" && info.Error != asset.ErrorMsg {
+			updates["error_msg"] = info.Error
+			asset.ErrorMsg = info.Error
+		}
+		if len(updates) > 0 {
+			_ = model.UpdateUserAssetFields(virtualId, updates)
 		}
 		// Return merged response
 		c.JSON(http.StatusOK, gin.H{
@@ -715,6 +729,7 @@ func GetAsset(c *gin.Context) {
 			"url":             info.URL,
 			"filename":        asset.Filename,
 			"status":          newStatus,
+			"error_msg":       asset.ErrorMsg,
 			"group_id":        asset.GroupId,
 			"byteplus_status": info.Status,
 			"asset_type":      info.AssetType,

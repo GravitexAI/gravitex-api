@@ -224,6 +224,7 @@ type ByteplusAssetInfo struct {
 	AssetType   string `json:"AssetType"` // Image, Video, Audio
 	Status      string `json:"Status"`    // Processing, Active, Failed
 	URL         string `json:"URL"`       // signed URL, valid 12 hrs
+	Error       string `json:"Error"`     // populated when Status == "Failed"
 	ProjectName string `json:"ProjectName"`
 	CreateTime  string `json:"CreateTime"`
 	UpdateTime  string `json:"UpdateTime"`
