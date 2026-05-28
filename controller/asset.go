@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -165,6 +167,31 @@ func normalizeAssetType(s string) (string, bool) {
 	}
 }
 
+// isPublicHTTPURL reports whether rawURL is an http(s) URL pointing at a
+// public host. Used to decide whether req.URL is safe to persist as
+// gravitex_url — non-public URLs (data:, file://, loopback, RFC1918 private
+// nets, link-local, unspecified, localhost/*.local) are skipped to avoid
+// storing unusable references that would later 404 or leak internal targets.
+func isPublicHTTPURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return !ip.IsLoopback() && !ip.IsPrivate() &&
+			!ip.IsLinkLocalUnicast() && !ip.IsUnspecified()
+	}
+	lower := strings.ToLower(host)
+	if lower == "localhost" || strings.HasSuffix(lower, ".local") {
+		return false
+	}
+	return true
+}
+
 // validateAssetUrlForType performs lightweight format whitelisting based on the
 // URL's path extension. We deliberately do NOT HEAD the remote URL — BytePlus
 // itself does the authoritative content sniffing during async preprocessing,
@@ -292,6 +319,12 @@ func createAssetByteplus(c *gin.Context) {
 	//	// Don't fail the whole request if the Gravitex upload fails — the asset is still created on BytePlus and can be retried later.
 	//	assetErrorResponse(c, http.StatusAccepted, "Asset created but failed to upload to Gravitex: "+err.Error())
 	//}
+	gravitexUrl := ""
+	if isPublicHTTPURL(req.URL) {
+		gravitexUrl = req.URL
+	} else {
+		logger.LogInfo(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): skip gravitex_url, non-public url=%s", req.URL))
+	}
 	// Save locally
 	userAsset := &model.UserAsset{
 		UserId:      userId,
@@ -303,7 +336,7 @@ func createAssetByteplus(c *gin.Context) {
 		Filename:    req.Name,
 		AssetType:   assetType,
 		Status:      "pending", // BytePlus "Processing" → internal "pending"
-		GravitexUrl: req.URL,
+		GravitexUrl: gravitexUrl,
 	}
 	if err := model.InsertUserAsset(userAsset); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): save failed: %s", err.Error()))
