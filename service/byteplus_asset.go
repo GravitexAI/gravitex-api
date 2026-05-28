@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -218,16 +219,16 @@ func ByteplusUpdateAssetGroup(cfg ByteplusAssetConfig, groupId, name, descriptio
 
 // ByteplusAssetInfo represents a single BytePlus asset.
 type ByteplusAssetInfo struct {
-	Id          string `json:"Id"`
-	GroupId     string `json:"GroupId"`
-	Name        string `json:"Name"`
-	AssetType   string `json:"AssetType"` // Image, Video, Audio
-	Status      string `json:"Status"`    // Processing, Active, Failed
-	URL         string `json:"URL"`       // signed URL, valid 12 hrs
-	Error       string `json:"Error"`     // populated when Status == "Failed"
-	ProjectName string `json:"ProjectName"`
-	CreateTime  string `json:"CreateTime"`
-	UpdateTime  string `json:"UpdateTime"`
+	Id          string          `json:"Id"`
+	GroupId     string          `json:"GroupId"`
+	Name        string          `json:"Name"`
+	AssetType   string          `json:"AssetType"`       // Image, Video, Audio
+	Status      string          `json:"Status"`          // Processing, Active, Failed
+	URL         string          `json:"URL"`             // signed URL, valid 12 hrs
+	Error       json.RawMessage `json:"Error,omitempty"` // populated when Status == "Failed"; raw JSON to preserve full upstream payload (e.g. {"Code":"...","Message":"..."})
+	ProjectName string          `json:"ProjectName"`
+	CreateTime  string          `json:"CreateTime"`
+	UpdateTime  string          `json:"UpdateTime"`
 }
 
 // ByteplusCreateAsset creates an asset in the specified group and returns the asset ID.

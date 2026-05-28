@@ -638,9 +638,15 @@ func ListAssets(c *gin.Context) {
 			updates["asset_type"] = info.AssetType
 			assets[i].AssetType = info.AssetType
 		}
-		if newStatus == "failed" && info.Error != "" && info.Error != assets[i].ErrorMsg {
-			updates["error_msg"] = info.Error
-			assets[i].ErrorMsg = info.Error
+		if newStatus == "failed" {
+			errMsg := ""
+			if len(info.Error) > 0 && string(info.Error) != "null" {
+				errMsg = string(info.Error)
+			}
+			if errMsg != "" && errMsg != assets[i].ErrorMsg {
+				updates["error_msg"] = errMsg
+				assets[i].ErrorMsg = errMsg
+			}
 		}
 		if len(updates) > 0 {
 			_ = model.UpdateUserAssetFields(assets[i].VirtualId, updates)
@@ -715,9 +721,15 @@ func GetAsset(c *gin.Context) {
 			updates["url"] = info.URL
 			asset.Url = info.URL
 		}
-		if newStatus == "failed" && info.Error != "" && info.Error != asset.ErrorMsg {
-			updates["error_msg"] = info.Error
-			asset.ErrorMsg = info.Error
+		if newStatus == "failed" {
+			errMsg := ""
+			if len(info.Error) > 0 && string(info.Error) != "null" {
+				errMsg = string(info.Error)
+			}
+			if errMsg != "" && errMsg != asset.ErrorMsg {
+				updates["error_msg"] = errMsg
+				asset.ErrorMsg = errMsg
+			}
 		}
 		if len(updates) > 0 {
 			_ = model.UpdateUserAssetFields(virtualId, updates)
