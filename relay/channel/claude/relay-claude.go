@@ -231,8 +231,13 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 			return nil, err
 		}
 
-		budgetTokens := reasoning.MaxTokens
-		if budgetTokens > 0 {
+		// reasoning.enabled alone must turn thinking on; budget_tokens is optional
+		// (defaults to a sane value, since the enabled type requires >=1024).
+		if reasoning.Enabled || reasoning.MaxTokens > 0 {
+			budgetTokens := reasoning.MaxTokens
+			if budgetTokens <= 0 {
+				budgetTokens = 4096
+			}
 			claudeRequest.Thinking = &dto.Thinking{
 				Type:         "enabled",
 				BudgetTokens: &budgetTokens,
@@ -449,6 +454,21 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	}
 	if textRequest.Effort != "" {
 		claudeRequest.Effort = textRequest.Effort
+	}
+
+	// OpenAI-compat path: Opus 4.7+ only supports adaptive thinking and rejects
+	// thinking.type="enabled" with a 400. Since the gateway is a conversion layer
+	// here, transparently switch any enabled thinking (from reasoning_effort /
+	// reasoning / thinking inputs above) to adaptive so the request succeeds and
+	// returns visible reasoning. Native Claude clients keep enabled semantics and
+	// may receive the upstream 400.
+	if claudeRequest.Thinking != nil && claudeRequest.Thinking.Type == "enabled" &&
+		opusVersionAtLeast47(claudeRequest.Model) {
+		claudeRequest.Thinking.Type = "adaptive"
+		claudeRequest.Thinking.BudgetTokens = nil
+		if claudeRequest.Thinking.Display == "" {
+			claudeRequest.Thinking.Display = "summarized"
+		}
 	}
 
 	applyClaudeThinkingPolicy(&claudeRequest)
