@@ -33,6 +33,12 @@ const (
 	WebSearchMaxUsesHigh   = 10
 )
 
+// jsonSchemaToolNameKey is the gin context key holding the synthetic tool name
+// used to emulate OpenAI response_format=json_schema via Claude tool-forcing.
+// When set, the forced tool_use output is unwrapped back into message content
+// (a JSON string) instead of being surfaced as tool_calls.
+const jsonSchemaToolNameKey = "claude_json_schema_tool_name"
+
 // toolUseIDPattern matches the tool_use id format Anthropic accepts. Ids with
 // other characters (e.g. colons from some OpenAI clients) are rejected with 400.
 var toolUseIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -162,6 +168,32 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 		claudeTools = append(claudeTools, &webSearchTool)
 	}
 
+	// response_format=json_schema has no native equivalent on the Claude (OpenAI)
+	// path; emulate structured output by wrapping the schema as a synthetic tool
+	// and forcing the model to call it. The tool_use input is unwrapped back into
+	// message content on the response side.
+	jsonSchemaToolName := ""
+	if rf := textRequest.ResponseFormat; rf != nil && rf.Type == "json_schema" && len(rf.JsonSchema) > 0 {
+		var fjs dto.FormatJsonSchema
+		if err := common.Unmarshal(rf.JsonSchema, &fjs); err == nil {
+			if schemaMap, ok := fjs.Schema.(map[string]any); ok && len(schemaMap) > 0 {
+				jsonSchemaToolName = strings.TrimSpace(fjs.Name)
+				if jsonSchemaToolName == "" {
+					jsonSchemaToolName = "json_schema_output"
+				}
+				desc := fjs.Description
+				if desc == "" {
+					desc = "Return the result strictly as arguments matching the required JSON schema."
+				}
+				claudeTools = append(claudeTools, &dto.Tool{
+					Name:        jsonSchemaToolName,
+					Description: desc,
+					InputSchema: schemaMap,
+				})
+			}
+		}
+	}
+
 	claudeRequest := dto.ClaudeRequest{
 		Model:         textRequest.Model,
 		StopSequences: nil,
@@ -186,6 +218,15 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 		claudeToolChoice := mapToolChoice(textRequest.ToolChoice, textRequest.ParallelTooCalls)
 		if claudeToolChoice != nil {
 			claudeRequest.ToolChoice = claudeToolChoice
+		}
+	}
+
+	// json_schema emulation forces the synthetic tool, overriding any client
+	// tool_choice so the structured output is guaranteed.
+	if jsonSchemaToolName != "" {
+		claudeRequest.ToolChoice = &dto.ClaudeToolChoice{Type: "tool", Name: jsonSchemaToolName}
+		if c != nil {
+			c.Set(jsonSchemaToolNameKey, jsonSchemaToolName)
 		}
 	}
 
@@ -627,7 +668,7 @@ func applyClaudeSamplingPolicy(req *dto.ClaudeRequest) {
 	}
 }
 
-func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCompletionsStreamResponse {
+func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse, jsonSchemaToolName string) *dto.ChatCompletionsStreamResponse {
 	var response dto.ChatCompletionsStreamResponse
 	response.Object = "chat.completion.chunk"
 	response.Model = claudeResponse.Model
@@ -656,15 +697,22 @@ func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCo
 				choice.Delta.SetContentString(*claudeResponse.ContentBlock.Text)
 			}
 			if claudeResponse.ContentBlock.Type == "tool_use" {
-				tools = append(tools, dto.ToolCallResponse{
-					Index: common.GetPointer(fcIdx),
-					ID:    claudeResponse.ContentBlock.Id,
-					Type:  "function",
-					Function: dto.FunctionResponse{
-						Name:      claudeResponse.ContentBlock.Name,
-						Arguments: "",
-					},
-				})
+				// json_schema emulation: the forced tool's start carries no
+				// content; its arguments stream in as input_json_delta and are
+				// surfaced as message content below, not as a tool call.
+				if jsonSchemaToolName != "" && claudeResponse.ContentBlock.Name == jsonSchemaToolName {
+					choice.Delta.SetContentString("")
+				} else {
+					tools = append(tools, dto.ToolCallResponse{
+						Index: common.GetPointer(fcIdx),
+						ID:    claudeResponse.ContentBlock.Id,
+						Type:  "function",
+						Function: dto.FunctionResponse{
+							Name:      claudeResponse.ContentBlock.Name,
+							Arguments: "",
+						},
+					})
+				}
 			}
 		} else {
 			return nil
@@ -674,6 +722,14 @@ func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCo
 			choice.Delta.Content = claudeResponse.Delta.Text
 			switch claudeResponse.Delta.Type {
 			case "input_json_delta":
+				// json_schema emulation: stream the forced tool's argument
+				// fragments as plain content instead of tool_call arguments.
+				if jsonSchemaToolName != "" {
+					if claudeResponse.Delta.PartialJson != nil {
+						choice.Delta.SetContentString(*claudeResponse.Delta.PartialJson)
+					}
+					break
+				}
 				tools = append(tools, dto.ToolCallResponse{
 					Type:  "function",
 					Index: common.GetPointer(fcIdx),
@@ -711,7 +767,7 @@ func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCo
 	return &response
 }
 
-func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextResponse {
+func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse, jsonSchemaToolName string) *dto.OpenAITextResponse {
 	choices := make([]dto.OpenAITextResponseChoice, 0)
 	fullTextResponse := dto.OpenAITextResponse{
 		Id:      fmt.Sprintf("chatcmpl-%s", common.GetUUID()),
@@ -728,11 +784,22 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 	}
 	tools := make([]dto.ToolCallResponse, 0)
 	thinkingContent := ""
+	jsonSchemaContent := ""
 
 	fullTextResponse.Id = claudeResponse.Id
 	for _, message := range claudeResponse.Content {
 		switch message.Type {
 		case "tool_use":
+			// json_schema emulation: unwrap the forced tool's input back into
+			// message content as a JSON string instead of a tool call.
+			if jsonSchemaToolName != "" && message.Name == jsonSchemaToolName {
+				args, _ := json.Marshal(message.Input)
+				jsonSchemaContent = string(args)
+				if jsonSchemaContent == "" || jsonSchemaContent == "null" {
+					jsonSchemaContent = "{}"
+				}
+				continue
+			}
 			args, _ := json.Marshal(message.Input)
 			arguments := string(args)
 			if arguments == "" || arguments == "null" {
@@ -754,6 +821,9 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 		case "text":
 			responseText = message.GetText()
 		}
+	}
+	if jsonSchemaContent != "" {
+		responseText = jsonSchemaContent
 	}
 	choice := dto.OpenAITextResponseChoice{
 		Index: 0,
@@ -1073,9 +1143,16 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 		helper.ClaudeChunkData(c, claudeResponse, data)
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
-		emptyArgsChunk := trackToolUseArgs(claudeInfo, &claudeResponse)
+		jsonSchemaToolName := c.GetString(jsonSchemaToolNameKey)
 
-		response := StreamResponseClaude2OpenAI(&claudeResponse)
+		// In json_schema mode the forced tool's arguments are surfaced as content,
+		// so the "{}" tool-args backfill (which emits a tool_call) does not apply.
+		var emptyArgsChunk *dto.ChatCompletionsStreamResponse
+		if jsonSchemaToolName == "" {
+			emptyArgsChunk = trackToolUseArgs(claudeInfo, &claudeResponse)
+		}
+
+		response := StreamResponseClaude2OpenAI(&claudeResponse, jsonSchemaToolName)
 
 		if FormatClaudeResponseInfo(&claudeResponse, response, claudeInfo) {
 			if err = helper.ObjectData(c, response); err != nil {
@@ -1184,7 +1261,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	var responseData []byte
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
-		openaiResponse := ResponseClaude2OpenAI(&claudeResponse)
+		openaiResponse := ResponseClaude2OpenAI(&claudeResponse, c.GetString(jsonSchemaToolNameKey))
 		openaiResponse.Usage = buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
 		responseData, err = json.Marshal(openaiResponse)
 		if err != nil {
