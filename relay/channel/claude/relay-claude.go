@@ -930,7 +930,11 @@ func trackToolUseArgs(claudeInfo *ClaudeResponseInfo, cr *dto.ClaudeResponse) *d
 			claudeInfo.toolArgsSeen[idx] = false
 		}
 	case "content_block_delta":
-		if cr.Delta != nil && cr.Delta.Type == "input_json_delta" {
+		// Only a non-empty partial_json counts as real arguments. Anthropic may emit
+		// an input_json_delta with partial_json="" even for no-argument tools, which
+		// must NOT suppress the "{}" backfill.
+		if cr.Delta != nil && cr.Delta.Type == "input_json_delta" &&
+			cr.Delta.PartialJson != nil && *cr.Delta.PartialJson != "" {
 			if _, ok := claudeInfo.toolArgsSeen[idx]; ok {
 				claudeInfo.toolArgsSeen[idx] = true
 			}
