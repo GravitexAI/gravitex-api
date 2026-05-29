@@ -459,9 +459,15 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 				if message.ToolCalls != nil {
 					for _, toolCall := range message.ParseToolCalls() {
 						inputObj := make(map[string]any)
-						if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &inputObj); err != nil {
-							common.SysLog("tool call function arguments is not a map[string]any: " + fmt.Sprintf("%v", toolCall.Function.Arguments))
-							continue
+						if args := strings.TrimSpace(toolCall.Function.Arguments); args != "" {
+							// 部分客户端会在 JSON 对象后带垃圾(如 <|tool_calls_section_end|>)，
+							// Decoder 只读第一个 JSON 值、忽略尾部，Unmarshal 则会失败。
+							// 解析失败时保留空对象，确保 tool_use 块仍被生成、与其
+							// tool_result 配对，避免上游因孤儿 tool_result 报 400。
+							if err := common.DecodeJson(strings.NewReader(args), &inputObj); err != nil {
+								common.SysLog("tool call arguments not a JSON object, using empty input: " + fmt.Sprintf("%v", toolCall.Function.Arguments))
+								inputObj = make(map[string]any)
+							}
 						}
 						claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
 							Type:  "tool_use",
