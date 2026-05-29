@@ -226,7 +226,11 @@ type ClaudeRequest struct {
 	Container         json.RawMessage `json:"container,omitempty"`
 	ToolChoice        any             `json:"tool_choice,omitempty"`
 	Thinking          *Thinking       `json:"thinking,omitempty"`
-	McpServers        json.RawMessage `json:"mcp_servers,omitempty"`
+	// Effort is a lenient top-level alias some clients send instead of
+	// output_config.effort. It is merged into OutputConfig and cleared before the
+	// request reaches the upstream (Anthropic rejects a top-level effort field).
+	Effort     string          `json:"effort,omitempty"`
+	McpServers json.RawMessage `json:"mcp_servers,omitempty"`
 	Metadata          json.RawMessage `json:"metadata,omitempty"`
 	// Speed specifies the Claude inference speed mode.
 	// This field is filtered by default and can be enabled via channel setting allow_speed.

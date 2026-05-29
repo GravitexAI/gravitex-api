@@ -437,8 +437,67 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 
 	claudeRequest.Prompt = ""
 	claudeRequest.Messages = claudeMessages
+
+	// Anthropic-native thinking object / effort sent through the OpenAI-compatible
+	// endpoint. The base conversion above never reads them, so an explicit client
+	// thinking object would otherwise be dropped. Honor them as the final override.
+	if len(textRequest.THINKING) > 0 {
+		var thinking dto.Thinking
+		if err := common.Unmarshal(textRequest.THINKING, &thinking); err == nil && thinking.Type != "" {
+			claudeRequest.Thinking = &thinking
+		}
+	}
+	if textRequest.Effort != "" {
+		claudeRequest.Effort = textRequest.Effort
+	}
+
+	applyClaudeThinkingPolicy(&claudeRequest)
 	applyClaudeSamplingPolicy(&claudeRequest)
 	return &claudeRequest, nil
+}
+
+// applyClaudeThinkingPolicy normalizes thinking/effort parameters before the
+// request is sent upstream:
+//   - a lenient top-level effort is merged into output_config.effort (Anthropic
+//     has no top-level effort field), then cleared;
+//   - on Opus 4.7+ adaptive thinking defaults display to "omitted", so restore
+//     the visible summary when the client requested adaptive without a display.
+func applyClaudeThinkingPolicy(req *dto.ClaudeRequest) {
+	if req == nil {
+		return
+	}
+	if req.Effort != "" {
+		req.OutputConfig = mergeEffortIntoOutputConfig(req.OutputConfig, req.Effort)
+		req.Effort = ""
+	}
+	if req.Thinking != nil && opusVersionAtLeast47(req.Model) &&
+		req.Thinking.Type == "adaptive" && req.Thinking.Display == "" {
+		req.Thinking.Display = "summarized"
+	}
+}
+
+// mergeEffortIntoOutputConfig sets output_config.effort while preserving any
+// other keys. An effort already present in output_config wins (explicit nesting
+// is more specific than the top-level alias).
+func mergeEffortIntoOutputConfig(existing json.RawMessage, effort string) json.RawMessage {
+	if effort == "" {
+		return existing
+	}
+	cfg := map[string]any{}
+	if len(existing) > 0 {
+		if err := common.Unmarshal(existing, &cfg); err != nil {
+			return existing
+		}
+	}
+	if _, ok := cfg["effort"]; ok {
+		return existing
+	}
+	cfg["effort"] = effort
+	data, err := common.Marshal(cfg)
+	if err != nil {
+		return existing
+	}
+	return json.RawMessage(data)
 }
 
 // opusVersionAtLeast47 reports whether model is claude-opus with version >= 4.7.
