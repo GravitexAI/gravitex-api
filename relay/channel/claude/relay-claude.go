@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -260,6 +261,11 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 		if message.Role == "" {
 			textRequest.Messages[i].Role = "user"
 		}
+		// New OpenAI SDK sends "developer" in place of "system"; map it so the
+		// accumulation logic below routes it into Claude's system field.
+		if message.Role == "developer" {
+			message.Role = "system"
+		}
 		fmtMessage := dto.Message{
 			Role:    message.Role,
 			Content: message.Content,
@@ -431,7 +437,46 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 
 	claudeRequest.Prompt = ""
 	claudeRequest.Messages = claudeMessages
+	applyClaudeSamplingPolicy(&claudeRequest)
 	return &claudeRequest, nil
+}
+
+// opusVersionAtLeast47 reports whether model is claude-opus with version >= 4.7.
+// Anthropic deprecated temperature/top_p/top_k for Opus 4.7 and later: any
+// non-default value returns 400. Parsing the version (rather than matching a
+// fixed string) auto-covers future opus releases (4-8, 4-9, 5-x).
+func opusVersionAtLeast47(model string) bool {
+	rest, ok := strings.CutPrefix(model, "claude-opus-")
+	if !ok {
+		return false
+	}
+	parts := strings.SplitN(rest, "-", 3) // "4-7" / "4-8" / "4-7-20260416" / "5-0"
+	if len(parts) < 2 {
+		return false
+	}
+	major, err1 := strconv.Atoi(parts[0])
+	minor, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return major > 4 || (major == 4 && minor >= 7)
+}
+
+// applyClaudeSamplingPolicy strips sampling params that the upstream would
+// reject, before the request is sent. Opus 4.7+ rejects any temperature/top_p/
+// top_k; sonnet/haiku and older opus still support them. Since Opus 4.1,
+// temperature and top_p cannot both be supplied, so drop top_p when both exist.
+func applyClaudeSamplingPolicy(req *dto.ClaudeRequest) {
+	if req == nil {
+		return
+	}
+	if opusVersionAtLeast47(req.Model) {
+		req.Temperature, req.TopP, req.TopK = nil, nil, nil
+		return
+	}
+	if req.Temperature != nil && req.TopP != nil {
+		req.TopP = nil
+	}
 }
 
 func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCompletionsStreamResponse {
@@ -541,12 +586,16 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 		switch message.Type {
 		case "tool_use":
 			args, _ := json.Marshal(message.Input)
+			arguments := string(args)
+			if arguments == "" || arguments == "null" {
+				arguments = "{}"
+			}
 			tools = append(tools, dto.ToolCallResponse{
 				ID:   message.Id,
 				Type: "function", // compatible with other OpenAI derivative applications
 				Function: dto.FunctionResponse{
 					Name:      message.Name,
-					Arguments: string(args),
+					Arguments: arguments,
 				},
 			})
 		case "thinking":
@@ -586,6 +635,9 @@ type ClaudeResponseInfo struct {
 	ResponseText strings.Builder
 	Usage        *dto.Usage
 	Done         bool
+	// toolArgsSeen tracks, per streamed tool_use content block index, whether any
+	// input_json_delta was emitted. Used to backfill "{}" for no-argument tools.
+	toolArgsSeen map[int]bool
 }
 
 func cacheCreationTokensForOpenAIUsage(usage *dto.Usage) int {
@@ -781,6 +833,61 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 	return true
 }
 
+// trackToolUseArgs records whether each streamed tool_use block emitted any
+// arguments. On block stop it returns a synthetic chunk carrying arguments "{}"
+// for no-argument tools (Anthropic sends no input_json_delta for those), so
+// OpenAI clients that concatenate argument fragments still get valid JSON.
+func trackToolUseArgs(claudeInfo *ClaudeResponseInfo, cr *dto.ClaudeResponse) *dto.ChatCompletionsStreamResponse {
+	idx := 0
+	if cr.Index != nil {
+		idx = *cr.Index
+	}
+	switch cr.Type {
+	case "content_block_start":
+		if cr.ContentBlock != nil && cr.ContentBlock.Type == "tool_use" {
+			if claudeInfo.toolArgsSeen == nil {
+				claudeInfo.toolArgsSeen = map[int]bool{}
+			}
+			claudeInfo.toolArgsSeen[idx] = false
+		}
+	case "content_block_delta":
+		if cr.Delta != nil && cr.Delta.Type == "input_json_delta" {
+			if _, ok := claudeInfo.toolArgsSeen[idx]; ok {
+				claudeInfo.toolArgsSeen[idx] = true
+			}
+		}
+	case "content_block_stop":
+		if seen, ok := claudeInfo.toolArgsSeen[idx]; ok {
+			delete(claudeInfo.toolArgsSeen, idx)
+			if !seen {
+				return buildEmptyToolArgsChunk(idx)
+			}
+		}
+	}
+	return nil
+}
+
+func buildEmptyToolArgsChunk(anthropicIndex int) *dto.ChatCompletionsStreamResponse {
+	fcIdx := anthropicIndex - 1
+	if fcIdx < 0 {
+		fcIdx = 0
+	}
+	var resp dto.ChatCompletionsStreamResponse
+	resp.Object = "chat.completion.chunk"
+	choice := dto.ChatCompletionsStreamResponseChoice{}
+	choice.Delta.ToolCalls = []dto.ToolCallResponse{
+		{
+			Index: common.GetPointer(fcIdx),
+			Type:  "function",
+			Function: dto.FunctionResponse{
+				Arguments: "{}",
+			},
+		},
+	}
+	resp.Choices = []dto.ChatCompletionsStreamResponseChoice{choice}
+	return &resp
+}
+
 func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, data string) *types.NewAPIError {
 	var claudeResponse dto.ClaudeResponse
 	err := common.UnmarshalJsonStr(data, &claudeResponse)
@@ -814,15 +921,23 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 		helper.ClaudeChunkData(c, claudeResponse, data)
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
+		emptyArgsChunk := trackToolUseArgs(claudeInfo, &claudeResponse)
+
 		response := StreamResponseClaude2OpenAI(&claudeResponse)
 
-		if !FormatClaudeResponseInfo(&claudeResponse, response, claudeInfo) {
-			return nil
+		if FormatClaudeResponseInfo(&claudeResponse, response, claudeInfo) {
+			if err = helper.ObjectData(c, response); err != nil {
+				logger.LogError(c, "send_stream_response_failed: "+err.Error())
+			}
 		}
 
-		err = helper.ObjectData(c, response)
-		if err != nil {
-			logger.LogError(c, "send_stream_response_failed: "+err.Error())
+		if emptyArgsChunk != nil {
+			emptyArgsChunk.Id = claudeInfo.ResponseId
+			emptyArgsChunk.Created = claudeInfo.Created
+			emptyArgsChunk.Model = claudeInfo.Model
+			if err = helper.ObjectData(c, emptyArgsChunk); err != nil {
+				logger.LogError(c, "send_stream_response_failed: "+err.Error())
+			}
 		}
 	}
 	return nil

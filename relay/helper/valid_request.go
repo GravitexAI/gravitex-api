@@ -296,7 +296,7 @@ func GetAndValidateClaudeRequest(c *gin.Context) (textRequest *dto.ClaudeRequest
 	if textRequest.Messages == nil || len(textRequest.Messages) == 0 {
 		return nil, errors.New("field messages is required")
 	}
-	if textRequest.Model == "" {
+	if strings.TrimSpace(textRequest.Model) == "" {
 		return nil, errors.New("field model is required")
 	}
 
@@ -324,7 +324,7 @@ func GetAndValidateTextRequest(c *gin.Context, relayMode int) (*dto.GeneralOpenA
 	if lo.FromPtrOr(textRequest.MaxTokens, uint(0)) > math.MaxInt32/2 {
 		return nil, errors.New("max_tokens is invalid")
 	}
-	if textRequest.Model == "" {
+	if strings.TrimSpace(textRequest.Model) == "" {
 		return nil, errors.New("model is required")
 	}
 	if textRequest.WebSearchOptions != nil {
