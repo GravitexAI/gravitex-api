@@ -352,6 +352,9 @@ func GetAndValidateTextRequest(c *gin.Context, relayMode int) (*dto.GeneralOpenA
 		if len(textRequest.Messages) == 0 && textRequest.Prefix == nil && textRequest.Suffix == nil {
 			return nil, errors.New("field messages is required")
 		}
+		if err := validateOpenAIMessageContent(textRequest.Messages); err != nil {
+			return nil, err
+		}
 	case relayconstant.RelayModeEmbeddings:
 	case relayconstant.RelayModeModerations:
 		if textRequest.Input == nil || textRequest.Input == "" {
@@ -363,6 +366,48 @@ func GetAndValidateTextRequest(c *gin.Context, relayMode int) (*dto.GeneralOpenA
 		}
 	}
 	return textRequest, nil
+}
+
+// validateOpenAIMessageContent rejects message content shapes the OpenAI Chat
+// Completions schema does not accept (matching the upstream 400). Valid content
+// is a string, an array of objects (content parts), or null. Numbers, booleans,
+// bare objects, and arrays containing non-object elements are rejected.
+func validateOpenAIMessageContent(messages []dto.Message) error {
+	for i, msg := range messages {
+		switch content := msg.Content.(type) {
+		case nil, string:
+			// null is allowed (e.g. assistant with tool_calls); string is valid.
+		case []any:
+			for j, part := range content {
+				if _, ok := part.(map[string]any); !ok {
+					return fmt.Errorf("invalid type for 'messages[%d].content[%d]': expected an object, but got %s instead", i, j, jsonValueTypeName(part))
+				}
+			}
+		default:
+			return fmt.Errorf("invalid type for 'messages[%d].content': expected a string or an array of objects, but got %s instead", i, jsonValueTypeName(content))
+		}
+	}
+	return nil
+}
+
+// jsonValueTypeName names a value decoded from JSON into an `any` for error text.
+func jsonValueTypeName(v any) string {
+	switch v.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "a boolean"
+	case float64, json.Number:
+		return "a number"
+	case string:
+		return "a string"
+	case []any:
+		return "an array"
+	case map[string]any:
+		return "an object"
+	default:
+		return "an unexpected value"
+	}
 }
 
 func GetAndValidateGeminiRequest(c *gin.Context) (*dto.GeminiChatRequest, error) {
