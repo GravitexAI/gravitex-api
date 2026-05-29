@@ -93,6 +93,12 @@ func removeFunctionResponseID(request *dto.GeminiChatRequest) {
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
+	// Vertex 上游即 Anthropic Claude，原生 /v1/messages 入站请求需与直连 Claude 做
+	// 相同的规范化:reasoning:{enabled/max_tokens}→thinking 转换、顶层 effort 合并、
+	// adaptive 补 display=summarized、opus-4.7+ 采样参数剥离。否则 reasoning 等字段
+	// 会被 copyRequest 丢弃,导致开关失效(thinking 块不产出)。
+	claude.ApplyClaudeThinkingPolicy(request)
+	claude.ApplyClaudeSamplingPolicy(request)
 	if v, ok := claudeModelMap[info.UpstreamModelName]; ok {
 		c.Set("request_model", v)
 	} else {

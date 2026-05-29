@@ -572,18 +572,21 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 		}
 	}
 
-	applyClaudeThinkingPolicy(&claudeRequest)
-	applyClaudeSamplingPolicy(&claudeRequest)
+	ApplyClaudeThinkingPolicy(&claudeRequest)
+	ApplyClaudeSamplingPolicy(&claudeRequest)
 	return &claudeRequest, nil
 }
 
-// applyClaudeThinkingPolicy normalizes thinking/effort parameters before the
+// ApplyClaudeThinkingPolicy normalizes thinking/effort parameters before the
 // request is sent upstream:
 //   - a lenient top-level effort is merged into output_config.effort (Anthropic
 //     has no top-level effort field), then cleared;
 //   - on Opus 4.7+ adaptive thinking defaults display to "omitted", so restore
 //     the visible summary when the client requested adaptive without a display.
-func applyClaudeThinkingPolicy(req *dto.ClaudeRequest) {
+//
+// Exported so other Anthropic-family upstreams (e.g. Vertex) can apply the same
+// normalization on their native /v1/messages path.
+func ApplyClaudeThinkingPolicy(req *dto.ClaudeRequest) {
 	if req == nil {
 		return
 	}
@@ -663,11 +666,14 @@ func opusVersionAtLeast47(model string) bool {
 	return major > 4 || (major == 4 && minor >= 7)
 }
 
-// applyClaudeSamplingPolicy strips sampling params that the upstream would
+// ApplyClaudeSamplingPolicy strips sampling params that the upstream would
 // reject, before the request is sent. Opus 4.7+ rejects any temperature/top_p/
 // top_k; sonnet/haiku and older opus still support them. Since Opus 4.1,
 // temperature and top_p cannot both be supplied, so drop top_p when both exist.
-func applyClaudeSamplingPolicy(req *dto.ClaudeRequest) {
+//
+// Exported so other Anthropic-family upstreams (e.g. Vertex) can apply the same
+// normalization on their native /v1/messages path.
+func ApplyClaudeSamplingPolicy(req *dto.ClaudeRequest) {
 	if req == nil {
 		return
 	}

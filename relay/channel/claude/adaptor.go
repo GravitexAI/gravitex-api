@@ -25,8 +25,8 @@ func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dt
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
-	applyClaudeThinkingPolicy(request)
-	applyClaudeSamplingPolicy(request)
+	ApplyClaudeThinkingPolicy(request)
+	ApplyClaudeSamplingPolicy(request)
 	return request, nil
 }
 
