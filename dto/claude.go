@@ -226,6 +226,10 @@ type ClaudeRequest struct {
 	Container         json.RawMessage `json:"container,omitempty"`
 	ToolChoice        any             `json:"tool_choice,omitempty"`
 	Thinking          *Thinking       `json:"thinking,omitempty"`
+	// Reasoning is a non-standard OpenRouter-style field ({enabled,effort,max_tokens})
+	// that some clients send instead of thinking. It is translated into Claude
+	// thinking and cleared before the request reaches the upstream Anthropic API.
+	Reasoning json.RawMessage `json:"reasoning,omitempty"`
 	// Effort is a lenient top-level alias some clients send instead of
 	// output_config.effort. It is merged into OutputConfig and cleared before the
 	// request reaches the upstream (Anthropic rejects a top-level effort field).

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -31,6 +32,45 @@ const (
 	WebSearchMaxUsesMedium = 5
 	WebSearchMaxUsesHigh   = 10
 )
+
+// toolUseIDPattern matches the tool_use id format Anthropic accepts. Ids with
+// other characters (e.g. colons from some OpenAI clients) are rejected with 400.
+var toolUseIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// sanitizeToolUseID returns id unchanged when it already satisfies Anthropic's
+// tool_use id format. Otherwise it derives a compliant id (illegal chars -> '_')
+// and caches the mapping keyed on the original id, so a tool_use and its matching
+// tool_result resolve to the same sanitized id regardless of which is seen first.
+func sanitizeToolUseID(id string, m map[string]string) string {
+	if id == "" || toolUseIDPattern.MatchString(id) {
+		return id
+	}
+	if mapped, ok := m[id]; ok {
+		return mapped
+	}
+	sanitized := regexp.MustCompile(`[^a-zA-Z0-9_-]`).ReplaceAllString(id, "_")
+	if sanitized == "" {
+		sanitized = "tool"
+	}
+	// avoid colliding with an id already assigned to a different original
+	base, n := sanitized, 1
+	for {
+		clash := false
+		for orig, v := range m {
+			if v == sanitized && orig != id {
+				clash = true
+				break
+			}
+		}
+		if !clash {
+			break
+		}
+		sanitized = fmt.Sprintf("%s_%d", base, n)
+		n++
+	}
+	m[id] = sanitized
+	return sanitized
+}
 
 func stopReasonClaude2OpenAI(reason string) string {
 	return reasonmap.ClaudeStopReasonToOpenAIFinishReason(reason)
@@ -299,6 +339,8 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	isFirstMessage := true
 	// 初始化system消息数组，用于累积多个system消息
 	var systemMessages []dto.ClaudeMediaMessage
+	// 缓存「原始 tool id -> 净化后 id」，保证 tool_use 与 tool_result 映射一致
+	toolIdMap := map[string]string{}
 
 	for _, message := range formatMessages {
 		if message.Role == "system" {
@@ -355,7 +397,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 					}
 					lastMessage.Content = append(lastMessage.Content.([]dto.ClaudeMediaMessage), dto.ClaudeMediaMessage{
 						Type:      "tool_result",
-						ToolUseId: message.ToolCallId,
+						ToolUseId: sanitizeToolUseID(message.ToolCallId, toolIdMap),
 						Content:   message.Content,
 					})
 					claudeMessages[len(claudeMessages)-1] = lastMessage
@@ -365,7 +407,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 					claudeMessage.Content = []dto.ClaudeMediaMessage{
 						{
 							Type:      "tool_result",
-							ToolUseId: message.ToolCallId,
+							ToolUseId: sanitizeToolUseID(message.ToolCallId, toolIdMap),
 							Content:   message.Content,
 						},
 					}
@@ -423,7 +465,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 						}
 						claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
 							Type:  "tool_use",
-							Id:    toolCall.ID,
+							Id:    sanitizeToolUseID(toolCall.ID, toolIdMap),
 							Name:  toolCall.Function.Name,
 							Input: inputObj,
 						})
@@ -485,6 +527,27 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 func applyClaudeThinkingPolicy(req *dto.ClaudeRequest) {
 	if req == nil {
 		return
+	}
+	// Native /v1/messages path: honor an OpenRouter-style reasoning field by
+	// translating it into Claude thinking. Opus 4.7+ only accepts adaptive
+	// thinking; older models keep enabled semantics with a budget. The field is
+	// always cleared so it is never forwarded upstream (Anthropic rejects it).
+	if len(req.Reasoning) > 0 {
+		if req.Thinking == nil {
+			var r openrouter.RequestReasoning
+			if err := common.Unmarshal(req.Reasoning, &r); err == nil && (r.Enabled || r.MaxTokens > 0) {
+				if opusVersionAtLeast47(req.Model) {
+					req.Thinking = &dto.Thinking{Type: "adaptive"}
+				} else {
+					budget := r.MaxTokens
+					if budget <= 0 {
+						budget = 4096
+					}
+					req.Thinking = &dto.Thinking{Type: "enabled", BudgetTokens: &budget}
+				}
+			}
+		}
+		req.Reasoning = nil
 	}
 	if req.Effort != "" {
 		req.OutputConfig = mergeEffortIntoOutputConfig(req.OutputConfig, req.Effort)
