@@ -538,6 +538,19 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	if len(textRequest.THINKING) > 0 {
 		var thinking dto.Thinking
 		if err := common.Unmarshal(textRequest.THINKING, &thinking); err == nil && thinking.Type != "" {
+			// Opus 4.7+ removed thinking.type="enabled" (upstream returns 400). When a
+			// client passes it directly through the OpenAI-compatible endpoint, surface
+			// the same 400 rather than silently rewriting it, so callers learn to switch
+			// to adaptive. Internally-generated enabled (from reasoning / reasoning_effort
+			// above) is not affected: it is converted to adaptive a few lines below.
+			if thinking.Type == "enabled" && opusVersionAtLeast47(claudeRequest.Model) {
+				return nil, types.NewError(
+					fmt.Errorf("thinking.type \"enabled\" is not supported on %s; use thinking.type \"adaptive\" with output_config.effort", claudeRequest.Model),
+					types.ErrorCodeInvalidRequest,
+					types.ErrOptionWithStatusCode(http.StatusBadRequest),
+					types.ErrOptionWithSkipRetry(),
+				)
+			}
 			claudeRequest.Thinking = &thinking
 		}
 	}
@@ -546,11 +559,10 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	}
 
 	// OpenAI-compat path: Opus 4.7+ only supports adaptive thinking and rejects
-	// thinking.type="enabled" with a 400. Since the gateway is a conversion layer
-	// here, transparently switch any enabled thinking (from reasoning_effort /
-	// reasoning / thinking inputs above) to adaptive so the request succeeds and
-	// returns visible reasoning. Native Claude clients keep enabled semantics and
-	// may receive the upstream 400.
+	// thinking.type="enabled" with a 400. Client-direct thinking is already rejected
+	// above; here we transparently switch internally-generated enabled thinking (from
+	// reasoning_effort / reasoning inputs) to adaptive so those requests succeed and
+	// return visible reasoning.
 	if claudeRequest.Thinking != nil && claudeRequest.Thinking.Type == "enabled" &&
 		opusVersionAtLeast47(claudeRequest.Model) {
 		claudeRequest.Thinking.Type = "adaptive"
