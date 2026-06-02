@@ -26,7 +26,7 @@ type ClaudeError struct {
 type ErrorType string
 
 const (
-	ErrorTypeGravitexAPIError ErrorType = "gravitex_api_error"
+	ErrorTypeGravitexAPIError ErrorType = "api_error"
 	ErrorTypeOpenAIError      ErrorType = "openai_error"
 	ErrorTypeClaudeError      ErrorType = "claude_error"
 	ErrorTypeMidjourneyError  ErrorType = "midjourney_error"

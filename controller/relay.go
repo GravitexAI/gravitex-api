@@ -485,7 +485,7 @@ func RelayMidjourney(c *gin.Context) {
 func RelayNotImplemented(c *gin.Context) {
 	err := types.OpenAIError{
 		Message: "API not implemented",
-		Type:    "gravitex_api_error",
+		Type:    "api_error",
 		Param:   "",
 		Code:    "api_not_implemented",
 	}
