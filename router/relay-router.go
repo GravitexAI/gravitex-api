@@ -66,6 +66,19 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
+
+	// 超时探针端点：不挂任何认证/分发/限流中间件，方便从外部 curl 排查 nginx/CDN/网关 idle timeout
+	// GET/POST /v1/test/timeout?time=240
+	// GET/POST /v1/test/timeout?time=240&stream=1&interval=5
+	testTimeoutRouter := router.Group("/v1/test")
+	testTimeoutRouter.Use(middleware.RouteTag("relay"))
+	{
+		testTimeoutRouter.GET("/timeout", controller.TestTimeout)
+		testTimeoutRouter.POST("/timeout", controller.TestTimeout)
+		testTimeoutRouter.GET("/timeout-image", controller.TestTimeoutWithImage)
+		testTimeoutRouter.POST("/timeout-image", controller.TestTimeoutWithImage)
+	}
+
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))
 	relayV1Router.Use(middleware.SystemPerformanceCheck())

@@ -68,8 +68,8 @@ func CreateLog(log *Log) error {
 	if typeName == "" {
 		typeName = fmt.Sprintf("type_%d", log.Type)
 	}
-	common.SysLog(fmt.Sprintf("[LogInsert] type=%s userId=%d channel=%d model=%s token=%s group=%s quota=%d content=%s other=%s",
-		typeName, log.UserId, log.ChannelId, log.ModelName, log.TokenName, log.Group, log.Quota, log.Content, log.Other))
+	common.SysLog(fmt.Sprintf("[LogInsert] requestId=%s type=%s userId=%d channel=%d model=%s token=%s group=%s quota=%d content=%s",
+		log.RequestId, typeName, log.UserId, log.ChannelId, log.ModelName, log.TokenName, log.Group, log.Quota, log.Content))
 	err := LOG_DB.Create(log).Error
 	if err != nil {
 		common.SysLog(fmt.Sprintf("[LogInsert] FAILED type=%s userId=%d err=%s", typeName, log.UserId, err.Error()))
@@ -241,7 +241,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if !common.LogConsumeEnabled {
 		return
 	}
-	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
+	//logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
 	requestId := params.RequestId
 	if requestId == "" {
