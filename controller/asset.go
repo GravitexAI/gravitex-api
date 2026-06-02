@@ -91,6 +91,29 @@ func assetErrorResponse(c *gin.Context, status int, message string) {
 	})
 }
 
+// recordAssetErrorLog writes a user-visible error log entry for a failed BytePlus
+// asset operation (OSS staging or upstream create). Best-effort: a logging
+// failure is itself logged but never surfaced to the caller.
+func recordAssetErrorLog(c *gin.Context, userId, tokenId, channelId int, content string) {
+	username, _ := model.GetUsernameById(userId, false)
+	errLog := &model.Log{
+		UserId:    userId,
+		Username:  username,
+		CreatedAt: common.GetTimestamp(),
+		Type:      model.LogTypeError,
+		Content:   content,
+		ChannelId: channelId,
+		ModelName: "BytePlusAsset",
+		TokenName: c.GetString("token_name"),
+		TokenId:   tokenId,
+		Group:     common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
+		RequestId: c.GetString(common.RequestIdKey),
+	}
+	if logErr := model.CreateLog(errLog); logErr != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("recordAssetErrorLog: failed to record error log: %s", logErr.Error()))
+	}
+}
+
 // ---------- handlers ----------
 
 // isAllowedImageType checks whether the content type is an allowed image format.
@@ -229,6 +252,23 @@ func validateAssetUrlForType(rawURL, assetType string) error {
 	return nil
 }
 
+// assetExtFromURL extracts the lower-case file extension (without the dot) from
+// a URL's path, stripping any query string. Returns "" when no extension is
+// present, letting service.UploadAssetURLToOSS apply a type-appropriate default.
+func assetExtFromURL(rawURL string) string {
+	lower := strings.ToLower(rawURL)
+	if idx := strings.IndexByte(lower, '?'); idx >= 0 {
+		lower = lower[:idx]
+	}
+	if idx := strings.LastIndexByte(lower, '/'); idx >= 0 {
+		lower = lower[idx+1:]
+	}
+	if idx := strings.LastIndexByte(lower, '.'); idx >= 0 {
+		return lower[idx+1:]
+	}
+	return ""
+}
+
 // inferAssetTypeFromContentType maps a MIME type (e.g. from multipart upload or
 // a HEAD request) to the BytePlus asset type. Returns empty string if not a
 // known media type.
@@ -261,32 +301,62 @@ func CreateAsset(c *gin.Context) {
 	}
 }
 
+// assetLogResponse marshals v to a compact JSON string for logging.
+// Falls back to a fmt representation on marshal error.
+func assetLogJSON(v interface{}) string {
+	b, err := common.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%+v", v)
+	}
+	return string(b)
+}
+
+// assetRespondError writes an error JSON response and logs the full responseBody.
+func assetRespondError(c *gin.Context, ctx context.Context, logPrefix string, status int, message string) {
+	resp := gin.H{"error": gin.H{"message": message, "type": "invalid_request_error"}}
+	logger.LogInfo(ctx, fmt.Sprintf("%s RESPONSE status=%d body=%s", logPrefix, status, assetLogJSON(resp)))
+	c.JSON(status, resp)
+}
+
 // createAssetByteplus creates an asset via BytePlus SDK (URL-based, no file upload).
 func createAssetByteplus(c *gin.Context) {
 	userId := c.GetInt("id")
 	tokenId := c.GetInt("token_id")
+	ctx := c.Request.Context()
+	reqId := c.GetString(common.RequestIdKey)
 
+	// ── parse & log request ──────────────────────────────────────────────────
 	var req createAssetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		assetErrorResponse(c, http.StatusBadRequest, "Invalid request: "+err.Error())
+		// logPrefix not yet built; use minimal prefix
+		lp := fmt.Sprintf("[CreateAsset][req=%s][uid=%d]", reqId, userId)
+		assetRespondError(c, ctx, lp, http.StatusBadRequest, "Invalid request: "+err.Error())
 		return
 	}
+
+	// Build the stable logPrefix after we have assetType (normalized below).
+	// We log the raw request body here before any processing.
+	logger.LogInfo(ctx, fmt.Sprintf("[CreateAsset][req=%s][uid=%d] REQUEST body=%s",
+		reqId, userId, assetLogJSON(req)))
 
 	// Verify group ownership
 	assetGroup, err := model.GetUserAssetGroupByUserIdAndGroupId(userId, req.GroupId)
 	if err != nil {
-		assetErrorResponse(c, http.StatusBadRequest, "Asset group not found or access denied")
+		lp := fmt.Sprintf("[CreateAsset][req=%s][uid=%d]", reqId, userId)
+		assetRespondError(c, ctx, lp, http.StatusBadRequest, "Asset group not found or access denied")
 		return
 	}
 
 	ch, err := getAssetChannelById(assetGroup.ChannelId)
 	if err != nil {
-		assetErrorResponse(c, http.StatusServiceUnavailable, "Asset channel unavailable")
+		lp := fmt.Sprintf("[CreateAsset][req=%s][uid=%d]", reqId, userId)
+		assetRespondError(c, ctx, lp, http.StatusServiceUnavailable, "Asset channel unavailable")
 		return
 	}
 
 	if !isByteplusAssetChannel(ch) {
-		assetErrorResponse(c, http.StatusBadRequest, "Channel does not have BytePlus asset configuration")
+		lp := fmt.Sprintf("[CreateAsset][req=%s][uid=%d][channel=%d]", reqId, userId, ch.Id)
+		assetRespondError(c, ctx, lp, http.StatusBadRequest, "Channel does not have BytePlus asset configuration")
 		return
 	}
 
@@ -294,55 +364,58 @@ func createAssetByteplus(c *gin.Context) {
 
 	assetType, ok := normalizeAssetType(req.AssetType)
 	if !ok {
-		assetErrorResponse(c, http.StatusBadRequest, "Invalid asset_type, expected image|video|audio")
+		lp := fmt.Sprintf("[CreateAsset][req=%s][uid=%d][channel=%d]", reqId, userId, ch.Id)
+		assetRespondError(c, ctx, lp, http.StatusBadRequest, "Invalid asset_type, expected image|video|audio")
 		return
 	}
 
 	if err := validateAssetUrlForType(req.URL, assetType); err != nil {
-		assetErrorResponse(c, http.StatusBadRequest, err.Error())
+		lp := fmt.Sprintf("[CreateAsset][req=%s][uid=%d][channel=%d]", reqId, userId, ch.Id)
+		assetRespondError(c, ctx, lp, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): channel=%d group=%s url=%s type=%s", ch.Id, req.GroupId, req.URL, assetType))
+	// Stable logPrefix for the rest of the function.
+	logPrefix := fmt.Sprintf("[CreateAsset][req=%s][uid=%d][channel=%d][group=%s][type=%s]",
+		reqId, userId, ch.Id, req.GroupId, assetType)
 
-	assetId, err := service.ByteplusCreateAsset(cfg, req.GroupId, req.URL, assetType, req.Name)
-	if err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): %s", err.Error()))
-		username, _ := model.GetUsernameById(userId, false)
-		errLog := &model.Log{
-			UserId:    userId,
-			Username:  username,
-			CreatedAt: common.GetTimestamp(),
-			Type:      model.LogTypeError,
-			Content:   fmt.Sprintf("Failed to upload %s asset: %s", assetType, err.Error()),
-			ChannelId: ch.Id,
-			ModelName: "BytePlusAsset",
-			TokenName: c.GetString("token_name"),
-			TokenId:   tokenId,
-			Group:     common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
-			RequestId: c.GetString(common.RequestIdKey),
-		}
-		if logErr := model.CreateLog(errLog); logErr != nil {
-			logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): failed to record error log: %s", logErr.Error()))
-		}
-		assetErrorResponse(c, http.StatusBadGateway, "Failed to create asset on upstream: "+err.Error())
-		return
-	}
+	logger.LogInfo(ctx, fmt.Sprintf("%s START oss_staging_enabled=%v", logPrefix, service.IsAssetOSSStagingEnabled()))
 
-	//tokenKey := c.Request.Header.Get("Authorization")
-	//gravitexUrl, err := service.UploadByImageURL(req.URL, tokenKey)
-	//if err != nil {
-	//	logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): upload by image URL failed: %s", err.Error()))
-	//	// Don't fail the whole request if the Gravitex upload fails — the asset is still created on BytePlus and can be retried later.
-	//	assetErrorResponse(c, http.StatusAccepted, "Asset created but failed to upload to Gravitex: "+err.Error())
-	//}
-	gravitexUrl := ""
-	if isPublicHTTPURL(req.URL) {
-		gravitexUrl = req.URL
+	// ── Step 1: OSS staging ─────────────────────────────────────────────────
+	// 30 s timeout. On failure, fall back to the original user URL so Seedance
+	// is always called regardless of OSS availability.
+	gravitexUrl := req.URL
+	ossStaged := false
+	if service.IsAssetOSSStagingEnabled() {
+		logger.LogInfo(ctx, fmt.Sprintf("%s OSS staging START src_url=%s ext=%s",
+			logPrefix, req.URL, assetExtFromURL(req.URL)))
+		ossURL, ossErr := service.UploadAssetURLToOSS(req.URL, assetType, assetExtFromURL(req.URL))
+		if ossErr != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("%s OSS staging FAILED (fallback to original URL): %s",
+				logPrefix, ossErr.Error()))
+		} else {
+			gravitexUrl = ossURL
+			ossStaged = true
+			logger.LogInfo(ctx, fmt.Sprintf("%s OSS staging OK oss_url=%s", logPrefix, ossURL))
+		}
 	} else {
-		logger.LogInfo(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): skip gravitex_url, non-public url=%s", req.URL))
+		logger.LogInfo(ctx, fmt.Sprintf("%s OSS staging SKIPPED (disabled by env)", logPrefix))
 	}
-	// Save locally
+
+	// ── Step 2: Seedance (BytePlus) CreateAsset ─────────────────────────────
+	logger.LogInfo(ctx, fmt.Sprintf("%s Seedance CreateAsset START upstream_url=%s oss_staged=%v",
+		logPrefix, gravitexUrl, ossStaged))
+
+	assetId, err := service.ByteplusCreateAsset(ctx, cfg, req.GroupId, gravitexUrl, assetType, req.Name)
+	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("%s Seedance CreateAsset FAILED: %s", logPrefix, err.Error()))
+		recordAssetErrorLog(c, userId, tokenId, ch.Id, fmt.Sprintf("Seedance CreateAsset failed (%s): %s", assetType, err.Error()))
+		assetRespondError(c, ctx, logPrefix, http.StatusBadGateway, "Failed to create asset on upstream: "+err.Error())
+		return
+	}
+	logger.LogInfo(ctx, fmt.Sprintf("%s Seedance CreateAsset OK virtual_id=%s", logPrefix, assetId))
+
+	// ── Step 3: persist to local DB ─────────────────────────────────────────
 	userAsset := &model.UserAsset{
 		UserId:      userId,
 		TokenId:     tokenId,
@@ -352,20 +425,25 @@ func createAssetByteplus(c *gin.Context) {
 		AssetUrl:    "asset://" + assetId,
 		Filename:    req.Name,
 		AssetType:   assetType,
-		Status:      "pending", // BytePlus "Processing" → internal "pending"
+		Status:      "pending",
 		GravitexUrl: gravitexUrl,
 	}
-	if err := model.InsertUserAsset(userAsset); err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAsset(byteplus): save failed: %s", err.Error()))
+	if dbErr := model.InsertUserAsset(userAsset); dbErr != nil {
+		logger.LogError(ctx, fmt.Sprintf("%s DB insert FAILED: %s", logPrefix, dbErr.Error()))
+	} else {
+		logger.LogInfo(ctx, fmt.Sprintf("%s DB insert OK gravitex_url=%s", logPrefix, gravitexUrl))
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	// ── respond & log ────────────────────────────────────────────────────────
+	respBody := gin.H{
 		"virtual_id": assetId,
 		"asset_url":  "asset://" + assetId,
 		"group_id":   req.GroupId,
 		"asset_type": assetType,
 		"status":     "pending",
-	})
+	}
+	logger.LogInfo(ctx, fmt.Sprintf("%s RESPONSE status=200 body=%s", logPrefix, assetLogJSON(respBody)))
+	c.JSON(http.StatusOK, respBody)
 }
 
 // uploadAssetUptoken is the legacy uptoken multipart upload flow.
