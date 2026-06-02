@@ -97,16 +97,11 @@ func UploadByImageURL(imageURL, token string) (*string, error) {
 const assetOSSUploadTimeout = 30 * time.Second
 
 // IsAssetOSSStagingEnabled reports whether OSS staging is turned on.
-// Controlled by env var ASSET_OSS_STAGING_ENABLED (default: "true").
-// Any value other than "false" / "0" / "" (after trimming) is treated as enabled.
+// Controlled by env var ASSET_OSS_STAGING_ENABLED (default: "false").
+// Only "true" or "1" (case-insensitive, trimmed) enables staging.
 func IsAssetOSSStagingEnabled() bool {
 	v := strings.TrimSpace(strings.ToLower(os.Getenv("ASSET_OSS_STAGING_ENABLED")))
-	// explicitly disabled
-	if v == "false" || v == "0" {
-		return false
-	}
-	// default: enabled (also covers "true", "1", anything non-empty)
-	return true
+	return v == "true" || v == "1"
 }
 
 // UploadAssetURLToOSS stages a remote asset URL into our own OSS via the Java
