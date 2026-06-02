@@ -323,39 +323,36 @@ func createAssetByteplus(c *gin.Context) {
 	userId := c.GetInt("id")
 	tokenId := c.GetInt("token_id")
 	ctx := c.Request.Context()
-	reqId := c.GetString(common.RequestIdKey)
-
 	// ── parse & log request ──────────────────────────────────────────────────
 	var req createAssetRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		// logPrefix not yet built; use minimal prefix
-		lp := fmt.Sprintf("[CreateAsset][req=%s][uid=%d]", reqId, userId)
+		lp := fmt.Sprintf("[CreateAsset][uid=%d]", userId)
 		assetRespondError(c, ctx, lp, http.StatusBadRequest, "Invalid request: "+err.Error())
 		return
 	}
 
 	// Build the stable logPrefix after we have assetType (normalized below).
 	// We log the raw request body here before any processing.
-	logger.LogInfo(ctx, fmt.Sprintf("[CreateAsset][req=%s][uid=%d] REQUEST body=%s",
-		reqId, userId, assetLogJSON(req)))
+	logger.LogInfo(ctx, fmt.Sprintf("[CreateAsset][uid=%d] REQUEST body=%s", userId, assetLogJSON(req)))
 
 	// Verify group ownership
 	assetGroup, err := model.GetUserAssetGroupByUserIdAndGroupId(userId, req.GroupId)
 	if err != nil {
-		lp := fmt.Sprintf("[CreateAsset][req=%s][uid=%d]", reqId, userId)
+		lp := fmt.Sprintf("[CreateAsset][uid=%d]", userId)
 		assetRespondError(c, ctx, lp, http.StatusBadRequest, "Asset group not found or access denied")
 		return
 	}
 
 	ch, err := getAssetChannelById(assetGroup.ChannelId)
 	if err != nil {
-		lp := fmt.Sprintf("[CreateAsset][req=%s][uid=%d]", reqId, userId)
+		lp := fmt.Sprintf("[CreateAsset][uid=%d]", userId)
 		assetRespondError(c, ctx, lp, http.StatusServiceUnavailable, "Asset channel unavailable")
 		return
 	}
 
 	if !isByteplusAssetChannel(ch) {
-		lp := fmt.Sprintf("[CreateAsset][req=%s][uid=%d][channel=%d]", reqId, userId, ch.Id)
+		lp := fmt.Sprintf("[CreateAsset][uid=%d][channel=%d]", userId, ch.Id)
 		assetRespondError(c, ctx, lp, http.StatusBadRequest, "Channel does not have BytePlus asset configuration")
 		return
 	}
@@ -364,20 +361,19 @@ func createAssetByteplus(c *gin.Context) {
 
 	assetType, ok := normalizeAssetType(req.AssetType)
 	if !ok {
-		lp := fmt.Sprintf("[CreateAsset][req=%s][uid=%d][channel=%d]", reqId, userId, ch.Id)
+		lp := fmt.Sprintf("[CreateAsset][uid=%d][channel=%d]", userId, ch.Id)
 		assetRespondError(c, ctx, lp, http.StatusBadRequest, "Invalid asset_type, expected image|video|audio")
 		return
 	}
 
 	if err := validateAssetUrlForType(req.URL, assetType); err != nil {
-		lp := fmt.Sprintf("[CreateAsset][req=%s][uid=%d][channel=%d]", reqId, userId, ch.Id)
+		lp := fmt.Sprintf("[CreateAsset][uid=%d][channel=%d]", userId, ch.Id)
 		assetRespondError(c, ctx, lp, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	// Stable logPrefix for the rest of the function.
-	logPrefix := fmt.Sprintf("[CreateAsset][req=%s][uid=%d][channel=%d][group=%s][type=%s]",
-		reqId, userId, ch.Id, req.GroupId, assetType)
+	logPrefix := fmt.Sprintf("[CreateAsset][uid=%d][channel=%d][group=%s][type=%s]", userId, ch.Id, req.GroupId, assetType)
 
 	logger.LogInfo(ctx, fmt.Sprintf("%s START oss_staging_enabled=%v", logPrefix, service.IsAssetOSSStagingEnabled()))
 
