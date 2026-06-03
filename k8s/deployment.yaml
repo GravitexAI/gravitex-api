@@ -16,6 +16,6 @@ spec:
       containers:
       - name: api-gateway
         #  动态替换 tag
-        image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway:1.0.6
+        image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway:1.0.7
         ports:
         - containerPort: 3000
