@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: api-gateway
-  namespace: prod # 替换为你的实际命名空间
+  namespace: prod
 spec:
   replicas: 2
   selector:
@@ -12,10 +12,33 @@ spec:
     metadata:
       labels:
         app: api-gateway
-    spec: 
+    spec:
       containers:
       - name: api-gateway
-        #  动态替换 tag
         image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway:1.0.7
         ports:
         - containerPort: 3000
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "2Gi"
+          limits:
+            cpu: "2000m"
+            memory: "4Gi"
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway-svc
+  namespace: prod
+spec:
+  selector:
+    app: api-gateway      
+  ports:
+  - name: http
+    protocol: TCP
+    port: 80            
+    targetPort: 3000      
+  type: ClusterIP
