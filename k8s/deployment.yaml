@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: api-gateway
-  namespace: Prod # 替换为你的实际命名空间
+  namespace: prod # 替换为你的实际命名空间
 spec:
   replicas: 2
   selector:
