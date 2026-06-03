@@ -29,6 +29,17 @@ var openAIModels []dto.OpenAIModels
 var openAIModelsMap map[string]dto.OpenAIModels
 var channelId2Models map[int][]string
 
+func appendOwnedModels(channelName string, modelNames []string) {
+	for _, modelName := range modelNames {
+		openAIModels = append(openAIModels, dto.OpenAIModels{
+			Id:      modelName,
+			Object:  "model",
+			Created: 1626777600,
+			OwnedBy: channelName,
+		})
+	}
+}
+
 func init() {
 	// https://platform.openai.com/docs/models/model-endpoint-compatibility
 	for i := 0; i < constant.APITypeDummy; i++ {
@@ -36,49 +47,17 @@ func init() {
 			continue
 		}
 		adaptor := relay.GetAdaptor(i)
+		if adaptor == nil {
+			continue
+		}
 		channelName := adaptor.GetChannelName()
 		modelNames := adaptor.GetModelList()
-		for _, modelName := range modelNames {
-			openAIModels = append(openAIModels, dto.OpenAIModels{
-				Id:      modelName,
-				Object:  "model",
-				Created: 1626777600,
-				OwnedBy: channelName,
-			})
-		}
+		appendOwnedModels(channelName, modelNames)
 	}
-	for _, modelName := range ai360.ModelList {
-		openAIModels = append(openAIModels, dto.OpenAIModels{
-			Id:      modelName,
-			Object:  "model",
-			Created: 1626777600,
-			OwnedBy: ai360.ChannelName,
-		})
-	}
-	for _, modelName := range moonshot.ModelList {
-		openAIModels = append(openAIModels, dto.OpenAIModels{
-			Id:      modelName,
-			Object:  "model",
-			Created: 1626777600,
-			OwnedBy: moonshot.ChannelName,
-		})
-	}
-	for _, modelName := range lingyiwanwu.ModelList {
-		openAIModels = append(openAIModels, dto.OpenAIModels{
-			Id:      modelName,
-			Object:  "model",
-			Created: 1626777600,
-			OwnedBy: lingyiwanwu.ChannelName,
-		})
-	}
-	for _, modelName := range minimax.ModelList {
-		openAIModels = append(openAIModels, dto.OpenAIModels{
-			Id:      modelName,
-			Object:  "model",
-			Created: 1626777600,
-			OwnedBy: minimax.ChannelName,
-		})
-	}
+	appendOwnedModels(ai360.ChannelName, ai360.ModelList)
+	appendOwnedModels(moonshot.ChannelName, moonshot.ModelList)
+	appendOwnedModels(lingyiwanwu.ChannelName, lingyiwanwu.ModelList)
+	appendOwnedModels(minimax.ChannelName, minimax.ModelList)
 	for modelName, _ := range constant.MidjourneyModel2Action {
 		openAIModels = append(openAIModels, dto.OpenAIModels{
 			Id:      modelName,
@@ -89,6 +68,11 @@ func init() {
 	}
 	channelId2Models = make(map[int][]string)
 	for i := 1; i <= constant.ChannelTypeDummy; i++ {
+		taskAdaptor := relay.GetTaskAdaptor(constant.TaskPlatform(fmt.Sprintf("%d", i)))
+		if taskAdaptor != nil {
+			appendOwnedModels(taskAdaptor.GetChannelName(), taskAdaptor.GetModelList())
+			channelId2Models[i] = lo.Uniq(append(channelId2Models[i], taskAdaptor.GetModelList()...))
+		}
 		apiType, success := common.ChannelType2APIType(i)
 		if !success || apiType == constant.APITypeAIProxyLibrary {
 			continue
@@ -97,8 +81,11 @@ func init() {
 			ChannelType: i,
 		}}
 		adaptor := relay.GetAdaptor(apiType)
+		if adaptor == nil {
+			continue
+		}
 		adaptor.Init(meta)
-		channelId2Models[i] = adaptor.GetModelList()
+		channelId2Models[i] = lo.Uniq(append(channelId2Models[i], adaptor.GetModelList()...))
 	}
 	// 先去重（保留首次出现的，即优先级最高的渠道），再构建 map
 	// 避免后遍历的渠道（如 vertex-ai）覆盖先遍历的渠道（如 claude）的 owned_by

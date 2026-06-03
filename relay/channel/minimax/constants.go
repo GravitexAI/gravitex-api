@@ -20,6 +20,7 @@ var ModelList = []string{
 	"MiniMax-M2.1-highspeed",
 	"MiniMax-M2",
 	"MiniMax-M2.5",
+	"MiniMax/MiniMax-M2.5",
 	"MiniMax-M2.5-highspeed",
 	"image-01",
 	"image-01-live",

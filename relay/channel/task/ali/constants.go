@@ -14,6 +14,12 @@ var ModelList = []string{
 	// wan2.5 系列
 	"wan2.5-t2v-preview", // 万相2.5文生视频 preview
 	"wan2.5-i2v-preview", // 万相2.5 preview（有声视频）推荐
+	// happyhorse 系列
+	"happyhorse-1.0-t2v", // HappyHorse 1.0 文生视频
+	"happyhorse-1.0-i2v", // HappyHorse 1.0 图生视频
+	"happyhorse-1.0-r2v", // HappyHorse 1.0 参考生视频
+	// wan2.1 系列
+	"wan2-1-14b-i2v-250225", // 万相 2.1 14B 图生视频
 	// wan2.2 系列
 	"wan2.2-i2v-flash", // 万相2.2极速版（无声视频）
 	"wan2.2-i2v-plus",  // 万相2.2专业版（无声视频）
