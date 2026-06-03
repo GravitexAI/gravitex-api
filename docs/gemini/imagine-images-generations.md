@@ -15,7 +15,7 @@
 > - 请求转换：`relay/channel/gemini/adaptor.go` → `ConvertImageRequest` → `convertImagineImageRequest`
 > - 响应转换：`relay/channel/gemini/relay-gemini.go` → `GeminiImagineImageHandler`
 > - imagine 模型清单：`setting/model_setting/gemini.go` → `SupportedImagineModels`（管理后台 `Gemini 设置 → 支持图片生成的模型列表` 可改）
-> - 同模型走 `/v1/chat/completions` 入口的规则：见 [`openai-compat.md`](./openai-compat.md)
+> - 同模型走 `/v1/chat/completions` 入口的规则：见 [`openai-compat.md`](Gemini Openai格式对话 API.md)
 
 ---
 
@@ -58,7 +58,7 @@ Content-Type: application/json
 | `size` | `generationConfig.imageConfig.aspectRatio` | 见 §5.1 映射 |
 | `quality` | `generationConfig.imageConfig.imageSize` | 见 §5.2 映射 |
 | `n` | — | imagine 单次调用上游只产出 1 张图，`n` 不会被放大；按上游实际产出张数计费（见 §7） |
-| `response_format` / `style` / `background` / `output_format` / `output_compression` / `partial_images` | — | 当前**不透传**给 Gemini；如需更细粒度的 `imageConfig`，请改走 `/v1/chat/completions` + `extra_body.google.generationConfig.imageConfig`（见 [`openai-compat.md`](./openai-compat.md) §5） |
+| `response_format` / `style` / `background` / `output_format` / `output_compression` / `partial_images` | — | 当前**不透传**给 Gemini；如需更细粒度的 `imageConfig`，请改走 `/v1/chat/completions` + `extra_body.google.generationConfig.imageConfig`（见 [`openai-compat.md`](Gemini Openai格式对话 API.md) §5） |
 
 > 平台默认 `safetySettings` 来自 `setting/model_setting/gemini.go` → `SafetySettings`，会自动写入。`/v1/images/generations` 入口下**不接受** `extra_body`，要覆盖 safety 请走 chat/completions。
 
