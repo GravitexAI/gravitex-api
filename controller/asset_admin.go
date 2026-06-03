@@ -382,8 +382,13 @@ func AdminByteplusCreateAsset(c *gin.Context) {
 	if assetType == "" {
 		assetType = "Image"
 	}
+	// Normalise moderation strategy to BytePlus title-case.
+	moderationStrategy := ""
+	if strings.EqualFold(req.ModerationStrategy, "skip") {
+		moderationStrategy = "Skip"
+	}
 	assetId, err := service.ByteplusCreateAsset(
-		context.Background(), cfg, req.GroupId, req.URL, assetType, req.Name, req.ModerationStrategy,
+		context.Background(), cfg, req.GroupId, req.URL, assetType, req.Name, moderationStrategy,
 	)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("AdminByteplusCreateAsset channel=%d group=%s: %s", req.ChannelId, req.GroupId, err.Error()))

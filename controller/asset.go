@@ -380,9 +380,11 @@ func createAssetByteplus(c *gin.Context) {
 	}
 
 	// Extract moderation strategy; default = "" (BytePlus default review).
+	// Normalise to BytePlus title-case "Skip" so callers can send "skip",
+	// "SKIP", or "Skip" interchangeably.
 	moderationStrategy := ""
-	if req.Moderation != nil {
-		moderationStrategy = req.Moderation.Strategy
+	if req.Moderation != nil && strings.EqualFold(req.Moderation.Strategy, "skip") {
+		moderationStrategy = "Skip"
 	}
 
 	// Stable logPrefix for the rest of the function.
