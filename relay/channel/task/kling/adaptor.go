@@ -344,19 +344,11 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 }
 
 func (a *TaskAdaptor) GetModelList() []string {
-	return []string{
-		"kling-v1",
-		"kling-v1-6",
-		"kling-v2-master",
-		"kling-v3",
-		"kling-v3-pro",
-		"kling-v3-omni",
-		"kling-v3-omni-pro",
-	}
+	return ModelList
 }
 
 func (a *TaskAdaptor) GetChannelName() string {
-	return "kling"
+	return ChannelName
 }
 
 // ============================
