@@ -240,6 +240,39 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 		geminiRequest.GenerationConfig.Seed = common.GetPointer(geminiSeed)
 	}
 
+	// CHZ-PATCH(gemini-param-mapping): Map OpenAI standard parameters to Gemini
+	if textRequest.FrequencyPenalty != nil {
+		fp := float32(*textRequest.FrequencyPenalty)
+		geminiRequest.GenerationConfig.FrequencyPenalty = &fp
+	}
+	if textRequest.PresencePenalty != nil {
+		pp := float32(*textRequest.PresencePenalty)
+		geminiRequest.GenerationConfig.PresencePenalty = &pp
+	}
+	if textRequest.TopK != nil {
+		tk := float64(*textRequest.TopK)
+		geminiRequest.GenerationConfig.TopK = &tk
+	}
+	if textRequest.N != nil && *textRequest.N > 1 {
+		geminiRequest.GenerationConfig.CandidateCount = textRequest.N
+	}
+	if textRequest.LogProbs != nil {
+		geminiRequest.GenerationConfig.ResponseLogprobs = textRequest.LogProbs
+	}
+	if textRequest.TopLogProbs != nil {
+		tlp := int32(*textRequest.TopLogProbs)
+		geminiRequest.GenerationConfig.Logprobs = &tlp
+	}
+	if len(textRequest.Modalities) > 0 && !model_setting.IsGeminiModelSupportImagine(info.UpstreamModelName) {
+		var modalities []string
+		if err := common.Unmarshal(textRequest.Modalities, &modalities); err == nil && len(modalities) > 0 {
+			geminiRequest.GenerationConfig.ResponseModalities = modalities
+		}
+	}
+	if len(textRequest.Audio) > 0 {
+		geminiRequest.GenerationConfig.SpeechConfig = textRequest.Audio
+	}
+
 	attachThoughtSignature := (info.ChannelType == constant.ChannelTypeGemini ||
 		info.ChannelType == constant.ChannelTypeVertexAi) &&
 		model_setting.GetGeminiSettings().FunctionCallThoughtSignatureEnabled
