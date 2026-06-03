@@ -252,6 +252,29 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.POST("/upstream_updates/detect", controller.DetectChannelUpstreamModelUpdates)
 			channelRoute.POST("/upstream_updates/detect_all", controller.DetectAllChannelUpstreamModelUpdates)
 		}
+		// Asset admin — per-channel management of t_user_asset_groups/t_user_assets
+		// and direct BytePlus upstream queries. Requires AdminAuth.
+		assetAdminRoute := apiRouter.Group("/asset-admin")
+		assetAdminRoute.Use(middleware.AdminAuth())
+		{
+			// Local table (t_user_asset_groups / t_user_assets)
+			assetAdminRoute.GET("/groups", controller.AdminListLocalGroups)
+			assetAdminRoute.PUT("/groups/:group_id", controller.AdminUpdateLocalGroup)
+			assetAdminRoute.DELETE("/groups/:group_id", controller.AdminDeleteLocalGroup)
+			assetAdminRoute.GET("/assets", controller.AdminListLocalAssets)
+			assetAdminRoute.PUT("/assets/:virtual_id", controller.AdminUpdateLocalAsset)
+			assetAdminRoute.DELETE("/assets/:virtual_id", controller.AdminDeleteLocalAsset)
+			// BytePlus upstream (direct API calls)
+			assetAdminRoute.GET("/byteplus/groups", controller.AdminByteplusListGroups)
+			assetAdminRoute.POST("/byteplus/groups", controller.AdminByteplusCreateGroup)
+			assetAdminRoute.PUT("/byteplus/groups/:group_id", controller.AdminByteplusUpdateGroup)
+			assetAdminRoute.DELETE("/byteplus/groups/:group_id", controller.AdminByteplusDeleteGroup)
+			assetAdminRoute.GET("/byteplus/assets", controller.AdminByteplusListAssets)
+			assetAdminRoute.GET("/byteplus/assets/:asset_id", controller.AdminByteplusGetAsset)
+			assetAdminRoute.POST("/byteplus/assets", controller.AdminByteplusCreateAsset)
+			assetAdminRoute.PUT("/byteplus/assets/:asset_id", controller.AdminByteplusUpdateAsset)
+			assetAdminRoute.DELETE("/byteplus/assets/:asset_id", controller.AdminByteplusDeleteAsset)
+		}
 		tokenRoute := apiRouter.Group("/token")
 		tokenRoute.Use(middleware.UserAuth())
 		{

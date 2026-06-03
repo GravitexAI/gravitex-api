@@ -246,7 +246,11 @@ func byteplusAPIURL(region, action string) string {
 // ByteplusCreateAsset creates an asset in the specified group and returns the
 // asset ID. ctx is used for structured logging only — the SDK does not accept
 // context for cancellation.
-func ByteplusCreateAsset(ctx context.Context, cfg ByteplusAssetConfig, groupId, imageURL, assetType, name string) (string, error) {
+//
+// moderationStrategy controls content pre-filter behaviour. Pass "Skip" to
+// bypass most non-baseline review policies (requires Secure Mode disabled on
+// the BytePlus console). Any other value (including "") uses the default review.
+func ByteplusCreateAsset(ctx context.Context, cfg ByteplusAssetConfig, groupId, imageURL, assetType, name, moderationStrategy string) (string, error) {
 	if assetType == "" {
 		assetType = "Image"
 	}
@@ -258,6 +262,9 @@ func ByteplusCreateAsset(ctx context.Context, cfg ByteplusAssetConfig, groupId, 
 	}
 	if name != "" {
 		body["Name"] = name
+	}
+	if moderationStrategy == "Skip" {
+		body["Moderation"] = map[string]interface{}{"Strategy": "Skip"}
 	}
 
 	apiURL := byteplusAPIURL(cfg.Region, "CreateAsset")
@@ -342,6 +349,23 @@ func ByteplusDeleteAsset(cfg ByteplusAssetConfig, assetId string) error {
 		"ProjectName": cfg.ProjectName,
 	}
 	_, err := byteplusCall(cfg, "DeleteAsset", body)
+	return err
+}
+
+// ByteplusUpdateAsset updates the Name of an existing asset.
+// Only non-empty name is sent; ProjectName is always included.
+func ByteplusUpdateAsset(cfg ByteplusAssetConfig, assetId, name string) error {
+	if assetId == "" {
+		return fmt.Errorf("ByteplusUpdateAsset: empty assetId")
+	}
+	body := map[string]interface{}{
+		"Id":          assetId,
+		"ProjectName": cfg.ProjectName,
+	}
+	if name != "" {
+		body["Name"] = name
+	}
+	_, err := byteplusCall(cfg, "UpdateAsset", body)
 	return err
 }
 

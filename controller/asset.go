@@ -167,11 +167,18 @@ var (
 	}
 )
 
+// createAssetModerationRequest mirrors the BytePlus Moderation object.
+// Only Strategy is currently used; additional fields can be added later.
+type createAssetModerationRequest struct {
+	Strategy string `json:"strategy"`
+}
+
 type createAssetRequest struct {
-	URL       string `json:"url" binding:"required"`
-	GroupId   string `json:"group_id" binding:"required"`
-	AssetType string `json:"asset_type"` // "Image" | "Video" | "Audio"; case-insensitive; defaults to "Image"
-	Name      string `json:"name"`
+	URL        string                         `json:"url" binding:"required"`
+	GroupId    string                         `json:"group_id" binding:"required"`
+	AssetType  string                         `json:"asset_type"` // "Image" | "Video" | "Audio"; case-insensitive; defaults to "Image"
+	Name       string                         `json:"name"`
+	Moderation *createAssetModerationRequest  `json:"moderation,omitempty"`
 }
 
 // normalizeAssetType maps user-supplied / inferred asset type to one of the
@@ -372,10 +379,16 @@ func createAssetByteplus(c *gin.Context) {
 		return
 	}
 
+	// Extract moderation strategy; default = "" (BytePlus default review).
+	moderationStrategy := ""
+	if req.Moderation != nil {
+		moderationStrategy = req.Moderation.Strategy
+	}
+
 	// Stable logPrefix for the rest of the function.
 	logPrefix := fmt.Sprintf("[CreateAsset][uid=%d][channel=%d][group=%s][type=%s]", userId, ch.Id, req.GroupId, assetType)
 
-	logger.LogInfo(ctx, fmt.Sprintf("%s START oss_staging_enabled=%v", logPrefix, service.IsAssetOSSStagingEnabled()))
+	logger.LogInfo(ctx, fmt.Sprintf("%s START oss_staging_enabled=%v moderation=%s", logPrefix, service.IsAssetOSSStagingEnabled(), moderationStrategy))
 
 	// ── Step 1: OSS staging ─────────────────────────────────────────────────
 	// 30 s timeout. On failure, fall back to the original user URL so Seedance
@@ -402,7 +415,7 @@ func createAssetByteplus(c *gin.Context) {
 	logger.LogInfo(ctx, fmt.Sprintf("%s Seedance CreateAsset START upstream_url=%s oss_staged=%v",
 		logPrefix, gravitexUrl, ossStaged))
 
-	assetId, err := service.ByteplusCreateAsset(ctx, cfg, req.GroupId, gravitexUrl, assetType, req.Name)
+	assetId, err := service.ByteplusCreateAsset(ctx, cfg, req.GroupId, gravitexUrl, assetType, req.Name, moderationStrategy)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("%s Seedance CreateAsset FAILED: %s", logPrefix, err.Error()))
 		recordAssetErrorLog(c, userId, tokenId, ch.Id, fmt.Sprintf("Seedance CreateAsset failed (%s): %s", assetType, err.Error()))
@@ -413,16 +426,17 @@ func createAssetByteplus(c *gin.Context) {
 
 	// ── Step 3: persist to local DB ─────────────────────────────────────────
 	userAsset := &model.UserAsset{
-		UserId:      userId,
-		TokenId:     tokenId,
-		ChannelId:   ch.Id,
-		GroupId:     req.GroupId,
-		VirtualId:   assetId,
-		AssetUrl:    "asset://" + assetId,
-		Filename:    req.Name,
-		AssetType:   assetType,
-		Status:      "pending",
-		GravitexUrl: gravitexUrl,
+		UserId:         userId,
+		TokenId:        tokenId,
+		ChannelId:      ch.Id,
+		GroupId:        req.GroupId,
+		VirtualId:      assetId,
+		AssetUrl:       "asset://" + assetId,
+		Filename:       req.Name,
+		AssetType:      assetType,
+		Status:         "pending",
+		GravitexUrl:    gravitexUrl,
+		SkipModeration: moderationStrategy == "Skip",
 	}
 	if dbErr := model.InsertUserAsset(userAsset); dbErr != nil {
 		logger.LogError(ctx, fmt.Sprintf("%s DB insert FAILED: %s", logPrefix, dbErr.Error()))

@@ -20,10 +20,11 @@ type UserAsset struct {
 	// upstream round-trip per asset.
 	AssetType string `json:"asset_type" gorm:"type:varchar(16);default:'Image';index"`
 	SizeBytes int64  `json:"size_bytes"`
-	Status    string `json:"status" gorm:"type:varchar(20);default:'pending'"`
-	ErrorMsg  string `json:"error_msg" gorm:"type:text"`
-	CreatedAt int64  `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt int64  `json:"updated_at" gorm:"autoUpdateTime"`
+	Status         string `json:"status" gorm:"type:varchar(20);default:'pending'"`
+	ErrorMsg       string `json:"error_msg" gorm:"type:text"`
+	SkipModeration bool   `json:"skip_moderation" gorm:"default:false"`
+	CreatedAt      int64  `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt      int64  `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 func (UserAsset) TableName() string {
@@ -159,6 +160,46 @@ func GetAssetChannelIdByVirtualIds(userId int, virtualIds []string) (map[string]
 // MigrateUserAssetChannelId sets the default channel_id for legacy assets (channel_id=0).
 func MigrateUserAssetChannelId(defaultChannelId int) error {
 	return DB.Model(&UserAsset{}).Where("channel_id = 0").Update("channel_id", defaultChannelId).Error
+}
+
+// AdminAssetQuery holds parameters for admin-side paginated asset queries.
+type AdminAssetQuery struct {
+	ChannelId int
+	GroupId   string
+	Status    string
+	Page      int
+	PageSize  int
+}
+
+// GetUserAssetsByChannelIdPaged returns assets for a channel with optional
+// group / status filters; ordered by created_at DESC. Page is 1-indexed.
+func GetUserAssetsByChannelIdPaged(q AdminAssetQuery) ([]UserAsset, int64, error) {
+	if q.Page < 1 {
+		q.Page = 1
+	}
+	if q.PageSize < 1 {
+		q.PageSize = 20
+	}
+	db := DB.Model(&UserAsset{}).Where("channel_id = ?", q.ChannelId)
+	if q.GroupId != "" {
+		db = db.Where("group_id = ?", q.GroupId)
+	}
+	if q.Status != "" {
+		db = db.Where("status = ?", q.Status)
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var assets []UserAsset
+	offset := (q.Page - 1) * q.PageSize
+	err := db.Order("created_at DESC").Offset(offset).Limit(q.PageSize).Find(&assets).Error
+	return assets, total, err
+}
+
+// UpdateUserAssetFilename updates only the Filename field of an asset by its virtual_id.
+func UpdateUserAssetFilename(virtualId, filename string) error {
+	return DB.Model(&UserAsset{}).Where("virtual_id = ?", virtualId).Update("filename", filename).Error
 }
 
 // AssetModelPrefix is the model name prefix used to identify channels that support the asset API.
