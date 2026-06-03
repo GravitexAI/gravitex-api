@@ -18,6 +18,11 @@ spec:
         image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway:1.0.7
         ports:
         - containerPort: 3000
+        envFrom:
+        - configMapRef:
+            name: api-gateway-config
+        - secretRef:
+            name: api-gateway-secret
         resources:
           requests:
             cpu: "500m"
