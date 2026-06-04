@@ -49,6 +49,7 @@ const (
 	LogTypeError     = 5
 	LogTypeRefund    = 6
 	LogTypeRetryFail = 7 // 重试（中间失败，后续有重试）
+	LogTypeTest      = 8
 )
 
 var logTypeNames = map[int]string{
@@ -60,6 +61,7 @@ var logTypeNames = map[int]string{
 	LogTypeError:     "error",
 	LogTypeRefund:    "refund",
 	LogTypeRetryFail: "retry",
+	LogTypeTest:      "test",
 }
 
 // CreateLog 统一的日志写入入口，写入 DB 并打印完整日志信息
@@ -139,6 +141,30 @@ func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo m
 		log.Other = common.MapToJsonStr(other)
 	}
 	if err := LOG_DB.Create(log).Error; err != nil {
+		common.SysLog("failed to record log: " + err.Error())
+	}
+}
+
+func RecordLogWithAdminInfoAndQuota(userId int, logType int, content string, quota int, adminInfo map[string]interface{}) {
+	if logType == LogTypeConsume && !common.LogConsumeEnabled {
+		return
+	}
+	username, _ := GetUsernameById(userId, false)
+	log := &Log{
+		UserId:    userId,
+		Username:  username,
+		CreatedAt: common.GetTimestamp(),
+		Type:      logType,
+		Content:   content,
+		Quota:     quota,
+	}
+	if len(adminInfo) > 0 {
+		other := map[string]interface{}{
+			"admin_info": adminInfo,
+		}
+		log.Other = common.MapToJsonStr(other)
+	}
+	if err := CreateLog(log); err != nil {
 		common.SysLog("failed to record log: " + err.Error())
 	}
 }

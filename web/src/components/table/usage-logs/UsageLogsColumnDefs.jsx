@@ -161,6 +161,12 @@ function renderType(type, t) {
           {t('重试')}
         </Tag>
       );
+    case 8:
+      return (
+        <Tag color='blue' shape='circle'>
+          {t('测试金')}
+        </Tag>
+      );
     default:
       return (
         <Tag color='grey' shape='circle'>

@@ -68,6 +68,7 @@ const EditUserModal = (props) => {
   const [adjustQuotaLocal, setAdjustQuotaLocal] = useState('');
   const [adjustAmountLocal, setAdjustAmountLocal] = useState('');
   const [adjustMode, setAdjustMode] = useState('add');
+  const [adjustType, setAdjustType] = useState(8);
   const [adjustLoading, setAdjustLoading] = useState(false);
   const isMobile = useIsMobile();
   const [groupOptions, setGroupOptions] = useState([]);
@@ -173,11 +174,16 @@ const EditUserModal = (props) => {
     if (adjustMode === 'override' && (adjustQuotaLocal === '' || adjustQuotaLocal == null)) return;
     setAdjustLoading(true);
     try {
-      const res = await API.post('/api/user/manage', {
-        id: userId,
-        action: 'add_quota',
-        mode: adjustMode,
-        value: adjustMode === 'override' ? quotaVal : Math.abs(quotaVal),
+      const formValues = formApiRef.current?.getValues() || {};
+      const res = await API.put('/api/user/', {
+        id: String(userId),
+        username: formValues.username || '',
+        display_name: formValues.display_name || '',
+        group: formValues.group || 'default',
+        remark: formValues.remark || '',
+        quota: adjustMode === 'override' ? quotaVal : Math.abs(quotaVal),
+        type: adjustType,
+        operation: adjustMode === 'add' ? 0 : adjustMode === 'subtract' ? 1 : 2,
       });
       const { success, message } = res.data;
       if (success) {
@@ -185,6 +191,7 @@ const EditUserModal = (props) => {
         setAdjustModalOpen(false);
         setAdjustQuotaLocal('');
         setAdjustAmountLocal('');
+        setAdjustType(8);
         const userRes = await API.get(`/api/user/${userId}`);
         if (userRes.data.success) {
           const data = userRes.data.data;
@@ -470,6 +477,7 @@ const EditUserModal = (props) => {
           setAdjustQuotaLocal('');
           setAdjustAmountLocal('');
           setAdjustMode('add');
+          setAdjustType(8);
         }}
         confirmLoading={adjustLoading}
         closable={null}
@@ -484,6 +492,20 @@ const EditUserModal = (props) => {
           <Text type='secondary' className='block mb-2'>
             {getPreviewText()}
           </Text>
+        </div>
+        <div className='mb-3'>
+          <div className='mb-1'>
+            <Text size='small'>{t('金额类型')}</Text>
+          </div>
+          <RadioGroup
+            type='button'
+            value={adjustType}
+            onChange={(e) => setAdjustType(Number(e.target.value))}
+            style={{ width: '100%' }}
+          >
+            <Radio value={8}>{t('测试金')}</Radio>
+            <Radio value={3}>{t('信控')}</Radio>
+          </RadioGroup>
         </div>
         <div className='mb-3'>
           <div className='mb-1'>
