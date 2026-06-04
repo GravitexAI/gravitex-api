@@ -659,7 +659,7 @@ func getUserAmountTypeText(logType int) string {
 	case model.LogTypeTest:
 		return "测试金"
 	case model.LogTypeManage:
-		return "管理"
+		return "信控金"
 	default:
 		return "额度"
 	}
