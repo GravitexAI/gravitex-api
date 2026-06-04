@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,10 +27,20 @@ type quotaWarningNotifyResponse struct {
 	Msg  string `json:"msg"`
 }
 
+const quotaWarningNotifyRedisKeyPrefix = "quota:warning:threshold:"
+
 func SendQuotaWarningNotifyToAPIEnd(userID int, notifyType string, remainingQuota int64, quotaWarningThreshold int64) error {
 	api := strings.TrimRight(strings.TrimSpace(os.Getenv("GRAVITEX_API_END")), "/")
 	if api == "" {
 		return fmt.Errorf("GRAVITEX_API_END not set")
+	}
+	redisKey := getQuotaWarningNotifyRedisKey(userID)
+	locked, err := acquireQuotaWarningNotifyLock(redisKey)
+	if err != nil {
+		return err
+	}
+	if !locked {
+		return nil
 	}
 
 	reqBody := quotaWarningNotifyRequest{
@@ -62,16 +73,19 @@ func SendQuotaWarningNotifyToAPIEnd(userID int, notifyType string, remainingQuot
 
 	resp, err := client.Do(req)
 	if err != nil {
+		releaseQuotaWarningNotifyLock(redisKey)
 		return fmt.Errorf("call quota warning notify api: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		releaseQuotaWarningNotifyLock(redisKey)
 		return fmt.Errorf("read quota warning notify response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		releaseQuotaWarningNotifyLock(redisKey)
 		return fmt.Errorf("quota warning notify http %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -81,13 +95,39 @@ func SendQuotaWarningNotifyToAPIEnd(userID int, notifyType string, remainingQuot
 
 	var result quotaWarningNotifyResponse
 	if err := common.Unmarshal(body, &result); err != nil {
+		releaseQuotaWarningNotifyLock(redisKey)
 		return fmt.Errorf("parse quota warning notify response: %w", err)
 	}
 	if result.Code != 200 {
+		releaseQuotaWarningNotifyLock(redisKey)
 		return fmt.Errorf("quota warning notify failed: %s", result.Msg)
 	}
 
 	return nil
+}
+
+func getQuotaWarningNotifyRedisKey(userID int) string {
+	return fmt.Sprintf("%s%d", quotaWarningNotifyRedisKeyPrefix, userID)
+}
+
+func acquireQuotaWarningNotifyLock(redisKey string) (bool, error) {
+	if !common.RedisEnabled || common.RDB == nil {
+		return true, nil
+	}
+	ok, err := common.RDB.SetNX(context.Background(), redisKey, "1", 24*time.Hour).Result()
+	if err != nil {
+		return false, fmt.Errorf("set quota warning redis key: %w", err)
+	}
+	return ok, nil
+}
+
+func releaseQuotaWarningNotifyLock(redisKey string) {
+	if !common.RedisEnabled || common.RDB == nil {
+		return
+	}
+	if err := common.RedisDel(redisKey); err != nil {
+		common.SysError(fmt.Sprintf("failed to release quota warning redis key: %s", err.Error()))
+	}
 }
 
 func buildRuoYiBearerToken(userID int) (string, error) {
