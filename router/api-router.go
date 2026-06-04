@@ -182,6 +182,13 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.POST("/migrate_console_setting", controller.MigrateConsoleSetting) // 用于迁移检测的旧键，下个版本会删除
 		}
 
+		operLogRoute := apiRouter.Group("/oper-log")
+		operLogRoute.Use(middleware.RootAuth())
+		{
+			operLogRoute.GET("/", controller.ListOperLogs)
+			operLogRoute.POST("/", controller.CreateOperLog)
+		}
+
 		// Custom OAuth provider management (root only)
 		customOAuthRoute := apiRouter.Group("/custom-oauth-provider")
 		customOAuthRoute.Use(middleware.RootAuth())

@@ -36,6 +36,8 @@ import {
   verifyJSON,
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
+import OperLogConfirmModal, { fieldLabel } from '../../../components/oper-log/OperLogConfirmModal';
+import { createOperLog } from '../../../components/oper-log/operLogApi';
 
 export default function ModelRatioSettings(props) {
   const [loading, setLoading] = useState(false);
@@ -53,64 +55,73 @@ export default function ModelRatioSettings(props) {
     VideoCompletionRatio: '',
     ImageModelPricePerImage: '',
     VideoModelPricePerSecond: '',
+    'billing_setting.billing_mode': '',
+    'billing_setting.billing_expr': '',
     ExposeRatioEnabled: false,
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
   const { t } = useTranslation();
 
+  // 操作日志弹窗 state
+  const [logModal, setLogModal] = useState({ visible: false, changes: [], updateArray: [] });
+
+  // 实际执行保存（经日志弹窗确认或跳过后调用）
+  // logRemark/logContent 为 null 表示运维选择「不记录」
+  async function doSave(updateArray, logRemark, logContent) {
+    const requestQueue = updateArray.map((item) => {
+      const value =
+        typeof inputs[item.key] === 'boolean'
+          ? String(inputs[item.key])
+          : inputs[item.key];
+      return API.put('/api/option/', { key: item.key, value });
+    });
+
+    setLoading(true);
+    try {
+      const res = await Promise.all(requestQueue);
+      if (res.includes(undefined)) {
+        return showError(
+          requestQueue.length > 1 ? t('部分保存失败，请重试') : t('保存失败'),
+        );
+      }
+      for (let i = 0; i < res.length; i++) {
+        if (!res[i].data.success) {
+          return showError(res[i].data.message);
+        }
+      }
+      showSuccess(t('保存成功'));
+      if (logRemark !== null) {
+        await createOperLog({ oper_type: '模型价格', content: logContent, remark: logRemark });
+      }
+      props.refresh();
+    } catch (error) {
+      console.error('Unexpected error:', error);
+      showError(t('保存失败，请重试'));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function onSubmit() {
     try {
-      await refForm.current
-        .validate()
-        .then(() => {
-          const updateArray = compareObjects(inputs, inputsRow);
-          if (!updateArray.length)
-            return showWarning(t('你似乎并没有修改什么'));
-
-          const requestQueue = updateArray.map((item) => {
-            const value =
-              typeof inputs[item.key] === 'boolean'
-                ? String(inputs[item.key])
-                : inputs[item.key];
-            return API.put('/api/option/', { key: item.key, value });
-          });
-
-          setLoading(true);
-          Promise.all(requestQueue)
-            .then((res) => {
-              if (res.includes(undefined)) {
-                return showError(
-                  requestQueue.length > 1
-                    ? t('部分保存失败，请重试')
-                    : t('保存失败'),
-                );
-              }
-
-              for (let i = 0; i < res.length; i++) {
-                if (!res[i].data.success) {
-                  return showError(res[i].data.message);
-                }
-              }
-
-              showSuccess(t('保存成功'));
-              props.refresh();
-            })
-            .catch((error) => {
-              console.error('Unexpected error:', error);
-              showError(t('保存失败，请重试'));
-            })
-            .finally(() => {
-              setLoading(false);
-            });
-        })
-        .catch(() => {
-          showError(t('请检查输入'));
-        });
-    } catch (error) {
+      await refForm.current.validate();
+    } catch {
       showError(t('请检查输入'));
-      console.error(error);
+      return;
     }
+
+    const updateArray = compareObjects(inputs, inputsRow);
+    if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
+
+    // 构建变更列表供弹窗展示
+    const changes = updateArray.map((item) => ({
+      key: item.key,
+      oldVal: inputsRow[item.key],
+      newVal: inputs[item.key],
+    }));
+    const defaultRemark = `修改了 ${changes.map((i) => fieldLabel(i.key)).join('、')}`;
+    setLogModal({ visible: true, changes, updateArray, defaultRemark });
   }
 
   async function resetModelRatio() {
@@ -455,6 +466,58 @@ export default function ModelRatioSettings(props) {
           </Col>
         </Row>
         <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('计费模式（阶梯计费）')}
+              extraText={t(
+                '阶梯/表达式计费模式映射，键为模型名称，值为 tiered_expr。一般由可视化编辑器自动生成，手动修改请谨慎',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，例如：{"gpt-4o": "tiered_expr"}',
+              )}
+              field={'billing_setting.billing_mode'}
+              autosize={{ minRows: 4, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, 'billing_setting.billing_mode': value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('计费表达式（阶梯计费）')}
+              extraText={t(
+                '阶梯/表达式计费的具体表达式，键为模型名称，值为计费表达式。一般由可视化编辑器自动生成，手动修改请谨慎',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，键为模型名称，值为计费表达式',
+              )}
+              field={'billing_setting.billing_expr'}
+              autosize={{ minRows: 4, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, 'billing_setting.billing_expr': value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
           <Col span={16}>
             <Form.Switch
               label={t('暴露倍率接口')}
@@ -478,6 +541,22 @@ export default function ModelRatioSettings(props) {
           <Button type={'danger'}>{t('重置模型倍率')}</Button>
         </Popconfirm>
       </Space>
+
+      <OperLogConfirmModal
+        visible={logModal.visible}
+        operType='模型价格'
+        changes={logModal.changes}
+        defaultRemark={logModal.defaultRemark}
+        onConfirm={(remark, content) => {
+          setLogModal((s) => ({ ...s, visible: false }));
+          doSave(logModal.updateArray, remark, content);
+        }}
+        onSkip={() => {
+          setLogModal((s) => ({ ...s, visible: false }));
+          doSave(logModal.updateArray, null, null);
+        }}
+        onCancel={() => setLogModal((s) => ({ ...s, visible: false }))}
+      />
     </Spin>
   );
 }

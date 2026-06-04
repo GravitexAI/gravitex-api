@@ -47,6 +47,8 @@ import GroupTable from './components/GroupTable';
 import AutoGroupList from './components/AutoGroupList';
 import GroupGroupRatioRules from './components/GroupGroupRatioRules';
 import GroupSpecialUsableRules from './components/GroupSpecialUsableRules';
+import OperLogConfirmModal, { fieldLabel } from '../../../components/oper-log/OperLogConfirmModal';
+import { createOperLog } from '../../../components/oper-log/operLogApi';
 
 const { Text, Title, Paragraph } = Typography;
 
@@ -91,6 +93,46 @@ export default function GroupRatioSettings(props) {
     return Object.keys(ratioMap);
   }, [inputs.GroupRatio]);
 
+  // 操作日志弹窗 state
+  const [logModal, setLogModal] = useState({ visible: false, changes: [], updateArray: [], defaultRemark: '' });
+
+  // 实际执行保存（经日志弹窗确认或跳过后调用）
+  // logRemark/logContent 为 null 表示运维选择「不记录」
+  async function doSave(updateArray, logRemark, logContent) {
+    const requestQueue = updateArray.map((item) => {
+      const value =
+        typeof inputs[item.key] === 'boolean'
+          ? String(inputs[item.key])
+          : inputs[item.key];
+      return API.put('/api/option/', { key: item.key, value });
+    });
+
+    setLoading(true);
+    try {
+      const res = await Promise.all(requestQueue);
+      if (res.includes(undefined)) {
+        return showError(
+          requestQueue.length > 1 ? t('部分保存失败，请重试') : t('保存失败'),
+        );
+      }
+      for (let i = 0; i < res.length; i++) {
+        if (!res[i].data.success) {
+          return showError(res[i].data.message);
+        }
+      }
+      showSuccess(t('保存成功'));
+      if (logRemark !== null) {
+        await createOperLog({ oper_type: '用户分组', content: logContent, remark: logRemark });
+      }
+      props.refresh();
+    } catch (error) {
+      console.error('Unexpected error:', error);
+      showError(t('保存失败，请重试'));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function onSubmit() {
     if (editMode === 'manual') {
       try {
@@ -106,37 +148,13 @@ export default function GroupRatioSettings(props) {
       return showWarning(t('你似乎并没有修改什么'));
     }
 
-    const requestQueue = updateArray.map((item) => {
-      const value =
-        typeof inputs[item.key] === 'boolean'
-          ? String(inputs[item.key])
-          : inputs[item.key];
-      return API.put('/api/option/', { key: item.key, value });
-    });
-
-    setLoading(true);
-    try {
-      const res = await Promise.all(requestQueue);
-      if (res.includes(undefined)) {
-        return showError(
-          requestQueue.length > 1
-            ? t('部分保存失败，请重试')
-            : t('保存失败'),
-        );
-      }
-      for (let i = 0; i < res.length; i++) {
-        if (!res[i].data.success) {
-          return showError(res[i].data.message);
-        }
-      }
-      showSuccess(t('保存成功'));
-      props.refresh();
-    } catch (error) {
-      console.error('Unexpected error:', error);
-      showError(t('保存失败，请重试'));
-    } finally {
-      setLoading(false);
-    }
+    const changes = updateArray.map((item) => ({
+      key: item.key,
+      oldVal: inputsRow[item.key],
+      newVal: inputs[item.key],
+    }));
+    const defaultRemark = `修改了 ${changes.map((i) => fieldLabel(i.key)).join('、')}`;
+    setLogModal({ visible: true, changes, updateArray, defaultRemark });
   }
 
   useEffect(() => {
@@ -753,6 +771,22 @@ export default function GroupRatioSettings(props) {
         {t('保存分组相关设置')}
       </Button>
       {renderGuide()}
+
+      <OperLogConfirmModal
+        visible={logModal.visible}
+        operType='用户分组'
+        changes={logModal.changes}
+        defaultRemark={logModal.defaultRemark}
+        onConfirm={(remark, content) => {
+          setLogModal((s) => ({ ...s, visible: false }));
+          doSave(logModal.updateArray, remark, content);
+        }}
+        onSkip={() => {
+          setLogModal((s) => ({ ...s, visible: false }));
+          doSave(logModal.updateArray, null, null);
+        }}
+        onCancel={() => setLogModal((s) => ({ ...s, visible: false }))}
+      />
     </Spin>
   );
 }

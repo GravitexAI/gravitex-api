@@ -288,6 +288,8 @@ func migrateDB() error {
 		&UserOAuthBinding{},
 		&UserAsset{},
 		&UserAssetGroup{},
+		&OperLog{},
+		&OperLogPushJobLog{},
 	)
 	if err != nil {
 		return err
@@ -340,6 +342,8 @@ func migrateDBFast() error {
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
 		{&UserAsset{}, "UserAsset"},
 		{&UserAssetGroup{}, "UserAssetGroup"},
+		{&OperLog{}, "OperLog"},
+		{&OperLogPushJobLog{}, "OperLogPushJobLog"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
