@@ -36,7 +36,7 @@ import {
   verifyJSON,
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
-import OperLogConfirmModal from '../../../components/oper-log/OperLogConfirmModal';
+import OperLogConfirmModal, { fieldLabel } from '../../../components/oper-log/OperLogConfirmModal';
 import { createOperLog } from '../../../components/oper-log/operLogApi';
 
 export default function ModelRatioSettings(props) {
@@ -55,6 +55,8 @@ export default function ModelRatioSettings(props) {
     VideoCompletionRatio: '',
     ImageModelPricePerImage: '',
     VideoModelPricePerSecond: '',
+    'billing_setting.billing_mode': '',
+    'billing_setting.billing_expr': '',
     ExposeRatioEnabled: false,
   });
   const refForm = useRef();
@@ -65,7 +67,8 @@ export default function ModelRatioSettings(props) {
   const [logModal, setLogModal] = useState({ visible: false, changes: [], updateArray: [] });
 
   // 实际执行保存（经日志弹窗确认或跳过后调用）
-  async function doSave(updateArray, logRemark) {
+  // logRemark/logContent 为 null 表示运维选择「不记录」
+  async function doSave(updateArray, logRemark, logContent) {
     const requestQueue = updateArray.map((item) => {
       const value =
         typeof inputs[item.key] === 'boolean'
@@ -88,10 +91,8 @@ export default function ModelRatioSettings(props) {
         }
       }
       showSuccess(t('保存成功'));
-      // 写操作日志（logRemark 为 null 表示运维选择「不记录」）
       if (logRemark !== null) {
-        const content = updateArray.map((item) => item.key).join(', ');
-        await createOperLog({ oper_type: '模型价格', content, remark: logRemark });
+        await createOperLog({ oper_type: '模型价格', content: logContent, remark: logRemark });
       }
       props.refresh();
     } catch (error) {
@@ -119,7 +120,7 @@ export default function ModelRatioSettings(props) {
       oldVal: inputsRow[item.key],
       newVal: inputs[item.key],
     }));
-    const defaultRemark = `修改了 ${updateArray.map((i) => i.key).join('、')}`;
+    const defaultRemark = `修改了 ${changes.map((i) => fieldLabel(i.key)).join('、')}`;
     setLogModal({ visible: true, changes, updateArray, defaultRemark });
   }
 
@@ -465,6 +466,58 @@ export default function ModelRatioSettings(props) {
           </Col>
         </Row>
         <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('计费模式（阶梯计费）')}
+              extraText={t(
+                '阶梯/表达式计费模式映射，键为模型名称，值为 tiered_expr。一般由可视化编辑器自动生成，手动修改请谨慎',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，例如：{"gpt-4o": "tiered_expr"}',
+              )}
+              field={'billing_setting.billing_mode'}
+              autosize={{ minRows: 4, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, 'billing_setting.billing_mode': value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('计费表达式（阶梯计费）')}
+              extraText={t(
+                '阶梯/表达式计费的具体表达式，键为模型名称，值为计费表达式。一般由可视化编辑器自动生成，手动修改请谨慎',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，键为模型名称，值为计费表达式',
+              )}
+              field={'billing_setting.billing_expr'}
+              autosize={{ minRows: 4, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, 'billing_setting.billing_expr': value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
           <Col span={16}>
             <Form.Switch
               label={t('暴露倍率接口')}
@@ -494,13 +547,13 @@ export default function ModelRatioSettings(props) {
         operType='模型价格'
         changes={logModal.changes}
         defaultRemark={logModal.defaultRemark}
-        onConfirm={(remark) => {
+        onConfirm={(remark, content) => {
           setLogModal((s) => ({ ...s, visible: false }));
-          doSave(logModal.updateArray, remark);
+          doSave(logModal.updateArray, remark, content);
         }}
         onSkip={() => {
           setLogModal((s) => ({ ...s, visible: false }));
-          doSave(logModal.updateArray, null);
+          doSave(logModal.updateArray, null, null);
         }}
         onCancel={() => setLogModal((s) => ({ ...s, visible: false }))}
       />

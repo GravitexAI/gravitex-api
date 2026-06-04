@@ -47,7 +47,7 @@ import GroupTable from './components/GroupTable';
 import AutoGroupList from './components/AutoGroupList';
 import GroupGroupRatioRules from './components/GroupGroupRatioRules';
 import GroupSpecialUsableRules from './components/GroupSpecialUsableRules';
-import OperLogConfirmModal from '../../../components/oper-log/OperLogConfirmModal';
+import OperLogConfirmModal, { fieldLabel } from '../../../components/oper-log/OperLogConfirmModal';
 import { createOperLog } from '../../../components/oper-log/operLogApi';
 
 const { Text, Title, Paragraph } = Typography;
@@ -97,7 +97,8 @@ export default function GroupRatioSettings(props) {
   const [logModal, setLogModal] = useState({ visible: false, changes: [], updateArray: [], defaultRemark: '' });
 
   // 实际执行保存（经日志弹窗确认或跳过后调用）
-  async function doSave(updateArray, logRemark) {
+  // logRemark/logContent 为 null 表示运维选择「不记录」
+  async function doSave(updateArray, logRemark, logContent) {
     const requestQueue = updateArray.map((item) => {
       const value =
         typeof inputs[item.key] === 'boolean'
@@ -121,8 +122,7 @@ export default function GroupRatioSettings(props) {
       }
       showSuccess(t('保存成功'));
       if (logRemark !== null) {
-        const content = updateArray.map((i) => i.key).join(', ');
-        await createOperLog({ oper_type: '用户分组', content, remark: logRemark });
+        await createOperLog({ oper_type: '用户分组', content: logContent, remark: logRemark });
       }
       props.refresh();
     } catch (error) {
@@ -153,7 +153,7 @@ export default function GroupRatioSettings(props) {
       oldVal: inputsRow[item.key],
       newVal: inputs[item.key],
     }));
-    const defaultRemark = `修改了 ${updateArray.map((i) => i.key).join('、')}`;
+    const defaultRemark = `修改了 ${changes.map((i) => fieldLabel(i.key)).join('、')}`;
     setLogModal({ visible: true, changes, updateArray, defaultRemark });
   }
 
@@ -777,13 +777,13 @@ export default function GroupRatioSettings(props) {
         operType='用户分组'
         changes={logModal.changes}
         defaultRemark={logModal.defaultRemark}
-        onConfirm={(remark) => {
+        onConfirm={(remark, content) => {
           setLogModal((s) => ({ ...s, visible: false }));
-          doSave(logModal.updateArray, remark);
+          doSave(logModal.updateArray, remark, content);
         }}
         onSkip={() => {
           setLogModal((s) => ({ ...s, visible: false }));
-          doSave(logModal.updateArray, null);
+          doSave(logModal.updateArray, null, null);
         }}
         onCancel={() => setLogModal((s) => ({ ...s, visible: false }))}
       />

@@ -1,9 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Modal,
   Space,
-  Table,
   Tag,
   TextArea,
   Typography,
@@ -16,9 +15,10 @@ const OPER_TYPE_COLORS = {
   '模型价格': 'blue',
   '用户分组': 'green',
   '渠道配置': 'orange',
+  '工具定价': 'purple',
 };
 
-const FIELD_LABELS = {
+export const FIELD_LABELS = {
   ModelPrice: '模型固定价格',
   ModelRatio: '模型倍率',
   CacheRatio: '提示缓存倍率',
@@ -33,6 +33,9 @@ const FIELD_LABELS = {
   ImageModelPricePerImage: '按张计费每张价格',
   VideoModelPricePerSecond: '按秒计费每秒价格',
   ExposeRatioEnabled: '暴露倍率接口',
+  'billing_setting.billing_mode': '计费模式(阶梯计费)',
+  'billing_setting.billing_expr': '计费表达式(阶梯计费)',
+  'tool_price_setting.prices': '工具调用价格',
   GroupRatio: '分组倍率',
   UserUsableGroups: '用户可选分组',
   GroupGroupRatio: '分组特殊倍率',
@@ -41,23 +44,92 @@ const FIELD_LABELS = {
   DefaultUseAutoGroup: '默认使用auto分组',
 };
 
-function truncate(str, max = 120) {
-  if (!str) return '';
-  const s = String(str);
-  return s.length > max ? s.slice(0, max) + '…' : s;
+export function fieldLabel(key) {
+  return FIELD_LABELS[key] || key;
+}
+
+function toStr(v) {
+  if (v === undefined || v === null || v === '') return '(空)';
+  return String(v);
+}
+
+// 尝试把字符串解析为「纯对象」（非数组），失败返回 null
+function tryParseObject(str) {
+  if (typeof str !== 'string') return null;
+  const s = str.trim();
+  if (!s || s === '(空)') return {};
+  try {
+    const v = JSON.parse(s);
+    if (v && typeof v === 'object' && !Array.isArray(v)) return v;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// 对比新旧对象，仅保留发生变化（新增/删除/修改）的键
+function diffObjects(oldObj, newObj) {
+  const oldDiff = {};
+  const newDiff = {};
+  const keys = new Set([...Object.keys(oldObj), ...Object.keys(newObj)]);
+  keys.forEach((k) => {
+    const inOld = Object.prototype.hasOwnProperty.call(oldObj, k);
+    const inNew = Object.prototype.hasOwnProperty.call(newObj, k);
+    if (inOld && inNew) {
+      if (JSON.stringify(oldObj[k]) !== JSON.stringify(newObj[k])) {
+        oldDiff[k] = oldObj[k];
+        newDiff[k] = newObj[k];
+      }
+    } else if (inOld) {
+      oldDiff[k] = oldObj[k]; // 删除的键
+    } else {
+      newDiff[k] = newObj[k]; // 新增的键
+    }
+  });
+  return { oldDiff, newDiff };
+}
+
+// 将单个变更项精简为「仅改动部分」：
+//   - 新旧都是 JSON 对象时，只展示发生变化的键
+//   - 否则原样返回
+function refineChange(change) {
+  const oldObj = tryParseObject(change.oldVal);
+  const newObj = tryParseObject(change.newVal);
+  if (oldObj && newObj) {
+    const { oldDiff, newDiff } = diffObjects(oldObj, newObj);
+    return {
+      ...change,
+      oldVal: JSON.stringify(oldDiff, null, 2),
+      newVal: JSON.stringify(newDiff, null, 2),
+    };
+  }
+  return change;
+}
+
+/**
+ * 将变更项序列化为可读的日志正文（落库 content）。
+ * 包含：配置项、原始值、新值。
+ */
+export function buildOperLogContent(changes) {
+  return changes
+    .map(
+      (c) =>
+        `【${fieldLabel(c.key)}】\n  原始值：${toStr(c.oldVal)}\n  新值：${toStr(c.newVal)}`,
+    )
+    .join('\n\n');
 }
 
 /**
  * 操作日志确认弹窗（切面式，不影响主流程）。
  *
  * Props:
- *   visible       {boolean}      是否显示
- *   operType      {string}       日志类型（模型价格/用户分组/渠道配置）
- *   changes       {Array}        compareObjects 返回的变更项，每项 { key, oldVal, newVal }
- *   defaultRemark {string}       预填备注
- *   onConfirm     {(remark)=>void}  点击「确认并记录日志」
- *   onSkip        {()=>void}     点击「不记录，直接保存」
- *   onCancel      {()=>void}     点击取消（不保存）
+ *   visible       {boolean}
+ *   operType      {string}              日志类型（模型价格/用户分组/渠道配置）
+ *   changes       {Array}               变更项，每项 { key, oldVal, newVal }
+ *   defaultRemark {string}              预填备注
+ *   onConfirm     {(remark, content)=>void}  确认并记录日志
+ *   onSkip        {()=>void}            不记录，直接保存
+ *   onCancel      {()=>void}            取消（不保存）
  */
 const OperLogConfirmModal = ({
   visible,
@@ -71,94 +143,133 @@ const OperLogConfirmModal = ({
   const [remark, setRemark] = useState('');
 
   useEffect(() => {
-    if (visible) {
-      setRemark(defaultRemark);
-    }
+    if (visible) setRemark(defaultRemark);
   }, [visible, defaultRemark]);
 
+  // 仅展示/记录改动的键
+  const refinedChanges = useMemo(
+    () => changes.map((c) => refineChange(c)),
+    [changes],
+  );
+
   const tagColor = OPER_TYPE_COLORS[operType] || 'grey';
-
-  const columns = [
-    {
-      title: '配置项',
-      dataIndex: 'key',
-      width: 180,
-      render: (key) => (
-        <Text strong size='small'>
-          {FIELD_LABELS[key] || key}
-        </Text>
-      ),
-    },
-    {
-      title: '原始值',
-      dataIndex: 'oldVal',
-      render: (v) => (
-        <Text
-          type='tertiary'
-          size='small'
-          style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}
-        >
-          {truncate(v)}
-        </Text>
-      ),
-    },
-    {
-      title: '新值',
-      dataIndex: 'newVal',
-      render: (v) => (
-        <Text
-          size='small'
-          style={{ fontFamily: 'monospace', wordBreak: 'break-all', color: 'var(--semi-color-success)' }}
-        >
-          {truncate(v)}
-        </Text>
-      ),
-    },
-  ];
-
-  const dataSource = changes.map((item, i) => ({
-    key: item.key,
-    oldVal: item.oldVal !== undefined ? String(item.oldVal) : '-',
-    newVal: item.newVal !== undefined ? String(item.newVal) : '-',
-    _key: i,
-  }));
 
   return (
     <Modal
       visible={visible}
       title={
-        <Space>
-          <IconEdit />
+        <Space spacing={8}>
+          <IconEdit style={{ color: 'var(--semi-color-primary)' }} />
           <span>确认改动并填写操作日志</span>
-          <Tag color={tagColor} size='small'>{operType}</Tag>
+          <Tag color={tagColor} size='small'>
+            {operType}
+          </Tag>
         </Space>
       }
-      width={720}
+      width={760}
       footer={null}
       onCancel={onCancel}
       maskClosable={false}
+      bodyStyle={{ padding: '20px 24px 24px' }}
     >
-      <div style={{ marginBottom: 12 }}>
-        <Space style={{ marginBottom: 8 }}>
-          <IconAlertCircle style={{ color: 'var(--semi-color-warning)' }} />
-          <Text type='tertiary' size='small'>
-            以下配置项将被保存，请确认改动是否符合预期，并可选填写本次变更原因。
-          </Text>
-        </Space>
-        <Table
-          columns={columns}
-          dataSource={dataSource}
-          rowKey='_key'
-          size='small'
-          pagination={false}
-          bordered
-          style={{ marginBottom: 16 }}
-          scroll={{ y: 240 }}
-        />
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '10px 12px',
+          marginBottom: 16,
+          borderRadius: 8,
+          background: 'var(--semi-color-warning-light-default)',
+        }}
+      >
+        <IconAlertCircle style={{ color: 'var(--semi-color-warning)', flexShrink: 0 }} />
+        <Text type='tertiary' size='small'>
+          以下配置项将被保存，请确认改动是否符合预期，并可选填写本次变更原因。
+        </Text>
       </div>
 
-      <div style={{ marginBottom: 16 }}>
-        <Text strong size='small' style={{ display: 'block', marginBottom: 6 }}>
+      <div
+        style={{
+          border: '1px solid var(--semi-color-border)',
+          borderRadius: 8,
+          overflow: 'hidden',
+          marginBottom: 20,
+        }}
+      >
+        {/* 表头 */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '180px 1fr 1fr',
+            background: 'var(--semi-color-fill-0)',
+            fontWeight: 600,
+            fontSize: 13,
+          }}
+        >
+          <div style={{ padding: '10px 14px' }}>配置项</div>
+          <div style={{ padding: '10px 14px' }}>原始值</div>
+          <div style={{ padding: '10px 14px' }}>新值</div>
+        </div>
+        {/* 数据行 */}
+        <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+          {refinedChanges.map((item, idx) => (
+            <div
+              key={item.key}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '180px 1fr 1fr',
+                borderTop: '1px solid var(--semi-color-border)',
+                background:
+                  idx % 2 === 1 ? 'var(--semi-color-fill-0)' : 'transparent',
+              }}
+            >
+              <div style={{ padding: '12px 14px' }}>
+                <Text strong size='small'>
+                  {fieldLabel(item.key)}
+                </Text>
+              </div>
+              <div style={{ padding: '12px 14px', minWidth: 0 }}>
+                <pre
+                  style={{
+                    margin: 0,
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-all',
+                    color: 'var(--semi-color-text-2)',
+                    maxHeight: 160,
+                    overflow: 'auto',
+                  }}
+                >
+                  {toStr(item.oldVal)}
+                </pre>
+              </div>
+              <div style={{ padding: '12px 14px', minWidth: 0 }}>
+                <pre
+                  style={{
+                    margin: 0,
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    lineHeight: 1.6,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-all',
+                    color: 'var(--semi-color-success)',
+                    maxHeight: 160,
+                    overflow: 'auto',
+                  }}
+                >
+                  {toStr(item.newVal)}
+                </pre>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 20 }}>
+        <Text strong size='small' style={{ display: 'block', marginBottom: 8 }}>
           备注（可选）
         </Text>
         <TextArea
@@ -170,7 +281,7 @@ const OperLogConfirmModal = ({
         />
       </div>
 
-      <Space style={{ justifyContent: 'flex-end', width: '100%' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
         <Button onClick={onCancel} type='tertiary'>
           取消
         </Button>
@@ -180,11 +291,11 @@ const OperLogConfirmModal = ({
         <Button
           theme='solid'
           type='primary'
-          onClick={() => onConfirm(remark)}
+          onClick={() => onConfirm(remark, buildOperLogContent(refinedChanges))}
         >
           确认并记录日志
         </Button>
-      </Space>
+      </div>
     </Modal>
   );
 };
