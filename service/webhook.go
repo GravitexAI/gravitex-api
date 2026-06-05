@@ -138,6 +138,15 @@ func SendWebhookNotify(webhookURL string, secret string, data dto.Notify) error 
 }
 
 func SendQuotaWarningWebhookNotify(webhookURL string, secret string, data dto.Notify, userID int64, notifyType string, remainingQuota int64, quotaWarningThreshold int64) error {
+	redisKey := getQuotaWarningNotifyRedisKey(int(userID))
+	locked, err := acquireQuotaWarningNotifyLock(redisKey)
+	if err != nil {
+		return err
+	}
+	if !locked {
+		return nil
+	}
+
 	content := data.Content
 	for _, value := range data.Values {
 		content = fmt.Sprintf(content, value)
@@ -157,6 +166,7 @@ func SendQuotaWarningWebhookNotify(webhookURL string, secret string, data dto.No
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
+		releaseQuotaWarningNotifyLock(redisKey)
 		return fmt.Errorf("failed to marshal webhook payload: %v", err)
 	}
 
@@ -181,11 +191,13 @@ func SendQuotaWarningWebhookNotify(webhookURL string, secret string, data dto.No
 
 		resp, err = DoWorkerRequest(workerReq)
 		if err != nil {
+			releaseQuotaWarningNotifyLock(redisKey)
 			return fmt.Errorf("failed to send webhook request through worker: %v", err)
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			releaseQuotaWarningNotifyLock(redisKey)
 			return fmt.Errorf("webhook request failed with status code: %d", resp.StatusCode)
 		}
 		return nil
@@ -193,11 +205,13 @@ func SendQuotaWarningWebhookNotify(webhookURL string, secret string, data dto.No
 
 	fetchSetting := system_setting.GetFetchSetting()
 	if err := common.ValidateURLWithFetchSetting(webhookURL, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
+		releaseQuotaWarningNotifyLock(redisKey)
 		return fmt.Errorf("request reject: %v", err)
 	}
 
 	req, err = http.NewRequest(http.MethodPost, webhookURL, bytes.NewBuffer(payloadBytes))
 	if err != nil {
+		releaseQuotaWarningNotifyLock(redisKey)
 		return fmt.Errorf("failed to create webhook request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -209,11 +223,13 @@ func SendQuotaWarningWebhookNotify(webhookURL string, secret string, data dto.No
 	client := GetHttpClient()
 	resp, err = client.Do(req)
 	if err != nil {
+		releaseQuotaWarningNotifyLock(redisKey)
 		return fmt.Errorf("failed to send webhook request: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		releaseQuotaWarningNotifyLock(redisKey)
 		return fmt.Errorf("webhook request failed with status code: %d", resp.StatusCode)
 	}
 

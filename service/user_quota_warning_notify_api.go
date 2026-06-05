@@ -1,18 +1,11 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"net/http"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/golang-jwt/jwt/v5"
 )
 
 type quotaWarningNotifyRequest struct {
@@ -29,82 +22,82 @@ type quotaWarningNotifyResponse struct {
 
 const quotaWarningNotifyRedisKeyPrefix = "quota:warning:threshold:"
 
-func SendQuotaWarningNotifyToAPIEnd(userID int, notifyType string, remainingQuota int64, quotaWarningThreshold int64) error {
-	api := strings.TrimRight(strings.TrimSpace(os.Getenv("GRAVITEX_API_END")), "/")
-	if api == "" {
-		return fmt.Errorf("GRAVITEX_API_END not set")
-	}
-	redisKey := getQuotaWarningNotifyRedisKey(userID)
-	locked, err := acquireQuotaWarningNotifyLock(redisKey)
-	if err != nil {
-		return err
-	}
-	if !locked {
-		return nil
-	}
-
-	reqBody := quotaWarningNotifyRequest{
-		UserID:                userID,
-		NotifyType:            notifyType,
-		RemainingQuota:        remainingQuota,
-		QuotaWarningThreshold: quotaWarningThreshold,
-	}
-
-	jsonData, err := common.Marshal(reqBody)
-	if err != nil {
-		return fmt.Errorf("marshal quota warning notify request: %w", err)
-	}
-
-	req, err := http.NewRequest(http.MethodPost, api+"/api/user/quota-warning-notify/send", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("create quota warning notify request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if token, err := buildRuoYiBearerToken(userID); err != nil {
-		return err
-	} else if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
-	client := GetHttpClient()
-	if client.Timeout == 0 {
-		client = &http.Client{Timeout: 30 * time.Second}
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		releaseQuotaWarningNotifyLock(redisKey)
-		return fmt.Errorf("call quota warning notify api: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		releaseQuotaWarningNotifyLock(redisKey)
-		return fmt.Errorf("read quota warning notify response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		releaseQuotaWarningNotifyLock(redisKey)
-		return fmt.Errorf("quota warning notify http %d: %s", resp.StatusCode, string(body))
-	}
-
-	if len(body) == 0 {
-		return nil
-	}
-
-	var result quotaWarningNotifyResponse
-	if err := common.Unmarshal(body, &result); err != nil {
-		releaseQuotaWarningNotifyLock(redisKey)
-		return fmt.Errorf("parse quota warning notify response: %w", err)
-	}
-	if result.Code != 200 {
-		releaseQuotaWarningNotifyLock(redisKey)
-		return fmt.Errorf("quota warning notify failed: %s", result.Msg)
-	}
-
-	return nil
-}
+//func SendQuotaWarningNotifyToAPIEnd(userID int, notifyType string, remainingQuota int64, quotaWarningThreshold int64) error {
+//	api := strings.TrimRight(strings.TrimSpace(os.Getenv("GRAVITEX_API_END")), "/")
+//	if api == "" {
+//		return fmt.Errorf("GRAVITEX_API_END not set")
+//	}
+//	redisKey := getQuotaWarningNotifyRedisKey(userID)
+//	locked, err := acquireQuotaWarningNotifyLock(redisKey)
+//	if err != nil {
+//		return err
+//	}
+//	if !locked {
+//		return nil
+//	}
+//
+//	reqBody := quotaWarningNotifyRequest{
+//		UserID:                userID,
+//		NotifyType:            notifyType,
+//		RemainingQuota:        remainingQuota,
+//		QuotaWarningThreshold: quotaWarningThreshold,
+//	}
+//
+//	jsonData, err := common.Marshal(reqBody)
+//	if err != nil {
+//		return fmt.Errorf("marshal quota warning notify request: %w", err)
+//	}
+//
+//	req, err := http.NewRequest(http.MethodPost, api+"/api/user/quota-warning-notify/send", bytes.NewBuffer(jsonData))
+//	if err != nil {
+//		return fmt.Errorf("create quota warning notify request: %w", err)
+//	}
+//	req.Header.Set("Content-Type", "application/json")
+//	if token, err := buildRuoYiBearerToken(userID); err != nil {
+//		return err
+//	} else if token != "" {
+//		req.Header.Set("Authorization", "Bearer "+token)
+//	}
+//
+//	client := GetHttpClient()
+//	if client.Timeout == 0 {
+//		client = &http.Client{Timeout: 30 * time.Second}
+//	}
+//
+//	resp, err := client.Do(req)
+//	if err != nil {
+//		releaseQuotaWarningNotifyLock(redisKey)
+//		return fmt.Errorf("call quota warning notify api: %w", err)
+//	}
+//	defer resp.Body.Close()
+//
+//	body, err := io.ReadAll(resp.Body)
+//	if err != nil {
+//		releaseQuotaWarningNotifyLock(redisKey)
+//		return fmt.Errorf("read quota warning notify response: %w", err)
+//	}
+//
+//	if resp.StatusCode != http.StatusOK {
+//		releaseQuotaWarningNotifyLock(redisKey)
+//		return fmt.Errorf("quota warning notify http %d: %s", resp.StatusCode, string(body))
+//	}
+//
+//	if len(body) == 0 {
+//		return nil
+//	}
+//
+//	var result quotaWarningNotifyResponse
+//	if err := common.Unmarshal(body, &result); err != nil {
+//		releaseQuotaWarningNotifyLock(redisKey)
+//		return fmt.Errorf("parse quota warning notify response: %w", err)
+//	}
+//	if result.Code != 200 {
+//		releaseQuotaWarningNotifyLock(redisKey)
+//		return fmt.Errorf("quota warning notify failed: %s", result.Msg)
+//	}
+//
+//	return nil
+//}
 
 func getQuotaWarningNotifyRedisKey(userID int) string {
 	return fmt.Sprintf("%s%d", quotaWarningNotifyRedisKeyPrefix, userID)
@@ -130,33 +123,33 @@ func releaseQuotaWarningNotifyLock(redisKey string) {
 	}
 }
 
-func buildRuoYiBearerToken(userID int) (string, error) {
-	if !common.RuoYiAuthEnabled {
-		return "", nil
-	}
-	secret := strings.TrimSpace(common.RuoYiJWTSecret)
-	if secret == "" {
-		return "", fmt.Errorf("RUOYI_JWT_SECRET is empty")
-	}
-
-	username, err := model.GetUsernameById(userID, false)
-	if err != nil {
-		return "", fmt.Errorf("load username for user %d: %w", userID, err)
-	}
-	now := time.Now()
-	claims := jwt.MapClaims{
-		"loginId":  fmt.Sprintf("sys_user:%d", userID),
-		"userId":   userID,
-		"userName": username,
-		"username": username,
-		"iat":      now.Unix(),
-		"nbf":      now.Unix(),
-		"exp":      now.Add(30 * time.Minute).Unix(),
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString([]byte(secret))
-	if err != nil {
-		return "", fmt.Errorf("sign ruoyi jwt token: %w", err)
-	}
-	return tokenString, nil
-}
+//func buildRuoYiBearerToken(userID int) (string, error) {
+//	if !common.RuoYiAuthEnabled {
+//		return "", nil
+//	}
+//	secret := strings.TrimSpace(common.RuoYiJWTSecret)
+//	if secret == "" {
+//		return "", fmt.Errorf("RUOYI_JWT_SECRET is empty")
+//	}
+//
+//	username, err := model.GetUsernameById(userID, false)
+//	if err != nil {
+//		return "", fmt.Errorf("load username for user %d: %w", userID, err)
+//	}
+//	now := time.Now()
+//	claims := jwt.MapClaims{
+//		"loginId":  fmt.Sprintf("sys_user:%d", userID),
+//		"userId":   userID,
+//		"userName": username,
+//		"username": username,
+//		"iat":      now.Unix(),
+//		"nbf":      now.Unix(),
+//		"exp":      now.Add(30 * time.Minute).Unix(),
+//	}
+//	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+//	tokenString, err := token.SignedString([]byte(secret))
+//	if err != nil {
+//		return "", fmt.Errorf("sign ruoyi jwt token: %w", err)
+//	}
+//	return tokenString, nil
+//}
