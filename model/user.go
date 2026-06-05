@@ -830,21 +830,6 @@ func GetUserEmail(id int) (email string, err error) {
 	return email, err
 }
 
-func GetUserQuotaWarningThreshold(id int) (threshold int64, err error) {
-	var thresholdNull sql.NullInt64
-	err = DB.Table("sys_user").
-		Where("user_id = ? AND del_flag = ?", id, "0").
-		Select("quota_warning_threshold").
-		Scan(&thresholdNull).Error
-	if err != nil {
-		return 0, err
-	}
-	if thresholdNull.Valid {
-		return thresholdNull.Int64, nil
-	}
-	return threshold, err
-}
-
 // GetUserGroup gets group from Redis first, falls back to DB if needed
 func GetUserGroup(id int, fromDB bool) (group string, err error) {
 	defer func() {
