@@ -517,26 +517,25 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 
 func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int) {
 	gopool.Go(func() {
+
 		if relayInfo == nil {
 			return
 		}
-		threshold, err := model.GetUserQuotaWarningThreshold(relayInfo.UserId)
-		if err != nil {
-			common.SysError(fmt.Sprintf("failed to load quota warning threshold for user %d: %s", relayInfo.UserId, err.Error()))
-			return
-		}
-		if threshold <= 0 {
-			return
+		userSetting := relayInfo.UserSetting
+		threshold := common.QuotaRemindThreshold
+		if userSetting.QuotaWarningThreshold != 0 {
+			threshold = int(userSetting.QuotaWarningThreshold)
 		}
 
 		consumeQuota := quota + preConsumedQuota
 		remainingQuota := relayInfo.UserQuota - consumeQuota
-		if int64(remainingQuota) < threshold {
-			err := SendQuotaWarningNotifyToAPIEnd(relayInfo.UserId, relayInfo.UserSetting.NotifyType, int64(remainingQuota), threshold)
+		if remainingQuota < threshold {
+			err := SendQuotaWarningNotifyToAPIEnd(relayInfo.UserId, userSetting.NotifyType, int64(remainingQuota), int64(threshold))
 			if err != nil {
 				common.SysError(fmt.Sprintf("failed to send quota notify to user %d: %s", relayInfo.UserId, err.Error()))
 			}
 		}
+
 	})
 }
 
@@ -549,22 +548,19 @@ func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
 			return
 		}
 
-		threshold, err := model.GetUserQuotaWarningThreshold(relayInfo.UserId)
-		if err != nil {
-			common.SysError(fmt.Sprintf("failed to load quota warning threshold for user %d: %s", relayInfo.UserId, err.Error()))
-			return
-		}
-		if threshold <= 0 {
-			return
+		userSetting := relayInfo.UserSetting
+		threshold := common.QuotaRemindThreshold
+		if userSetting.QuotaWarningThreshold != 0 {
+			threshold = int(userSetting.QuotaWarningThreshold)
 		}
 
 		usedAfter := relayInfo.SubscriptionAmountUsedAfterPreConsume + relayInfo.SubscriptionPostDelta
 		remaining := relayInfo.SubscriptionAmountTotal - usedAfter
-		if remaining >= threshold {
+		if remaining >= int64(threshold) {
 			return
 		}
 
-		if err := SendQuotaWarningNotifyToAPIEnd(relayInfo.UserId, relayInfo.UserSetting.NotifyType, remaining, threshold); err != nil {
+		if err := SendQuotaWarningNotifyToAPIEnd(relayInfo.UserId, userSetting.NotifyType, remaining, int64(threshold)); err != nil {
 			common.SysError(fmt.Sprintf("failed to send subscription quota notify to user %d: %s", relayInfo.UserId, err.Error()))
 		}
 	})
