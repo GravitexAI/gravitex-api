@@ -649,13 +649,15 @@ func shouldRecordUserAmountChangeLog(logType *int, operation *int) bool {
 	if logType == nil || operation == nil {
 		return false
 	}
-	validType := *logType == model.LogTypeManage || *logType == model.LogTypeTest
+	validType := *logType == model.LogTypeTopup || *logType == model.LogTypeManage || *logType == model.LogTypeTest
 	validOperation := *operation == 0 || *operation == 1 || *operation == 2
 	return validType && validOperation
 }
 
 func getUserAmountTypeText(logType int) string {
 	switch logType {
+	case model.LogTypeTopup:
+		return "充值"
 	case model.LogTypeTest:
 		return "测试金"
 	case model.LogTypeManage:
@@ -678,7 +680,41 @@ func getUserAmountOperationText(operation int) string {
 	}
 }
 
-func buildUserAmountChangeLogContent(logType int, operation int, originQuota int, newQuota int) string {
+func buildUserAmountChangeLogContent(logType int, operation int, originQuota int, newQuota int, adminUsername string, username string) string {
+	quotaDelta := newQuota - originQuota
+	if quotaDelta < 0 {
+		quotaDelta = -quotaDelta
+	}
+	if logType == model.LogTypeTopup {
+		switch operation {
+		case 0:
+			return fmt.Sprintf(
+				"管理员 %s 为用户 %s 充值 %s，额度从 %s 变更为 %s",
+				adminUsername,
+				username,
+				logger.LogQuota(quotaDelta),
+				logger.LogQuota(originQuota),
+				logger.LogQuota(newQuota),
+			)
+		case 1:
+			return fmt.Sprintf(
+				"管理员 %s 为用户 %s 扣减充值额度 %s，额度从 %s 变更为 %s",
+				adminUsername,
+				username,
+				logger.LogQuota(quotaDelta),
+				logger.LogQuota(originQuota),
+				logger.LogQuota(newQuota),
+			)
+		case 2:
+			return fmt.Sprintf(
+				"管理员 %s 为用户 %s 覆盖充值额度为 %s，原额度 %s",
+				adminUsername,
+				username,
+				logger.LogQuota(newQuota),
+				logger.LogQuota(originQuota),
+			)
+		}
+	}
 	return fmt.Sprintf(
 		"管理员%s%s，额度从 %s 变更为 %s",
 		getUserAmountOperationText(operation),
@@ -699,7 +735,7 @@ func recordUserAmountChangeLog(c *gin.Context, user *model.User, logType *int, o
 	model.RecordLogWithAdminInfoAndQuota(
 		user.Id,
 		*logType,
-		buildUserAmountChangeLogContent(*logType, *operation, user.Quota, newQuota),
+		buildUserAmountChangeLogContent(*logType, *operation, user.Quota, newQuota, c.GetString("username"), user.Username),
 		newQuota-user.Quota,
 		adminInfo,
 	)
