@@ -24,6 +24,18 @@ type WebhookPayload struct {
 	Timestamp int64         `json:"timestamp"`
 }
 
+type QuotaWarningWebhookPayload struct {
+	Type                  string        `json:"type"`
+	Title                 string        `json:"title"`
+	Content               string        `json:"content"`
+	Values                []interface{} `json:"values,omitempty"`
+	UserID                int64         `json:"user_id"`
+	NotifyType            string        `json:"notify_type,omitempty"`
+	RemainingQuota        int64         `json:"remaining_quota"`
+	QuotaWarningThreshold int64         `json:"quota_warning_threshold"`
+	Timestamp             int64         `json:"timestamp"`
+}
+
 // generateSignature 生成 webhook 签名
 func generateSignature(secret string, payload []byte) string {
 	h := hmac.New(sha256.New, []byte(secret))
@@ -120,6 +132,89 @@ func SendWebhookNotify(webhookURL string, secret string, data dto.Notify) error 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return fmt.Errorf("webhook request failed with status code: %d", resp.StatusCode)
 		}
+	}
+
+	return nil
+}
+
+func SendQuotaWarningWebhookNotify(webhookURL string, secret string, data dto.Notify, userID int64, notifyType string, remainingQuota int64, quotaWarningThreshold int64) error {
+	content := data.Content
+	for _, value := range data.Values {
+		content = fmt.Sprintf(content, value)
+	}
+
+	payload := QuotaWarningWebhookPayload{
+		Type:                  data.Type,
+		Title:                 data.Title,
+		Content:               content,
+		Values:                data.Values,
+		UserID:                userID,
+		NotifyType:            notifyType,
+		RemainingQuota:        remainingQuota,
+		QuotaWarningThreshold: quotaWarningThreshold,
+		Timestamp:             time.Now().Unix(),
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal webhook payload: %v", err)
+	}
+
+	var req *http.Request
+	var resp *http.Response
+
+	if system_setting.EnableWorker() {
+		workerReq := &WorkerRequest{
+			URL:    webhookURL,
+			Key:    system_setting.WorkerValidKey,
+			Method: http.MethodPost,
+			Headers: map[string]string{
+				"Content-Type": "application/json",
+			},
+			Body: payloadBytes,
+		}
+		if secret != "" {
+			signature := generateSignature(secret, payloadBytes)
+			workerReq.Headers["X-Webhook-Signature"] = signature
+			workerReq.Headers["Authorization"] = "Bearer " + secret
+		}
+
+		resp, err = DoWorkerRequest(workerReq)
+		if err != nil {
+			return fmt.Errorf("failed to send webhook request through worker: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("webhook request failed with status code: %d", resp.StatusCode)
+		}
+		return nil
+	}
+
+	fetchSetting := system_setting.GetFetchSetting()
+	if err := common.ValidateURLWithFetchSetting(webhookURL, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
+		return fmt.Errorf("request reject: %v", err)
+	}
+
+	req, err = http.NewRequest(http.MethodPost, webhookURL, bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return fmt.Errorf("failed to create webhook request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if secret != "" {
+		signature := generateSignature(secret, payloadBytes)
+		req.Header.Set("X-Webhook-Signature", signature)
+	}
+
+	client := GetHttpClient()
+	resp, err = client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send webhook request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("webhook request failed with status code: %d", resp.StatusCode)
 	}
 
 	return nil
