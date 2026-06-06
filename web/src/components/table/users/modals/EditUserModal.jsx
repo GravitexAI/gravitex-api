@@ -68,7 +68,7 @@ const EditUserModal = (props) => {
   const [adjustQuotaLocal, setAdjustQuotaLocal] = useState('');
   const [adjustAmountLocal, setAdjustAmountLocal] = useState('');
   const [adjustMode, setAdjustMode] = useState('add');
-  const [adjustType, setAdjustType] = useState(8);
+  const [adjustType, setAdjustType] = useState(1);
   const [adjustLoading, setAdjustLoading] = useState(false);
   const isMobile = useIsMobile();
   const [groupOptions, setGroupOptions] = useState([]);
@@ -191,7 +191,7 @@ const EditUserModal = (props) => {
         setAdjustModalOpen(false);
         setAdjustQuotaLocal('');
         setAdjustAmountLocal('');
-        setAdjustType(8);
+        setAdjustType(1);
         const userRes = await API.get(`/api/user/${userId}`);
         if (userRes.data.success) {
           const data = userRes.data.data;
@@ -477,7 +477,7 @@ const EditUserModal = (props) => {
           setAdjustQuotaLocal('');
           setAdjustAmountLocal('');
           setAdjustMode('add');
-          setAdjustType(8);
+          setAdjustType(1);
         }}
         confirmLoading={adjustLoading}
         closable={null}
@@ -503,6 +503,7 @@ const EditUserModal = (props) => {
             onChange={(e) => setAdjustType(Number(e.target.value))}
             style={{ width: '100%' }}
           >
+            <Radio value={1}>{t('充值')}</Radio>
             <Radio value={8}>{t('测试金')}</Radio>
             <Radio value={3}>{t('信控')}</Radio>
           </RadioGroup>
