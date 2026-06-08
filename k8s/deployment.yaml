@@ -18,6 +18,9 @@ spec:
         image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway:1.0.15
         ports:
         - containerPort: 3000
+        env:                          
+        - name: TZ                    
+          value: "Asia/Shanghai"      
         envFrom:
         - configMapRef:
             name: api-gateway-config
