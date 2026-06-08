@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -64,8 +65,48 @@ func getAssetChannelById(channelId int) (*model.Channel, error) {
 
 // getAssetSupportedChannels returns all enabled channels with seedance-2-0 models accessible by the token's group.
 // Uses the same channel cache and priority/weight ordering as Distribute().
-func getAssetSupportedChannels(group string) ([]*model.Channel, error) {
-	return model.GetAssetSupportedChannelsByGroup(group)
+//
+// When the token group is "auto", this expands to the user's actual auto groups
+// (matching the Distributor middleware behavior) and aggregates channels across
+// all resolved groups. Without this, asset APIs would always return empty results
+// for "auto" tokens because "auto" is not a real channel group in the cache.
+func getAssetSupportedChannels(c *gin.Context, group string) ([]*model.Channel, error) {
+	if group != "auto" {
+		return model.GetAssetSupportedChannelsByGroup(group)
+	}
+
+	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+	autoGroups := service.GetUserAutoGroup(userGroup)
+	if len(autoGroups) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[int]bool)
+	var result []*model.Channel
+	for _, g := range autoGroups {
+		channels, err := model.GetAssetSupportedChannelsByGroup(g)
+		if err != nil {
+			continue
+		}
+		for _, ch := range channels {
+			if seen[ch.Id] {
+				continue
+			}
+			seen[ch.Id] = true
+			result = append(result, ch)
+		}
+	}
+
+	// Sort by priority DESC, then by id ASC — consistent with the cache layer ordering
+	sort.Slice(result, func(i, j int) bool {
+		pi, pj := result[i].GetPriority(), result[j].GetPriority()
+		if pi != pj {
+			return pi > pj
+		}
+		return result[i].Id < result[j].Id
+	})
+
+	return result, nil
 }
 
 // getAssetChannelBaseURL returns the base URL for the channel, falling back to the default for its type.
@@ -491,7 +532,7 @@ func uploadAssetUptoken(c *gin.Context) {
 			return
 		}
 	} else {
-		channels, err := getAssetSupportedChannels(group)
+		channels, err := getAssetSupportedChannels(c, group)
 		if err != nil || len(channels) == 0 {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("UploadAsset: no asset channel available for group=%s: %v", group, err))
 			assetErrorResponse(c, http.StatusServiceUnavailable, "No asset channel available for this token")
@@ -658,7 +699,7 @@ func ListAssets(c *gin.Context) {
 	}
 
 	// Only list assets from BytePlus-enabled channels (skip uptoken channels)
-	channels, err := getByteplusEnabledChannels(group)
+	channels, err := getByteplusEnabledChannels(c, group)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("ListAssets: failed to get asset channels: %s", err.Error()))
 		assetErrorResponse(c, http.StatusInternalServerError, "Failed to list assets")
