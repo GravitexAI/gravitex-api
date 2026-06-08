@@ -1,6 +1,11 @@
 package router
 
 import (
+	"log"
+	"strconv"
+	"sync"
+	"time"
+
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
@@ -9,6 +14,55 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// delayedWriter wraps a gin.ResponseWriter, buffering all output until flush().
+// Used by the /chat/completions/:wait_time test endpoint to enforce minimum response time.
+type delayedWriter struct {
+	gin.ResponseWriter
+	buf        []byte
+	delay      time.Duration
+	once       sync.Once
+	statusCode int
+	written    bool
+}
+
+func (w *delayedWriter) Write(b []byte) (int, error) {
+	if !w.written {
+		w.written = true
+		if w.statusCode == 0 {
+			w.statusCode = 200
+		}
+	}
+	w.buf = append(w.buf, b...)
+	return len(b), nil
+}
+
+func (w *delayedWriter) WriteString(s string) (int, error) {
+	return w.Write([]byte(s))
+}
+
+func (w *delayedWriter) WriteHeader(code int) {
+	if !w.written {
+		w.written = true
+		w.statusCode = code
+	}
+}
+
+func (w *delayedWriter) WriteHeaderNow() {}
+
+func (w *delayedWriter) Flush() {}
+
+func (w *delayedWriter) flush() {
+	w.once.Do(func() {
+		time.Sleep(w.delay)
+		if w.statusCode > 0 {
+			w.ResponseWriter.WriteHeader(w.statusCode)
+		}
+		if len(w.buf) > 0 {
+			_, _ = w.ResponseWriter.Write(w.buf)
+		}
+	})
+}
 
 func SetRelayRouter(router *gin.Engine) {
 	router.Use(middleware.CORS())
@@ -108,6 +162,20 @@ func SetRelayRouter(router *gin.Engine) {
 		})
 		httpRouter.POST("/chat/completions", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAI)
+		})
+		// Test endpoint: force minimum response time (wait_time in milliseconds)
+		httpRouter.POST("/chat/completions/:wait_time", func(c *gin.Context) {
+			wt, err := strconv.Atoi(c.Param("wait_time"))
+			if err != nil || wt <= 0 {
+				controller.Relay(c, types.RelayFormatOpenAI)
+				return
+			}
+			delay := time.Duration(wt) * time.Millisecond
+			dw := &delayedWriter{ResponseWriter: c.Writer, delay: delay}
+			c.Writer = dw
+			controller.Relay(c, types.RelayFormatOpenAI)
+			dw.flush()
+			log.Printf("[Relay] wait_time enforced: %v", delay)
 		})
 
 		// response related routes
