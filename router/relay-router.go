@@ -1,7 +1,10 @@
 package router
 
 import (
+	"bufio"
 	"log"
+	"net"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -17,22 +20,21 @@ import (
 
 // delayedWriter wraps a gin.ResponseWriter, buffering all output until flush().
 // Used by the /chat/completions/:wait_time test endpoint to enforce minimum response time.
+// IMPORTANT: gin.ResponseWriter is a NAMED field (not embedded) to prevent io.Copy
+// from detecting io.ReaderFrom on the underlying writer and bypassing our buffer.
 type delayedWriter struct {
-	gin.ResponseWriter
+	w          gin.ResponseWriter
 	buf        []byte
 	delay      time.Duration
 	once       sync.Once
 	statusCode int
-	written    bool
+}
+
+func (w *delayedWriter) Header() http.Header {
+	return w.w.Header()
 }
 
 func (w *delayedWriter) Write(b []byte) (int, error) {
-	if !w.written {
-		w.written = true
-		if w.statusCode == 0 {
-			w.statusCode = 200
-		}
-	}
 	w.buf = append(w.buf, b...)
 	return len(b), nil
 }
@@ -42,24 +44,48 @@ func (w *delayedWriter) WriteString(s string) (int, error) {
 }
 
 func (w *delayedWriter) WriteHeader(code int) {
-	if !w.written {
-		w.written = true
+	if w.statusCode == 0 {
 		w.statusCode = code
 	}
 }
 
+// Required by gin.ResponseWriter interface — must be no-op to prevent early flush
 func (w *delayedWriter) WriteHeaderNow() {}
 
+// Required by gin.ResponseWriter interface — must be no-op to prevent early flush
 func (w *delayedWriter) Flush() {}
+
+func (w *delayedWriter) Status() int   { return w.statusCode }
+func (w *delayedWriter) Size() int     { return len(w.buf) }
+func (w *delayedWriter) Written() bool { return len(w.buf) > 0 || w.statusCode > 0 }
+func (w *delayedWriter) Pusher() http.Pusher {
+	if pusher, ok := w.w.(http.Pusher); ok {
+		return pusher
+	}
+	return nil
+}
+
+// Required by gin.ResponseWriter (http.Hijacker)
+func (w *delayedWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.w.Hijack()
+}
+
+// Required by gin.ResponseWriter (http.CloseNotifier)
+func (w *delayedWriter) CloseNotify() <-chan bool {
+	if notifier, ok := w.w.(http.CloseNotifier); ok {
+		return notifier.CloseNotify()
+	}
+	return make(chan bool)
+}
 
 func (w *delayedWriter) flush() {
 	w.once.Do(func() {
 		time.Sleep(w.delay)
 		if w.statusCode > 0 {
-			w.ResponseWriter.WriteHeader(w.statusCode)
+			w.w.WriteHeader(w.statusCode)
 		}
 		if len(w.buf) > 0 {
-			_, _ = w.ResponseWriter.Write(w.buf)
+			_, _ = w.w.Write(w.buf)
 		}
 	})
 }
@@ -174,7 +200,7 @@ func SetRelayRouter(router *gin.Engine) {
 			// Strip /:wait_time from path so upstream sees /v1/chat/completions
 			c.Request.URL.Path = "/v1/chat/completions"
 			c.Request.URL.RawPath = ""
-			dw := &delayedWriter{ResponseWriter: c.Writer, delay: delay}
+			dw := &delayedWriter{w: c.Writer, delay: delay}
 			c.Writer = dw
 			controller.Relay(c, types.RelayFormatOpenAI)
 			dw.flush()
