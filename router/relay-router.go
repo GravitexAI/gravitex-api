@@ -171,6 +171,9 @@ func SetRelayRouter(router *gin.Engine) {
 				return
 			}
 			delay := time.Duration(wt) * time.Millisecond
+			// Strip /:wait_time from path so upstream sees /v1/chat/completions
+			c.Request.URL.Path = "/v1/chat/completions"
+			c.Request.URL.RawPath = ""
 			dw := &delayedWriter{ResponseWriter: c.Writer, delay: delay}
 			c.Writer = dw
 			controller.Relay(c, types.RelayFormatOpenAI)
