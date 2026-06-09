@@ -24,8 +24,6 @@ spec:
         envFrom:
         - configMapRef:
             name: api-gateway-test-config
-        - secretRef:
-            name: api-gateway-test-secret
         resources:
           requests:
             cpu: "500m"
