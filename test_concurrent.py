@@ -33,7 +33,7 @@ ENABLE_IMAGE = False        # 是否携带图片
 # ENABLE_IMAGE = True        # 是否携带图片
 IMAGE_URL = ""              # 图片地址（启用图片时必填）
 # IMAGE_URL = "/Users/caihongzhan/Desktop/sucai/下载.png"              # 图片地址（启用图片时必填, 本地、url都可）
-ENABLE_METRICS = False      # 是否采集服务器 CPU/内存/Goroutine 指标
+ENABLE_METRICS = True      # 是否采集服务器 CPU/内存/Goroutine 指标
 METRICS_INTERVAL = 5        # 指标采集间隔 (秒)
 # ==================================
 
@@ -59,28 +59,32 @@ def metrics_url():
     return f"{base}/v1/test/metrics"
 
 
-async def collect_metrics(session, stop_event, samples):
-    """后台定时采集服务器指标"""
+async def collect_metrics(stop_event, samples):
+    """后台定时采集服务器指标（独立 session，避免被业务请求阻塞）"""
     url = metrics_url()
-    while not stop_event.is_set():
-        try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    samples.append({
-                        "time": time.monotonic(),
-                        "cpu": data.get("cpu_usage", 0),
-                        "mem": data.get("mem_usage", 0),
-                        "heap_mb": data.get("heap_alloc_mb", 0),
-                        "goroutine": data.get("num_goroutine", 0),
-                        "gc": data.get("num_gc", 0),
-                    })
-        except Exception:
-            pass
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=METRICS_INTERVAL)
-        except asyncio.TimeoutError:
-            pass
+    async with aiohttp.ClientSession() as session:
+        while not stop_event.is_set():
+            try:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        samples.append({
+                            "time": time.monotonic(),
+                            "hostname": data.get("hostname", ""),
+                            "ip": data.get("ip", ""),
+                            "cpu": data.get("cpu_usage", 0),
+                            "mem": data.get("mem_usage", 0),
+                            "heap_mb": data.get("heap_alloc_mb", 0),
+                            "goroutine": data.get("num_goroutine", 0),
+                            "gc": data.get("num_gc", 0),
+                        })
+            except Exception:
+                pass
+            # 可被 stop_event 立即中断的睡眠
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=METRICS_INTERVAL)
+            except asyncio.TimeoutError:
+                pass
 
 
 async def send_request(session, request_id, headers, body):
@@ -153,12 +157,12 @@ async def main():
 
     connector = aiohttp.TCPConnector(limit=TOTAL_REQUESTS, limit_per_host=TOTAL_REQUESTS)
     async with aiohttp.ClientSession(connector=connector) as session:
-        # 启动指标采集
+        # 启动指标采集（独立 session）
         stop_event = asyncio.Event()
         metric_samples = []
         metrics_task = None
         if ENABLE_METRICS:
-            metrics_task = asyncio.create_task(collect_metrics(session, stop_event, metric_samples))
+            metrics_task = asyncio.create_task(collect_metrics(stop_event, metric_samples))
             print(f"指标采集已启动 ({metrics_url()})")
 
         test_start = time.monotonic()
@@ -177,13 +181,32 @@ async def main():
                 print(f"  已发送 {i + 1}/{TOTAL_REQUESTS} 个请求...")
 
         print("等待所有响应返回...")
-        results = await asyncio.gather(*results)
+        # 带进度显示的等待
+        pending = set(results)
+        last_print = time.monotonic()
+        while pending:
+            done, pending = await asyncio.wait(pending, timeout=5)
+            now = time.monotonic()
+            if now - last_print >= 5:
+                completed_count = TOTAL_REQUESTS - len(pending)
+                elapsed_so_far = now - test_start
+                print(f"  已完成 {completed_count}/{TOTAL_REQUESTS}，耗时 {elapsed_so_far:.1f}s...")
+                last_print = now
+        results = [t.result() for t in results]
         test_elapsed = time.monotonic() - test_start
 
-        # 停止指标采集
+        # 停止指标采集（带超时 + 强制取消）
         if metrics_task:
             stop_event.set()
-            await metrics_task
+            try:
+                await asyncio.wait_for(metrics_task, timeout=10)
+            except asyncio.TimeoutError:
+                metrics_task.cancel()
+                try:
+                    await metrics_task
+                except asyncio.CancelledError:
+                    pass
+            print(f"指标采集已停止 (共采集 {len(metric_samples)} 次)")
 
     # ---- 统计结果 ----
     success = [r for r in results if r["error"] is None and r["status"] == 200]
@@ -226,23 +249,33 @@ async def main():
 
     # ---- 服务器指标 ----
     if ENABLE_METRICS and metric_samples:
-        cpus = [s["cpu"] for s in metric_samples]
-        mems = [s["mem"] for s in metric_samples]
-        heaps = [s["heap_mb"] for s in metric_samples]
-        goroutines = [s["goroutine"] for s in metric_samples]
-        print()
-        print("=" * 60)
-        print(f"服务器指标 (共采集 {len(metric_samples)} 次)")
-        print("=" * 60)
-        print(f"CPU 使用率(%):        最小 {min(cpus):.1f}  最大 {max(cpus):.1f}  平均 {statistics.mean(cpus):.1f}")
-        print(f"内存使用率(%):        最小 {min(mems):.1f}  最大 {max(mems):.1f}  平均 {statistics.mean(mems):.1f}")
-        print(f"堆内存(MB):           最小 {min(heaps):.1f}  最大 {max(heaps):.1f}  平均 {statistics.mean(heaps):.1f}")
-        print(f"Goroutine 数量:       最小 {min(goroutines)}  最大 {max(goroutines)}  平均 {int(statistics.mean(goroutines))}")
+        # 按服务器分组（集群场景）
+        servers = {}
+        for s in metric_samples:
+            key = f"{s['hostname']}({s['ip']})" if s['hostname'] else "unknown"
+            servers.setdefault(key, []).append(s)
+
+        for server_name, server_samples in servers.items():
+            cpus = [s["cpu"] for s in server_samples]
+            mems = [s["mem"] for s in server_samples]
+            heaps = [s["heap_mb"] for s in server_samples]
+            goroutines = [s["goroutine"] for s in server_samples]
+            print()
+            print("=" * 60)
+            print(f"服务器指标 — {server_name} (共采集 {len(server_samples)} 次)")
+            print("=" * 60)
+            print(f"CPU 使用率(%):        最小 {min(cpus):.1f}  最大 {max(cpus):.1f}  平均 {statistics.mean(cpus):.1f}")
+            print(f"内存使用率(%):        最小 {min(mems):.1f}  最大 {max(mems):.1f}  平均 {statistics.mean(mems):.1f}")
+            print(f"堆内存(MB):           最小 {min(heaps):.1f}  最大 {max(heaps):.1f}  平均 {statistics.mean(heaps):.1f}")
+            print(f"Goroutine 数量:       最小 {min(goroutines)}  最大 {max(goroutines)}  平均 {int(statistics.mean(goroutines))}")
+
         print()
         print("采集明细:")
+        t0 = metric_samples[0]["time"]
         for i, s in enumerate(metric_samples):
-            elapsed = s["time"] - test_start if 'test_start' in dir() else 0
-            print(f"  [{i+1:3d}] CPU={s['cpu']:6.1f}%  MEM={s['mem']:5.1f}%  Heap={s['heap_mb']:7.1f}MB  Goroutine={s['goroutine']:6d}")
+            elapsed = s["time"] - t0
+            host = s['hostname'] or "?"
+            print(f"  [{i+1:3d}] +{elapsed:6.1f}s  {host:20s}  CPU={s['cpu']:6.1f}%  MEM={s['mem']:5.1f}%  Heap={s['heap_mb']:7.1f}MB  Goroutine={s['goroutine']:6d}")
 
     # 有失败则返回非零退出码
     if len(failed) > 0:
