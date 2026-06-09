@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -30,6 +32,51 @@ const (
 	WebSearchMaxUsesMedium = 5
 	WebSearchMaxUsesHigh   = 10
 )
+
+// jsonSchemaToolNameKey is the gin context key holding the synthetic tool name
+// used to emulate OpenAI response_format=json_schema via Claude tool-forcing.
+// When set, the forced tool_use output is unwrapped back into message content
+// (a JSON string) instead of being surfaced as tool_calls.
+const jsonSchemaToolNameKey = "claude_json_schema_tool_name"
+
+// toolUseIDPattern matches the tool_use id format Anthropic accepts. Ids with
+// other characters (e.g. colons from some OpenAI clients) are rejected with 400.
+var toolUseIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// sanitizeToolUseID returns id unchanged when it already satisfies Anthropic's
+// tool_use id format. Otherwise it derives a compliant id (illegal chars -> '_')
+// and caches the mapping keyed on the original id, so a tool_use and its matching
+// tool_result resolve to the same sanitized id regardless of which is seen first.
+func sanitizeToolUseID(id string, m map[string]string) string {
+	if id == "" || toolUseIDPattern.MatchString(id) {
+		return id
+	}
+	if mapped, ok := m[id]; ok {
+		return mapped
+	}
+	sanitized := regexp.MustCompile(`[^a-zA-Z0-9_-]`).ReplaceAllString(id, "_")
+	if sanitized == "" {
+		sanitized = "tool"
+	}
+	// avoid colliding with an id already assigned to a different original
+	base, n := sanitized, 1
+	for {
+		clash := false
+		for orig, v := range m {
+			if v == sanitized && orig != id {
+				clash = true
+				break
+			}
+		}
+		if !clash {
+			break
+		}
+		sanitized = fmt.Sprintf("%s_%d", base, n)
+		n++
+	}
+	m[id] = sanitized
+	return sanitized
+}
 
 func stopReasonClaude2OpenAI(reason string) string {
 	return reasonmap.ClaudeStopReasonToOpenAIFinishReason(reason)
@@ -121,6 +168,32 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 		claudeTools = append(claudeTools, &webSearchTool)
 	}
 
+	// response_format=json_schema has no native equivalent on the Claude (OpenAI)
+	// path; emulate structured output by wrapping the schema as a synthetic tool
+	// and forcing the model to call it. The tool_use input is unwrapped back into
+	// message content on the response side.
+	jsonSchemaToolName := ""
+	if rf := textRequest.ResponseFormat; rf != nil && rf.Type == "json_schema" && len(rf.JsonSchema) > 0 {
+		var fjs dto.FormatJsonSchema
+		if err := common.Unmarshal(rf.JsonSchema, &fjs); err == nil {
+			if schemaMap, ok := fjs.Schema.(map[string]any); ok && len(schemaMap) > 0 {
+				jsonSchemaToolName = strings.TrimSpace(fjs.Name)
+				if jsonSchemaToolName == "" {
+					jsonSchemaToolName = "json_schema_output"
+				}
+				desc := fjs.Description
+				if desc == "" {
+					desc = "Return the result strictly as arguments matching the required JSON schema."
+				}
+				claudeTools = append(claudeTools, &dto.Tool{
+					Name:        jsonSchemaToolName,
+					Description: desc,
+					InputSchema: schemaMap,
+				})
+			}
+		}
+	}
+
 	claudeRequest := dto.ClaudeRequest{
 		Model:         textRequest.Model,
 		StopSequences: nil,
@@ -145,6 +218,15 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 		claudeToolChoice := mapToolChoice(textRequest.ToolChoice, textRequest.ParallelTooCalls)
 		if claudeToolChoice != nil {
 			claudeRequest.ToolChoice = claudeToolChoice
+		}
+	}
+
+	// json_schema emulation forces the synthetic tool, overriding any client
+	// tool_choice so the structured output is guaranteed.
+	if jsonSchemaToolName != "" {
+		claudeRequest.ToolChoice = &dto.ClaudeToolChoice{Type: "tool", Name: jsonSchemaToolName}
+		if c != nil {
+			c.Set(jsonSchemaToolNameKey, jsonSchemaToolName)
 		}
 	}
 
@@ -230,8 +312,13 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 			return nil, err
 		}
 
-		budgetTokens := reasoning.MaxTokens
-		if budgetTokens > 0 {
+		// reasoning.enabled alone must turn thinking on; budget_tokens is optional
+		// (defaults to a sane value, since the enabled type requires >=1024).
+		if reasoning.Enabled || reasoning.MaxTokens > 0 {
+			budgetTokens := reasoning.MaxTokens
+			if budgetTokens <= 0 {
+				budgetTokens = 4096
+			}
 			claudeRequest.Thinking = &dto.Thinking{
 				Type:         "enabled",
 				BudgetTokens: &budgetTokens,
@@ -259,6 +346,11 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	for i, message := range textRequest.Messages {
 		if message.Role == "" {
 			textRequest.Messages[i].Role = "user"
+		}
+		// New OpenAI SDK sends "developer" in place of "system"; map it so the
+		// accumulation logic below routes it into Claude's system field.
+		if message.Role == "developer" {
+			message.Role = "system"
 		}
 		fmtMessage := dto.Message{
 			Role:    message.Role,
@@ -288,6 +380,8 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	isFirstMessage := true
 	// 初始化system消息数组，用于累积多个system消息
 	var systemMessages []dto.ClaudeMediaMessage
+	// 缓存「原始 tool id -> 净化后 id」，保证 tool_use 与 tool_result 映射一致
+	toolIdMap := map[string]string{}
 
 	for _, message := range formatMessages {
 		if message.Role == "system" {
@@ -344,7 +438,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 					}
 					lastMessage.Content = append(lastMessage.Content.([]dto.ClaudeMediaMessage), dto.ClaudeMediaMessage{
 						Type:      "tool_result",
-						ToolUseId: message.ToolCallId,
+						ToolUseId: sanitizeToolUseID(message.ToolCallId, toolIdMap),
 						Content:   message.Content,
 					})
 					claudeMessages[len(claudeMessages)-1] = lastMessage
@@ -354,7 +448,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 					claudeMessage.Content = []dto.ClaudeMediaMessage{
 						{
 							Type:      "tool_result",
-							ToolUseId: message.ToolCallId,
+							ToolUseId: sanitizeToolUseID(message.ToolCallId, toolIdMap),
 							Content:   message.Content,
 						},
 					}
@@ -406,13 +500,19 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 				if message.ToolCalls != nil {
 					for _, toolCall := range message.ParseToolCalls() {
 						inputObj := make(map[string]any)
-						if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &inputObj); err != nil {
-							common.SysLog("tool call function arguments is not a map[string]any: " + fmt.Sprintf("%v", toolCall.Function.Arguments))
-							continue
+						if args := strings.TrimSpace(toolCall.Function.Arguments); args != "" {
+							// 部分客户端会在 JSON 对象后带垃圾(如 <|tool_calls_section_end|>)，
+							// Decoder 只读第一个 JSON 值、忽略尾部，Unmarshal 则会失败。
+							// 解析失败时保留空对象，确保 tool_use 块仍被生成、与其
+							// tool_result 配对，避免上游因孤儿 tool_result 报 400。
+							if err := common.DecodeJson(strings.NewReader(args), &inputObj); err != nil {
+								common.SysLog("tool call arguments not a JSON object, using empty input: " + fmt.Sprintf("%v", toolCall.Function.Arguments))
+								inputObj = make(map[string]any)
+							}
 						}
 						claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
 							Type:  "tool_use",
-							Id:    toolCall.ID,
+							Id:    sanitizeToolUseID(toolCall.ID, toolIdMap),
 							Name:  toolCall.Function.Name,
 							Input: inputObj,
 						})
@@ -431,10 +531,162 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 
 	claudeRequest.Prompt = ""
 	claudeRequest.Messages = claudeMessages
+
+	// Anthropic-native thinking object / effort sent through the OpenAI-compatible
+	// endpoint. The base conversion above never reads them, so an explicit client
+	// thinking object would otherwise be dropped. Honor them as the final override.
+	if len(textRequest.THINKING) > 0 {
+		var thinking dto.Thinking
+		if err := common.Unmarshal(textRequest.THINKING, &thinking); err == nil && thinking.Type != "" {
+			// Opus 4.7+ removed thinking.type="enabled" (upstream returns 400). When a
+			// client passes it directly through the OpenAI-compatible endpoint, surface
+			// the same 400 rather than silently rewriting it, so callers learn to switch
+			// to adaptive. Internally-generated enabled (from reasoning / reasoning_effort
+			// above) is not affected: it is converted to adaptive a few lines below.
+			if thinking.Type == "enabled" && opusVersionAtLeast47(claudeRequest.Model) {
+				return nil, types.NewError(
+					fmt.Errorf("thinking.type \"enabled\" is not supported on %s; use thinking.type \"adaptive\" with output_config.effort", claudeRequest.Model),
+					types.ErrorCodeInvalidRequest,
+					types.ErrOptionWithStatusCode(http.StatusBadRequest),
+					types.ErrOptionWithSkipRetry(),
+				)
+			}
+			claudeRequest.Thinking = &thinking
+		}
+	}
+	if textRequest.Effort != "" {
+		claudeRequest.Effort = textRequest.Effort
+	}
+
+	// OpenAI-compat path: Opus 4.7+ only supports adaptive thinking and rejects
+	// thinking.type="enabled" with a 400. Client-direct thinking is already rejected
+	// above; here we transparently switch internally-generated enabled thinking (from
+	// reasoning_effort / reasoning inputs) to adaptive so those requests succeed and
+	// return visible reasoning.
+	if claudeRequest.Thinking != nil && claudeRequest.Thinking.Type == "enabled" &&
+		opusVersionAtLeast47(claudeRequest.Model) {
+		claudeRequest.Thinking.Type = "adaptive"
+		claudeRequest.Thinking.BudgetTokens = nil
+		if claudeRequest.Thinking.Display == "" {
+			claudeRequest.Thinking.Display = "summarized"
+		}
+	}
+
+	ApplyClaudeThinkingPolicy(&claudeRequest)
+	ApplyClaudeSamplingPolicy(&claudeRequest)
 	return &claudeRequest, nil
 }
 
-func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCompletionsStreamResponse {
+// ApplyClaudeThinkingPolicy normalizes thinking/effort parameters before the
+// request is sent upstream:
+//   - a lenient top-level effort is merged into output_config.effort (Anthropic
+//     has no top-level effort field), then cleared;
+//   - on Opus 4.7+ adaptive thinking defaults display to "omitted", so restore
+//     the visible summary when the client requested adaptive without a display.
+//
+// Exported so other Anthropic-family upstreams (e.g. Vertex) can apply the same
+// normalization on their native /v1/messages path.
+func ApplyClaudeThinkingPolicy(req *dto.ClaudeRequest) {
+	if req == nil {
+		return
+	}
+	// Native /v1/messages path: honor an OpenRouter-style reasoning field by
+	// translating it into Claude thinking. Opus 4.7+ only accepts adaptive
+	// thinking; older models keep enabled semantics with a budget. The field is
+	// always cleared so it is never forwarded upstream (Anthropic rejects it).
+	if len(req.Reasoning) > 0 {
+		if req.Thinking == nil {
+			var r openrouter.RequestReasoning
+			if err := common.Unmarshal(req.Reasoning, &r); err == nil && (r.Enabled || r.MaxTokens > 0) {
+				if opusVersionAtLeast47(req.Model) {
+					req.Thinking = &dto.Thinking{Type: "adaptive"}
+				} else {
+					budget := r.MaxTokens
+					if budget <= 0 {
+						budget = 4096
+					}
+					req.Thinking = &dto.Thinking{Type: "enabled", BudgetTokens: &budget}
+				}
+			}
+		}
+		req.Reasoning = nil
+	}
+	if req.Effort != "" {
+		req.OutputConfig = mergeEffortIntoOutputConfig(req.OutputConfig, req.Effort)
+		req.Effort = ""
+	}
+	if req.Thinking != nil && opusVersionAtLeast47(req.Model) &&
+		req.Thinking.Type == "adaptive" && req.Thinking.Display == "" {
+		req.Thinking.Display = "summarized"
+	}
+}
+
+// mergeEffortIntoOutputConfig sets output_config.effort while preserving any
+// other keys. An effort already present in output_config wins (explicit nesting
+// is more specific than the top-level alias).
+func mergeEffortIntoOutputConfig(existing json.RawMessage, effort string) json.RawMessage {
+	if effort == "" {
+		return existing
+	}
+	cfg := map[string]any{}
+	if len(existing) > 0 {
+		if err := common.Unmarshal(existing, &cfg); err != nil {
+			return existing
+		}
+	}
+	if _, ok := cfg["effort"]; ok {
+		return existing
+	}
+	cfg["effort"] = effort
+	data, err := common.Marshal(cfg)
+	if err != nil {
+		return existing
+	}
+	return json.RawMessage(data)
+}
+
+// opusVersionAtLeast47 reports whether model is claude-opus with version >= 4.7.
+// Anthropic deprecated temperature/top_p/top_k for Opus 4.7 and later: any
+// non-default value returns 400. Parsing the version (rather than matching a
+// fixed string) auto-covers future opus releases (4-8, 4-9, 5-x).
+func opusVersionAtLeast47(model string) bool {
+	rest, ok := strings.CutPrefix(model, "claude-opus-")
+	if !ok {
+		return false
+	}
+	parts := strings.SplitN(rest, "-", 3) // "4-7" / "4-8" / "4-7-20260416" / "5-0"
+	if len(parts) < 2 {
+		return false
+	}
+	major, err1 := strconv.Atoi(parts[0])
+	minor, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return major > 4 || (major == 4 && minor >= 7)
+}
+
+// ApplyClaudeSamplingPolicy strips sampling params that the upstream would
+// reject, before the request is sent. Opus 4.7+ rejects any temperature/top_p/
+// top_k; sonnet/haiku and older opus still support them. Since Opus 4.1,
+// temperature and top_p cannot both be supplied, so drop top_p when both exist.
+//
+// Exported so other Anthropic-family upstreams (e.g. Vertex) can apply the same
+// normalization on their native /v1/messages path.
+func ApplyClaudeSamplingPolicy(req *dto.ClaudeRequest) {
+	if req == nil {
+		return
+	}
+	if opusVersionAtLeast47(req.Model) {
+		req.Temperature, req.TopP, req.TopK = nil, nil, nil
+		return
+	}
+	if req.Temperature != nil && req.TopP != nil {
+		req.TopP = nil
+	}
+}
+
+func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse, jsonSchemaToolName string) *dto.ChatCompletionsStreamResponse {
 	var response dto.ChatCompletionsStreamResponse
 	response.Object = "chat.completion.chunk"
 	response.Model = claudeResponse.Model
@@ -463,15 +715,22 @@ func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCo
 				choice.Delta.SetContentString(*claudeResponse.ContentBlock.Text)
 			}
 			if claudeResponse.ContentBlock.Type == "tool_use" {
-				tools = append(tools, dto.ToolCallResponse{
-					Index: common.GetPointer(fcIdx),
-					ID:    claudeResponse.ContentBlock.Id,
-					Type:  "function",
-					Function: dto.FunctionResponse{
-						Name:      claudeResponse.ContentBlock.Name,
-						Arguments: "",
-					},
-				})
+				// json_schema emulation: the forced tool's start carries no
+				// content; its arguments stream in as input_json_delta and are
+				// surfaced as message content below, not as a tool call.
+				if jsonSchemaToolName != "" && claudeResponse.ContentBlock.Name == jsonSchemaToolName {
+					choice.Delta.SetContentString("")
+				} else {
+					tools = append(tools, dto.ToolCallResponse{
+						Index: common.GetPointer(fcIdx),
+						ID:    claudeResponse.ContentBlock.Id,
+						Type:  "function",
+						Function: dto.FunctionResponse{
+							Name:      claudeResponse.ContentBlock.Name,
+							Arguments: "",
+						},
+					})
+				}
 			}
 		} else {
 			return nil
@@ -481,6 +740,14 @@ func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCo
 			choice.Delta.Content = claudeResponse.Delta.Text
 			switch claudeResponse.Delta.Type {
 			case "input_json_delta":
+				// json_schema emulation: stream the forced tool's argument
+				// fragments as plain content instead of tool_call arguments.
+				if jsonSchemaToolName != "" {
+					if claudeResponse.Delta.PartialJson != nil {
+						choice.Delta.SetContentString(*claudeResponse.Delta.PartialJson)
+					}
+					break
+				}
 				tools = append(tools, dto.ToolCallResponse{
 					Type:  "function",
 					Index: common.GetPointer(fcIdx),
@@ -518,7 +785,7 @@ func StreamResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.ChatCo
 	return &response
 }
 
-func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextResponse {
+func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse, jsonSchemaToolName string) *dto.OpenAITextResponse {
 	choices := make([]dto.OpenAITextResponseChoice, 0)
 	fullTextResponse := dto.OpenAITextResponse{
 		Id:      fmt.Sprintf("chatcmpl-%s", common.GetUUID()),
@@ -535,18 +802,33 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 	}
 	tools := make([]dto.ToolCallResponse, 0)
 	thinkingContent := ""
+	jsonSchemaContent := ""
 
 	fullTextResponse.Id = claudeResponse.Id
 	for _, message := range claudeResponse.Content {
 		switch message.Type {
 		case "tool_use":
+			// json_schema emulation: unwrap the forced tool's input back into
+			// message content as a JSON string instead of a tool call.
+			if jsonSchemaToolName != "" && message.Name == jsonSchemaToolName {
+				args, _ := json.Marshal(message.Input)
+				jsonSchemaContent = string(args)
+				if jsonSchemaContent == "" || jsonSchemaContent == "null" {
+					jsonSchemaContent = "{}"
+				}
+				continue
+			}
 			args, _ := json.Marshal(message.Input)
+			arguments := string(args)
+			if arguments == "" || arguments == "null" {
+				arguments = "{}"
+			}
 			tools = append(tools, dto.ToolCallResponse{
 				ID:   message.Id,
 				Type: "function", // compatible with other OpenAI derivative applications
 				Function: dto.FunctionResponse{
 					Name:      message.Name,
-					Arguments: string(args),
+					Arguments: arguments,
 				},
 			})
 		case "thinking":
@@ -557,6 +839,9 @@ func ResponseClaude2OpenAI(claudeResponse *dto.ClaudeResponse) *dto.OpenAITextRe
 		case "text":
 			responseText = message.GetText()
 		}
+	}
+	if jsonSchemaContent != "" {
+		responseText = jsonSchemaContent
 	}
 	choice := dto.OpenAITextResponseChoice{
 		Index: 0,
@@ -586,6 +871,9 @@ type ClaudeResponseInfo struct {
 	ResponseText strings.Builder
 	Usage        *dto.Usage
 	Done         bool
+	// toolArgsSeen tracks, per streamed tool_use content block index, whether any
+	// input_json_delta was emitted. Used to backfill "{}" for no-argument tools.
+	toolArgsSeen map[int]bool
 }
 
 func cacheCreationTokensForOpenAIUsage(usage *dto.Usage) int {
@@ -731,6 +1019,7 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 			claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Message.Usage.GetCacheCreation5mTokens()
 			claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Message.Usage.GetCacheCreation1hTokens()
 			claudeInfo.Usage.CompletionTokens = claudeResponse.Message.Usage.OutputTokens
+			claudeInfo.Usage.CompletionTokenDetails.ReasoningTokens = claudeResponse.Message.Usage.GetThinkingTokens()
 		}
 	} else if claudeResponse.Type == "content_block_delta" {
 		if claudeResponse.Delta != nil {
@@ -764,6 +1053,9 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 			if claudeResponse.Usage.OutputTokens > 0 {
 				claudeInfo.Usage.CompletionTokens = claudeResponse.Usage.OutputTokens
 			}
+			if thinkingTokens := claudeResponse.Usage.GetThinkingTokens(); thinkingTokens > 0 {
+				claudeInfo.Usage.CompletionTokenDetails.ReasoningTokens = thinkingTokens
+			}
 			claudeInfo.Usage.TotalTokens = claudeInfo.Usage.PromptTokens + claudeInfo.Usage.CompletionTokens
 		}
 
@@ -779,6 +1071,65 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 		oaiResponse.Model = claudeInfo.Model
 	}
 	return true
+}
+
+// trackToolUseArgs records whether each streamed tool_use block emitted any
+// arguments. On block stop it returns a synthetic chunk carrying arguments "{}"
+// for no-argument tools (Anthropic sends no input_json_delta for those), so
+// OpenAI clients that concatenate argument fragments still get valid JSON.
+func trackToolUseArgs(claudeInfo *ClaudeResponseInfo, cr *dto.ClaudeResponse) *dto.ChatCompletionsStreamResponse {
+	idx := 0
+	if cr.Index != nil {
+		idx = *cr.Index
+	}
+	switch cr.Type {
+	case "content_block_start":
+		if cr.ContentBlock != nil && cr.ContentBlock.Type == "tool_use" {
+			if claudeInfo.toolArgsSeen == nil {
+				claudeInfo.toolArgsSeen = map[int]bool{}
+			}
+			claudeInfo.toolArgsSeen[idx] = false
+		}
+	case "content_block_delta":
+		// Only a non-empty partial_json counts as real arguments. Anthropic may emit
+		// an input_json_delta with partial_json="" even for no-argument tools, which
+		// must NOT suppress the "{}" backfill.
+		if cr.Delta != nil && cr.Delta.Type == "input_json_delta" &&
+			cr.Delta.PartialJson != nil && *cr.Delta.PartialJson != "" {
+			if _, ok := claudeInfo.toolArgsSeen[idx]; ok {
+				claudeInfo.toolArgsSeen[idx] = true
+			}
+		}
+	case "content_block_stop":
+		if seen, ok := claudeInfo.toolArgsSeen[idx]; ok {
+			delete(claudeInfo.toolArgsSeen, idx)
+			if !seen {
+				return buildEmptyToolArgsChunk(idx)
+			}
+		}
+	}
+	return nil
+}
+
+func buildEmptyToolArgsChunk(anthropicIndex int) *dto.ChatCompletionsStreamResponse {
+	fcIdx := anthropicIndex - 1
+	if fcIdx < 0 {
+		fcIdx = 0
+	}
+	var resp dto.ChatCompletionsStreamResponse
+	resp.Object = "chat.completion.chunk"
+	choice := dto.ChatCompletionsStreamResponseChoice{}
+	choice.Delta.ToolCalls = []dto.ToolCallResponse{
+		{
+			Index: common.GetPointer(fcIdx),
+			Type:  "function",
+			Function: dto.FunctionResponse{
+				Arguments: "{}",
+			},
+		},
+	}
+	resp.Choices = []dto.ChatCompletionsStreamResponseChoice{choice}
+	return &resp
 }
 
 func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo, data string) *types.NewAPIError {
@@ -814,15 +1165,30 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 		helper.ClaudeChunkData(c, claudeResponse, data)
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
-		response := StreamResponseClaude2OpenAI(&claudeResponse)
+		jsonSchemaToolName := c.GetString(jsonSchemaToolNameKey)
 
-		if !FormatClaudeResponseInfo(&claudeResponse, response, claudeInfo) {
-			return nil
+		// In json_schema mode the forced tool's arguments are surfaced as content,
+		// so the "{}" tool-args backfill (which emits a tool_call) does not apply.
+		var emptyArgsChunk *dto.ChatCompletionsStreamResponse
+		if jsonSchemaToolName == "" {
+			emptyArgsChunk = trackToolUseArgs(claudeInfo, &claudeResponse)
 		}
 
-		err = helper.ObjectData(c, response)
-		if err != nil {
-			logger.LogError(c, "send_stream_response_failed: "+err.Error())
+		response := StreamResponseClaude2OpenAI(&claudeResponse, jsonSchemaToolName)
+
+		if FormatClaudeResponseInfo(&claudeResponse, response, claudeInfo) {
+			if err = helper.ObjectData(c, response); err != nil {
+				logger.LogError(c, "send_stream_response_failed: "+err.Error())
+			}
+		}
+
+		if emptyArgsChunk != nil {
+			emptyArgsChunk.Id = claudeInfo.ResponseId
+			emptyArgsChunk.Created = claudeInfo.Created
+			emptyArgsChunk.Model = claudeInfo.Model
+			if err = helper.ObjectData(c, emptyArgsChunk); err != nil {
+				logger.LogError(c, "send_stream_response_failed: "+err.Error())
+			}
 		}
 	}
 	return nil
@@ -907,6 +1273,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeResponse.Usage != nil {
 		claudeInfo.Usage.PromptTokens = claudeResponse.Usage.InputTokens
 		claudeInfo.Usage.CompletionTokens = claudeResponse.Usage.OutputTokens
+		claudeInfo.Usage.CompletionTokenDetails.ReasoningTokens = claudeResponse.Usage.GetThinkingTokens()
 		claudeInfo.Usage.TotalTokens = claudeResponse.Usage.InputTokens + claudeResponse.Usage.OutputTokens
 		claudeInfo.Usage.UsageSemantic = "anthropic"
 		claudeInfo.Usage.PromptTokensDetails.CachedTokens = claudeResponse.Usage.CacheReadInputTokens
@@ -917,7 +1284,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	var responseData []byte
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
-		openaiResponse := ResponseClaude2OpenAI(&claudeResponse)
+		openaiResponse := ResponseClaude2OpenAI(&claudeResponse, c.GetString(jsonSchemaToolNameKey))
 		openaiResponse.Usage = buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
 		responseData, err = json.Marshal(openaiResponse)
 		if err != nil {

@@ -1,6 +1,14 @@
 package router
 
 import (
+	"bufio"
+	"log"
+	"net"
+	"net/http"
+	"strconv"
+	"sync"
+	"time"
+
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
@@ -9,6 +17,78 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// delayedWriter wraps a gin.ResponseWriter, buffering all output until flush().
+// Used by the /chat/completions/:wait_time test endpoint to enforce minimum response time.
+// IMPORTANT: gin.ResponseWriter is a NAMED field (not embedded) to prevent io.Copy
+// from detecting io.ReaderFrom on the underlying writer and bypassing our buffer.
+type delayedWriter struct {
+	w          gin.ResponseWriter
+	buf        []byte
+	delay      time.Duration
+	once       sync.Once
+	statusCode int
+}
+
+func (w *delayedWriter) Header() http.Header {
+	return w.w.Header()
+}
+
+func (w *delayedWriter) Write(b []byte) (int, error) {
+	w.buf = append(w.buf, b...)
+	return len(b), nil
+}
+
+func (w *delayedWriter) WriteString(s string) (int, error) {
+	return w.Write([]byte(s))
+}
+
+func (w *delayedWriter) WriteHeader(code int) {
+	if w.statusCode == 0 {
+		w.statusCode = code
+	}
+}
+
+// Required by gin.ResponseWriter interface — must be no-op to prevent early flush
+func (w *delayedWriter) WriteHeaderNow() {}
+
+// Required by gin.ResponseWriter interface — must be no-op to prevent early flush
+func (w *delayedWriter) Flush() {}
+
+func (w *delayedWriter) Status() int   { return w.statusCode }
+func (w *delayedWriter) Size() int     { return len(w.buf) }
+func (w *delayedWriter) Written() bool { return len(w.buf) > 0 || w.statusCode > 0 }
+func (w *delayedWriter) Pusher() http.Pusher {
+	if pusher, ok := w.w.(http.Pusher); ok {
+		return pusher
+	}
+	return nil
+}
+
+// Required by gin.ResponseWriter (http.Hijacker)
+func (w *delayedWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return w.w.Hijack()
+}
+
+// Required by gin.ResponseWriter (http.CloseNotifier)
+func (w *delayedWriter) CloseNotify() <-chan bool {
+	if notifier, ok := w.w.(http.CloseNotifier); ok {
+		return notifier.CloseNotify()
+	}
+	return make(chan bool)
+}
+
+func (w *delayedWriter) flush() {
+	w.once.Do(func() {
+		time.Sleep(w.delay)
+		if w.statusCode > 0 {
+			w.w.WriteHeader(w.statusCode)
+		}
+		if len(w.buf) > 0 {
+			_, _ = w.w.Write(w.buf)
+		}
+	})
+}
 
 func SetRelayRouter(router *gin.Engine) {
 	router.Use(middleware.CORS())
@@ -66,6 +146,20 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
+
+	// 超时探针端点：不挂任何认证/分发/限流中间件，方便从外部 curl 排查 nginx/CDN/网关 idle timeout
+	// GET/POST /v1/test/timeout?time=240
+	// GET/POST /v1/test/timeout?time=240&stream=1&interval=5
+	testTimeoutRouter := router.Group("/v1/test")
+	testTimeoutRouter.Use(middleware.RouteTag("relay"))
+	{
+		testTimeoutRouter.GET("/timeout", controller.TestTimeout)
+		testTimeoutRouter.POST("/timeout", controller.TestTimeout)
+		testTimeoutRouter.GET("/timeout-image", controller.TestTimeoutWithImage)
+		testTimeoutRouter.POST("/timeout-image", controller.TestTimeoutWithImage)
+		testTimeoutRouter.GET("/metrics", controller.GetTestMetrics)
+	}
+
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
@@ -95,6 +189,23 @@ func SetRelayRouter(router *gin.Engine) {
 		})
 		httpRouter.POST("/chat/completions", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAI)
+		})
+		// Test endpoint: force minimum response time (wait_time in milliseconds)
+		httpRouter.POST("/chat/completions/:wait_time", func(c *gin.Context) {
+			wt, err := strconv.Atoi(c.Param("wait_time"))
+			if err != nil || wt <= 0 {
+				controller.Relay(c, types.RelayFormatOpenAI)
+				return
+			}
+			delay := time.Duration(wt) * time.Millisecond
+			// Strip /:wait_time from path so upstream sees /v1/chat/completions
+			c.Request.URL.Path = "/v1/chat/completions"
+			c.Request.URL.RawPath = ""
+			dw := &delayedWriter{w: c.Writer, delay: delay}
+			c.Writer = dw
+			controller.Relay(c, types.RelayFormatOpenAI)
+			dw.flush()
+			log.Printf("[Relay] wait_time enforced: %v", delay)
 		})
 
 		// response related routes

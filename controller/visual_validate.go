@@ -246,7 +246,7 @@ func pickByteplusChannel(c *gin.Context, group string, explicitId int) (*model.C
 		}
 		return ch, nil
 	}
-	channels, err := getByteplusEnabledChannels(group)
+	channels, err := getByteplusEnabledChannels(c, group)
 	if err != nil || len(channels) == 0 {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("pickByteplusChannel: no byteplus channel for group=%s: %v", group, err))
 		assetErrorResponse(c, http.StatusServiceUnavailable, "No BytePlus asset channel available")

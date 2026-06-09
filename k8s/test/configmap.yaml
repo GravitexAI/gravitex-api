@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-gateway-test-config
+  namespace: test
+data:
+  PORT: |-
+    3000
+  FRONTEND_BASE_URL: |-
+    http://localhost:5667
+  DEBUG: |-
+    true
+  ERROR_LOG_ENABLED: |-
+    true
+  DISABLE_PERFORMANCE_CHECK: |-
+    true
+  ENABLE_TASK_POLLING: |-
+    false
+  ENABLE_PPROF: |-
+    false
+  SA_TOKEN_SECRET: |-
+    abcdefghijklmnopqrstuvwxyz
+  RUOYI_AUTH_ENABLED: |-
+    true
+  RUOYI_JWT_SECRET: |-
+    abcdefghijklmnopqrstuvwxyz
+  SQL_DSN: |-
+    root:Gravitex2026@tcp(mysql-1c3abdf6bcb0-public.rds.bytepluses.com:3306)/gravitex_api_test?parseTime=true
+  LOG_SQL_DSN: |-
+    clickhouse://bytehouse:5t22Pibedd%3ARm3VWfws0z@tenant-3000990276-ap-southeast-1-public.bytehouse.bytepluses.com:19000/gravitex_api_test?secure=true&dial_timeout=10s
+  SQL_MAX_IDLE_CONNS: |-
+    800
+  SQL_MAX_OPEN_CONNS: |-
+    4000
+  DISABLE_PREPARE_STMT: |-
+    true
+  REDIS_CONN_STRING: |-
+    redis://:h7j4kab0wt5@redis-mlrfidzhj48zhy87a.redis.bytepluses.com:6379/1
+  BATCH_UPDATE_ENABLED: |-
+    true
+  BATCH_UPDATE_INTERVAL: |-
+    5
+  SQL_SKIP_MIGRATION: |-
+    true
+  SESSION_SECRET: |-
+    your_random_session_secret_for_development_12345
+  RELAY_MAX_IDLE_CONNS: |-
+    1000
+  RELAY_MAX_IDLE_CONNS_PER_HOST: |-
+    500
+  GRAVITEX_API_END: |-
+    http://101.47.154.214/prod-api

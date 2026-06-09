@@ -20,7 +20,12 @@ type VertexAIClaudeRequest struct {
 	ToolChoice       any                 `json:"tool_choice,omitempty"`
 	Thinking         *dto.Thinking       `json:"thinking,omitempty"`
 	OutputConfig     json.RawMessage     `json:"output_config,omitempty"`
-	//Metadata         json.RawMessage     `json:"metadata,omitempty"`
+	// 以下字段 Vertex 上的 Anthropic Messages 端均支持(structured outputs / metadata /
+	// prompt caching),此前未透传会被静默丢弃。Container、McpServers 等 Vertex 不支持的
+	// 字段仍不透传(传了上游也会 400)。
+	OutputFormat json.RawMessage `json:"output_format,omitempty"`
+	Metadata     json.RawMessage `json:"metadata,omitempty"`
+	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 }
 
 func copyRequest(req *dto.ClaudeRequest, version string) *VertexAIClaudeRequest {
@@ -38,5 +43,8 @@ func copyRequest(req *dto.ClaudeRequest, version string) *VertexAIClaudeRequest 
 		ToolChoice:       req.ToolChoice,
 		Thinking:         req.Thinking,
 		OutputConfig:     req.OutputConfig,
+		OutputFormat:     req.OutputFormat,
+		Metadata:         req.Metadata,
+		CacheControl:     req.CacheControl,
 	}
 }

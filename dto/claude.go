@@ -226,7 +226,15 @@ type ClaudeRequest struct {
 	Container         json.RawMessage `json:"container,omitempty"`
 	ToolChoice        any             `json:"tool_choice,omitempty"`
 	Thinking          *Thinking       `json:"thinking,omitempty"`
-	McpServers        json.RawMessage `json:"mcp_servers,omitempty"`
+	// Reasoning is a non-standard OpenRouter-style field ({enabled,effort,max_tokens})
+	// that some clients send instead of thinking. It is translated into Claude
+	// thinking and cleared before the request reaches the upstream Anthropic API.
+	Reasoning json.RawMessage `json:"reasoning,omitempty"`
+	// Effort is a lenient top-level alias some clients send instead of
+	// output_config.effort. It is merged into OutputConfig and cleared before the
+	// request reaches the upstream (Anthropic rejects a top-level effort field).
+	Effort     string          `json:"effort,omitempty"`
+	McpServers json.RawMessage `json:"mcp_servers,omitempty"`
 	Metadata          json.RawMessage `json:"metadata,omitempty"`
 	// Speed specifies the Claude inference speed mode.
 	// This field is filtered by default and can be enabled via channel setting allow_speed.
@@ -564,6 +572,21 @@ type ClaudeUsage struct {
 	ClaudeCacheCreation5mTokens int                  `json:"claude_cache_creation_5_m_tokens"`
 	ClaudeCacheCreation1hTokens int                  `json:"claude_cache_creation_1_h_tokens"`
 	ServerToolUse               *ClaudeServerToolUse `json:"server_tool_use,omitempty"`
+	// OutputTokensDetails 携带上游对 output_tokens 的拆分，其中 thinking_tokens 用于
+	// 映射到 OpenAI 协议的 completion_tokens_details.reasoning_tokens。
+	OutputTokensDetails *ClaudeOutputTokensDetails `json:"output_tokens_details,omitempty"`
+}
+
+type ClaudeOutputTokensDetails struct {
+	ThinkingTokens int `json:"thinking_tokens,omitempty"`
+}
+
+// GetThinkingTokens 安全返回上游思考 token 数，缺失时返回 0。
+func (u *ClaudeUsage) GetThinkingTokens() int {
+	if u == nil || u.OutputTokensDetails == nil {
+		return 0
+	}
+	return u.OutputTokensDetails.ThinkingTokens
 }
 
 type ClaudeCacheCreationUsage struct {

@@ -1,12 +1,14 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 
 	"github.com/byteplus-sdk/byteplus-go-sdk-v2/byteplus"
 	"github.com/byteplus-sdk/byteplus-go-sdk-v2/byteplus/bytepluserr"
@@ -231,8 +233,24 @@ type ByteplusAssetInfo struct {
 	UpdateTime  string          `json:"UpdateTime"`
 }
 
-// ByteplusCreateAsset creates an asset in the specified group and returns the asset ID.
-func ByteplusCreateAsset(cfg ByteplusAssetConfig, groupId, imageURL, assetType, name string) (string, error) {
+// byteplusAPIURL returns the human-readable endpoint URL for a BytePlus ARK API
+// action. The SDK constructs the actual URL internally; this helper is used
+// only for logging so operators can correlate our logs with BytePlus audit logs.
+func byteplusAPIURL(region, action string) string {
+	if region == "" {
+		region = "cn-beijing"
+	}
+	return fmt.Sprintf("https://open.volcengineapi.com/?Action=%s&Version=2024-01-01&Region=%s", action, region)
+}
+
+// ByteplusCreateAsset creates an asset in the specified group and returns the
+// asset ID. ctx is used for structured logging only — the SDK does not accept
+// context for cancellation.
+//
+// moderationStrategy controls content pre-filter behaviour. Pass "Skip" to
+// bypass most non-baseline review policies (requires Secure Mode disabled on
+// the BytePlus console). Any other value (including "") uses the default review.
+func ByteplusCreateAsset(ctx context.Context, cfg ByteplusAssetConfig, groupId, imageURL, assetType, name, moderationStrategy string) (string, error) {
 	if assetType == "" {
 		assetType = "Image"
 	}
@@ -245,10 +263,25 @@ func ByteplusCreateAsset(cfg ByteplusAssetConfig, groupId, imageURL, assetType, 
 	if name != "" {
 		body["Name"] = name
 	}
+	if moderationStrategy == "Skip" {
+		body["Moderation"] = map[string]interface{}{"Strategy": "Skip"}
+	}
+
+	apiURL := byteplusAPIURL(cfg.Region, "CreateAsset")
+	if bodyJSON, merr := common.Marshal(body); merr == nil {
+		logger.LogInfo(ctx, fmt.Sprintf("[ByteplusCreateAsset] REQUEST url=%s body=%s", apiURL, string(bodyJSON)))
+	}
+
 	resp, err := byteplusCall(cfg, "CreateAsset", body)
 	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("[ByteplusCreateAsset] RESPONSE ERROR url=%s err=%s", apiURL, err.Error()))
 		return "", err
 	}
+
+	if respJSON, merr := common.Marshal(resp); merr == nil {
+		logger.LogInfo(ctx, fmt.Sprintf("[ByteplusCreateAsset] RESPONSE OK url=%s body=%s", apiURL, string(respJSON)))
+	}
+
 	assetId := extractStringField(resp, "Id")
 	if assetId == "" {
 		return "", fmt.Errorf("CreateAsset returned empty Id, raw: %v", resp)
@@ -316,6 +349,23 @@ func ByteplusDeleteAsset(cfg ByteplusAssetConfig, assetId string) error {
 		"ProjectName": cfg.ProjectName,
 	}
 	_, err := byteplusCall(cfg, "DeleteAsset", body)
+	return err
+}
+
+// ByteplusUpdateAsset updates the Name of an existing asset.
+// Only non-empty name is sent; ProjectName is always included.
+func ByteplusUpdateAsset(cfg ByteplusAssetConfig, assetId, name string) error {
+	if assetId == "" {
+		return fmt.Errorf("ByteplusUpdateAsset: empty assetId")
+	}
+	body := map[string]interface{}{
+		"Id":          assetId,
+		"ProjectName": cfg.ProjectName,
+	}
+	if name != "" {
+		body["Name"] = name
+	}
+	_, err := byteplusCall(cfg, "UpdateAsset", body)
 	return err
 }
 

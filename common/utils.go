@@ -263,7 +263,8 @@ func GetTimestamp() int64 {
 }
 
 func GetTimeString() string {
-	now := time.Now().UTC()
+	//	now := time.Now().UTC()  原来的时间
+	now := time.Now().In(time.FixedZone("UTC+8", 8*60*60))
 	return fmt.Sprintf("%s%d", now.Format("20060102150405"), now.UnixNano()%1e9)
 }
 

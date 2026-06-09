@@ -10,24 +10,32 @@ var ModelList = []string{
 	"gemini-2.5-flash-native-audio-latest",
 	// preview version
 	"gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts",
-	"gemini-2.5-flash-image", "gemini-2.5-flash-lite-preview-09-2025",
-	"gemini-3-pro-preview", "gemini-3-flash-preview", "gemini-3.1-pro-preview",
+	"gemini-2.5-flash-image", "gemini-2.5-flash-image-preview",
+	"gemini-2.5-flash-preview-09-2025", "gemini-2.5-flash-lite-preview-09-2025",
+	"gemini-2.5-flash-nothinking", "gemini-2.5-flash-preview-09-2025-nothinking",
+	"gemini-3-pro-preview", "gemini-3-pro-preview-lowthinking", "gemini-3-pro-preview-lowthinnking",
+	"gemini-3-flash-preview", "gemini-3-flash-preview-lowthinking", "gemini-3.1-pro-preview",
+	"gemini-3.1-pro-preview-lowthinking", "gemini-3.5-flash",
 	"gemini-3.1-pro-preview-customtools", "gemini-3.1-flash-lite-preview",
 	"gemini-3-pro-image-preview", "nano-banana-pro-preview",
-	"gemini-3.1-flash-image-preview", "gemini-robotics-er-1.5-preview",
+	"gemini-3.1-flash-image", "gemini-3.1-flash-image-preview", "gemini-robotics-er-1.5-preview",
 	"gemini-2.5-computer-use-preview-10-2025", "deep-research-pro-preview-12-2025",
 	"gemini-2.5-flash-native-audio-preview-09-2025", "gemini-2.5-flash-native-audio-preview-12-2025",
+	"gemini-live-2.5-flash-native-audio", "gemini-live-2.5-flash-preview-native-audio-09-2025",
 	// gemma models
 	"gemma-3-1b-it", "gemma-3-4b-it", "gemma-3-12b-it",
 	"gemma-3-27b-it", "gemma-3n-e4b-it", "gemma-3n-e2b-it",
 	// embedding models
 	"gemini-embedding-001", "gemini-embedding-2-preview",
 	// imagen models
+	"imagen-3.0-fast-generate-001", "imagen-3.0-generate-002",
 	"imagen-4.0-generate-001", "imagen-4.0-ultra-generate-001",
 	"imagen-4.0-fast-generate-001",
 	// veo models
 	"veo-2.0-generate-001", "veo-3.0-generate-001", "veo-3.0-fast-generate-001",
 	"veo-3.1-generate-preview", "veo-3.1-fast-generate-preview",
+	"veo-3.1-generate-001", "veo-3.1-fast-generate-001", "veo-3.1-lite-generate-001",
+	"gemini-2.0-flash-preview-image-generation",
 	// other models
 	"aqa",
 }

@@ -16,12 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useState } from 'react';
-import { API, showError, showSuccess } from '../../../../helpers';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { API, showError, showSuccess, showWarning } from '../../../../helpers';
 import {
   combineBillingExpr,
   splitBillingExprAndRequestRules,
 } from '../components/requestRuleExpr';
+import { createOperLog } from '../../../../components/oper-log/operLogApi';
 
 export const PAGE_SIZE = 10;
 export const PRICE_SUFFIX = '$/1M tokens';
@@ -634,6 +635,13 @@ export function useModelPricingEditorState({
   const [loading, setLoading] = useState(false);
   const [conflictOnly, setConflictOnly] = useState(false);
   const [optionalFieldToggles, setOptionalFieldToggles] = useState({});
+  // 操作日志弹窗 state（可视化编辑保存时弹出）
+  const [operLogModal, setOperLogModal] = useState({
+    visible: false,
+    changes: [],
+    defaultRemark: '',
+  });
+  const pendingSaveRef = useRef(null);
 
   useEffect(() => {
     const sourceMaps = {
@@ -1020,78 +1028,107 @@ export function useModelPricingEditorState({
     return true;
   };
 
-  const handleSubmit = async () => {
-    setLoading(true);
-    try {
-      const output = {
-        ModelPrice: {},
-        ModelRatio: {},
-        CompletionRatio: {},
-        CacheRatio: {},
-        CreateCacheRatio: {},
-        ImageRatio: {},
-        AudioRatio: {},
-        AudioCompletionRatio: {},
-      };
+  // 将本次保存要写入的 option 序列化为 { key: jsonString } 形式
+  const buildSavePayload = () => {
+    const output = {
+      ModelPrice: {},
+      ModelRatio: {},
+      CompletionRatio: {},
+      CacheRatio: {},
+      CreateCacheRatio: {},
+      ImageRatio: {},
+      AudioRatio: {},
+      AudioCompletionRatio: {},
+    };
 
-      const tieredOutput = {
-        'billing_setting.billing_mode': {},
-        'billing_setting.billing_expr': {},
-      };
+    const tieredOutput = {
+      'billing_setting.billing_mode': {},
+      'billing_setting.billing_expr': {},
+    };
 
-      for (const model of models) {
-        if (model.billingMode === 'tiered_expr') {
-          const finalBillingExpr = combineBillingExpr(
-            model.billingExpr,
-            model.requestRuleExpr,
-          );
-          if (finalBillingExpr) {
-            tieredOutput['billing_setting.billing_mode'][model.name] = 'tiered_expr';
-            tieredOutput['billing_setting.billing_expr'][model.name] = finalBillingExpr;
-          }
-        }
-
-        // Always serialize ratio/price values for all models (including
-        // tiered_expr) so they serve as fallback during multi-instance sync
-        // delay.  ModelPriceHelper checks billing_mode first, so these values
-        // are only used when billing_setting hasn't propagated yet.
-        try {
-          const serialized = serializeModel(model, t);
-          Object.entries(serialized).forEach(([key, value]) => {
-            if (value !== null) {
-              output[key][model.name] = value;
-            }
-          });
-        } catch (e) {
-          if (model.billingMode !== 'tiered_expr') {
-            throw e;
-          }
+    for (const model of models) {
+      if (model.billingMode === 'tiered_expr') {
+        const finalBillingExpr = combineBillingExpr(
+          model.billingExpr,
+          model.requestRuleExpr,
+        );
+        if (finalBillingExpr) {
+          tieredOutput['billing_setting.billing_mode'][model.name] = 'tiered_expr';
+          tieredOutput['billing_setting.billing_expr'][model.name] = finalBillingExpr;
         }
       }
 
-      const requestQueue = [
-        ...Object.entries(output).map(([key, value]) =>
-          API.put('/api/option/', {
-            key,
-            value: JSON.stringify(value, null, 2),
-          }),
-        ),
-        ...Object.entries(tieredOutput).map(([key, value]) =>
-          API.put('/api/option/', {
-            key,
-            value: JSON.stringify(value, null, 2),
-          }),
-        ),
-      ];
+      try {
+        const serialized = serializeModel(model, t);
+        Object.entries(serialized).forEach(([key, value]) => {
+          if (value !== null) {
+            output[key][model.name] = value;
+          }
+        });
+      } catch (e) {
+        if (model.billingMode !== 'tiered_expr') {
+          throw e;
+        }
+      }
+    }
 
+    const payload = {};
+    Object.entries(output).forEach(([key, value]) => {
+      payload[key] = JSON.stringify(value, null, 2);
+    });
+    Object.entries(tieredOutput).forEach(([key, value]) => {
+      payload[key] = JSON.stringify(value, null, 2);
+    });
+    return payload;
+  };
+
+  // 归一化 JSON 字符串以便对比（忽略格式差异）
+  const normalizeJson = (str) => {
+    if (str === undefined || str === null || str === '') return '';
+    try {
+      return JSON.stringify(JSON.parse(str));
+    } catch {
+      return String(str);
+    }
+  };
+
+  // 对比本次 payload 与原始 options，得到变更项
+  const computeChanges = (payload) => {
+    const changes = [];
+    Object.entries(payload).forEach(([key, newStr]) => {
+      const oldStr = options[key] ?? '';
+      if (normalizeJson(oldStr) !== normalizeJson(newStr)) {
+        changes.push({
+          key,
+          oldVal: oldStr && oldStr.trim() ? oldStr : '(空)',
+          newVal: newStr,
+        });
+      }
+    });
+    return changes;
+  };
+
+  // 真正提交保存请求；logRemark/logContent 为 null 表示不记录日志
+  const commitSave = async (payload, logRemark, logContent) => {
+    setLoading(true);
+    try {
+      const requestQueue = Object.entries(payload).map(([key, value]) =>
+        API.put('/api/option/', { key, value }),
+      );
       const results = await Promise.all(requestQueue);
       for (const res of results) {
         if (!res?.data?.success) {
           throw new Error(res?.data?.message || t('保存失败，请重试'));
         }
       }
-
       showSuccess(t('保存成功'));
+      if (logRemark !== null) {
+        await createOperLog({
+          oper_type: '模型价格',
+          content: logContent,
+          remark: logRemark,
+        });
+      }
       await refresh();
     } catch (error) {
       console.error('保存失败:', error);
@@ -1099,6 +1136,47 @@ export function useModelPricingEditorState({
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSubmit = async () => {
+    let payload;
+    try {
+      payload = buildSavePayload();
+    } catch (error) {
+      showError(error.message || t('保存失败，请重试'));
+      return;
+    }
+    const changes = computeChanges(payload);
+    if (!changes.length) {
+      showWarning(t('你似乎并没有修改什么'));
+      return;
+    }
+    pendingSaveRef.current = payload;
+    setOperLogModal({
+      visible: true,
+      changes,
+      defaultRemark: `修改了模型定价（${changes.length} 项）`,
+    });
+  };
+
+  // 弹窗：确认并记录日志
+  const confirmOperLogSave = (remark, content) => {
+    const payload = pendingSaveRef.current;
+    setOperLogModal((s) => ({ ...s, visible: false }));
+    if (payload) commitSave(payload, remark, content);
+  };
+
+  // 弹窗：不记录，直接保存
+  const skipOperLogSave = () => {
+    const payload = pendingSaveRef.current;
+    setOperLogModal((s) => ({ ...s, visible: false }));
+    if (payload) commitSave(payload, null, null);
+  };
+
+  // 弹窗：取消（不保存）
+  const cancelOperLogSave = () => {
+    pendingSaveRef.current = null;
+    setOperLogModal((s) => ({ ...s, visible: false }));
   };
 
   return {
@@ -1129,5 +1207,9 @@ export function useModelPricingEditorState({
     addModel,
     deleteModel,
     applySelectedModelPricing,
+    operLogModal,
+    confirmOperLogSave,
+    skipOperLogSave,
+    cancelOperLogSave,
   };
 }

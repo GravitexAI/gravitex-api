@@ -98,6 +98,9 @@ type GeneralOpenAIRequest struct {
 	WebSearch json.RawMessage `json:"web_search,omitempty"`
 	// doubao,zhipu_v4
 	THINKING json.RawMessage `json:"thinking,omitempty"`
+	// Anthropic adaptive thinking effort (low/medium/high/xhigh/max), forwarded
+	// into Claude output_config.effort. Top-level here for client convenience.
+	Effort string `json:"effort,omitempty"`
 	// pplx Params
 	SearchDomainFilter     json.RawMessage `json:"search_domain_filter,omitempty"`
 	SearchRecencyFilter    json.RawMessage `json:"search_recency_filter,omitempty"`

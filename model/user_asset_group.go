@@ -99,3 +99,49 @@ func CountUserAssetGroupsByChannel(userId, channelId int, groupType string) (int
 	err := q.Count(&count).Error
 	return count, err
 }
+
+// AdminGroupQuery holds parameters for admin-side paginated group queries.
+type AdminGroupQuery struct {
+	ChannelId int
+	GroupType string
+	Page      int
+	PageSize  int
+}
+
+// GetUserAssetGroupsByChannelIdPaged returns asset groups for a channel with
+// optional group_type filter; ordered by created_at DESC. Page is 1-indexed.
+func GetUserAssetGroupsByChannelIdPaged(q AdminGroupQuery) ([]UserAssetGroup, int64, error) {
+	if q.Page < 1 {
+		q.Page = 1
+	}
+	if q.PageSize < 1 {
+		q.PageSize = 20
+	}
+	db := DB.Model(&UserAssetGroup{}).Where("channel_id = ?", q.ChannelId)
+	if q.GroupType != "" && q.GroupType != "all" {
+		db = db.Where("group_type = ?", q.GroupType)
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var groups []UserAssetGroup
+	offset := (q.Page - 1) * q.PageSize
+	err := db.Order("created_at DESC").Offset(offset).Limit(q.PageSize).Find(&groups).Error
+	return groups, total, err
+}
+
+// UpdateUserAssetGroupName updates the Name and Description of a group by its group_id.
+func UpdateUserAssetGroupName(groupId, name, description string) error {
+	updates := map[string]interface{}{}
+	if name != "" {
+		updates["name"] = name
+	}
+	if description != "" {
+		updates["description"] = description
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	return DB.Model(&UserAssetGroup{}).Where("group_id = ?", groupId).Updates(updates).Error
+}

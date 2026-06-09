@@ -25,7 +25,7 @@ Seedance 2.0 是一款先进的 AI 视频生成模型，支持文生视频、图
   - [列出素材组](#列出素材组)
   - [删除素材组](#删除素材组)
   - [创建素材](#创建素材)
-  - [列出素材](#列出素材)
+  - [列出素材真人素材组：H5 真人核验（liveness_face）](#列出素材)
   - [查询单个素材](#查询单个素材)
   - [删除素材](#删除素材)
   - [素材状态](#素材状态)
@@ -55,10 +55,12 @@ Content-Type: application/json
 
 ## 模型列表
 
-| 模型 ID | 说明 | 支持分辨率 | 特点 |
-|---------|------|-----------|------|
-| `seedance-2-0` | Seedance 2.0 标准版 | `480p`、`720p`、`1080p` | 高质量生成，适合正式生产 |
-| `seedance-2-0-fast` | Seedance 2.0 快速版 | `480p`、`720p` | 更快速度，适合快速迭代，**不支持 1080p** |
+
+| 模型 ID               | 说明               | 支持分辨率                 | 特点                        |
+| ------------------- | ---------------- | --------------------- | ------------------------- |
+| `seedance-2-0`      | Seedance 2.0 标准版 | `480p`、`720p`、`1080p` | 高质量生成，适合正式生产              |
+| `seedance-2-0-fast` | Seedance 2.0 快速版 | `480p`、`720p`         | 更快速度，适合快速迭代，**不支持 1080p** |
+
 
 ---
 
@@ -68,53 +70,62 @@ Content-Type: application/json
 
 ### 请求参数
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `model` | string | **是** | — | 模型 ID：`seedance-2-0` 或 `seedance-2-0-fast` |
-| `content` | array | 否* | — | 内容数组，包含文本提示、图片、视频、音频（详见下方） |
-| `prompt` | string | 否* | — | 文本提示词（`content` 的简化替代，两者二选一） |
-| `duration` | integer | 否 | `5` | 视频时长，`-1`（自动）或 `4`~`15` 秒 |
-| `resolution` | string | 否 | `"720p"` | 分辨率：`480p`、`720p`（标准版还支持 `1080p`，fast 版不支持 `1080p`） |
-| `ratio` | string | 否 | `"16:9"` | 画面比例：`16:9`、`9:16`、`1:1`、`4:3`、`3:4`、`21:9`、`adaptive` |
-| `generate_audio` | boolean | 否 | `true` | 是否自动生成音频 |
-| `watermark` | boolean | 否 | `false` | 是否添加水印 |
-| `seed` | integer | 否 | `-1`（随机） | 随机种子，固定种子可复现结果 |
 
-> \* `content` 和 `prompt` 至少提供一个。推荐使用 `content` 数组，功能更强大。
+| 参数               | 类型      | 必填    | 默认值      | 说明                                                     |
+| ---------------- | ------- | ----- | -------- | ------------------------------------------------------ |
+| `model`          | string  | **是** | —        | 模型 ID：`seedance-2-0` 或 `seedance-2-0-fast`             |
+| `content`        | array   | 否*    | —        | 内容数组，包含文本提示、图片、视频、音频（详见下方）                             |
+| `prompt`         | string  | 否*    | —        | 文本提示词（`content` 的简化替代，两者二选一）                           |
+| `duration`       | integer | 否     | `5`      | 视频时长，`-1`（自动）或 `4`~`15` 秒                              |
+| `resolution`     | string  | 否     | `"720p"` | 分辨率：`480p`、`720p`（标准版还支持 `1080p`，fast 版不支持 `1080p`）    |
+| `ratio`          | string  | 否     | `"16:9"` | 画面比例：`16:9`、`9:16`、`1:1`、`4:3`、`3:4`、`21:9`、`adaptive` |
+| `generate_audio` | boolean | 否     | `true`   | 是否自动生成音频                                               |
+| `watermark`      | boolean | 否     | `false`  | 是否添加水印                                                 |
+| `seed`           | integer | 否     | `-1`（随机） | 随机种子，固定种子可复现结果                                         |
+
+
+>  `content` 和 `prompt` 至少提供一个。推荐使用 `content` 数组，功能更强大。
 
 ### Content 数组详解
 
 `content` 是一个数组，每个元素代表一种输入类型：
 
-| type | role | 说明 | 数量限制 |
-|------|------|------|----------|
-| `text` | — | 文本提示词，描述想要生成的视频内容 | 1 条 |
-| `image_url` | （可省略） | **图片输入**，不指定 role 时默认作为首帧图片 | 1 张 |
-| `image_url` | `first_frame` | **首帧图片**，视频将以此图片作为第一帧开始生成 | 1 张 |
-| `image_url` | `last_frame` | **尾帧图片**，需搭配 `first_frame` 使用 | 1 张 |
-| `image_url` | `reference_image` | **参考图片**，提供视觉参考风格 | 最多 9 张 |
-| `video_url` | `reference_video` | **参考视频**，提供运动/风格参考 | 最多 3 个 |
-| `audio_url` | `reference_audio` | **参考音频**，提供音乐/声音参考 | 最多 3 段 |
+
+| type        | role              | 说明                            | 数量限制   |
+| ----------- | ----------------- | ----------------------------- | ------ |
+| `text`      | —                 | 文本提示词，描述想要生成的视频内容             | 1 条    |
+| `image_url` | （可省略）             | **图片输入**，不指定 role 时默认作为首帧图片   | 1 张    |
+| `image_url` | `first_frame`     | **首帧图片**，视频将以此图片作为第一帧开始生成     | 1 张    |
+| `image_url` | `last_frame`      | **尾帧图片**，需搭配 `first_frame` 使用 | 1 张    |
+| `image_url` | `reference_image` | **参考图片**，提供视觉参考风格             | 最多 9 张 |
+| `video_url` | `reference_video` | **参考视频**，提供运动/风格参考            | 最多 3 个 |
+| `audio_url` | `reference_audio` | **参考音频**，提供音乐/声音参考            | 最多 3 段 |
+
 
 **互斥规则：**
+
 - `first_frame` 与 `reference_image` **互斥**，不能同时使用
 - `last_frame` 必须搭配 `first_frame`
 - `reference_audio` 需搭配图片或视频输入
 
-> ⚠️ **`asset://` 引用必须按 `asset_type` 严格分流到对应字段**
+> ⚠️ `**asset://` 引用必须按 `asset_type` 严格分流到对应字段**
 >
 > 同一个 `asset_url` 在素材库 `GET /v1/assets` 返回的 `asset_type` 是什么类型，组装到 `content[]` 时就必须用对应的 `type` / 字段名 / `role`，**不能统一塞到 `image_url`**。否则上游会返回：
+>
 > ```json
 > {"error":{"code":"InvalidParameter","message":"the specified asset is not an image","param":"content[N].image_url.url","type":"BadRequest"}}
 > ```
 >
-> | 素材的 `asset_type` | `type` | 字段 | `role` |
-> |---|---|---|---|
-> | `Image` | `image_url` | `image_url.url` | `reference_image`（或 `first_frame` / `last_frame`） |
-> | `Video` | `video_url` | `video_url.url` | `reference_video` |
-> | `Audio` | `audio_url` | `audio_url.url` | `reference_audio` |
+>
+> | 素材的 `asset_type` | `type`      | 字段              | `role`                                            |
+> | ---------------- | ----------- | --------------- | ------------------------------------------------- |
+> | `Image`          | `image_url` | `image_url.url` | `reference_image`（或 `first_frame` / `last_frame`） |
+> | `Video`          | `video_url` | `video_url.url` | `reference_video`                                 |
+> | `Audio`          | `audio_url` | `audio_url.url` | `reference_audio`                                 |
+>
 >
 > ✅ 正确（用图片素材 + 音频素材）：
+>
 > ```json
 > [
 >   {"type":"text","text":"素材1 用素材2唱歌"},
@@ -124,6 +135,7 @@ Content-Type: application/json
 > ```
 >
 > ❌ 错误（音频素材塞 image_url，触发 InvalidParameter）：
+>
 > ```json
 > [
 >   {"type":"text","text":"素材1 用素材2唱歌"},
@@ -224,12 +236,14 @@ Authorization: Bearer sk-{your_token_key}
 queued → in_progress → completed / failed
 ```
 
-| 状态 | 说明 |
-|------|------|
-| `queued` | 任务已提交，排队中 |
-| `in_progress` | 正在生成 |
-| `completed` | 生成成功，`video_url` 字段可用 |
-| `failed` | 生成失败，查看 `error.message` 获取原因；如果是 Seedance 2.0 被审核拦截，还可以调用 [查询审核拦截原因](#查询审核拦截原因) 拿到具体分类 |
+
+| 状态            | 说明                                                                                     |
+| ------------- | -------------------------------------------------------------------------------------- |
+| `queued`      | 任务已提交，排队中                                                                              |
+| `in_progress` | 正在生成                                                                                   |
+| `completed`   | 生成成功，`video_url` 字段可用                                                                  |
+| `failed`      | 生成失败，查看 `error.message` 获取原因；如果是 Seedance 2.0 被审核拦截，还可以调用 [查询审核拦截原因](#查询审核拦截原因) 拿到具体分类 |
+
 
 **建议轮询间隔**：每 5 秒查询一次，视频通常在 30~120 秒内生成完毕。
 
@@ -402,10 +416,12 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
 
 **素材库分两类：**
 
-| 库类型 | `group_type` | 创建方式 | 典型用途 |
-|---|---|---|---|
-| 虚拟素材库（默认） | `aigc` | `POST /v1/asset-groups` 直接创建 | 任意人物 / 动物 / 风景 / 物品的图片、视频、音频 |
-| 真人素材库 | `liveness_face` | `POST /v1/visual-validate/session` H5 真人核验后创建 | 真人写真，**首次创建必须通过本人真人核验**；后续追加图/视/音不再校验人脸 |
+
+| 库类型       | `group_type`    | 创建方式                                          | 典型用途                                    |
+| --------- | --------------- | --------------------------------------------- | --------------------------------------- |
+| 虚拟素材库（默认） | `aigc`          | `POST /v1/asset-groups` 直接创建                  | 任意人物 / 动物 / 风景 / 物品的图片、视频、音频            |
+| 真人素材库     | `liveness_face` | `POST /v1/visual-validate/session` H5 真人核验后创建 | 真人写真，**首次创建必须通过本人真人核验**；后续追加图/视/音不再校验人脸 |
+
 
 **完整流程：**
 
@@ -422,11 +438,13 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
 
 **支持的素材类型与格式（虚拟 / 真人 两类素材库均一致，约束以火山方舟官方为准）：**
 
-| `asset_type` | 支持格式 | 单文件大小 | 其他约束 |
-|---|---|---|---|
-| `Image`（默认） | jpeg / png / webp / bmp / tiff / gif / heic / heif | < 30 MB | 长宽比 0.4–2.5；宽高 300–6000 px |
-| `Video` | mp4 / mov | ≤ 50 MB | 分辨率 480p / 720p；时长 2–15 秒；FPS 24–60；长宽比 0.4–2.5；宽高 300–6000 px；总像素 409600–927408 |
-| `Audio` | mp3 / wav | ≤ 15 MB | 时长 2–15 秒 |
+
+| `asset_type` | 支持格式                                               | 单文件大小   | 其他约束                                                                             |
+| ------------ | -------------------------------------------------- | ------- | -------------------------------------------------------------------------------- |
+| `Image`（默认）  | jpeg / png / webp / bmp / tiff / gif / heic / heif | < 30 MB | 长宽比 0.4–2.5；宽高 300–6000 px                                                       |
+| `Video`      | mp4 / mov                                          | ≤ 50 MB | 分辨率 480p / 720p；时长 2–15 秒；FPS 24–60；长宽比 0.4–2.5；宽高 300–6000 px；总像素 409600–927408 |
+| `Audio`      | mp3 / wav                                          | ≤ 15 MB | 时长 2–15 秒                                                                        |
+
 
 > 真人素材库（`liveness_face`）虽可上传图/视/音三类，但首次创建时仍需以**真人正脸图片**完成 H5 真人核验；后续追加视频/音频不会再触发人脸比对。
 
@@ -485,13 +503,15 @@ curl -X POST https://api.gravitex.ai/v1/assets \
 }
 ```
 
-| 字段 | 说明 |
-|------|------|
-| `virtual_id` | 素材唯一 ID |
-| `asset_url` | 在视频生成中引用素材时使用的 URL（`asset://` 协议） |
-| `asset_type` | 实际入库的素材类型，已规整为 `Image` / `Video` / `Audio` |
-| `group_id` | 回显请求里的 `group_id` |
-| `status` | 素材状态：`pending` → `active`（成功）或 `failed`（失败） |
+
+| 字段           | 说明                                          |
+| ------------ | ------------------------------------------- |
+| `virtual_id` | 素材唯一 ID                                     |
+| `asset_url`  | 在视频生成中引用素材时使用的 URL（`asset://` 协议）           |
+| `asset_type` | 实际入库的素材类型，已规整为 `Image` / `Video` / `Audio`  |
+| `group_id`   | 回显请求里的 `group_id`                           |
+| `status`     | 素材状态：`pending` → `active`（成功）或 `failed`（失败） |
+
 
 #### 步骤 3：等待素材处理完成
 
@@ -525,6 +545,7 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
 ```
 
 > **重要**：
+>
 > - 使用 `asset://` 协议引用素材，而不是 HTTP URL
 > - 仅 `active` 状态的素材可用于视频生成
 > - 网关会验证素材所有权，您只能使用自己上传的素材
@@ -538,17 +559,19 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
 
 ### 接口总览
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/v1/asset-groups` | 创建素材组（虚拟 `aigc`） |
-| `GET` | `/v1/asset-groups` | 列出素材组，支持 `?group_type=aigc\|liveness_face\|all`；**未指定时默认仅返回 `aigc` 素材组** |
-| `DELETE` | `/v1/asset-groups/{group_id}` | 删除素材组（级联删除组内所有素材） |
-| `POST` | `/v1/assets` | 创建素材（**仅接受公网 https URL**；支持 `Image`/`Video`/`Audio`） |
-| `GET` | `/v1/assets` | 列出素材，支持 `?group_id=`、`?group_type=aigc\|liveness_face\|all` 过滤；**未指定 `group_type` 时默认仅返回 `aigc` 类素材** |
-| `GET` | `/v1/assets/{virtual_id}` | 查询单个素材，自动刷新上游状态 |
-| `DELETE` | `/v1/assets/{virtual_id}` | 删除素材 |
-| `POST` | `/v1/visual-validate/session` | 真人素材组：发起 H5 真人核验 |
-| `POST` | `/v1/visual-validate/result` | 真人素材组：H5 回调内部使用，业务侧无需直接调用 |
+
+| 方法       | 路径                            | 说明                                                                                                  |
+| -------- | ----------------------------- | --------------------------------------------------------------------------------------------------- |
+| `POST`   | `/v1/asset-groups`            | 创建素材组（虚拟 `aigc`）                                                                                    |
+| `GET`    | `/v1/asset-groups`            | 列出素材组，支持 `?group_type=aigc|liveness_face|all`；**未指定时默认仅返回 `aigc` 素材组**                              |
+| `DELETE` | `/v1/asset-groups/{group_id}` | 删除素材组（级联删除组内所有素材）                                                                                   |
+| `POST`   | `/v1/assets`                  | 创建素材（**仅接受公网 https URL**；支持 `Image`/`Video`/`Audio`）                                                |
+| `GET`    | `/v1/assets`                  | 列出素材，支持 `?group_id=`、`?group_type=aigc|liveness_face|all` 过滤；**未指定 `group_type` 时默认仅返回 `aigc` 类素材** |
+| `GET`    | `/v1/assets/{virtual_id}`     | 查询单个素材，自动刷新上游状态                                                                                     |
+| `DELETE` | `/v1/assets/{virtual_id}`     | 删除素材                                                                                                |
+| `POST`   | `/v1/visual-validate/session` | 真人素材组：发起 H5 真人核验                                                                                    |
+| `POST`   | `/v1/visual-validate/result`  | 真人素材组：H5 回调内部使用，业务侧无需直接调用                                                                           |
+
 
 ---
 
@@ -556,12 +579,14 @@ curl -X POST https://api.gravitex.ai/v1/video/generations \
 
 **POST** `https://api.gravitex.ai/v1/asset-groups`
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `name` | string | **是** | 素材组名称 |
-| `description` | string | 否 | 描述。**省略或传空串时，网关自动用调用 API Key 所属用户的 `username` 兜底**，便于在火山方舟控制台识别归属 |
-| `channel_id` | integer | 否 | 指定上游渠道 ID，省略则自动选择 |
-| `group_type` | string | 否 | `aigc`（默认）。**`liveness_face` 不能在此创建**，需走 `POST /v1/visual-validate/session` |
+
+| 字段            | 类型      | 必填    | 说明                                                                          |
+| ------------- | ------- | ----- | --------------------------------------------------------------------------- |
+| `name`        | string  | **是** | 素材组名称                                                                       |
+| `description` | string  | 否     | 描述。**省略或传空串时，网关自动用调用 API Key 所属用户的 `username` 兜底**，便于在火山方舟控制台识别归属           |
+| `channel_id`  | integer | 否     | 指定上游渠道 ID，省略则自动选择                                                           |
+| `group_type`  | string  | 否     | `aigc`（默认）。`**liveness_face` 不能在此创建**，需走 `POST /v1/visual-validate/session` |
+
 
 **限额**：同一个用户下，**虚拟素材组（`aigc`）与真人素材组（`liveness_face`）各最多 100 个**，两类配额相互独立、不共用。例如用户已经创建了 100 个虚拟素材组，仍可继续通过 H5 真人核验创建至多 100 个真人素材组。
 
@@ -584,12 +609,14 @@ curl -X POST https://api.gravitex.ai/v1/asset-groups \
 }
 ```
 
-| 字段 | 说明 |
-|---|---|
-| `group_id` | 后续 `POST /v1/assets`、`DELETE /v1/asset-groups/{group_id}` 都用这个 |
-| `description` | 网关回填后的实际入库值（用户传空 → 兜底为 username） |
-| `channel_id` | 实际选中的上游渠道（自动选择时返回所选渠道的 ID） |
-| `group_type` | 固定为 `aigc`；`liveness_face` 不在本接口创建 |
+
+| 字段            | 说明                                                             |
+| ------------- | -------------------------------------------------------------- |
+| `group_id`    | 后续 `POST /v1/assets`、`DELETE /v1/asset-groups/{group_id}` 都用这个 |
+| `description` | 网关回填后的实际入库值（用户传空 → 兜底为 username）                               |
+| `channel_id`  | 实际选中的上游渠道（自动选择时返回所选渠道的 ID）                                     |
+| `group_type`  | 固定为 `aigc`；`liveness_face` 不在本接口创建                             |
+
 
 ---
 
@@ -611,11 +638,13 @@ curl -X POST https://api.gravitex.ai/v1/asset-groups \
 
 #### POST /v1/visual-validate/session
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `name` | string | **是** | 素材组名称（用于落库 + 回写到火山方舟控制台） |
-| `description` | string | 否 | 描述。同 `POST /v1/asset-groups`，缺省时网关自动用 `username` 兜底 |
-| `channel_id` | integer | 否 | 指定上游渠道 ID，省略则自动选择 |
+
+| 字段            | 类型      | 必填    | 说明                                                  |
+| ------------- | ------- | ----- | --------------------------------------------------- |
+| `name`        | string  | **是** | 素材组名称（用于落库 + 回写到火山方舟控制台）                            |
+| `description` | string  | 否     | 描述。同 `POST /v1/asset-groups`，缺省时网关自动用 `username` 兜底 |
+| `channel_id`  | integer | 否     | 指定上游渠道 ID，省略则自动选择                                   |
+
 
 > 网关在拿到火山返回的 `GroupId` 后，会立刻调用 `UpdateAssetGroup` 把上面的 `name` / `description` 回写到火山控制台（火山的 `CreateVisualValidateSession` 接口本身不接受这两个字段）。
 
@@ -638,12 +667,14 @@ curl -X POST https://api.gravitex.ai/v1/visual-validate/session \
 }
 ```
 
-| 字段 | 说明 |
-|---|---|
-| `h5_link` | BytePlus 真人核验 H5 页面 URL；网关已强制附加 `lang=zh-CN&lng=zh` 以默认显示简体中文 |
-| `state` | 网关签发的 HMAC `state` 令牌（HMAC-SHA256），已绑定 `user/channel/group_name/byted_token`，回调页自动用它换取结果 |
-| `byted_token` | 火山方舟下发的本次核验唯一凭据；回调页校验时也会用它和 `state` 内的值比对 |
-| `expires_in` | **`state` 令牌的有效期（秒）**，固定 `900`（15 分钟）。**注意：这并不是 H5 页面本身的寿命**——BytePlus 的 H5 链接只在约 120 秒内有效，超时后 `byted_token` 会被火山作废，必须重新调用本接口拿新链接 |
+
+| 字段            | 说明                                                                                                                                |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `h5_link`     | BytePlus 真人核验 H5 页面 URL；网关已强制附加 `lang=zh-CN&lng=zh` 以默认显示简体中文                                                                     |
+| `state`       | 网关签发的 HMAC `state` 令牌（HMAC-SHA256），已绑定 `user/channel/group_name/byted_token`，回调页自动用它换取结果                                          |
+| `byted_token` | 火山方舟下发的本次核验唯一凭据；回调页校验时也会用它和 `state` 内的值比对                                                                                         |
+| `expires_in`  | `**state` 令牌的有效期（秒）**，固定 `900`（15 分钟）。**注意：这并不是 H5 页面本身的寿命**——BytePlus 的 H5 链接只在约 120 秒内有效，超时后 `byted_token` 会被火山作废，必须重新调用本接口拿新链接 |
+
 
 > 客户端通常只需把 `h5_link` 在 popup 中打开，并监听 `window.message` 的 `gravitex-asset-validate-result`；`state` 字段已被网关内置回调页自动转发，业务侧无需自行调用 `/v1/visual-validate/result`。
 
@@ -706,9 +737,11 @@ window.addEventListener('message', listener);
 
 **Query 参数：**
 
-| 名称 | 可选值 | 默认 | 说明 |
-|---|---|---|---|
+
+| 名称           | 可选值                              | 默认     | 说明                                                              |
+| ------------ | -------------------------------- | ------ | --------------------------------------------------------------- |
 | `group_type` | `aigc` / `liveness_face` / `all` | `aigc` | 按素材组类型过滤。**未传时默认只返回虚拟素材组**——要看真人素材组请显式传 `liveness_face` 或 `all` |
+
 
 ```bash
 # 默认只返回虚拟素材组
@@ -749,11 +782,14 @@ curl "https://api.gravitex.ai/v1/asset-groups?group_type=all" \
 }
 ```
 
-| 字段 | 说明 |
-|---|---|
-| `group_type` | `aigc` 或 `liveness_face` |
+
+| 字段            | 说明                          |
+| ------------- | --------------------------- |
+| `group_type`  | `aigc` 或 `liveness_face`    |
 | `space_label` | A / B / C…，用于多上游空间场景下区分不同渠道 |
-| `asset_count` | 该组当前的素材数量 |
+| `asset_count` | 该组当前的素材数量                   |
+
+
 ---
 
 ### 删除素材组
@@ -775,12 +811,14 @@ curl -X DELETE https://api.gravitex.ai/v1/asset-groups/group-20260508120000-abcd
 
 `Content-Type: application/json`
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `url` | string | **是** | 素材的 **公网 https URL**（BytePlus 必须能直接拉取到）。**不支持 Base64 / Data URI / 本地文件直传**（火山方舟官方已明确下线，详见下方"历史变更"） |
-| `group_id` | string | **是** | 素材组 ID（来自 `POST /v1/asset-groups` 或 `/v1/visual-validate/session`） |
-| `asset_type` | string | 否 | `Image`（默认）/ `Video` / `Audio`，大小写不敏感 |
-| `name` | string | 否 | 素材名称（≤ 64 字符，仅用于素材库 UI 展示和 `ListAssets` 模糊搜索，**不参与模型推理**） |
+
+| 字段           | 类型     | 必填    | 说明                                                                                                 |
+| ------------ | ------ | ----- | -------------------------------------------------------------------------------------------------- |
+| `url`        | string | **是** | 素材的 **公网 https URL**（BytePlus 必须能直接拉取到）。**不支持 Base64 / Data URI / 本地文件直传**（火山方舟官方已明确下线，详见下方"历史变更"） |
+| `group_id`   | string | **是** | 素材组 ID（来自 `POST /v1/asset-groups` 或 `/v1/visual-validate/session`）                                 |
+| `asset_type` | string | 否     | `Image`（默认）/ `Video` / `Audio`，大小写不敏感                                                              |
+| `name`       | string | 否     | 素材名称（≤ 64 字符，仅用于素材库 UI 展示和 `ListAssets` 模糊搜索，**不参与模型推理**）                                          |
+
 
 > 自 2026-05 起，**虚拟（aigc）与真人（liveness_face）两类素材库均支持图片、视频、音频三种 `asset_type`**。网关会根据 URL 后缀做基础格式校验，最终内容审核与转码由 BytePlus 异步完成。
 
@@ -790,37 +828,43 @@ curl -X DELETE https://api.gravitex.ai/v1/asset-groups/group-20260508120000-abcd
 
 > 📜 **历史变更（重要）：** 火山方舟 `CreateAsset` 早期版本的 `URL` 字段曾接受 Base64 / Data URI 直传（部分老文档或老 SDK 也是这么写的）。**自 2026 年起官方已下线该能力**，新文档（[Create an Asset](https://docs.byteplus.com/en/docs/ModelArk/CreateAsset)）明确写："*For image/video/audio assets, only URL upload is supported. Base64 is not supported.*" 因此本网关接口也只接受公网 URL。如老代码传了 Data URI，会被火山以 `InvalidParameter` 类错误拒绝。
 
-**素材格式与大小约束（与火山方舟官方 [`CreateAsset`](https://docs.byteplus.com/en/docs/ModelArk/CreateAsset) 完全一致）：**
+**素材格式与大小约束（与火山方舟官方 `[CreateAsset](https://docs.byteplus.com/en/docs/ModelArk/CreateAsset)` 完全一致）：**
 
 #### 图片 (`asset_type: "Image"`)
 
-| 项目 | 限制 |
-|---|---|
-| 格式 | jpeg / png / webp / bmp / tiff / gif / heic / heif |
-| 大小 | < 30 MB / 张 |
-| 长宽比（W/H） | 0.4 ~ 2.5 |
-| 宽高（像素） | 300 ~ 6000 |
+
+| 项目       | 限制                                                 |
+| -------- | -------------------------------------------------- |
+| 格式       | jpeg / png / webp / bmp / tiff / gif / heic / heif |
+| 大小       | < 30 MB / 张                                        |
+| 长宽比（W/H） | 0.4 ~ 2.5                                          |
+| 宽高（像素）   | 300 ~ 6000                                         |
+
 
 #### 视频 (`asset_type: "Video"`)
 
-| 项目 | 限制 |
-|---|---|
-| 格式 | mp4 / mov |
-| 大小 | ≤ 50 MB / 个 |
-| 分辨率 | 480p、720p（不支持 1080p+） |
-| 时长 | 2 ~ 15 秒 |
-| FPS | 24 ~ 60 |
-| 长宽比（W/H） | 0.4 ~ 2.5 |
-| 宽高（像素） | 300 ~ 6000 |
+
+| 项目       | 限制                                                |
+| -------- | ------------------------------------------------- |
+| 格式       | mp4 / mov                                         |
+| 大小       | ≤ 50 MB / 个                                       |
+| 分辨率      | 480p、720p（不支持 1080p+）                             |
+| 时长       | 2 ~ 15 秒                                          |
+| FPS      | 24 ~ 60                                           |
+| 长宽比（W/H） | 0.4 ~ 2.5                                         |
+| 宽高（像素）   | 300 ~ 6000                                        |
 | 总像素（W×H） | 409600 ~ 927408（如 640×640=409600、834×1112=927408） |
+
 
 #### 音频 (`asset_type: "Audio"`)
 
-| 项目 | 限制 |
-|---|---|
-| 格式 | mp3 / wav |
-| 大小 | ≤ 15 MB / 个 |
-| 时长 | 2 ~ 15 秒 |
+
+| 项目  | 限制          |
+| --- | ----------- |
+| 格式  | mp3 / wav   |
+| 大小  | ≤ 15 MB / 个 |
+| 时长  | 2 ~ 15 秒    |
+
 
 > 网关只对 URL 后缀做基本格式校验，**真正的尺寸 / 时长 / 像素 / 帧率检查全部在 BytePlus 异步预处理阶段完成**。如果素材不达标，最终 `GET /v1/assets` 会得到 `status: "failed"`。
 
@@ -878,12 +922,14 @@ curl -X POST https://api.gravitex.ai/v1/assets \
 }
 ```
 
-| 字段 | 说明 |
-|---|---|
-| `virtual_id` | 素材唯一 ID（同时也是 `asset_url` 中 `asset://` 后的部分） |
-| `asset_url` | 在 `POST /v1/video/generations` 的 `content` 数组中以 `image_url.url` / `video_url.url` / `audio_url.url` 形式引用的 URL |
-| `asset_type` | 实际入库的类型，`Image` / `Video` / `Audio` |
-| `status` | `pending`（上游异步处理中）/ `active`（可用）/ `failed`（处理失败） |
+
+| 字段           | 说明                                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------------------- |
+| `virtual_id` | 素材唯一 ID（同时也是 `asset_url` 中 `asset://` 后的部分）                                                                   |
+| `asset_url`  | 在 `POST /v1/video/generations` 的 `content` 数组中以 `image_url.url` / `video_url.url` / `audio_url.url` 形式引用的 URL |
+| `asset_type` | 实际入库的类型，`Image` / `Video` / `Audio`                                                                           |
+| `status`     | `pending`（上游异步处理中）/ `active`（可用）/ `failed`（处理失败）                                                              |
+
 
 ---
 
@@ -895,10 +941,12 @@ curl -X POST https://api.gravitex.ai/v1/assets \
 
 **Query 参数：**
 
-| 名称 | 可选值 | 默认 | 说明 |
-|---|---|---|---|
-| `group_id` | 任意素材组 ID | — | 按素材组 ID 过滤；**指定后会忽略 `group_type`**（`group_id` 已经隐含类型） |
+
+| 名称           | 可选值                              | 默认     | 说明                                                                    |
+| ------------ | -------------------------------- | ------ | --------------------------------------------------------------------- |
+| `group_id`   | 任意素材组 ID                         | —      | 按素材组 ID 过滤；**指定后会忽略 `group_type`**（`group_id` 已经隐含类型）                 |
 | `group_type` | `aigc` / `liveness_face` / `all` | `aigc` | 按素材所属组的类型过滤。**未传时默认只返回虚拟素材组里的素材**——要看真人素材请显式传 `liveness_face` 或 `all` |
+
 
 ```bash
 # 默认只返回虚拟素材库下的素材
@@ -995,11 +1043,13 @@ curl -X DELETE https://api.gravitex.ai/v1/assets/asset-20260508120145-pqwhc \
 
 ### 素材状态
 
-| 状态 | 说明 |
-|------|------|
+
+| 状态        | 说明                      |
+| --------- | ----------------------- |
 | `pending` | 素材已提交，上游正在异步处理（包含人脸识别等） |
-| `active` | 素材就绪，可用于面部一致性视频生成 |
-| `failed` | 素材处理失败，请检查图片质量后重新上传 |
+| `active`  | 素材就绪，可用于面部一致性视频生成       |
+| `failed`  | 素材处理失败，请检查图片质量后重新上传     |
+
 
 ---
 
@@ -1007,48 +1057,56 @@ curl -X DELETE https://api.gravitex.ai/v1/assets/asset-20260508120145-pqwhc \
 
 ### 视频参数
 
-| 参数 | 可选值 | 说明 |
-|------|--------|------|
-| `duration` | `-1`, `4` ~ `15` | 输出视频时长（秒），`-1` 为自动时长 |
-| `resolution` | `480p`, `720p`, `1080p` | 输出分辨率。⚠️ `seedance-2-0-fast` 仅支持 `480p` 和 `720p`，不支持 `1080p` |
-| `ratio` | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `adaptive` | 画面比例。`adaptive` 在使用首帧图片时自动匹配图片比例；参考模式下不可用 |
-| `generate_audio` | `true`, `false` | 是否自动生成音频 |
-| `watermark` | `true`, `false` | 是否添加水印 |
-| `seed` | `-1` 或正整数 | 随机种子，`-1` 为随机 |
 
-> 以下三张表是 **`POST /v1/video/generations` 的 `content` 数组里 `image_url` / `video_url` / `audio_url` 直接裸传 URL 时**，火山方舟对资源本身的限制。
+| 参数               | 可选值                                                     | 说明                                                           |
+| ---------------- | ------------------------------------------------------- | ------------------------------------------------------------ |
+| `duration`       | `-1`, `4` ~ `15`                                        | 输出视频时长（秒），`-1` 为自动时长                                         |
+| `resolution`     | `480p`, `720p`, `1080p`                                 | 输出分辨率。⚠️ `seedance-2-0-fast` 仅支持 `480p` 和 `720p`，不支持 `1080p` |
+| `ratio`          | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `adaptive` | 画面比例。`adaptive` 在使用首帧图片时自动匹配图片比例；参考模式下不可用                    |
+| `generate_audio` | `true`, `false`                                         | 是否自动生成音频                                                     |
+| `watermark`      | `true`, `false`                                         | 是否添加水印                                                       |
+| `seed`           | `-1` 或正整数                                               | 随机种子，`-1` 为随机                                                |
+
+
+> 以下三张表是 `**POST /v1/video/generations` 的 `content` 数组里 `image_url` / `video_url` / `audio_url` 直接裸传 URL 时**，火山方舟对资源本身的限制。
 >
 > 通过 `asset://` 引用素材库素材时**也是这套硬约束**（火山方舟全平台共享）；素材库的「图片」`asset_type` 在格式上更宽容一些，能多收 bmp/tiff/gif/heic/heif 这些后缀，但单文件大小、宽高、像素总数等数值与下方完全一致——详见 [创建素材](#创建素材) 中的"素材格式与大小约束"小节。
 
 ### 图片输入限制
 
-| 项目 | 限制 |
-|------|------|
-| 格式 | JPEG、PNG、WebP |
-| 大小 | 最大 30MB |
-| 分辨率 | 300~6000px |
+
+| 项目     | 限制                        |
+| ------ | ------------------------- |
+| 格式     | JPEG、PNG、WebP             |
+| 大小     | 最大 30MB                   |
+| 分辨率    | 300~6000px                |
 | 参考图片数量 | 最多 9 张（`reference_image`） |
-| 首帧/尾帧 | 各 1 张 |
+| 首帧/尾帧  | 各 1 张                     |
+
 
 ### 视频输入限制
 
-| 项目 | 限制 |
-|------|------|
-| 格式 | MP4、MOV |
-| 大小 | 最大 50MB |
-| 单个时长 | 2~15 秒 |
-| 总时长 | 最多 15 秒 |
-| 数量 | 最多 3 个（`reference_video`） |
+
+| 项目   | 限制                        |
+| ---- | ------------------------- |
+| 格式   | MP4、MOV                   |
+| 大小   | 最大 50MB                   |
+| 单个时长 | 2~15 秒                    |
+| 总时长  | 最多 15 秒                   |
+| 数量   | 最多 3 个（`reference_video`） |
+
 
 ### 音频输入限制
 
-| 项目 | 限制 |
-|------|------|
-| 格式 | WAV、MP3 |
-| 大小 | 最大 15MB |
-| 时长 | 2~15 秒/段 |
-| 数量 | 最多 3 段（`reference_audio`） |
-| 前提 | 需搭配图片或视频输入 |
+
+| 项目  | 限制                        |
+| --- | ------------------------- |
+| 格式  | WAV、MP3                   |
+| 大小  | 最大 15MB                   |
+| 时长  | 2~15 秒/段                  |
+| 数量  | 最多 3 段（`reference_audio`） |
+| 前提  | 需搭配图片或视频输入                |
+
 
 ---
 
@@ -1056,14 +1114,16 @@ curl -X DELETE https://api.gravitex.ai/v1/assets/asset-20260508120145-pqwhc \
 
 ### HTTP 状态码
 
-| 状态码 | 含义 | 处理方式 |
-|--------|------|---------|
-| `200` | 成功 | — |
-| `400` | 请求参数错误 | 检查参数格式和取值范围 |
-| `401` | 未授权 | 检查 API Key 是否正确 |
-| `402` | 余额不足 | 前往平台充值 |
-| `429` | 请求频繁 | 降低请求频率，稍后重试 |
-| `502` | 上游服务错误 | 等待片刻后重试 |
+
+| 状态码   | 含义     | 处理方式            |
+| ----- | ------ | --------------- |
+| `200` | 成功     | —               |
+| `400` | 请求参数错误 | 检查参数格式和取值范围     |
+| `401` | 未授权    | 检查 API Key 是否正确 |
+| `402` | 余额不足   | 前往平台充值          |
+| `429` | 请求频繁   | 降低请求频率，稍后重试     |
+| `502` | 上游服务错误 | 等待片刻后重试         |
+
 
 ### 错误响应格式
 
@@ -1091,13 +1151,16 @@ curl -X DELETE https://api.gravitex.ai/v1/assets/asset-20260508120145-pqwhc \
 }
 ```
 
-| 字段 | 含义 |
-|---|---|
-| `code` | 火山方舟错误码（如 `InvalidParameter` / `InternalServiceError` / `RateLimitExceeded`） |
-| `param` | 出错字段的点路径定位（如 `content[2].image_url.url`），可直接对照请求 body 排查 |
-| `Request id` | 火山请求 ID，反馈火山工单时必带 |
+
+| 字段           | 含义                                                                           |
+| ------------ | ---------------------------------------------------------------------------- |
+| `code`       | 火山方舟错误码（如 `InvalidParameter` / `InternalServiceError` / `RateLimitExceeded`） |
+| `param`      | 出错字段的点路径定位（如 `content[2].image_url.url`），可直接对照请求 body 排查                     |
+| `Request id` | 火山请求 ID，反馈火山工单时必带                                                            |
+
 
 > 常见 `InvalidParameter` 触发点：
+>
 > - `asset://` 引用塞错字段（详见 [Content 数组详解](#content-数组详解)）
 > - 视频尺寸/时长超出限制
 > - 内容安全审核未通过
@@ -1112,14 +1175,16 @@ curl -X DELETE https://api.gravitex.ai/v1/assets/asset-20260508120145-pqwhc \
 
 ### 限制
 
-| 限制 | 说明 |
-|---|---|
-| 模型范围 | 仅 `seedance-2-0` / `seedance-2-0-fast` 失败任务可查 |
-| 时间窗口 | 任务创建后 **14 天内**可查；超时返回 `400 query_window_expired` |
-| 任务状态 | 仅 `failed` 任务有意义；其他状态返回 `400 invalid_task_status` |
-| 任务归属 | 只能查询自己 token 创建的任务（按 `user_id + task_id` 限定） |
-| 频率限制 | 每个渠道 **10 QPM**（与上游 QPM 一致）；超限返回 `429 rate_limited` |
+
+| 限制   | 说明                                                    |
+| ---- | ----------------------------------------------------- |
+| 模型范围 | 仅 `seedance-2-0` / `seedance-2-0-fast` 失败任务可查         |
+| 时间窗口 | 任务创建后 **14 天内**可查；超时返回 `400 query_window_expired`     |
+| 任务状态 | 仅 `failed` 任务有意义；其他状态返回 `400 invalid_task_status`     |
+| 任务归属 | 只能查询自己 token 创建的任务（按 `user_id + task_id` 限定）          |
+| 频率限制 | 每个渠道 **10 QPM**（与上游 QPM 一致）；超限返回 `429 rate_limited`   |
 | 自动缓存 | 首次查询成功后结果会持久化到任务记录里，重复查询不消耗 QPM，响应中带 `"cached": true` |
+
 
 ### 请求
 
@@ -1154,24 +1219,28 @@ curl https://api.gravitex.ai/v1/video/generations/moderation-result/cgt-20260430
 
 ### `block_reasons` 字段说明（对齐火山官方枚举）
 
-| 字段 | 说明 |
-|---|---|
-| `label` | 拦截大类，枚举值：`Safety`（内容安全）/ `Copyright`（版权）/ `Celebrity`（公众人物）/ `Deepfake`（真人脸） |
+
+| 字段          | 说明                                                                                                            |
+| ----------- | ------------------------------------------------------------------------------------------------------------- |
+| `label`     | 拦截大类，枚举值：`Safety`（内容安全）/ `Copyright`（版权）/ `Celebrity`（公众人物）/ `Deepfake`（真人脸）                                  |
 | `sub_label` | 子分类：`Safety` 大类下为 `Safety`；`Copyright` 下为 `IP` / `Other`；`Celebrity` 下为 `Celebrity`；`Deepfake` 下为 `RealHuman` |
-| `detail` | 自然语言描述，可能包含命中的具体 IP / 公众人物名称（如 "Spider-Man: Homecoming-Peter Parker"） |
+| `detail`    | 自然语言描述，可能包含命中的具体 IP / 公众人物名称（如 "Spider-Man: Homecoming-Peter Parker"）                                         |
+
 
 ### 错误响应
 
-| HTTP | `error.type` | 含义 |
-|------|---|---|
-| `400` | `invalid_request` | 缺少 `task_id` |
-| `400` | `invalid_task_status` | 任务不是 `failed` 状态，无拦截原因可查 |
-| `400` | `unsupported_model` | 任务不属于 seedance-2-0 系列 |
-| `400` | `query_window_expired` | 任务已超出 14 天可查询窗口 |
-| `403` | `channel_not_whitelisted` | 渠道未开启审核拦截原因查询开关 |
-| `404` | `not_found` | 任务不存在，或上游返回 `NotFound.Id`（任务未被审核拦截 / ID 无效 / 渠道未真正进入白名单） |
-| `429` | `rate_limited` | 当前渠道触发 10 QPM 限流，请稍后重试 |
-| `502` | `upstream_error` | 上游返回非 404 的错误，详细原因在 `error.message` 中透传 |
+
+| HTTP  | `error.type`              | 含义                                                       |
+| ----- | ------------------------- | -------------------------------------------------------- |
+| `400` | `invalid_request`         | 缺少 `task_id`                                             |
+| `400` | `invalid_task_status`     | 任务不是 `failed` 状态，无拦截原因可查                                 |
+| `400` | `unsupported_model`       | 任务不属于 seedance-2-0 系列                                    |
+| `400` | `query_window_expired`    | 任务已超出 14 天可查询窗口                                          |
+| `403` | `channel_not_whitelisted` | 渠道未开启审核拦截原因查询开关                                          |
+| `404` | `not_found`               | 任务不存在，或上游返回 `NotFound.Id`（任务未被审核拦截 / ID 无效 / 渠道未真正进入白名单） |
+| `429` | `rate_limited`            | 当前渠道触发 10 QPM 限流，请稍后重试                                   |
+| `502` | `upstream_error`          | 上游返回非 404 的错误，详细原因在 `error.message` 中透传                  |
+
 
 错误体格式与其他接口一致：
 
@@ -1493,11 +1562,13 @@ done
 
 通过 `asset_type` 字段声明素材类型，限制以火山方舟官方为准（完整版见 [创建素材 → 素材格式与大小约束](#创建素材)）：
 
-| `asset_type` | 支持后缀 | 单文件大小 | 关键约束 |
-|---|---|---|---|
-| `Image`（默认） | jpeg / png / webp / bmp / tiff / gif / heic / heif | < 30 MB | 长宽比 0.4–2.5；宽高 300–6000 px |
-| `Video` | mp4 / mov | ≤ 50 MB | 480p / 720p；时长 2–15 秒；FPS 24–60；总像素 409600–927408 |
-| `Audio` | mp3 / wav | ≤ 15 MB | 时长 2–15 秒 |
+
+| `asset_type` | 支持后缀                                               | 单文件大小   | 关键约束                                              |
+| ------------ | -------------------------------------------------- | ------- | ------------------------------------------------- |
+| `Image`（默认）  | jpeg / png / webp / bmp / tiff / gif / heic / heif | < 30 MB | 长宽比 0.4–2.5；宽高 300–6000 px                        |
+| `Video`      | mp4 / mov                                          | ≤ 50 MB | 480p / 720p；时长 2–15 秒；FPS 24–60；总像素 409600–927408 |
+| `Audio`      | mp3 / wav                                          | ≤ 15 MB | 时长 2–15 秒                                         |
+
 
 > 不再支持 `multipart/form-data` 文件上传。如果你之前用 `-F file=@xxx.jpg` 调用会得到 `No file-upload channel available...` 错误，请改为 JSON 格式提交、`url` 字段填写一个公网可访问的 https URL。
 
@@ -1513,6 +1584,7 @@ done
 ### Q: 视频生成通常需要多长时间？
 
 取决于视频时长和分辨率。通常：
+
 - 5 秒 480p：约 30~60 秒
 - 5 秒 720p：约 60~90 秒
 - 5 秒 1080p（仅标准版）：约 90~120 秒
@@ -1526,6 +1598,7 @@ done
 ### Q: 素材上传后一直是 `pending` 状态怎么办？
 
 素材处理通常需要 1~3 分钟。如果超过 5 分钟仍为 `pending`，请检查：
+
 1. 上传的图片是否包含清晰的人脸
 2. 图片分辨率是否在 300~6000px 范围内
 3. 如果持续异常，尝试删除后重新上传
@@ -1537,6 +1610,7 @@ done
 ### Q: `seedance-2-0-fast` 和 `seedance-2-0` 有什么区别？
 
 主要区别：
+
 - **分辨率**：`seedance-2-0` 支持 `480p`、`720p`、`1080p`；`seedance-2-0-fast` 仅支持 `480p`、`720p`，**不支持 1080p**
 - **速度**：`fast` 版生成速度通常比标准版快 30%~50%
 - **质量**：标准版在细节、稳定性上通常优于 `fast` 版

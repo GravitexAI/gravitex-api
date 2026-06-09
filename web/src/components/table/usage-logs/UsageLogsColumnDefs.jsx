@@ -149,16 +149,16 @@ function renderType(type, t) {
           {t('退款')}
         </Tag>
       );
-    case 6:
-      return (
-        <Tag color='teal' shape='circle'>
-          {t('退款')}
-        </Tag>
-      );
     case 7:
       return (
         <Tag color='amber' shape='circle'>
           {t('重试')}
+        </Tag>
+      );
+    case 8:
+      return (
+        <Tag color='blue' shape='circle'>
+          {t('测试金')}
         </Tag>
       );
     default:
@@ -833,6 +833,19 @@ export const getLogsColumns = ({
       title: t('花费'),
       dataIndex: 'quota',
       render: (text, record, index) => {
+        if (
+          record.type === 1 ||
+          record.type === 3 ||
+          record.type === 4 ||
+          record.type === 8
+        ) {
+          const quotaValue = Number(text);
+          return Number.isNaN(quotaValue) || quotaValue === 0 ? (
+            <></>
+          ) : (
+            <>{renderQuota(quotaValue, 6)}</>
+          );
+        }
         if (
           !(
             record.type === 0 ||

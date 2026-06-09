@@ -4,7 +4,11 @@ var ModelList = []string{
 	// language models
 	"grok-4-1-fast-reasoning",
 	"grok-4-1-fast-non-reasoning",
+	"grok-4-20-reasoning",
+	"grok-4-20-non-reasoning",
 	"grok-code-fast-1",
+	"grok-4",
+	"grok-3-fast",
 	"grok-4-fast-reasoning",
 	"grok-4-fast-non-reasoning",
 	"grok-4-0709",

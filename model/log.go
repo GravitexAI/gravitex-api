@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -49,6 +50,7 @@ const (
 	LogTypeError     = 5
 	LogTypeRefund    = 6
 	LogTypeRetryFail = 7 // 重试（中间失败，后续有重试）
+	LogTypeTest      = 8
 )
 
 var logTypeNames = map[int]string{
@@ -60,6 +62,7 @@ var logTypeNames = map[int]string{
 	LogTypeError:     "error",
 	LogTypeRefund:    "refund",
 	LogTypeRetryFail: "retry",
+	LogTypeTest:      "test",
 }
 
 // CreateLog 统一的日志写入入口，写入 DB 并打印完整日志信息
@@ -68,8 +71,15 @@ func CreateLog(log *Log) error {
 	if typeName == "" {
 		typeName = fmt.Sprintf("type_%d", log.Type)
 	}
-	common.SysLog(fmt.Sprintf("[LogInsert] type=%s userId=%d channel=%d model=%s token=%s group=%s quota=%d content=%s other=%s",
-		typeName, log.UserId, log.ChannelId, log.ModelName, log.TokenName, log.Group, log.Quota, log.Content, log.Other))
+	common.SysLog(fmt.Sprintf("[LogInsert] requestId=%s type=%s userId=%d channel=%d model=%s token=%s group=%s quota=%d content=%s",
+		log.RequestId, typeName, log.UserId, log.ChannelId, log.ModelName, log.TokenName, log.Group, log.Quota, log.Content))
+	// ClickHouse/ByteHouse：进缓冲区批量写入，不做单条 INSERT。
+	// id 由 ByteHouse 列 DEFAULT generateSnowflakeID() 服务端生成（雪花时间有序），
+	// 写入时在 LogBuffer.Flush 里 Omit("id") 忽略该列，保证 DEFAULT 生效。
+	if common.UsingClickHouse && GlobalLogBuffer != nil {
+		GlobalLogBuffer.Add(log)
+		return nil
+	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
 		common.SysLog(fmt.Sprintf("[LogInsert] FAILED type=%s userId=%d err=%s", typeName, log.UserId, err.Error()))
@@ -93,6 +103,43 @@ func formatUserLogs(logs []*Log, startIdx int) {
 		logs[i].Other = common.MapToJsonStr(otherMap)
 		logs[i].Id = startIdx + i + 1
 	}
+}
+
+// applyModelNameLike 按日志库方言追加 model_name 模糊匹配条件。
+// MySQL/SQLite/PG 使用 sanitizeLikePattern 产出的 ! 转义 + ESCAPE '!'；
+// ClickHouse/ByteHouse 的 LIKE 固定以反斜杠为转义符且不支持自定义 ESCAPE 子句，需转换为反斜杠转义。
+func applyModelNameLike(tx *gorm.DB, col string, sanitized string) *gorm.DB {
+	if common.UsingClickHouse {
+		return tx.Where(col+" LIKE ?", clickhouseLikePattern(sanitized))
+	}
+	return tx.Where(col+" LIKE ? ESCAPE '!'", sanitized)
+}
+
+// clickhouseLikePattern 把 ! 转义的 LIKE 模式转换为 ClickHouse 的反斜杠转义模式，保留 % 通配符。
+func clickhouseLikePattern(sanitized string) string {
+	var b strings.Builder
+	for i := 0; i < len(sanitized); i++ {
+		c := sanitized[i]
+		if c == '!' && i+1 < len(sanitized) {
+			switch sanitized[i+1] {
+			case '!':
+				b.WriteByte('!')
+				i++
+				continue
+			case '_':
+				b.WriteString(`\_`)
+				i++
+				continue
+			}
+		}
+		switch c {
+		case '\\':
+			b.WriteString(`\\`)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
@@ -138,7 +185,31 @@ func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo m
 		}
 		log.Other = common.MapToJsonStr(other)
 	}
-	if err := LOG_DB.Create(log).Error; err != nil {
+	if err := CreateLog(log); err != nil {
+		common.SysLog("failed to record log: " + err.Error())
+	}
+}
+
+func RecordLogWithAdminInfoAndQuota(userId int, logType int, content string, quota int, adminInfo map[string]interface{}) {
+	if logType == LogTypeConsume && !common.LogConsumeEnabled {
+		return
+	}
+	username, _ := GetUsernameById(userId, false)
+	log := &Log{
+		UserId:    userId,
+		Username:  username,
+		CreatedAt: common.GetTimestamp(),
+		Type:      logType,
+		Content:   content,
+		Quota:     quota,
+	}
+	if len(adminInfo) > 0 {
+		other := map[string]interface{}{
+			"admin_info": adminInfo,
+		}
+		log.Other = common.MapToJsonStr(other)
+	}
+	if err := CreateLog(log); err != nil {
 		common.SysLog("failed to record log: " + err.Error())
 	}
 }
@@ -165,7 +236,7 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 		Ip:        callerIp,
 		Other:     common.MapToJsonStr(other),
 	}
-	err := LOG_DB.Create(log).Error
+	err := CreateLog(log)
 	if err != nil {
 		common.SysLog("failed to record topup log: " + err.Error())
 	}
@@ -241,7 +312,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if !common.LogConsumeEnabled {
 		return
 	}
-	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
+	//logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
 	requestId := params.RequestId
 	if requestId == "" {
@@ -350,7 +421,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		Group:     params.Group,
 		Other:     common.MapToJsonStr(params.Other),
 	}
-	err := LOG_DB.Create(log).Error
+	err := CreateLog(log)
 	if err != nil {
 		common.SysLog("failed to record task billing log: " + err.Error())
 	}
@@ -455,7 +526,7 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 		if err != nil {
 			return nil, 0, err
 		}
-		tx = tx.Where("logs.model_name LIKE ? ESCAPE '!'", modelNamePattern)
+		tx = applyModelNameLike(tx, "logs.model_name", modelNamePattern)
 	}
 	if tokenName != "" {
 		tx = tx.Where("logs.token_name = ?", tokenName)
@@ -494,10 +565,10 @@ type Stat struct {
 }
 
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	tx := LOG_DB.Table("logs").Select("sum(quota) quota")
+	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota),0) quota")
 
 	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, sum(prompt_tokens) + sum(completion_tokens) tpm")
+	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens),0) + COALESCE(sum(completion_tokens),0) tpm")
 
 	if username != "" {
 		tx = tx.Where("username = ?", username)
@@ -518,8 +589,8 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		if err != nil {
 			return stat, err
 		}
-		tx = tx.Where("model_name LIKE ? ESCAPE '!'", modelNamePattern)
-		rpmTpmQuery = rpmTpmQuery.Where("model_name LIKE ? ESCAPE '!'", modelNamePattern)
+		tx = applyModelNameLike(tx, "model_name", modelNamePattern)
+		rpmTpmQuery = applyModelNameLike(rpmTpmQuery, "model_name", modelNamePattern)
 	}
 	if channel != 0 {
 		tx = tx.Where("channel_id = ?", channel)
@@ -550,7 +621,7 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 }
 
 func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {
-	tx := LOG_DB.Table("logs").Select("ifnull(sum(prompt_tokens),0) + ifnull(sum(completion_tokens),0)")
+	tx := LOG_DB.Table("logs").Select("COALESCE(sum(prompt_tokens),0) + COALESCE(sum(completion_tokens),0)")
 	if username != "" {
 		tx = tx.Where("username = ?", username)
 	}
@@ -571,6 +642,11 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 }
 
 func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+	// ByteHouse(CnchMergeTree) 不支持行级 DELETE，计费日志不可变，直接拒绝
+	if common.UsingClickHouse {
+		return 0, errors.New("ByteHouse 不支持删除日志操作（CnchMergeTree 引擎不支持行级 DELETE）")
+	}
+
 	var total int64 = 0
 
 	for {

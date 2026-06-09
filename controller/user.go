@@ -549,14 +549,16 @@ func UpdateUser(c *gin.Context) {
 		DisplayName string               `json:"display_name"`
 		Password    string               `json:"password"`
 		Group       string               `json:"group"`
-		Quota       int                  `json:"quota"`
+		Quota       *int                 `json:"quota,omitempty"`
 		Remark      string               `json:"remark"`
 		Role        int                  `json:"role"`
 		Status      int                  `json:"status"`
+		Type        *int                 `json:"type,omitempty"`
+		Operation   *int                 `json:"operation,omitempty"`
 	}
 
 	var req updateUserRequest
-	err := json.NewDecoder(c.Request.Body).Decode(&req)
+	err := common.DecodeJson(c.Request.Body, &req)
 	if err != nil || req.Id.Int64() == 0 {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -568,7 +570,6 @@ func UpdateUser(c *gin.Context) {
 		DisplayName: req.DisplayName,
 		Password:    req.Password,
 		Group:       req.Group,
-		Quota:       req.Quota,
 		Remark:      req.Remark,
 		Role:        req.Role,
 		Status:      req.Status,
@@ -594,6 +595,15 @@ func UpdateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserCannotCreateHigherLevel)
 		return
 	}
+	newQuota := 0
+	quotaChanged := false
+	if req.Quota != nil {
+		newQuota, quotaChanged, err = calculateUpdatedQuota(originUser.Quota, *req.Quota, req.Operation)
+		if err != nil {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+	}
 	if updatedUser.Password == "$I_LOVE_U" {
 		updatedUser.Password = "" // rollback to what it should be
 	}
@@ -602,11 +612,133 @@ func UpdateUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if req.Quota != nil && quotaChanged {
+		if err := model.SetUserQuota(updatedUser.Id, newQuota); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		recordUserAmountChangeLog(c, originUser, req.Type, req.Operation, newQuota)
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
 	})
 	return
+}
+
+func calculateUpdatedQuota(originQuota int, quotaValue int, operation *int) (int, bool, error) {
+	if quotaValue < 0 {
+		return 0, false, errors.New("invalid quota")
+	}
+	if operation == nil {
+		return quotaValue, originQuota != quotaValue, nil
+	}
+	switch *operation {
+	case 0:
+		return originQuota + quotaValue, quotaValue != 0, nil
+	case 1:
+		return originQuota - quotaValue, quotaValue != 0, nil
+	case 2:
+		return quotaValue, originQuota != quotaValue, nil
+	default:
+		return 0, false, errors.New("invalid operation")
+	}
+}
+
+func shouldRecordUserAmountChangeLog(logType *int, operation *int) bool {
+	if logType == nil || operation == nil {
+		return false
+	}
+	validType := *logType == model.LogTypeTopup || *logType == model.LogTypeManage || *logType == model.LogTypeTest
+	validOperation := *operation == 0 || *operation == 1 || *operation == 2
+	return validType && validOperation
+}
+
+func getUserAmountTypeText(logType int) string {
+	switch logType {
+	case model.LogTypeTopup:
+		return "充值"
+	case model.LogTypeTest:
+		return "测试金"
+	case model.LogTypeManage:
+		return "信控金"
+	default:
+		return "额度"
+	}
+}
+
+func getUserAmountOperationText(operation int) string {
+	switch operation {
+	case 0:
+		return "新增"
+	case 1:
+		return "减少"
+	case 2:
+		return "覆盖"
+	default:
+		return "调整"
+	}
+}
+
+func buildUserAmountChangeLogContent(logType int, operation int, originQuota int, newQuota int, adminUsername string, username string) string {
+	quotaDelta := newQuota - originQuota
+	if quotaDelta < 0 {
+		quotaDelta = -quotaDelta
+	}
+	if logType == model.LogTypeTopup {
+		switch operation {
+		case 0:
+			return fmt.Sprintf(
+				"管理员 %s 为用户 %s 充值 %s，额度从 %s 变更为 %s",
+				adminUsername,
+				username,
+				logger.LogQuota(quotaDelta),
+				logger.LogQuota(originQuota),
+				logger.LogQuota(newQuota),
+			)
+		case 1:
+			return fmt.Sprintf(
+				"管理员 %s 为用户 %s 扣减充值额度 %s，额度从 %s 变更为 %s",
+				adminUsername,
+				username,
+				logger.LogQuota(quotaDelta),
+				logger.LogQuota(originQuota),
+				logger.LogQuota(newQuota),
+			)
+		case 2:
+			return fmt.Sprintf(
+				"管理员 %s 为用户 %s 覆盖充值额度为 %s，原额度 %s",
+				adminUsername,
+				username,
+				logger.LogQuota(newQuota),
+				logger.LogQuota(originQuota),
+			)
+		}
+	}
+	return fmt.Sprintf(
+		"管理员%s%s，额度从 %s 变更为 %s",
+		getUserAmountOperationText(operation),
+		getUserAmountTypeText(logType),
+		logger.LogQuota(originQuota),
+		logger.LogQuota(newQuota),
+	)
+}
+
+func recordUserAmountChangeLog(c *gin.Context, user *model.User, logType *int, operation *int, newQuota int) {
+	if user == nil || !shouldRecordUserAmountChangeLog(logType, operation) || user.Quota == newQuota {
+		return
+	}
+	adminInfo := map[string]interface{}{
+		"admin_id":       c.GetInt("id"),
+		"admin_username": c.GetString("username"),
+	}
+	model.RecordLogWithAdminInfoAndQuota(
+		user.Id,
+		*logType,
+		buildUserAmountChangeLogContent(*logType, *operation, user.Quota, newQuota, c.GetString("username"), user.Username),
+		newQuota-user.Quota,
+		adminInfo,
+	)
 }
 
 func AdminClearUserBinding(c *gin.Context) {

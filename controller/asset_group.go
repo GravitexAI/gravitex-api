@@ -65,8 +65,8 @@ func isByteplusAssetChannel(ch *model.Channel) bool {
 }
 
 // getByteplusEnabledChannels returns asset-supporting channels that have BytePlus AK/SK configured.
-func getByteplusEnabledChannels(group string) ([]*model.Channel, error) {
-	channels, err := getAssetSupportedChannels(group)
+func getByteplusEnabledChannels(c *gin.Context, group string) ([]*model.Channel, error) {
+	channels, err := getAssetSupportedChannels(c, group)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +120,7 @@ func CreateAssetGroup(c *gin.Context) {
 			return
 		}
 	} else {
-		channels, err := getByteplusEnabledChannels(group)
+		channels, err := getByteplusEnabledChannels(c, group)
 		if err != nil || len(channels) == 0 {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("CreateAssetGroup: no byteplus channel for group=%s: %v", group, err))
 			assetErrorResponse(c, http.StatusServiceUnavailable, "No BytePlus asset channel available")
@@ -200,7 +200,7 @@ func ListAssetGroups(c *gin.Context) {
 		return
 	}
 
-	channels, err := getByteplusEnabledChannels(group)
+	channels, err := getByteplusEnabledChannels(c, group)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("ListAssetGroups: failed to get channels: %s", err.Error()))
 		assetErrorResponse(c, http.StatusInternalServerError, "Failed to list asset groups")

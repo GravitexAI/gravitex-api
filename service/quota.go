@@ -556,7 +556,24 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 				values = []interface{}{prompt, logger.FormatQuota(relayInfo.UserQuota), topUpLink, topUpLink}
 			}
 
-			err := NotifyUser(relayInfo.UserId, relayInfo.UserEmail, relayInfo.UserSetting, dto.NewNotify(dto.NotifyTypeQuotaExceed, prompt, content, values))
+			notifyData := dto.NewNotify(dto.NotifyTypeQuotaExceed, prompt, content, values)
+			if notifyType == dto.NotifyTypeWebhook {
+				err := SendQuotaWarningWebhookNotify(
+					userSetting.WebhookUrl,
+					userSetting.WebhookSecret,
+					notifyData,
+					int64(relayInfo.UserId),
+					notifyType,
+					int64(relayInfo.UserQuota-consumeQuota),
+					int64(threshold),
+				)
+				if err != nil {
+					common.SysError(fmt.Sprintf("failed to send quota notify to user %d: %s", relayInfo.UserId, err.Error()))
+				}
+				return
+			}
+
+			err := NotifyUser(relayInfo.UserId, relayInfo.UserEmail, relayInfo.UserSetting, notifyData)
 			if err != nil {
 				common.SysError(fmt.Sprintf("failed to send quota notify to user %d: %s", relayInfo.UserId, err.Error()))
 			}
@@ -606,7 +623,24 @@ func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
 			values = []interface{}{prompt, logger.FormatQuota(int(remaining)), topUpLink, topUpLink}
 		}
 
-		if err := NotifyUser(relayInfo.UserId, relayInfo.UserEmail, relayInfo.UserSetting, dto.NewNotify(dto.NotifyTypeQuotaExceed, prompt, content, values)); err != nil {
+		notifyData := dto.NewNotify(dto.NotifyTypeQuotaExceed, prompt, content, values)
+		if notifyType == dto.NotifyTypeWebhook {
+			err := SendQuotaWarningWebhookNotify(
+				userSetting.WebhookUrl,
+				userSetting.WebhookSecret,
+				notifyData,
+				int64(relayInfo.UserId),
+				notifyType,
+				remaining,
+				int64(threshold),
+			)
+			if err != nil {
+				common.SysError(fmt.Sprintf("failed to send subscription quota notify to user %d: %s", relayInfo.UserId, err.Error()))
+			}
+			return
+		}
+
+		if err := NotifyUser(relayInfo.UserId, relayInfo.UserEmail, relayInfo.UserSetting, notifyData); err != nil {
 			common.SysError(fmt.Sprintf("failed to send subscription quota notify to user %d: %s", relayInfo.UserId, err.Error()))
 		}
 	})

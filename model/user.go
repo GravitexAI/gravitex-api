@@ -955,6 +955,16 @@ func DeltaUpdateUserQuota(id int, delta int) (err error) {
 	}
 }
 
+func SetUserQuota(id int, quota int) error {
+	if err := DB.Model(&User{}).Where("id = ?", id).Update("quota", quota).Error; err != nil {
+		return err
+	}
+	if err := updateUserQuotaCache(id, quota); err != nil {
+		common.SysLog("failed to update user quota cache: " + err.Error())
+	}
+	return nil
+}
+
 //func GetRootUserEmail() (email string) {
 //	DB.Model(&User{}).Where("role = ?", common.RoleRootUser).Select("email").Find(&email)
 //	return email

@@ -50,6 +50,7 @@ import {
 } from '../hooks/useModelPricingEditorState';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import TieredPricingEditor from './TieredPricingEditor';
+import OperLogConfirmModal from '../../../../components/oper-log/OperLogConfirmModal';
 
 const { Text } = Typography;
 const EMPTY_CANDIDATE_MODEL_NAMES = [];
@@ -130,6 +131,10 @@ export default function ModelPricingEditor({
     addModel,
     deleteModel,
     applySelectedModelPricing,
+    operLogModal,
+    confirmOperLogSave,
+    skipOperLogSave,
+    cancelOperLogSave,
   } = useModelPricingEditorState({
     options,
     refresh,
@@ -776,6 +781,16 @@ export default function ModelPricingEditor({
           </div>
         ) : null}
       </Modal>
+
+      <OperLogConfirmModal
+        visible={operLogModal.visible}
+        operType='模型价格'
+        changes={operLogModal.changes}
+        defaultRemark={operLogModal.defaultRemark}
+        onConfirm={confirmOperLogSave}
+        onSkip={skipOperLogSave}
+        onCancel={cancelOperLogSave}
+      />
     </>
   );
 }

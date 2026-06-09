@@ -193,7 +193,61 @@ func ThinkingAdaptor(geminiRequest *dto.GeminiChatRequest, info *relaycommon.Rel
 				ThinkingLevel:   level,
 			}
 			info.ReasoningEffort = level
+		} else if len(oaiRequest) > 0 && oaiRequest[0].ReasoningEffort != "" {
+			// 客户端通过 OpenAI 的 reasoning_effort 参数直接请求思考（无模型后缀场景）。
+			// 必须显式设置 IncludeThoughts=true，否则上游（Gemini/Vertex）只在 usage 中计费
+			// thoughtsTokenCount，却不会回传思考摘要，导致 reasoning_tokens 有值但 reasoning_content 为空。
+			effort := oaiRequest[0].ReasoningEffort
+			thinkingConfig := &dto.GeminiThinkingConfig{IncludeThoughts: true}
+			if strings.HasPrefix(modelName, "gemini-3") {
+				// Gemini 3.x 使用 thinkingLevel（low/high），不再使用 thinkingBudget
+				thinkingConfig.ThinkingLevel = mapEffortToGeminiThinkingLevel(effort)
+			} else {
+				thinkingConfig.ThinkingBudget = common.GetPointer(clampThinkingBudgetByEffort(modelName, effort))
+			}
+			geminiRequest.GenerationConfig.ThinkingConfig = thinkingConfig
+			info.ReasoningEffort = effort
+		} else if geminiThinkingOnByDefault(modelName) {
+			// 默认开启思考摘要输出：这些模型本身默认就会思考（usage 中会产生 thoughtsTokenCount），
+			// 但只有 includeThoughts=true 时上游才会回传思考内容。此处兜底设为 true，避免出现
+			// reasoning_tokens 有值而 reasoning_content 为空的情况。
+			// 若客户端想关闭，可通过 extra_body.google.thinking_config.include_thoughts=false 显式禁用
+			// （该路径会跳过 ThinkingAdaptor，不会进入此分支）。
+			geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
+				IncludeThoughts: true,
+			}
 		}
+	}
+}
+
+// geminiThinkingOnByDefault 判断该模型是否「默认开启思考」，用于在客户端未显式指定思考参数时
+// 兜底打开 includeThoughts。仅覆盖默认会思考的文本模型（gemini-2.5-pro / 2.5-flash / 3.x），
+// 排除不支持 thinkingConfig 的模型（2.0 / gemma / 图像 / TTS / 音频 / 向量 / 机器人 / computer-use /
+// flash-lite 等），避免向不支持思考的上游发送 thinkingConfig 导致 400。
+func geminiThinkingOnByDefault(modelName string) bool {
+	if model_setting.IsGeminiModelSupportImagine(modelName) {
+		return false
+	}
+	for _, kw := range []string{"lite", "image", "tts", "audio", "embedding", "robotics", "computer-use", "nothinking"} {
+		if strings.Contains(modelName, kw) {
+			return false
+		}
+	}
+	return strings.HasPrefix(modelName, "gemini-3") ||
+		strings.HasPrefix(modelName, "gemini-2.5-pro") ||
+		strings.HasPrefix(modelName, "gemini-2.5-flash")
+}
+
+// mapEffortToGeminiThinkingLevel 将 OpenAI 的 reasoning_effort 映射为 Gemini 3.x 的 thinkingLevel。
+// Gemini 3.x 当前仅支持 low / high 两档。
+func mapEffortToGeminiThinkingLevel(effort string) string {
+	switch effort {
+	case "minimal", "low":
+		return "low"
+	case "medium", "high", "xhigh", "max":
+		return "high"
+	default:
+		return ""
 	}
 }
 
@@ -238,6 +292,39 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 	if textRequest.Seed != nil && *textRequest.Seed != 0 {
 		geminiSeed := int64(lo.FromPtr(textRequest.Seed))
 		geminiRequest.GenerationConfig.Seed = common.GetPointer(geminiSeed)
+	}
+
+	// CHZ-PATCH(gemini-param-mapping): Map OpenAI standard parameters to Gemini
+	if textRequest.FrequencyPenalty != nil {
+		fp := float32(*textRequest.FrequencyPenalty)
+		geminiRequest.GenerationConfig.FrequencyPenalty = &fp
+	}
+	if textRequest.PresencePenalty != nil {
+		pp := float32(*textRequest.PresencePenalty)
+		geminiRequest.GenerationConfig.PresencePenalty = &pp
+	}
+	if textRequest.TopK != nil {
+		tk := float64(*textRequest.TopK)
+		geminiRequest.GenerationConfig.TopK = &tk
+	}
+	if textRequest.N != nil && *textRequest.N > 1 {
+		geminiRequest.GenerationConfig.CandidateCount = textRequest.N
+	}
+	if textRequest.LogProbs != nil {
+		geminiRequest.GenerationConfig.ResponseLogprobs = textRequest.LogProbs
+	}
+	if textRequest.TopLogProbs != nil {
+		tlp := int32(*textRequest.TopLogProbs)
+		geminiRequest.GenerationConfig.Logprobs = &tlp
+	}
+	if len(textRequest.Modalities) > 0 && !model_setting.IsGeminiModelSupportImagine(info.UpstreamModelName) {
+		var modalities []string
+		if err := common.Unmarshal(textRequest.Modalities, &modalities); err == nil && len(modalities) > 0 {
+			geminiRequest.GenerationConfig.ResponseModalities = modalities
+		}
+	}
+	if len(textRequest.Audio) > 0 {
+		geminiRequest.GenerationConfig.SpeechConfig = textRequest.Audio
 	}
 
 	attachThoughtSignature := (info.ChannelType == constant.ChannelTypeGemini ||

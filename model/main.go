@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 
 	"github.com/glebarez/sqlite"
+	"gorm.io/driver/clickhouse"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -122,6 +123,18 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 
 	dsn := os.Getenv(envName)
 	if dsn != "" {
+		if strings.HasPrefix(dsn, "clickhouse://") {
+			// ClickHouse/ByteHouse 仅支持作为日志库
+			if !isLog {
+				common.FatalLog("ClickHouse/ByteHouse 只能作为日志库 (LOG_SQL_DSN)，不支持作为主库 SQL_DSN")
+			}
+			common.SysLog("using ClickHouse/ByteHouse as log database")
+			common.UsingClickHouse = true
+			common.LogSqlType = common.DatabaseTypeClickHouse
+			return gorm.Open(clickhouse.Open(dsn), &gorm.Config{
+				PrepareStmt: false,
+			})
+		}
 		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
 			// Use PostgreSQL
 			common.SysLog("using PostgreSQL as database")
@@ -239,6 +252,15 @@ func InitLogDB() (err error) {
 		sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
 		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
 
+		// ClickHouse/ByteHouse 不适合单条 INSERT，所有节点都启用内存缓冲批量写入
+		if common.UsingClickHouse {
+			GlobalLogBuffer = NewLogBuffer(
+				common.GetEnvOrDefault("LOG_BUFFER_MAX_SIZE", 5000),
+				time.Duration(common.GetEnvOrDefault("LOG_BUFFER_INTERVAL_SEC", 5))*time.Second,
+			)
+			common.SysLog("ClickHouse LogBuffer initialized")
+		}
+
 		if !common.IsMasterNode {
 			return nil
 		}
@@ -288,6 +310,8 @@ func migrateDB() error {
 		&UserOAuthBinding{},
 		&UserAsset{},
 		&UserAssetGroup{},
+		&OperLog{},
+		&OperLogPushJobLog{},
 	)
 	if err != nil {
 		return err
@@ -340,6 +364,8 @@ func migrateDBFast() error {
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
 		{&UserAsset{}, "UserAsset"},
 		{&UserAssetGroup{}, "UserAssetGroup"},
+		{&OperLog{}, "OperLog"},
+		{&OperLogPushJobLog{}, "OperLogPushJobLog"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
@@ -378,6 +404,10 @@ func migrateDBFast() error {
 }
 
 func migrateLOGDB() error {
+	if common.UsingClickHouse {
+		common.SysLog("ClickHouse log DB: skip AutoMigrate, use manual DDL (see docs/bytehouse_logs.sql)")
+		return nil
+	}
 	var err error
 	if err = LOG_DB.AutoMigrate(&Log{}); err != nil {
 		return err
@@ -665,6 +695,10 @@ func migrateUserAssetChannelId() {
 }
 
 func CloseDB() error {
+	// 停机前 flush 缓冲区，避免计费日志丢失
+	if GlobalLogBuffer != nil {
+		GlobalLogBuffer.Close()
+	}
 	if LOG_DB != DB {
 		err := closeDB(LOG_DB)
 		if err != nil {
