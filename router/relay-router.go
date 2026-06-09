@@ -157,6 +157,7 @@ func SetRelayRouter(router *gin.Engine) {
 		testTimeoutRouter.POST("/timeout", controller.TestTimeout)
 		testTimeoutRouter.GET("/timeout-image", controller.TestTimeoutWithImage)
 		testTimeoutRouter.POST("/timeout-image", controller.TestTimeoutWithImage)
+		testTimeoutRouter.GET("/metrics", controller.GetTestMetrics)
 	}
 
 	relayV1Router := router.Group("/v1")
