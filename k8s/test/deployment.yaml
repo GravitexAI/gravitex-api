@@ -26,8 +26,8 @@ spec:
             name: api-gateway-test-config
         resources:
           requests:
-            cpu: "500m"
-            memory: "2Gi"
+            cpu: "8000m"
+            memory: "16Gi"
           limits:
             cpu: "16000m"
             memory: "32Gi"
