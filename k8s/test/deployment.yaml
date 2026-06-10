@@ -4,7 +4,12 @@ metadata:
   name: api-gateway-test
   namespace: test
 spec:
-  replicas: 2
+  replicas: 4                          # 2 -> 4:Node
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0                # 滚动更新时不减少可用副本,避免更新期间掐连接
+      maxSurge: 1
   selector:
     matchLabels:
       app: api-gateway-test
@@ -13,27 +18,59 @@ spec:
       labels:
         app: api-gateway-test
     spec:
+      terminationGracePeriodSeconds: 60   
+      initContainers:
+      - name: sysctl-init                 # Pod 网络命名空间内核调优(somaxconn 等)
+        image: busybox:1.36
+        securityContext:
+          privileged: true
+        command:
+        - sh
+        - -c
+        - |
+          sysctl -w net.core.somaxconn=65535
+          sysctl -w net.ipv4.tcp_max_syn_backlog=65535
+          sysctl -w net.ipv4.ip_local_port_range="1024 65535"
+          sysctl -w net.ipv4.tcp_tw_reuse=1
+          sysctl -w net.ipv4.tcp_fin_timeout=15
+          sysctl -w net.ipv4.tcp_keepalive_time=120
+          sysctl -w net.ipv4.tcp_keepalive_intvl=30
+          sysctl -w net.ipv4.tcp_keepalive_probes=3
       containers:
       - name: api-gateway-test
         image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway-test:1.0.5
         ports:
         - containerPort: 3000
-        env:                          
-        - name: TZ                    
-          value: "Asia/Shanghai"      
+        env:
+        - name: TZ
+          value: "Asia/Shanghai"
         envFrom:
         - configMapRef:
             name: api-gateway-test-config
+        lifecycle:
+          preStop:                      
+            exec:
+              command: ["sh", "-c", "sleep 15"]
+        readinessProbe:                 
+          tcpSocket:                      
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 2
+        livenessProbe:
+          tcpSocket:
+            port: 3000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          failureThreshold: 3
         resources:
           requests:
+            cpu: "4000m"                  # Node 单进程用不到 8C,降 request 让 4 副本调度得开
+            memory: "8Gi"
+          limits:
             cpu: "8000m"
             memory: "16Gi"
-          limits:
-            cpu: "16000m"
-            memory: "32Gi"
-
 ---
-
 apiVersion: v1
 kind: Service
 metadata:
@@ -41,10 +78,10 @@ metadata:
   namespace: test
 spec:
   selector:
-    app: api-gateway-test      
+    app: api-gateway-test
   ports:
   - name: http
     protocol: TCP
-    port: 3000            
-    targetPort: 3000      
+    port: 3000
+    targetPort: 3000
   type: ClusterIP
