@@ -7,7 +7,7 @@ data:
   PORT: |-
     3000
   FRONTEND_BASE_URL: |-
-    http://localhost:5667
+    http://lxxxx:5667
   DEBUG: |-
     true
   ERROR_LOG_ENABLED: |-

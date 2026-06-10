@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: api-gateway-test
-        image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway-test:1.0.2
+        image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway-test:1.0.3
         ports:
         - containerPort: 3000
         env:                          
