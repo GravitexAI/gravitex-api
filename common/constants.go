@@ -28,6 +28,46 @@ var TaskEnabled = true
 var DataExportEnabled = true
 var DataExportInterval = 5         // unit: minute
 var DataExportDefaultTime = "hour" // unit: minute
+// QuotaDataStreamEnabled 是否启用 quota_data 的 Redis Stream 新链路。
+// 开启后，type=2 的消费日志会进入 Redis Stream，再由消费者异步更新 quota_data。
+var QuotaDataStreamEnabled = true
+
+// QuotaDataStreamConsumerCount 消费者协程数量。
+// 用于同一实例内并发消费 Stream，提升 quota_data 聚合吞吐。
+var QuotaDataStreamConsumerCount = 1
+
+// QuotaDataStreamBatchSize 单次从 Stream 拉取的消息条数。
+// 数值越大吞吐越高，但单批失败重试成本也更高。
+var QuotaDataStreamBatchSize = 100
+
+// QuotaDataStreamBlockMs XREADGROUP 的阻塞等待时间，单位毫秒。
+// 控制消费者空闲时多久返回一次并重新轮询。
+var QuotaDataStreamBlockMs = 5000
+
+// QuotaDataStreamPendingIdleMs Pending 消息最小空闲时长，单位毫秒。
+// 超过该时间未 ack 的消息会被重领，用于实例故障后的恢复。
+var QuotaDataStreamPendingIdleMs = 60000
+
+// QuotaDataStreamRetryLimit 单条消息允许的最大重试次数。
+// 超过后会转入 DLQ，避免坏消息长期阻塞主消费链路。
+var QuotaDataStreamRetryLimit = 10
+
+// QuotaDataStreamBackfillBatch 补偿扫描每批读取的日志条数。
+// 用于把 logs 中漏投到 Stream 的消费日志重新补进队列。
+var QuotaDataStreamBackfillBatch = 200
+
+// QuotaDataStreamBackfillIntervalSeconds 补偿扫描执行间隔，单位秒。
+// 间隔越短，logs 到 quota_data 的最终一致性收敛越快。
+var QuotaDataStreamBackfillIntervalSeconds = 15
+
+// QuotaDataStreamDoneTTLHours 幂等完成标记保留时长，单位小时。
+// 用于避免多实例重试或补偿回放时重复累计 quota_data。
+var QuotaDataStreamDoneTTLHours = 24 * 90
+var QuotaDataStreamLockTTLSeconds = 300
+
+// QuotaDataStreamMaxLen Redis Stream 的近似最大长度。
+// 超出后旧消息会被近似裁剪，避免 Stream 无限增长。
+var QuotaDataStreamMaxLen = 200000
 var DefaultCollapseSidebar = false // default value of collapse sidebar
 
 // Any options with "Secret", "Token" in its key won't be return by GetOptions
