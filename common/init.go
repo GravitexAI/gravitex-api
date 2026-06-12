@@ -106,6 +106,17 @@ func InitEnv() {
 	RelayTimeout = GetEnvOrDefault("RELAY_TIMEOUT", 0)
 	RelayMaxIdleConns = GetEnvOrDefault("RELAY_MAX_IDLE_CONNS", 500)
 	RelayMaxIdleConnsPerHost = GetEnvOrDefault("RELAY_MAX_IDLE_CONNS_PER_HOST", 100)
+	QuotaDataStreamEnabled = GetEnvOrDefaultBool("QUOTA_DATA_STREAM_ENABLED", true)
+	QuotaDataStreamConsumerCount = GetEnvOrDefault("QUOTA_DATA_STREAM_CONSUMER_COUNT", 1)
+	QuotaDataStreamBatchSize = GetEnvOrDefault("QUOTA_DATA_STREAM_BATCH_SIZE", 100)
+	QuotaDataStreamBlockMs = GetEnvOrDefault("QUOTA_DATA_STREAM_BLOCK_MS", 5000)
+	QuotaDataStreamPendingIdleMs = GetEnvOrDefault("QUOTA_DATA_STREAM_PENDING_IDLE_MS", 60000)
+	QuotaDataStreamRetryLimit = GetEnvOrDefault("QUOTA_DATA_STREAM_RETRY_LIMIT", 10)
+	QuotaDataStreamBackfillBatch = GetEnvOrDefault("QUOTA_DATA_STREAM_BACKFILL_BATCH", 200)
+	QuotaDataStreamBackfillIntervalSeconds = GetEnvOrDefault("QUOTA_DATA_STREAM_BACKFILL_INTERVAL_SECONDS", 15)
+	QuotaDataStreamDoneTTLHours = GetEnvOrDefault("QUOTA_DATA_STREAM_DONE_TTL_HOURS", 24*90)
+	QuotaDataStreamLockTTLSeconds = GetEnvOrDefault("QUOTA_DATA_STREAM_LOCK_TTL_SECONDS", 300)
+	QuotaDataStreamMaxLen = GetEnvOrDefault("QUOTA_DATA_STREAM_MAX_LEN", 20000)
 
 	// Initialize string variables with GetEnvOrDefaultString
 	GeminiSafetySetting = GetEnvOrDefaultString("GEMINI_SAFETY_SETTING", "BLOCK_NONE")
