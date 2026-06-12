@@ -543,7 +543,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 			// the same 400 rather than silently rewriting it, so callers learn to switch
 			// to adaptive. Internally-generated enabled (from reasoning / reasoning_effort
 			// above) is not affected: it is converted to adaptive a few lines below.
-			if thinking.Type == "enabled" && opusVersionAtLeast47(claudeRequest.Model) {
+			if thinking.Type == "enabled" && isAdaptiveOnlyModel(claudeRequest.Model) {
 				return nil, types.NewError(
 					fmt.Errorf("thinking.type \"enabled\" is not supported on %s; use thinking.type \"adaptive\" with output_config.effort", claudeRequest.Model),
 					types.ErrorCodeInvalidRequest,
@@ -558,13 +558,13 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 		claudeRequest.Effort = textRequest.Effort
 	}
 
-	// OpenAI-compat path: Opus 4.7+ only supports adaptive thinking and rejects
-	// thinking.type="enabled" with a 400. Client-direct thinking is already rejected
-	// above; here we transparently switch internally-generated enabled thinking (from
-	// reasoning_effort / reasoning inputs) to adaptive so those requests succeed and
-	// return visible reasoning.
+	// OpenAI-compat path: Opus 4.7+ and Fable models only support adaptive thinking
+	// and reject thinking.type="enabled" with a 400. Client-direct thinking is
+	// already rejected above; here we transparently switch internally-generated
+	// enabled thinking (from reasoning_effort / reasoning inputs) to adaptive so
+	// those requests succeed and return visible reasoning.
 	if claudeRequest.Thinking != nil && claudeRequest.Thinking.Type == "enabled" &&
-		opusVersionAtLeast47(claudeRequest.Model) {
+		isAdaptiveOnlyModel(claudeRequest.Model) {
 		claudeRequest.Thinking.Type = "adaptive"
 		claudeRequest.Thinking.BudgetTokens = nil
 		if claudeRequest.Thinking.Display == "" {
@@ -574,6 +574,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 
 	ApplyClaudeThinkingPolicy(&claudeRequest)
 	ApplyClaudeSamplingPolicy(&claudeRequest)
+	ApplyClaudeToolChoicePolicy(&claudeRequest)
 	return &claudeRequest, nil
 }
 
@@ -591,14 +592,14 @@ func ApplyClaudeThinkingPolicy(req *dto.ClaudeRequest) {
 		return
 	}
 	// Native /v1/messages path: honor an OpenRouter-style reasoning field by
-	// translating it into Claude thinking. Opus 4.7+ only accepts adaptive
-	// thinking; older models keep enabled semantics with a budget. The field is
-	// always cleared so it is never forwarded upstream (Anthropic rejects it).
+	// translating it into Claude thinking. Opus 4.7+ and Fable models only accept
+	// adaptive thinking; older models keep enabled semantics with a budget. The
+	// field is always cleared so it is never forwarded upstream (Anthropic rejects it).
 	if len(req.Reasoning) > 0 {
 		if req.Thinking == nil {
 			var r openrouter.RequestReasoning
 			if err := common.Unmarshal(req.Reasoning, &r); err == nil && (r.Enabled || r.MaxTokens > 0) {
-				if opusVersionAtLeast47(req.Model) {
+				if isAdaptiveOnlyModel(req.Model) {
 					req.Thinking = &dto.Thinking{Type: "adaptive"}
 				} else {
 					budget := r.MaxTokens
@@ -615,7 +616,7 @@ func ApplyClaudeThinkingPolicy(req *dto.ClaudeRequest) {
 		req.OutputConfig = mergeEffortIntoOutputConfig(req.OutputConfig, req.Effort)
 		req.Effort = ""
 	}
-	if req.Thinking != nil && opusVersionAtLeast47(req.Model) &&
+	if req.Thinking != nil && isAdaptiveOnlyModel(req.Model) &&
 		req.Thinking.Type == "adaptive" && req.Thinking.Display == "" {
 		req.Thinking.Display = "summarized"
 	}
@@ -666,10 +667,25 @@ func opusVersionAtLeast47(model string) bool {
 	return major > 4 || (major == 4 && minor >= 7)
 }
 
+// IsFableModel reports whether the model is a claude-fable series model.
+// Fable models share the same restrictions as Opus 4.7+: top_p/temperature/top_k
+// are deprecated and thinking.type="enabled" is not supported (adaptive only).
+// They also do not support forced tool_choice (type=any/tool).
+func IsFableModel(model string) bool {
+	return strings.HasPrefix(model, "claude-fable-")
+}
+
+// isAdaptiveOnlyModel reports whether the model requires adaptive thinking
+// (thinking.type="enabled" returns 400). Covers Opus 4.7+ and all Fable models.
+func isAdaptiveOnlyModel(model string) bool {
+	return opusVersionAtLeast47(model) || IsFableModel(model)
+}
+
 // ApplyClaudeSamplingPolicy strips sampling params that the upstream would
-// reject, before the request is sent. Opus 4.7+ rejects any temperature/top_p/
-// top_k; sonnet/haiku and older opus still support them. Since Opus 4.1,
-// temperature and top_p cannot both be supplied, so drop top_p when both exist.
+// reject, before the request is sent. Opus 4.7+ and Fable models reject any
+// temperature/top_p/top_k; sonnet/haiku and older opus still support them.
+// Since Opus 4.1, temperature and top_p cannot both be supplied, so drop top_p
+// when both exist.
 //
 // Exported so other Anthropic-family upstreams (e.g. Vertex) can apply the same
 // normalization on their native /v1/messages path.
@@ -677,12 +693,31 @@ func ApplyClaudeSamplingPolicy(req *dto.ClaudeRequest) {
 	if req == nil {
 		return
 	}
-	if opusVersionAtLeast47(req.Model) {
+	if isAdaptiveOnlyModel(req.Model) {
 		req.Temperature, req.TopP, req.TopK = nil, nil, nil
 		return
 	}
 	if req.Temperature != nil && req.TopP != nil {
 		req.TopP = nil
+	}
+}
+
+// ApplyClaudeToolChoicePolicy strips forced tool_choice types (any, tool) for
+// models that do not support them, silently downgrading to auto. Currently
+// applies to all Fable models, which reject forced tool_choice with 400.
+//
+// Exported so other Anthropic-family upstreams (e.g. Vertex) can apply the same
+// normalization on their native /v1/messages path.
+func ApplyClaudeToolChoicePolicy(req *dto.ClaudeRequest) {
+	if req == nil || req.ToolChoice == nil {
+		return
+	}
+	if IsFableModel(req.Model) {
+		if tc, ok := req.ToolChoice.(*dto.ClaudeToolChoice); ok {
+			if tc.Type == "any" || tc.Type == "tool" {
+				req.ToolChoice = &dto.ClaudeToolChoice{Type: "auto"}
+			}
+		}
 	}
 }
 
