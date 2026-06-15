@@ -67,7 +67,7 @@ var QuotaDataStreamLockTTLSeconds = 300
 
 // QuotaDataStreamMaxLen Redis Stream 的近似最大长度。
 // 超出后旧消息会被近似裁剪，避免 Stream 无限增长。
-var QuotaDataStreamMaxLen = 200000
+var QuotaDataStreamMaxLen = 500000
 var DefaultCollapseSidebar = false // default value of collapse sidebar
 
 // Any options with "Secret", "Token" in its key won't be return by GetOptions

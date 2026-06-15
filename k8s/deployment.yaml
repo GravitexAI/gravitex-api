@@ -50,6 +50,10 @@ spec:
         env:
         - name: TZ
           value: "Asia/Shanghai"
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
         envFrom:
         - configMapRef:
             name: api-gateway-config

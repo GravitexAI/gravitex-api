@@ -116,7 +116,7 @@ func InitEnv() {
 	QuotaDataStreamBackfillIntervalSeconds = GetEnvOrDefault("QUOTA_DATA_STREAM_BACKFILL_INTERVAL_SECONDS", 15)
 	QuotaDataStreamDoneTTLHours = GetEnvOrDefault("QUOTA_DATA_STREAM_DONE_TTL_HOURS", 24*2)
 	QuotaDataStreamLockTTLSeconds = GetEnvOrDefault("QUOTA_DATA_STREAM_LOCK_TTL_SECONDS", 300)
-	QuotaDataStreamMaxLen = GetEnvOrDefault("QUOTA_DATA_STREAM_MAX_LEN", 20000)
+	QuotaDataStreamMaxLen = GetEnvOrDefault("QUOTA_DATA_STREAM_MAX_LEN", 500000)
 
 	// Initialize string variables with GetEnvOrDefaultString
 	GeminiSafetySetting = GetEnvOrDefaultString("GEMINI_SAFETY_SETTING", "BLOCK_NONE")
