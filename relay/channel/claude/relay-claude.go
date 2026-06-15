@@ -236,14 +236,14 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	}
 
 	if baseModel, effortLevel, ok := reasoning.TrimEffortSuffix(textRequest.Model); ok && effortLevel != "" &&
-		(strings.HasPrefix(textRequest.Model, "claude-opus-4-6") || strings.HasPrefix(textRequest.Model, "claude-opus-4-7")) {
+		(strings.HasPrefix(textRequest.Model, "claude-opus-4-6") || OpusVersionAtLeast47(textRequest.Model)) {
 		claudeRequest.Model = baseModel
 		claudeRequest.Thinking = &dto.Thinking{
 			Type: "adaptive",
 		}
 		claudeRequest.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, effortLevel))
-		if strings.HasPrefix(baseModel, "claude-opus-4-7") {
-			// Opus 4.7 rejects non-default temperature/top_p/top_k with 400
+		if OpusVersionAtLeast47(baseModel) {
+			// Opus 4.7+ rejects non-default temperature/top_p/top_k with 400
 			// and defaults display to "omitted"; restore the 4.6 visible summary.
 			claudeRequest.Thinking.Display = "summarized"
 			claudeRequest.Temperature = nil
@@ -257,8 +257,8 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 		strings.HasSuffix(textRequest.Model, "-thinking") {
 
 		trimmedModel := strings.TrimSuffix(textRequest.Model, "-thinking")
-		if strings.HasPrefix(trimmedModel, "claude-opus-4-7") {
-			// Opus 4.7 rejects thinking.type="enabled"; use adaptive at high effort.
+		if OpusVersionAtLeast47(trimmedModel) {
+			// Opus 4.7+ rejects thinking.type="enabled"; use adaptive at high effort.
 			claudeRequest.Thinking = &dto.Thinking{Type: "adaptive", Display: "summarized"}
 			claudeRequest.OutputConfig = json.RawMessage(`{"effort":"high"}`)
 			claudeRequest.Temperature = nil
@@ -646,11 +646,11 @@ func mergeEffortIntoOutputConfig(existing json.RawMessage, effort string) json.R
 	return json.RawMessage(data)
 }
 
-// opusVersionAtLeast47 reports whether model is claude-opus with version >= 4.7.
+// OpusVersionAtLeast47 reports whether model is claude-opus with version >= 4.7.
 // Anthropic deprecated temperature/top_p/top_k for Opus 4.7 and later: any
 // non-default value returns 400. Parsing the version (rather than matching a
 // fixed string) auto-covers future opus releases (4-8, 4-9, 5-x).
-func opusVersionAtLeast47(model string) bool {
+func OpusVersionAtLeast47(model string) bool {
 	rest, ok := strings.CutPrefix(model, "claude-opus-")
 	if !ok {
 		return false
@@ -678,7 +678,7 @@ func IsFableModel(model string) bool {
 // isAdaptiveOnlyModel reports whether the model requires adaptive thinking
 // (thinking.type="enabled" returns 400). Covers Opus 4.7+ and all Fable models.
 func isAdaptiveOnlyModel(model string) bool {
-	return opusVersionAtLeast47(model) || IsFableModel(model)
+	return OpusVersionAtLeast47(model) || IsFableModel(model)
 }
 
 // ApplyClaudeSamplingPolicy strips sampling params that the upstream would

@@ -25,9 +25,11 @@ func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dt
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
-	ApplyClaudeThinkingPolicy(request)
-	ApplyClaudeSamplingPolicy(request)
-	ApplyClaudeToolChoicePolicy(request)
+	// Native /v1/messages 路径保持透传：不做 top_p/temperature/top_k 剥离、
+	// thinking.type 转换或 tool_choice 降级。这些兼容性处理只在 OpenAI→Claude
+	// (RequestOpenAI2ClaudeMessage) 路径执行，用于屏蔽 OpenAI 客户端不感知的
+	// Claude 限制。直连 /v1/messages 的调用方应自行遵循 Anthropic 协议规范，
+	// 不符合时由上游统一返回 400。
 	return request, nil
 }
 

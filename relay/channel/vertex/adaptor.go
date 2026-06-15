@@ -45,6 +45,9 @@ var claudeModelMap = map[string]string{
 	"claude-opus-4-5-20251101":   "claude-opus-4-5@20251101",
 	"claude-opus-4-6":            "claude-opus-4-6",
 	"claude-opus-4-7":            "claude-opus-4-7",
+	"claude-opus-4-8":            "claude-opus-4-8",
+	"claude-opus-4-9":            "claude-opus-4-9",
+	"claude-opus-4-10":           "claude-opus-4-10",
 }
 
 const anthropicVersion = "vertex-2023-10-16"
@@ -93,13 +96,10 @@ func removeFunctionResponseID(request *dto.GeminiChatRequest) {
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
-	// Vertex 上游即 Anthropic Claude，原生 /v1/messages 入站请求需与直连 Claude 做
-	// 相同的规范化:reasoning:{enabled/max_tokens}→thinking 转换、顶层 effort 合并、
-	// adaptive 补 display=summarized、opus-4.7+/fable 采样参数剥离、fable 强制
-	// tool_choice 降级。否则这些字段会被 copyRequest 丢弃或被上游拒绝。
-	claude.ApplyClaudeThinkingPolicy(request)
-	claude.ApplyClaudeSamplingPolicy(request)
-	claude.ApplyClaudeToolChoicePolicy(request)
+	// Native /v1/messages 路径保持透传，与直连 Claude 一致：不剥离采样参数、
+	// 不转换 thinking.type、不降级 tool_choice。这些兼容性处理只在 OpenAI→Claude
+	// 路径执行；直连 Vertex /v1/messages 的调用方应遵循 Anthropic 协议规范，
+	// 不符合时由上游统一返回 400。
 	if v, ok := claudeModelMap[info.UpstreamModelName]; ok {
 		c.Set("request_model", v)
 	} else {
