@@ -286,7 +286,11 @@ type Message struct {
 	Reasoning        string          `json:"reasoning,omitempty"`
 	ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
 	ToolCallId       string          `json:"tool_call_id,omitempty"`
-	parsedContent    []MediaContent
+	// CacheControl 是网关扩展字段，允许 OpenAI 客户端在单条 message 上显式启用
+	// Anthropic prompt caching。转换为 Claude 协议时会附加到该 message 的
+	// 最后一个 content block 上。Anthropic 原生协议本身就有 cache_control。
+	CacheControl  json.RawMessage `json:"cache_control,omitempty"`
+	parsedContent []MediaContent
 	//parsedStringContent *string
 }
 

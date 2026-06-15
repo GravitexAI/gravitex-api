@@ -19,6 +19,10 @@ type ClaudeSettings struct {
 	DefaultMaxTokens                      map[string]int                 `json:"default_max_tokens"`
 	ThinkingAdapterEnabled                bool                           `json:"thinking_adapter_enabled"`
 	ThinkingAdapterBudgetTokensPercentage float64                        `json:"thinking_adapter_budget_tokens_percentage"`
+	// OpenAIAutoCacheControl 控制是否在 OpenAI→Claude 转换路径上自动注入
+	// cache_control 断点（启用 Anthropic prompt caching）。默认开启，
+	// 客户端显式传入的 cache_control 始终被尊重，自动注入不会覆盖。
+	OpenAIAutoCacheControl bool `json:"openai_auto_cache_control"`
 }
 
 // 默认配置
@@ -29,6 +33,7 @@ var defaultClaudeSettings = ClaudeSettings{
 		"default": 8192,
 	},
 	ThinkingAdapterBudgetTokensPercentage: 0.8,
+	OpenAIAutoCacheControl:                true,
 }
 
 // 全局实例

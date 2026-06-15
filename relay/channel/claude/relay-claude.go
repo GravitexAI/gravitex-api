@@ -355,6 +355,9 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 		fmtMessage := dto.Message{
 			Role:    message.Role,
 			Content: message.Content,
+			// 保留客户端显式传入的 cache_control（方案 C），转换为 Claude block 时
+			// 会附加到该 message 的最后一个 content block 上。
+			CacheControl: message.CacheControl,
 		}
 		if message.Role == "tool" {
 			fmtMessage.ToolCallId = message.ToolCallId
@@ -365,6 +368,11 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 		if lastMessage.Role == message.Role && lastMessage.Role != "tool" {
 			if lastMessage.IsStringContent() && message.IsStringContent() {
 				fmtMessage.SetStringContent(strings.Trim(fmt.Sprintf("%s %s", lastMessage.StringContent(), message.StringContent()), "\""))
+				// 合并后保留较晚一条的 cache_control 语义：缓存边界推到更靠后的位置
+				// 是 cache_control 的 superset，旧的 cache_control 由 message i 含入。
+				if len(fmtMessage.CacheControl) == 0 && len(lastMessage.CacheControl) > 0 {
+					fmtMessage.CacheControl = lastMessage.CacheControl
+				}
 				// delete last message
 				formatMessages = formatMessages[:len(formatMessages)-1]
 			}
@@ -386,6 +394,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	for _, message := range formatMessages {
 		if message.Role == "system" {
 			// 根据Claude API规范，system字段使用数组格式更有通用性
+			startLen := len(systemMessages)
 			if message.IsStringContent() {
 				if text := message.StringContent(); text != "" {
 					systemMessages = append(systemMessages, dto.ClaudeMediaMessage{
@@ -397,13 +406,21 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 				// 支持复合内容的system消息（虽然不常见，但需要考虑完整性）
 				for _, ctx := range message.ParseContent() {
 					if ctx.Type == "text" && ctx.Text != "" {
-						systemMessages = append(systemMessages, dto.ClaudeMediaMessage{
+						block := dto.ClaudeMediaMessage{
 							Type: "text",
 							Text: common.GetPointer[string](ctx.Text),
-						})
+						}
+						if len(ctx.CacheControl) > 0 {
+							block.CacheControl = ctx.CacheControl
+						}
+						systemMessages = append(systemMessages, block)
 					}
 					// 未来可以在这里扩展对图片等其他类型的支持
 				}
+			}
+			// 方案 C：message 顶层 cache_control 附加到本 system 段最后一个 block
+			if len(message.CacheControl) > 0 && len(systemMessages) > startLen {
+				systemMessages[len(systemMessages)-1].CacheControl = message.CacheControl
 			}
 		} else {
 			if isFirstMessage {
@@ -465,10 +482,15 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 					switch mediaMessage.Type {
 					case "text":
 						if mediaMessage.Text != "" {
-							claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
+							block := dto.ClaudeMediaMessage{
 								Type: "text",
 								Text: common.GetPointer[string](mediaMessage.Text),
-							})
+							}
+							// 方案 C：透传 OpenRouter 风格的 content-block 级 cache_control
+							if len(mediaMessage.CacheControl) > 0 {
+								block.CacheControl = mediaMessage.CacheControl
+							}
+							claudeMediaMessages = append(claudeMediaMessages, block)
 						}
 					default:
 						source := mediaMessage.ToFileSource()
@@ -492,6 +514,9 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 
 						claudeMediaMessage.Source.MediaType = mimeType
 						claudeMediaMessage.Source.Data = base64Data
+						if len(mediaMessage.CacheControl) > 0 {
+							claudeMediaMessage.CacheControl = mediaMessage.CacheControl
+						}
 						claudeMediaMessages = append(claudeMediaMessages, claudeMediaMessage)
 						continue
 					}
@@ -519,6 +544,11 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 					}
 				}
 				claudeMessage.Content = claudeMediaMessages
+			}
+			// 方案 C：message 顶层 cache_control 附加到该 message 的最后一个 block。
+			// 若 content 是纯字符串则升级成 single-text-block 以便挂载。
+			if len(message.CacheControl) > 0 {
+				attachCacheControlToLastBlock(&claudeMessage, message.CacheControl)
 			}
 			claudeMessages = append(claudeMessages, claudeMessage)
 		}
@@ -575,7 +605,136 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	ApplyClaudeThinkingPolicy(&claudeRequest)
 	ApplyClaudeSamplingPolicy(&claudeRequest)
 	ApplyClaudeToolChoicePolicy(&claudeRequest)
+	ApplyOpenAIPromptCachePolicy(&claudeRequest)
 	return &claudeRequest, nil
+}
+
+// attachCacheControlToLastBlock 把 cache_control 挂到一个 ClaudeMessage 的最后一个
+// content block 上；若 Content 仍是字符串则升级为单个 text block 以便挂载。
+func attachCacheControlToLastBlock(msg *dto.ClaudeMessage, cc json.RawMessage) {
+	if msg == nil || len(cc) == 0 {
+		return
+	}
+	switch content := msg.Content.(type) {
+	case string:
+		msg.Content = []dto.ClaudeMediaMessage{
+			{Type: "text", Text: common.GetPointer[string](content), CacheControl: cc},
+		}
+	case []dto.ClaudeMediaMessage:
+		if len(content) == 0 {
+			return
+		}
+		content[len(content)-1].CacheControl = cc
+		msg.Content = content
+	}
+}
+
+// ephemeralCacheControl 是 Anthropic prompt caching 默认的 5 分钟 ephemeral 缓存标记。
+var ephemeralCacheControl = json.RawMessage(`{"type":"ephemeral"}`)
+
+// countCacheBreakpoints 统计请求中已存在的 cache_control 断点（来自方案 C 客户端注入）。
+// Anthropic 上限为 4 个断点，超过则自动注入应停止。
+func countCacheBreakpoints(req *dto.ClaudeRequest) int {
+	if req == nil {
+		return 0
+	}
+	n := 0
+	if sys, ok := req.System.([]dto.ClaudeMediaMessage); ok {
+		for i := range sys {
+			if len(sys[i].CacheControl) > 0 {
+				n++
+			}
+		}
+	}
+	if tools, ok := req.Tools.([]any); ok {
+		for _, t := range tools {
+			if tool, ok := t.(*dto.Tool); ok && len(tool.CacheControl) > 0 {
+				n++
+			}
+		}
+	}
+	for i := range req.Messages {
+		if blocks, ok := req.Messages[i].Content.([]dto.ClaudeMediaMessage); ok {
+			for j := range blocks {
+				if len(blocks[j].CacheControl) > 0 {
+					n++
+				}
+			}
+		}
+	}
+	return n
+}
+
+// ApplyOpenAIPromptCachePolicy 在 OpenAI→Claude 转换路径上自动注入 Anthropic prompt
+// caching 断点，让 OpenAI 客户端在多轮对话/含 system/含 tools 场景下也能命中缓存，
+// 无需感知 cache_control 字段。
+//
+// 注入策略：在仍有断点配额（Anthropic 上限 4 个）的前提下，按优先级依次注入：
+//  1. system 数组最后一个 block（缓存 system prompt）
+//  2. tools 数组最后一个用户定义 Tool（缓存 system+tools）
+//  3. 多轮场景下倒数第二条（即历史最后一条 assistant）的最后一个 block（缓存历史前缀）
+//
+// 已存在 cache_control 的 block 不会被覆盖；当 OpenAIAutoCacheControl 关闭或客户端
+// 已用满 4 个断点时，自动注入完全跳过。
+func ApplyOpenAIPromptCachePolicy(req *dto.ClaudeRequest) {
+	if req == nil || !model_setting.GetClaudeSettings().OpenAIAutoCacheControl {
+		return
+	}
+	const maxBreakpoints = 4
+	used := countCacheBreakpoints(req)
+	if used >= maxBreakpoints {
+		return
+	}
+
+	// 1. system 最后一个 block
+	if sys, ok := req.System.([]dto.ClaudeMediaMessage); ok && len(sys) > 0 {
+		last := &sys[len(sys)-1]
+		if len(last.CacheControl) == 0 {
+			last.CacheControl = ephemeralCacheControl
+			req.System = sys
+			used++
+		}
+	}
+
+	// 2. tools：把 cache_control 放在最后一个 *dto.Tool 上
+	if used < maxBreakpoints {
+		if tools, ok := req.Tools.([]any); ok {
+			for i := len(tools) - 1; i >= 0; i-- {
+				if t, ok := tools[i].(*dto.Tool); ok {
+					if len(t.CacheControl) == 0 {
+						t.CacheControl = ephemeralCacheControl
+						used++
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// 3. 历史多轮场景：在历史最后一条 assistant message 的最后一个 block 上加 cache_control。
+	// 仅当 len(messages) >= 3（即存在至少一轮完整 user-assistant 历史 + 当前 user）时触发。
+	if used < maxBreakpoints && len(req.Messages) >= 3 {
+		// 跳过最后一条（当前 user 请求），向前找最近的 assistant 消息
+		for i := len(req.Messages) - 2; i >= 0; i-- {
+			if req.Messages[i].Role != "assistant" {
+				continue
+			}
+			// 已被客户端打过 cache_control 则不重复注入
+			alreadyHas := false
+			if blocks, ok := req.Messages[i].Content.([]dto.ClaudeMediaMessage); ok {
+				for j := range blocks {
+					if len(blocks[j].CacheControl) > 0 {
+						alreadyHas = true
+						break
+					}
+				}
+			}
+			if !alreadyHas {
+				attachCacheControlToLastBlock(&req.Messages[i], ephemeralCacheControl)
+			}
+			break
+		}
+	}
 }
 
 // ApplyClaudeThinkingPolicy normalizes thinking/effort parameters before the

@@ -380,3 +380,92 @@ func TestRequestOpenAI2ClaudeMessage_ConvertsTextFileContentToText(t *testing.T)
 	require.NotNil(t, content[0].Text)
 	require.Equal(t, "alpha\nbeta", *content[0].Text)
 }
+
+// ── OpenAI prompt cache 自动注入测试 ──
+
+func TestApplyOpenAIPromptCachePolicy_AutoInjectSystemOnly(t *testing.T) {
+	// 单轮场景 + system → 只在 system 末尾打一个断点
+	req := dto.GeneralOpenAIRequest{
+		Model: "claude-opus-4-8",
+		Messages: []dto.Message{
+			{Role: "system", Content: "you are a helpful assistant"},
+			{Role: "user", Content: "hi"},
+		},
+	}
+	cr, err := RequestOpenAI2ClaudeMessage(nil, req)
+	require.NoError(t, err)
+
+	sys, ok := cr.System.([]dto.ClaudeMediaMessage)
+	require.True(t, ok)
+	require.Len(t, sys, 1)
+	require.NotEmpty(t, sys[0].CacheControl, "system 末尾应自动注入 cache_control")
+	require.JSONEq(t, `{"type":"ephemeral"}`, string(sys[0].CacheControl))
+
+	// 单轮 → 不应给历史 assistant 加 cache（没历史）
+	require.Equal(t, 1, countCacheBreakpoints(cr))
+}
+
+func TestApplyOpenAIPromptCachePolicy_MultiTurnInjectsHistory(t *testing.T) {
+	// 多轮场景 → system + history assistant 各一个断点
+	req := dto.GeneralOpenAIRequest{
+		Model: "claude-opus-4-8",
+		Messages: []dto.Message{
+			{Role: "system", Content: "you are a helpful assistant"},
+			{Role: "user", Content: "what's 1+1?"},
+			{Role: "assistant", Content: "It's 2."},
+			{Role: "user", Content: "and 2+2?"},
+		},
+	}
+	cr, err := RequestOpenAI2ClaudeMessage(nil, req)
+	require.NoError(t, err)
+
+	// system 断点
+	sys := cr.System.([]dto.ClaudeMediaMessage)
+	require.NotEmpty(t, sys[0].CacheControl)
+
+	// 历史 assistant 断点（messages: [user, assistant, user] 转换后；assistant 是 index 1）
+	require.Len(t, cr.Messages, 3)
+	require.Equal(t, "assistant", cr.Messages[1].Role)
+	blocks, ok := cr.Messages[1].Content.([]dto.ClaudeMediaMessage)
+	require.True(t, ok, "assistant content 应升级为 block 数组以挂载 cache_control")
+	require.NotEmpty(t, blocks[len(blocks)-1].CacheControl)
+
+	// 总共 2 个断点（system + history assistant）
+	require.Equal(t, 2, countCacheBreakpoints(cr))
+}
+
+func TestApplyOpenAIPromptCachePolicy_RespectsClientCacheControl(t *testing.T) {
+	// 客户端在 message 顶层显式传 cache_control（方案 C）
+	clientCC := []byte(`{"type":"ephemeral","ttl":"1h"}`)
+	req := dto.GeneralOpenAIRequest{
+		Model: "claude-opus-4-8",
+		Messages: []dto.Message{
+			{
+				Role:         "system",
+				Content:      "you are a helpful assistant",
+				CacheControl: clientCC,
+			},
+			{Role: "user", Content: "hi"},
+		},
+	}
+	cr, err := RequestOpenAI2ClaudeMessage(nil, req)
+	require.NoError(t, err)
+
+	sys := cr.System.([]dto.ClaudeMediaMessage)
+	require.NotEmpty(t, sys[0].CacheControl)
+	// 客户端的 1h TTL 必须被保留，不能被默认 ephemeral 覆盖
+	require.JSONEq(t, `{"type":"ephemeral","ttl":"1h"}`, string(sys[0].CacheControl))
+}
+
+func TestApplyOpenAIPromptCachePolicy_SingleTurnNoSystem(t *testing.T) {
+	// 无 system 单轮 → 无断点
+	req := dto.GeneralOpenAIRequest{
+		Model: "claude-opus-4-8",
+		Messages: []dto.Message{
+			{Role: "user", Content: "hi"},
+		},
+	}
+	cr, err := RequestOpenAI2ClaudeMessage(nil, req)
+	require.NoError(t, err)
+	require.Equal(t, 0, countCacheBreakpoints(cr))
+}
