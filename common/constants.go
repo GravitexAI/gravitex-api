@@ -62,7 +62,7 @@ var QuotaDataStreamBackfillIntervalSeconds = 15
 
 // QuotaDataStreamDoneTTLHours 幂等完成标记保留时长，单位小时。
 // 用于避免多实例重试或补偿回放时重复累计 quota_data。
-var QuotaDataStreamDoneTTLHours = 24 * 90
+var QuotaDataStreamDoneTTLHours = 24 * 2
 var QuotaDataStreamLockTTLSeconds = 300
 
 // QuotaDataStreamMaxLen Redis Stream 的近似最大长度。
