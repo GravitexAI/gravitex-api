@@ -26,6 +26,22 @@ const (
 var quotaStreamStartOnce sync.Once
 var quotaStreamAutoClaimUnsupported sync.Once
 
+const (
+	quotaDataBucketLocalRetryTimes    = 5
+	quotaDataBucketLocalRetryInterval = 200 * time.Millisecond
+	quotaDataBucketMaxRepairRounds    = 20
+)
+
+const (
+	quotaDataLuaStateDone            = "DONE"
+	quotaDataLuaStateProcessing      = "PROCESSING"
+	quotaDataLuaStateAcquiredBucket  = "ACQUIRED_BUCKET"
+	quotaDataLuaStateBucketBusy      = "BUCKET_BUSY_MARKED_DIRTY"
+	quotaDataLuaStateDoneAndReleased = "DONE_AND_RELEASED"
+	quotaDataLuaStateDoneAndRetry    = "DONE_AND_RETRY_BUCKET"
+	quotaDataLuaStateOwnerMismatch   = "OWNER_MISMATCH"
+)
+
 // quotaStreamEvent 是 Redis Stream 内部使用的消费事件。
 // 默认优先使用应用侧生成的 event_id 做幂等；
 // 对历史数据或非 ClickHouse 场景，再回退到 log id。
@@ -42,6 +58,12 @@ type quotaStreamEvent struct {
 	CreatedAt   int64
 	EventType   int
 	EventSource string
+}
+
+type quotaDataBucketAgg struct {
+	Count     int
+	Quota     int
+	TokenUsed int
 }
 
 func IsQuotaDataStreamEnabled() bool {
@@ -190,7 +212,6 @@ func processQuotaStreamMessage(ctx context.Context, consumerName string, message
 		return
 	}
 
-	lockKey := quotaDataEventLockKey(event.EventID)
 	doneKey := quotaDataEventDoneKey(event.EventID)
 
 	done, err := common.RDB.Exists(ctx, doneKey).Result()
@@ -200,36 +221,54 @@ func processQuotaStreamMessage(ctx context.Context, consumerName string, message
 		return
 	}
 
-	locked, err := common.RDB.SetNX(ctx, lockKey, consumerName, time.Duration(maxInt(common.QuotaDataStreamLockTTLSeconds, 30))*time.Second).Result()
-	if err != nil {
-		common.SysError(fmt.Sprintf("[QuotaStream][Consumer] lock failed consumer=%s messageId=%s eventId=%s logId=%d err=%v", consumerName, message.ID, event.EventID, event.LogID, err))
-		return
-	}
-	if !locked {
-		common.SysLog(fmt.Sprintf("[QuotaStream][Consumer] skip busy lock consumer=%s messageId=%s eventId=%s logId=%d", consumerName, message.ID, event.EventID, event.LogID))
-		return
-	}
-	defer func() {
-		if err := common.RDB.Del(ctx, lockKey).Err(); err != nil {
-			common.SysError(fmt.Sprintf("[QuotaStream][Consumer] unlock failed consumer=%s messageId=%s eventId=%s logId=%d err=%v", consumerName, message.ID, event.EventID, event.LogID, err))
+	var beginState string
+	for attempt := 1; attempt <= quotaDataBucketLocalRetryTimes; attempt++ {
+		beginState, err = quotaDataBeginEventProcessing(ctx, consumerName, event)
+		if err != nil {
+			common.SysError(fmt.Sprintf("[QuotaStream][Consumer] begin state failed consumer=%s messageId=%s eventId=%s logId=%d attempt=%d err=%v",
+				consumerName, message.ID, event.EventID, event.LogID, attempt, err))
+			if attempt == quotaDataBucketLocalRetryTimes {
+				return
+			}
+			time.Sleep(quotaDataBucketLocalRetryInterval)
+			continue
 		}
-	}()
-
-	done, err = common.RDB.Exists(ctx, doneKey).Result()
-	if err == nil && done > 0 {
-		common.SysLog(fmt.Sprintf("[QuotaStream][Consumer] duplicate ack after lock consumer=%s messageId=%s eventId=%s logId=%d", consumerName, message.ID, event.EventID, event.LogID))
-		ackQuotaStreamMessage(ctx, consumerName, message.ID)
-		return
+		switch beginState {
+		case quotaDataLuaStateDone:
+			common.SysLog(fmt.Sprintf("[QuotaStream][Consumer] duplicate ack consumer=%s messageId=%s eventId=%s logId=%d", consumerName, message.ID, event.EventID, event.LogID))
+			ackQuotaStreamMessage(ctx, consumerName, message.ID)
+			return
+		case quotaDataLuaStateAcquiredBucket:
+			goto APPLY
+		case quotaDataLuaStateProcessing, quotaDataLuaStateBucketBusy:
+			if attempt < quotaDataBucketLocalRetryTimes {
+				time.Sleep(quotaDataBucketLocalRetryInterval)
+				continue
+			}
+			common.SysLog(fmt.Sprintf("[QuotaStream][Consumer] leave pending after local retry consumer=%s messageId=%s eventId=%s logId=%d state=%s",
+				consumerName, message.ID, event.EventID, event.LogID, beginState))
+			return
+		default:
+			common.SysError(fmt.Sprintf("[QuotaStream][Consumer] unexpected begin state consumer=%s messageId=%s eventId=%s logId=%d state=%s",
+				consumerName, message.ID, event.EventID, event.LogID, beginState))
+			return
+		}
 	}
 
-	if err := applyQuotaStreamEvent(event); err != nil {
+APPLY:
+	if err := applyQuotaStreamEvent(ctx, consumerName, event); err != nil {
+		quotaDataAbortEventProcessing(ctx, consumerName, event)
 		common.SysError(fmt.Sprintf("[QuotaStream][Consumer] apply failed consumer=%s messageId=%s eventId=%s logId=%d err=%v", consumerName, message.ID, event.EventID, event.LogID, err))
 		return
 	}
-	if err := common.RDB.Set(ctx, doneKey, "1", time.Duration(maxInt(common.QuotaDataStreamDoneTTLHours, 1))*time.Hour).Err(); err != nil {
-		// 这里保留详细注释：不新增表时，done 标记与 quota_data 更新无法做单事务。
-		// 如果此处写入失败，消息会在后续重试时被再次处理，因此只记录错误，不立即 ack。
-		common.SysError(fmt.Sprintf("[QuotaStream][Consumer] done mark failed consumer=%s messageId=%s eventId=%s logId=%d err=%v", consumerName, message.ID, event.EventID, event.LogID, err))
+
+	finalState, err := quotaDataCompleteEventProcessing(ctx, consumerName, event)
+	if err != nil {
+		common.SysError(fmt.Sprintf("[QuotaStream][Consumer] finalize failed consumer=%s messageId=%s eventId=%s logId=%d err=%v", consumerName, message.ID, event.EventID, event.LogID, err))
+		return
+	}
+	if finalState == quotaDataLuaStateOwnerMismatch {
+		common.SysError(fmt.Sprintf("[QuotaStream][Consumer] finalize owner mismatch consumer=%s messageId=%s eventId=%s logId=%d", consumerName, message.ID, event.EventID, event.LogID))
 		return
 	}
 
@@ -238,32 +277,84 @@ func processQuotaStreamMessage(ctx context.Context, consumerName string, message
 	ackQuotaStreamMessage(ctx, consumerName, message.ID)
 }
 
-func applyQuotaStreamEvent(event quotaStreamEvent) error {
-	return DB.Transaction(func(tx *gorm.DB) error {
-		quotaDataDB := &QuotaData{}
-		err := tx.Table("quota_data").Where("user_id = ? and username = ? and model_name = ? and created_at = ?",
-			event.UserID, event.Username, event.ModelName, event.BucketTS).First(quotaDataDB).Error
-		if err == nil && quotaDataDB.Id > 0 {
-			return tx.Table("quota_data").Where("id = ?", quotaDataDB.Id).Updates(map[string]interface{}{
-				"count":      gorm.Expr("count + ?", 1),
-				"quota":      gorm.Expr("quota + ?", event.Quota),
-				"token_used": gorm.Expr("token_used + ?", event.TokenUsed),
-			}).Error
-		}
-		if err != nil && err != gorm.ErrRecordNotFound {
+func applyQuotaStreamEvent(ctx context.Context, consumerName string, event quotaStreamEvent) error {
+	if err := waitQuotaSourceLogReadyWithRetry(event); err != nil {
+		return err
+	}
+
+	for round := 1; round <= quotaDataBucketMaxRepairRounds; round++ {
+		agg, err := aggregateQuotaDataBucketFromLogs(event)
+		if err != nil {
 			return err
 		}
-		quotaData := &QuotaData{
-			UserID:    event.UserID,
-			Username:  event.Username,
-			ModelName: event.ModelName,
-			CreatedAt: event.BucketTS,
-			TokenUsed: event.TokenUsed,
-			Count:     1,
-			Quota:     event.Quota,
+		if err := rewriteQuotaDataBucketExact(event.UserID, event.Username, event.ModelName, event.BucketTS, agg); err != nil {
+			return err
 		}
-		return tx.Table("quota_data").Create(quotaData).Error
-	})
+		state, err := quotaDataFinalizeBucketRound(ctx, consumerName, event)
+		if err != nil {
+			return err
+		}
+		switch state {
+		case quotaDataLuaStateDoneAndReleased:
+			return nil
+		case quotaDataLuaStateDoneAndRetry:
+			common.SysLog(fmt.Sprintf("[QuotaStream][Consumer] retry dirty bucket immediately consumer=%s eventId=%s userId=%d model=%s bucket=%d round=%d",
+				consumerName, event.EventID, event.UserID, event.ModelName, event.BucketTS, round))
+			continue
+		case quotaDataLuaStateOwnerMismatch:
+			return fmt.Errorf("bucket owner mismatch requestId=%s userId=%d model=%s bucket=%d",
+				event.RequestID, event.UserID, event.ModelName, event.BucketTS)
+		default:
+			return fmt.Errorf("unexpected bucket finalize state=%s requestId=%s userId=%d model=%s bucket=%d",
+				state, event.RequestID, event.UserID, event.ModelName, event.BucketTS)
+		}
+	}
+	return fmt.Errorf("bucket repair rounds exceeded requestId=%s userId=%d model=%s bucket=%d maxRounds=%d",
+		event.RequestID, event.UserID, event.ModelName, event.BucketTS, quotaDataBucketMaxRepairRounds)
+}
+
+func waitQuotaSourceLogReadyWithRetry(event quotaStreamEvent) error {
+	if event.RequestID == "" {
+		return nil
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= quotaDataBucketLocalRetryTimes; attempt++ {
+		ready, err := hasQuotaSourceLog(event)
+		if err != nil {
+			lastErr = err
+		} else if ready {
+			if attempt > 1 {
+				common.SysLog(fmt.Sprintf("[QuotaStream][Consumer] source log became visible after retry eventId=%s requestId=%s userId=%d model=%s bucket=%d attempt=%d",
+					event.EventID, event.RequestID, event.UserID, event.ModelName, event.BucketTS, attempt))
+			}
+			return nil
+		} else {
+			lastErr = fmt.Errorf("source log not visible yet requestId=%s userId=%d model=%s bucket=%d source=%s",
+				event.RequestID, event.UserID, event.ModelName, event.BucketTS, event.EventSource)
+		}
+
+		if attempt < quotaDataBucketLocalRetryTimes {
+			time.Sleep(quotaDataBucketLocalRetryInterval)
+		}
+	}
+	return fmt.Errorf("%w after %d local retries", lastErr, quotaDataBucketLocalRetryTimes)
+}
+
+func hasQuotaSourceLog(event quotaStreamEvent) (bool, error) {
+	var count int64
+	err := LOG_DB.Model(&Log{}).
+		Where("type = ? AND request_id = ? AND user_id = ? AND username = ? AND model_name = ? AND created_at >= ? AND created_at < ?",
+			LogTypeConsume, event.RequestID, event.UserID, event.Username, event.ModelName, event.BucketTS, event.BucketTS+3600).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func aggregateQuotaDataBucketFromLogs(event quotaStreamEvent) (quotaDataBucketAgg, error) {
+	return loadQuotaDataBucketAggFromLogs(event.UserID, event.Username, event.ModelName, event.BucketTS)
 }
 
 func runQuotaDataPendingReclaimer() {
@@ -618,6 +709,175 @@ func quotaDataEventLockKey(eventID string) string {
 func quotaDataEventDoneKey(eventID string) string {
 	return fmt.Sprintf("quota_data:stream:done:%s", eventID)
 }
+
+func quotaDataBucketLockKey(event quotaStreamEvent) string {
+	return fmt.Sprintf("quota_data:stream:bucket_lock:%d:%s:%s:%d", event.UserID, event.Username, event.ModelName, event.BucketTS)
+}
+
+func quotaDataBucketDirtyKey(event quotaStreamEvent) string {
+	return fmt.Sprintf("quota_data:stream:bucket_dirty:%d:%s:%s:%d", event.UserID, event.Username, event.ModelName, event.BucketTS)
+}
+
+func quotaDataEventProcessingKey(eventID string) string {
+	return fmt.Sprintf("quota_data:stream:processing:%s", eventID)
+}
+
+func quotaDataBeginEventProcessing(ctx context.Context, consumerName string, event quotaStreamEvent) (string, error) {
+	result, err := common.RDB.Eval(ctx, quotaDataBeginEventProcessingLua, []string{
+		quotaDataEventDoneKey(event.EventID),
+		quotaDataEventProcessingKey(event.EventID),
+		quotaDataBucketLockKey(event),
+		quotaDataBucketDirtyKey(event),
+	}, []interface{}{
+		consumerName,
+		int64(maxInt(common.QuotaDataStreamLockTTLSeconds, 30)) * 1000,
+		int64(maxInt(common.QuotaDataStreamLockTTLSeconds, 30)) * 1000,
+		int64(maxInt(common.QuotaDataStreamDoneTTLHours, 1)) * 3600 * 1000,
+	}).Result()
+	if err != nil {
+		return "", err
+	}
+	return streamValueToString(result), nil
+}
+
+func quotaDataCompleteEventProcessing(ctx context.Context, consumerName string, event quotaStreamEvent) (string, error) {
+	result, err := common.RDB.Eval(ctx, quotaDataCompleteEventProcessingLua, []string{
+		quotaDataEventDoneKey(event.EventID),
+		quotaDataEventProcessingKey(event.EventID),
+		quotaDataBucketLockKey(event),
+		quotaDataBucketDirtyKey(event),
+	}, []interface{}{
+		consumerName,
+		int64(maxInt(common.QuotaDataStreamDoneTTLHours, 1)) * 3600,
+		int64(maxInt(common.QuotaDataStreamLockTTLSeconds, 30)) * 1000,
+	}).Result()
+	if err != nil {
+		return "", err
+	}
+	return streamValueToString(result), nil
+}
+
+func quotaDataFinalizeBucketRound(ctx context.Context, consumerName string, event quotaStreamEvent) (string, error) {
+	result, err := common.RDB.Eval(ctx, quotaDataFinalizeBucketRoundLua, []string{
+		quotaDataBucketLockKey(event),
+		quotaDataBucketDirtyKey(event),
+	}, []interface{}{
+		consumerName,
+		int64(maxInt(common.QuotaDataStreamLockTTLSeconds, 30)) * 1000,
+	}).Result()
+	if err != nil {
+		return "", err
+	}
+	return streamValueToString(result), nil
+}
+
+func quotaDataAbortEventProcessing(ctx context.Context, consumerName string, event quotaStreamEvent) {
+	if _, err := common.RDB.Eval(ctx, quotaDataAbortEventProcessingLua, []string{
+		quotaDataEventProcessingKey(event.EventID),
+		quotaDataBucketLockKey(event),
+	}, []interface{}{consumerName}).Result(); err != nil {
+		common.SysError(fmt.Sprintf("[QuotaStream][Consumer] abort state failed consumer=%s eventId=%s userId=%d model=%s bucket=%d err=%v",
+			consumerName, event.EventID, event.UserID, event.ModelName, event.BucketTS, err))
+	}
+}
+
+const quotaDataBeginEventProcessingLua = `
+local doneKey = KEYS[1]
+local processingKey = KEYS[2]
+local bucketKey = KEYS[3]
+local dirtyKey = KEYS[4]
+
+local worker = ARGV[1]
+local processingTTL = tonumber(ARGV[2])
+local bucketTTL = tonumber(ARGV[3])
+local dirtyTTL = tonumber(ARGV[4])
+
+if redis.call("EXISTS", doneKey) == 1 then
+	return "DONE"
+end
+
+if redis.call("EXISTS", processingKey) == 1 then
+	return "PROCESSING"
+end
+
+local bucketOwner = redis.call("GET", bucketKey)
+if bucketOwner and bucketOwner ~= worker then
+	redis.call("SET", dirtyKey, "1", "PX", dirtyTTL)
+	return "BUCKET_BUSY_MARKED_DIRTY"
+end
+
+redis.call("SET", processingKey, worker, "PX", processingTTL)
+redis.call("SET", bucketKey, worker, "PX", bucketTTL)
+return "ACQUIRED_BUCKET"
+`
+
+const quotaDataCompleteEventProcessingLua = `
+local doneKey = KEYS[1]
+local processingKey = KEYS[2]
+local bucketKey = KEYS[3]
+local dirtyKey = KEYS[4]
+
+local worker = ARGV[1]
+local doneTTLSeconds = tonumber(ARGV[2])
+local bucketTTL = tonumber(ARGV[3])
+
+redis.call("SET", doneKey, "1", "EX", doneTTLSeconds)
+redis.call("DEL", processingKey)
+
+local bucketOwner = redis.call("GET", bucketKey)
+if bucketOwner and bucketOwner ~= worker then
+	return "OWNER_MISMATCH"
+end
+
+if redis.call("EXISTS", dirtyKey) == 1 then
+	redis.call("DEL", dirtyKey)
+	redis.call("SET", bucketKey, worker, "PX", bucketTTL)
+	return "DONE_AND_RETRY_BUCKET"
+end
+
+redis.call("DEL", bucketKey)
+return "DONE_AND_RELEASED"
+`
+
+const quotaDataFinalizeBucketRoundLua = `
+local bucketKey = KEYS[1]
+local dirtyKey = KEYS[2]
+
+local worker = ARGV[1]
+local bucketTTL = tonumber(ARGV[2])
+
+local bucketOwner = redis.call("GET", bucketKey)
+if bucketOwner and bucketOwner ~= worker then
+	return "OWNER_MISMATCH"
+end
+
+if redis.call("EXISTS", dirtyKey) == 1 then
+	redis.call("DEL", dirtyKey)
+	redis.call("SET", bucketKey, worker, "PX", bucketTTL)
+	return "DONE_AND_RETRY_BUCKET"
+end
+
+redis.call("DEL", bucketKey)
+return "DONE_AND_RELEASED"
+`
+
+const quotaDataAbortEventProcessingLua = `
+local processingKey = KEYS[1]
+local bucketKey = KEYS[2]
+local worker = ARGV[1]
+
+local processingOwner = redis.call("GET", processingKey)
+if processingOwner == worker then
+	redis.call("DEL", processingKey)
+end
+
+local bucketOwner = redis.call("GET", bucketKey)
+if bucketOwner == worker then
+	redis.call("DEL", bucketKey)
+end
+
+return "OK"
+`
 
 func quotaStreamConsumerName(index int) string {
 	name := common.NodeName
