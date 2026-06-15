@@ -92,12 +92,7 @@ func main() {
 	go model.SyncOptions(common.SyncFrequency)
 
 	// 数据看板
-	// 旧实现仍然保留，便于 Redis Stream 开关关闭时继续兜底。
-	if model.IsQuotaDataStreamEnabled() {
-		model.StartQuotaDataStreamWorkers()
-	} else {
-		go model.UpdateQuotaData()
-	}
+	go model.UpdateQuotaData()
 
 	if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" {
 		frequency, err := strconv.Atoi(os.Getenv("CHANNEL_UPDATE_FREQUENCY"))
