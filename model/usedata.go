@@ -105,43 +105,14 @@ func SyncQuotaDataFromConsumeLogsByRequestId(requestId string) error {
 	if err != nil {
 		return err
 	}
-	if agg.Count <= 0 {
-		return nil
-	}
-
-	quotaDataDB := &QuotaData{}
-	err = DB.Table("quota_data").Where("user_id = ? and username = ? and model_name = ? and created_at = ?",
-		consumeLog.UserId, consumeLog.Username, consumeLog.ModelName, createdAt).First(quotaDataDB).Error
-	if err == nil && quotaDataDB.Id > 0 {
-		err = DB.Table("quota_data").Where("id = ?", quotaDataDB.Id).Updates(map[string]interface{}{
-			"count":      agg.Count,
-			"quota":      agg.Quota,
-			"token_used": agg.TokenUsed,
-		}).Error
-		if err != nil {
-			return err
-		}
-		common.SysLog(fmt.Sprintf("[QuotaData] synced user=%d username=%s model=%s created_at=%d count=%d quota=%d token_used=%d",
-			consumeLog.UserId, consumeLog.Username, consumeLog.ModelName, createdAt, agg.Count, agg.Quota, agg.TokenUsed))
-		return nil
-	}
-	if err != nil && err != gorm.ErrRecordNotFound {
-		return err
-	}
-
-	quotaData := &QuotaData{
-		UserID:    consumeLog.UserId,
-		Username:  consumeLog.Username,
-		ModelName: consumeLog.ModelName,
-		CreatedAt: createdAt,
-		TokenUsed: agg.TokenUsed,
+	if err := rewriteQuotaDataBucketExact(consumeLog.UserId, consumeLog.Username, consumeLog.ModelName, createdAt, quotaDataBucketAgg{
 		Count:     agg.Count,
 		Quota:     agg.Quota,
-	}
-	if err := DB.Table("quota_data").Create(quotaData).Error; err != nil {
+		TokenUsed: agg.TokenUsed,
+	}); err != nil {
 		return err
 	}
-	common.SysLog(fmt.Sprintf("[QuotaData] synced created user=%d username=%s model=%s created_at=%d count=%d quota=%d token_used=%d",
+	common.SysLog(fmt.Sprintf("[QuotaData] synced exact user=%d username=%s model=%s created_at=%d count=%d quota=%d token_used=%d",
 		consumeLog.UserId, consumeLog.Username, consumeLog.ModelName, createdAt, agg.Count, agg.Quota, agg.TokenUsed))
 	return nil
 }
@@ -155,16 +126,11 @@ func SaveQuotaDataCache() {
 	// 2. 如果有数据，就更新数据
 	// 3. 如果没有数据，就插入数据
 	for _, quotaData := range CacheQuotaData {
-		quotaDataDB := &QuotaData{}
-		DB.Table("quota_data").Where("user_id = ? and username = ? and model_name = ? and created_at = ?",
-			quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.CreatedAt).First(quotaDataDB)
-		if quotaDataDB.Id > 0 {
-			//quotaDataDB.Count += quotaData.Count
-			//quotaDataDB.Quota += quotaData.Quota
-			//DB.Table("quota_data").Save(quotaDataDB)
-			increaseQuotaData(quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.Count, quotaData.Quota, quotaData.CreatedAt, quotaData.TokenUsed)
-		} else {
-			DB.Table("quota_data").Create(quotaData)
+		// 旧缓存链路保留为兜底，但落库时改成按 logs 精确重算小时桶，
+		// 避免继续使用 count/quota 递增导致 quota_data 被重复累加。
+		if err := rebuildQuotaDataBucketFromLogs(quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.CreatedAt); err != nil {
+			common.SysLog(fmt.Sprintf("rebuildQuotaDataBucketFromLogs error: user=%d username=%s model=%s created_at=%d err=%v",
+				quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.CreatedAt, err))
 		}
 	}
 	CacheQuotaData = make(map[string]*QuotaData)
@@ -181,6 +147,86 @@ func increaseQuotaData(userId int, username string, modelName string, count int,
 	if err != nil {
 		common.SysLog(fmt.Sprintf("increaseQuotaData error: %s", err))
 	}
+}
+
+func rebuildQuotaDataBucketFromLogs(userId int, username string, modelName string, createdAt int64) error {
+	agg, err := loadQuotaDataBucketAggFromLogs(userId, username, modelName, createdAt)
+	if err != nil {
+		return err
+	}
+	return rewriteQuotaDataBucketExact(userId, username, modelName, createdAt, agg)
+}
+
+func loadQuotaDataBucketAggFromLogs(userId int, username string, modelName string, createdAt int64) (quotaDataBucketAgg, error) {
+	agg := quotaDataBucketAgg{}
+	err := LOG_DB.Model(&Log{}).
+		Select("count(*) as count, COALESCE(sum(quota), 0) as quota, COALESCE(sum(prompt_tokens + completion_tokens), 0) as token_used").
+		Where("type = ? AND user_id = ? AND username = ? AND model_name = ? AND created_at >= ? AND created_at < ?",
+			LogTypeConsume, userId, username, modelName, createdAt, createdAt+3600).
+		Scan(&agg).Error
+	if err != nil {
+		return quotaDataBucketAgg{}, err
+	}
+	return agg, nil
+}
+
+func rewriteQuotaDataBucketExact(userId int, username string, modelName string, createdAt int64, agg quotaDataBucketAgg) error {
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var rows []*QuotaData
+		err := tx.Table("quota_data").
+			Where("user_id = ? and username = ? and model_name = ? and created_at = ?",
+				userId, username, modelName, createdAt).
+			Order("id asc").
+			Find(&rows).Error
+		if err != nil {
+			return err
+		}
+
+		if agg.Count <= 0 {
+			if len(rows) == 0 {
+				return nil
+			}
+			ids := make([]int, 0, len(rows))
+			for _, row := range rows {
+				ids = append(ids, row.Id)
+			}
+			return tx.Table("quota_data").Where("id IN ?", ids).Delete(&QuotaData{}).Error
+		}
+
+		if len(rows) == 0 {
+			return tx.Table("quota_data").Create(&QuotaData{
+				UserID:    userId,
+				Username:  username,
+				ModelName: modelName,
+				CreatedAt: createdAt,
+				TokenUsed: agg.TokenUsed,
+				Count:     agg.Count,
+				Quota:     agg.Quota,
+			}).Error
+		}
+
+		primaryRow := rows[0]
+		if err := tx.Table("quota_data").Where("id = ?", primaryRow.Id).Updates(map[string]interface{}{
+			"count":      agg.Count,
+			"quota":      agg.Quota,
+			"token_used": agg.TokenUsed,
+		}).Error; err != nil {
+			return err
+		}
+
+		if len(rows) > 1 {
+			duplicateIDs := make([]int, 0, len(rows)-1)
+			for _, row := range rows[1:] {
+				duplicateIDs = append(duplicateIDs, row.Id)
+			}
+			if err := tx.Table("quota_data").Where("id IN ?", duplicateIDs).Delete(&QuotaData{}).Error; err != nil {
+				return err
+			}
+			common.SysLog(fmt.Sprintf("[QuotaData] normalized duplicate rows user=%d username=%s model=%s created_at=%d keptId=%d deleted=%d",
+				userId, username, modelName, createdAt, primaryRow.Id, len(duplicateIDs)))
+		}
+		return nil
+	})
 }
 
 func GetQuotaDataByUsername(username string, startTime int64, endTime int64) (quotaData []*QuotaData, err error) {
