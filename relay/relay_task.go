@@ -448,7 +448,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	adaptor := GetTaskAdaptor(originTask.Platform)
 	if adaptor != nil {
 		if converter, ok := adaptor.(channel.OpenAIVideoConverter); ok {
-			if originTask.Status == model.TaskStatusSuccess {
+			if originTask.Status == model.TaskStatusSuccess && !model.IsQuotaDataStreamEnabled() {
 				if err := model.SyncQuotaDataFromConsumeLogsByRequestId(originTask.TaskID); err != nil {
 					common.SysLog(fmt.Sprintf("[QuotaData] sync from logs failed task=%s err=%v", originTask.TaskID, err))
 				}
@@ -544,7 +544,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 				return nil
 			}
 		}
-		if ti.Status == model.TaskStatusSuccess {
+		if ti.Status == model.TaskStatusSuccess && !model.IsQuotaDataStreamEnabled() {
 			if err := model.SyncQuotaDataFromConsumeLogsByRequestId(task.TaskID); err != nil {
 				common.SysLog(fmt.Sprintf("[QuotaData] sync from logs failed task=%s err=%v", task.TaskID, err))
 			}

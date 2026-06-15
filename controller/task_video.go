@@ -1548,6 +1548,8 @@ func handleVideoPerSecondBilling(ctx context.Context, task *model.Task) error {
 	}
 	if err := model.CreateLog(consumeLog); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed to insert consume log: %v", modelName, task.TaskID, err))
+	} else if model.IsQuotaDataStreamEnabled() {
+		model.QueueConsumeLogToQuotaStream(consumeLog, "video_billing_per_second")
 	}
 
 	// 更新用量统计
@@ -1567,8 +1569,11 @@ func handleVideoPerSecondBilling(ctx context.Context, task *model.Task) error {
 	}).Error; err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed to persist billing result: %v", modelName, task.TaskID, err))
 	}
-	if err := model.SyncQuotaDataFromConsumeLogsByRequestId(task.TaskID); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed to sync quota data: %v", modelName, task.TaskID, err))
+	if !model.IsQuotaDataStreamEnabled() {
+		// 旧的 request_id 回填逻辑暂时保留，作为 Redis Stream 关闭时的兼容回退路径。
+		if err := model.SyncQuotaDataFromConsumeLogsByRequestId(task.TaskID); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s failed to sync quota data: %v", modelName, task.TaskID, err))
+		}
 	}
 
 	return nil
@@ -1870,6 +1875,8 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	}
 	if err := model.CreateLog(consumeLog); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to insert consume log: %v", modelName, task.TaskID, err))
+	} else if model.IsQuotaDataStreamEnabled() {
+		model.QueueConsumeLogToQuotaStream(consumeLog, "video_billing_token_ratio")
 	}
 
 	model.UpdateUserUsedQuotaAndRequestCount(task.UserId, actualQuota)
@@ -1886,8 +1893,11 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	}).Error; err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to persist billing result: %v", modelName, task.TaskID, err))
 	}
-	if err := model.SyncQuotaDataFromConsumeLogsByRequestId(task.TaskID); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to sync quota data: %v", modelName, task.TaskID, err))
+	if !model.IsQuotaDataStreamEnabled() {
+		// 旧的 request_id 回填逻辑暂时保留，作为 Redis Stream 关闭时的兼容回退路径。
+		if err := model.SyncQuotaDataFromConsumeLogsByRequestId(task.TaskID); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to sync quota data: %v", modelName, task.TaskID, err))
+		}
 	}
 	return nil
 }

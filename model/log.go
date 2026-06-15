@@ -67,6 +67,7 @@ var logTypeNames = map[int]string{
 
 // CreateLog 统一的日志写入入口，写入 DB 并打印完整日志信息
 func CreateLog(log *Log) error {
+	ensureQuotaStreamEventIDOnLog(log)
 	typeName := logTypeNames[log.Type]
 	if typeName == "" {
 		typeName = fmt.Sprintf("type_%d", log.Type)
@@ -85,6 +86,20 @@ func CreateLog(log *Log) error {
 		common.SysLog(fmt.Sprintf("[LogInsert] FAILED type=%s userId=%d err=%s", typeName, log.UserId, err.Error()))
 	}
 	return err
+}
+
+func ensureQuotaStreamEventIDOnLog(log *Log) {
+	if log == nil || log.Type != LogTypeConsume {
+		return
+	}
+	otherMap, _ := common.StrToMap(log.Other)
+	if otherMap == nil {
+		otherMap = make(map[string]interface{})
+	}
+	if _, ok := otherMap["quota_stream_event_id"]; !ok {
+		otherMap["quota_stream_event_id"] = "qse_" + common.GetUUID()
+		log.Other = common.MapToJsonStr(otherMap)
+	}
 }
 
 func formatUserLogs(logs []*Log, startIdx int) {
@@ -348,10 +363,11 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			needRecordIp = true
 		}
 	}
+	createdAt := common.GetTimestamp()
 	log := &Log{
 		UserId:           userId,
 		Username:         username,
-		CreatedAt:        common.GetTimestamp(),
+		CreatedAt:        createdAt,
 		Type:             LogTypeConsume,
 		Content:          params.Content,
 		PromptTokens:     params.PromptTokens,
@@ -376,10 +392,16 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	err := CreateLog(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
+		return
+	}
+	if IsQuotaDataStreamEnabled() {
+		QueueConsumeLogToQuotaStream(log, "record_consume_log")
+		return
 	}
 	if common.DataExportEnabled {
+		// 旧的内存缓存写法暂时保留，作为 Redis Stream 关闭时的兼容回退路径。
 		gopool.Go(func() {
-			LogQuotaData(userId, username, params.ModelName, params.Quota, common.GetTimestamp(), params.PromptTokens+params.CompletionTokens)
+			LogQuotaData(userId, username, params.ModelName, params.Quota, createdAt, params.PromptTokens+params.CompletionTokens)
 		})
 	}
 }
@@ -407,10 +429,11 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 			tokenName = token.Name
 		}
 	}
+	createdAt := common.GetTimestamp()
 	log := &Log{
 		UserId:    params.UserId,
 		Username:  username,
-		CreatedAt: common.GetTimestamp(),
+		CreatedAt: createdAt,
 		Type:      params.LogType,
 		Content:   params.Content,
 		TokenName: tokenName,
@@ -424,6 +447,10 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	err := CreateLog(log)
 	if err != nil {
 		common.SysLog("failed to record task billing log: " + err.Error())
+		return
+	}
+	if params.LogType == LogTypeConsume && IsQuotaDataStreamEnabled() {
+		QueueConsumeLogToQuotaStream(log, "record_task_billing_log")
 	}
 }
 
