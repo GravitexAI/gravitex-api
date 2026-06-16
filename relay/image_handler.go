@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,12 +22,43 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func truncateImageLogBody(body []byte) string {
+	bodyStr := strings.TrimSpace(string(body))
+	if bodyStr == "" {
+		return "<empty>"
+	}
+	// JSON 请求体按字段截断，避免 base64 等长字符串把整条日志刷爆。
+	if strings.HasPrefix(bodyStr, "{") || strings.HasPrefix(bodyStr, "[") {
+		return common.TruncateJsonValues(bodyStr)
+	}
+	const maxLogLen = 2000
+	if len(bodyStr) > maxLogLen {
+		return bodyStr[:maxLogLen] + fmt.Sprintf("...(truncated,total=%d)", len(body))
+	}
+	return bodyStr
+}
+
 func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
 
 	imageReq, ok := info.Request.(*dto.ImageRequest)
 	if !ok {
 		return types.NewErrorWithStatusCode(fmt.Errorf("invalid request type, expected dto.ImageRequest, got %T", info.Request), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	// 记录用户侧解析后的图片请求参数，便于对比后续实际发往上游的内容。
+	if requestBytes, err := common.Marshal(imageReq); err == nil {
+		var requestMap map[string]json.RawMessage
+		if err := common.Unmarshal(requestBytes, &requestMap); err == nil {
+			for key, value := range imageReq.Extra {
+				if _, exists := requestMap[key]; !exists {
+					requestMap[key] = value
+				}
+			}
+			if mergedBytes, err := common.Marshal(requestMap); err == nil {
+				requestBytes = mergedBytes
+			}
+		}
+		logger.LogInfo(c, fmt.Sprintf("image user request params: %s", common.TruncateJsonValues(string(requestBytes))))
 	}
 
 	request, err := common.DeepCopy(imageReq)
@@ -105,6 +137,10 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
+		// 透传模式下直接记录原始请求体，排查“用户传了什么”与“上游收到了什么”是否一致。
+		if bodyBytes, err := storage.Bytes(); err == nil {
+			logger.LogInfo(c, fmt.Sprintf("image upstream request body(size=%d): %s", len(bodyBytes), truncateImageLogBody(bodyBytes)))
+		}
 		requestBody = common.ReaderOnly(storage)
 	} else {
 		convertedRequest, err := adaptor.ConvertImageRequest(c, info, *request)
@@ -115,6 +151,9 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 		switch convertedRequest.(type) {
 		case *bytes.Buffer:
+			bodyBytes := convertedRequest.(*bytes.Buffer).Bytes()
+			// multipart / buffer 形式的上游请求在这里记录最终内容，方便定位转换后的差异。
+			logger.LogInfo(c, fmt.Sprintf("image upstream request body(size=%d): %s", len(bodyBytes), truncateImageLogBody(bodyBytes)))
 			requestBody = convertedRequest.(io.Reader)
 		default:
 			jsonData, err := common.Marshal(convertedRequest)
@@ -129,6 +168,8 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 					return newAPIErrorFromParamOverride(err)
 				}
 			}
+			// JSON 形式的上游请求在应用参数覆盖后记录，确保日志反映最终发送结果。
+			logger.LogInfo(c, fmt.Sprintf("image upstream request body(size=%d): %s", len(jsonData), truncateImageLogBody(jsonData)))
 
 			if common.DebugEnabled {
 				const maxLogLen = 2000

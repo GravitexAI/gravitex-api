@@ -679,10 +679,20 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 			}
 		}
 
+		// 日志：记录本次构造 multipart 请求时使用的完整参数，长字段（如 base64）按字段截断。
+		if requestBytes, err := common.Marshal(request); err == nil {
+			logger.LogInfo(c.Request.Context(), fmt.Sprintf("gpt-image edits upstream full params: %s", common.TruncateJsonValues(string(requestBytes))))
+		}
+
 		// 日志：记录发送到上游的 multipart 表单参数摘要
 		logger.LogInfo(c.Request.Context(), fmt.Sprintf("gpt-image edits upstream request: model=%s, prompt=%q, size=%s, quality=%s, n=%v, input_fidelity=%s, content-type=%s, body_size=%d",
 			request.Model, request.Prompt, request.Size, request.Quality,
-			func() string { if request.N != nil { return fmt.Sprintf("%d", *request.N) }; return "nil" }(),
+			func() string {
+				if request.N != nil {
+					return fmt.Sprintf("%d", *request.N)
+				}
+				return "nil"
+			}(),
 			request.InputFidelity, writer.FormDataContentType(), requestBody.Len()))
 
 		writer.Close()
