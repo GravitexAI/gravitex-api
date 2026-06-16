@@ -834,10 +834,19 @@ func IsFableModel(model string) bool {
 	return strings.HasPrefix(model, "claude-fable-")
 }
 
+// IsMythosModel reports whether the model is a claude-mythos series model.
+// Mythos is the access-gated successor of Fable Preview; it shares the same
+// API restrictions as Fable 5 (always-on adaptive thinking, deprecated sampling
+// params). Reference: https://platform.claude.com/docs/en/about-claude/models/migration-guide
+func IsMythosModel(model string) bool {
+	return strings.HasPrefix(model, "claude-mythos-")
+}
+
 // isAdaptiveOnlyModel reports whether the model requires adaptive thinking
-// (thinking.type="enabled" returns 400). Covers Opus 4.7+ and all Fable models.
+// (thinking.type="enabled" returns 400) AND has fully deprecated
+// temperature/top_p/top_k. Covers Opus 4.7+, Fable, and Mythos families.
 func isAdaptiveOnlyModel(model string) bool {
-	return OpusVersionAtLeast47(model) || IsFableModel(model)
+	return OpusVersionAtLeast47(model) || IsFableModel(model) || IsMythosModel(model)
 }
 
 // ApplyClaudeSamplingPolicy strips sampling params that the upstream would
@@ -862,8 +871,9 @@ func ApplyClaudeSamplingPolicy(req *dto.ClaudeRequest) {
 }
 
 // ApplyClaudeToolChoicePolicy strips forced tool_choice types (any, tool) for
-// models that do not support them, silently downgrading to auto. Currently
-// applies to all Fable models, which reject forced tool_choice with 400.
+// models that do not support them, silently downgrading to auto. Applies to
+// Fable and Mythos families which reject forced tool_choice with 400 when
+// adaptive thinking is active (and on these models thinking is always on).
 //
 // Exported so other Anthropic-family upstreams (e.g. Vertex) can apply the same
 // normalization on their native /v1/messages path.
@@ -871,7 +881,7 @@ func ApplyClaudeToolChoicePolicy(req *dto.ClaudeRequest) {
 	if req == nil || req.ToolChoice == nil {
 		return
 	}
-	if IsFableModel(req.Model) {
+	if IsFableModel(req.Model) || IsMythosModel(req.Model) {
 		if tc, ok := req.ToolChoice.(*dto.ClaudeToolChoice); ok {
 			if tc.Type == "any" || tc.Type == "tool" {
 				req.ToolChoice = &dto.ClaudeToolChoice{Type: "auto"}

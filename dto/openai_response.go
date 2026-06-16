@@ -264,10 +264,21 @@ type InputTokenDetails struct {
 }
 
 type OutputTokenDetails struct {
-	TextTokens      int `json:"text_tokens"`
-	AudioTokens     int `json:"audio_tokens"`
-	ImageTokens     int `json:"image_tokens"`
+	// TextTokens / ImageTokens 是网关扩展字段，预留给 gpt-image-2 之类
+	// 支持在 chat completions 接口同时输出文本+图片的模型，OpenAI 官方 spec
+	// 之外的存量字段不要删除以免破坏现有调用方。
+	TextTokens  int `json:"text_tokens"`
+	AudioTokens int `json:"audio_tokens"`
+	ImageTokens int `json:"image_tokens"`
+	// 以下三个是 OpenAI 官方 completion_tokens_details 字段。
 	ReasoningTokens int `json:"reasoning_tokens"`
+	// AcceptedPredictionTokens 是 Predicted Outputs 命中的 token 数，即
+	// 客户端 prediction 字段中被模型实际采用并出现在输出里的部分。
+	AcceptedPredictionTokens int `json:"accepted_prediction_tokens"`
+	// RejectedPredictionTokens 是 Predicted Outputs 未命中的 token 数。
+	// 即便未命中也按 output token 价计费，所以预测越准越省钱。
+	// 参考: https://platform.openai.com/docs/guides/predicted-outputs
+	RejectedPredictionTokens int `json:"rejected_prediction_tokens"`
 }
 
 type OpenAIResponsesResponse struct {
