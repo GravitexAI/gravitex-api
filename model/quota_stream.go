@@ -212,7 +212,7 @@ func processQuotaStreamMessage(ctx context.Context, consumerName string, message
 		return
 	}
 
-	doneKey := quotaDataEventDoneKey(event.EventID)
+	doneKey := quotaDataEventDoneKey(event)
 
 	done, err := common.RDB.Exists(ctx, doneKey).Result()
 	if err == nil && done > 0 {
@@ -702,30 +702,34 @@ func streamValueToInt64(value interface{}) (int64, error) {
 	}
 }
 
-func quotaDataEventLockKey(eventID string) string {
-	return fmt.Sprintf("quota_data:stream:lock:%s", eventID)
+// quotaDataBucketHashTag 用 bucket 维度（userID + modelName + bucketTS）作为
+// Redis Cluster 的 hash tag，让同一条 event 涉及的 4 个 key 固定落在同一个 slot，
+// 规避 Lua 脚本多 KEYS 跨 slot 时的 CROSSSLOT 错误。username 故意不进 hash tag：
+// 一是 userID 与 username 在业务里是 1:1，二是 username 可能包含 { / } 等字符破坏 hash tag 解析。
+func quotaDataBucketHashTag(event quotaStreamEvent) string {
+	return fmt.Sprintf("{%d:%s:%d}", event.UserID, event.ModelName, event.BucketTS)
 }
 
-func quotaDataEventDoneKey(eventID string) string {
-	return fmt.Sprintf("quota_data:stream:done:%s", eventID)
+func quotaDataEventDoneKey(event quotaStreamEvent) string {
+	return fmt.Sprintf("quota_data:stream:done:%s:%s", quotaDataBucketHashTag(event), event.EventID)
+}
+
+func quotaDataEventProcessingKey(event quotaStreamEvent) string {
+	return fmt.Sprintf("quota_data:stream:processing:%s:%s", quotaDataBucketHashTag(event), event.EventID)
 }
 
 func quotaDataBucketLockKey(event quotaStreamEvent) string {
-	return fmt.Sprintf("quota_data:stream:bucket_lock:%d:%s:%s:%d", event.UserID, event.Username, event.ModelName, event.BucketTS)
+	return fmt.Sprintf("quota_data:stream:bucket_lock:%s", quotaDataBucketHashTag(event))
 }
 
 func quotaDataBucketDirtyKey(event quotaStreamEvent) string {
-	return fmt.Sprintf("quota_data:stream:bucket_dirty:%d:%s:%s:%d", event.UserID, event.Username, event.ModelName, event.BucketTS)
-}
-
-func quotaDataEventProcessingKey(eventID string) string {
-	return fmt.Sprintf("quota_data:stream:processing:%s", eventID)
+	return fmt.Sprintf("quota_data:stream:bucket_dirty:%s", quotaDataBucketHashTag(event))
 }
 
 func quotaDataBeginEventProcessing(ctx context.Context, consumerName string, event quotaStreamEvent) (string, error) {
 	result, err := common.RDB.Eval(ctx, quotaDataBeginEventProcessingLua, []string{
-		quotaDataEventDoneKey(event.EventID),
-		quotaDataEventProcessingKey(event.EventID),
+		quotaDataEventDoneKey(event),
+		quotaDataEventProcessingKey(event),
 		quotaDataBucketLockKey(event),
 		quotaDataBucketDirtyKey(event),
 	}, []interface{}{
@@ -742,8 +746,8 @@ func quotaDataBeginEventProcessing(ctx context.Context, consumerName string, eve
 
 func quotaDataCompleteEventProcessing(ctx context.Context, consumerName string, event quotaStreamEvent) (string, error) {
 	result, err := common.RDB.Eval(ctx, quotaDataCompleteEventProcessingLua, []string{
-		quotaDataEventDoneKey(event.EventID),
-		quotaDataEventProcessingKey(event.EventID),
+		quotaDataEventDoneKey(event),
+		quotaDataEventProcessingKey(event),
 		quotaDataBucketLockKey(event),
 		quotaDataBucketDirtyKey(event),
 	}, []interface{}{
@@ -773,7 +777,7 @@ func quotaDataFinalizeBucketRound(ctx context.Context, consumerName string, even
 
 func quotaDataAbortEventProcessing(ctx context.Context, consumerName string, event quotaStreamEvent) {
 	if _, err := common.RDB.Eval(ctx, quotaDataAbortEventProcessingLua, []string{
-		quotaDataEventProcessingKey(event.EventID),
+		quotaDataEventProcessingKey(event),
 		quotaDataBucketLockKey(event),
 	}, []interface{}{consumerName}).Result(); err != nil {
 		common.SysError(fmt.Sprintf("[QuotaStream][Consumer] abort state failed consumer=%s eventId=%s userId=%d model=%s bucket=%d err=%v",
