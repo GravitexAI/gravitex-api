@@ -7,7 +7,7 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 0                # 滚动更新时不减少可用副本,避免更新期间掐连接
+      maxUnavailable: 0
       maxSurge: 1
   selector:
     matchLabels:
@@ -17,9 +17,9 @@ spec:
       labels:
         app: api-gateway-test
     spec:
-      terminationGracePeriodSeconds: 60   
+      terminationGracePeriodSeconds: 60
       initContainers:
-      - name: sysctl-init                 #  Pod 网络命名空间内核参数
+      - name: sysctl-init
         image: busybox:1.36
         securityContext:
           privileged: true
@@ -47,15 +47,17 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
+        - name: LOG_PATH
+          value: "/data/logs/$(NODE_NAME)"
         envFrom:
         - configMapRef:
             name: api-gateway-test-config
         lifecycle:
-          preStop:                      
+          preStop:
             exec:
               command: ["sh", "-c", "sleep 15"]
-        readinessProbe:                 
-          tcpSocket:                      
+        readinessProbe:
+          tcpSocket:
             port: 3000
           initialDelaySeconds: 5
           periodSeconds: 5
@@ -68,11 +70,18 @@ spec:
           failureThreshold: 3
         resources:
           requests:
-            cpu: "4000m"                  # Node 单进程用不到 8C,降 request 让 4 副本调度得开
+            cpu: "4000m"
             memory: "8Gi"
           limits:
             cpu: "8000m"
             memory: "16Gi"
+        volumeMounts:
+        - mountPath: /data/logs
+          name: api-gateway-test-stg
+      volumes:
+      - name: api-gateway-test-stg
+        persistentVolumeClaim:
+          claimName: api-gateway-claim
 ---
 apiVersion: v1
 kind: Service
