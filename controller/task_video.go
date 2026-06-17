@@ -1751,14 +1751,15 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		videoResolution = "720p"
 	}
 
-	if hasVideoInputResolved {
-		// 优先尝试分辨率维度定价
-		cfgVal, ok = ratio_setting.GetVideoCompletionRatioResolutionPricing(modelName, hasVideoInputVal, videoResolution)
-		logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio task=%s using video_input+resolution dimension: has_video_input=%v resolution=%s cfgVal=%.6f ok=%v",
-			task.TaskID, hasVideoInputVal, videoResolution, cfgVal, ok))
-	} else {
-		cfgVal, ok = ratio_setting.GetVideoCompletionRatioPricing(modelName, generateAudio)
-	}
+	cfgVal, ok, billingDimension := ratio_setting.ResolveVideoCompletionRatioForBilling(
+		modelName,
+		hasVideoInputResolved,
+		hasVideoInputVal,
+		videoResolution,
+		generateAudio,
+	)
+	logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio task=%s using %s dimension: has_video_input_resolved=%v has_video_input=%v resolution=%s generate_audio=%v cfgVal=%.6f ok=%v",
+		task.TaskID, billingDimension, hasVideoInputResolved, hasVideoInputVal, videoResolution, generateAudio, cfgVal, ok))
 	if !ok || cfgVal <= 0 {
 		return fmt.Errorf("handleVideoTokenRatioBilling: video completion ratio not configured for model=%s", modelName)
 	}

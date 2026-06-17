@@ -513,6 +513,31 @@ func ByteplusGetModerationResult(cfg ByteplusAssetConfig, id, idType string) ([]
 	return result.BlockReasons, nil
 }
 
+// ByteplusGetModerationResultRaw queries the upstream BytePlus Ark
+// `GetModerationResult` API and returns the complete upstream response body as
+// provided by the SDK map envelope, preserving top-level metadata fields.
+func ByteplusGetModerationResultRaw(cfg ByteplusAssetConfig, id, idType string) (map[string]interface{}, error) {
+	if id == "" {
+		return nil, fmt.Errorf("GetModerationResult: empty id")
+	}
+	if idType == "" {
+		idType = ByteplusModerationIdTypeTaskId
+	}
+	body := map[string]interface{}{
+		"Id":          id,
+		"Type":        idType,
+		"ProjectName": cfg.ProjectName,
+	}
+	resp, err := byteplusCall(cfg, "GetModerationResult", body)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("GetModerationResult: nil response")
+	}
+	return *resp, nil
+}
+
 // IsByteplusNotFoundError reports whether the given upstream error corresponds
 // to a `NotFound.Id` failure (HTTP 404). For `GetModerationResult` this maps to
 // any of the three documented cases (PDF p.3):

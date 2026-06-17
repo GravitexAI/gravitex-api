@@ -278,6 +278,7 @@ func SetApiRouter(router *gin.Engine) {
 			assetAdminRoute.DELETE("/byteplus/groups/:group_id", controller.AdminByteplusDeleteGroup)
 			assetAdminRoute.GET("/byteplus/assets", controller.AdminByteplusListAssets)
 			assetAdminRoute.GET("/byteplus/assets/:asset_id", controller.AdminByteplusGetAsset)
+			assetAdminRoute.GET("/byteplus/moderation-result/:task_id", controller.AdminByteplusGetModerationResult)
 			assetAdminRoute.POST("/byteplus/assets", controller.AdminByteplusCreateAsset)
 			assetAdminRoute.PUT("/byteplus/assets/:asset_id", controller.AdminByteplusUpdateAsset)
 			assetAdminRoute.DELETE("/byteplus/assets/:asset_id", controller.AdminByteplusDeleteAsset)

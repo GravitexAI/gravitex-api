@@ -1010,6 +1010,34 @@ func HasVideoCompletionRatioResolution(name string) bool {
 	return ok && len(resMap.Resolutions) > 0
 }
 
+// HasVideoCompletionRatioVideoDimension 检查模型是否显式配置了 noVideo/video 维度定价。
+func HasVideoCompletionRatioVideoDimension(name string) bool {
+	name = FormatMatchingModelName(name)
+	pricing, ok := getVideoCompletionAudioPricing(name)
+	if !ok {
+		return false
+	}
+	return pricing.NoVideo > 0 || pricing.Video > 0
+}
+
+// ResolveVideoCompletionRatioForBilling 根据模型实际配置形态解析视频补全倍率/价格。
+// 返回值中的 dimension 用于日志排查，可能为：
+// - "video_input+resolution"
+// - "video_input"
+// - "audio"
+func ResolveVideoCompletionRatioForBilling(name string, hasVideoInputResolved bool, hasVideoInput bool, resolution string, generateAudio bool) (float64, bool, string) {
+	if hasVideoInputResolved && HasVideoCompletionRatioResolution(name) {
+		value, ok := GetVideoCompletionRatioResolutionPricing(name, hasVideoInput, resolution)
+		return value, ok, "video_input+resolution"
+	}
+	if hasVideoInputResolved && HasVideoCompletionRatioVideoDimension(name) {
+		value, ok := GetVideoCompletionRatioVideoPricing(name, hasVideoInput)
+		return value, ok, "video_input"
+	}
+	value, ok := GetVideoCompletionRatioPricing(name, generateAudio)
+	return value, ok, "audio"
+}
+
 // selectVideoInputPrice 根据是否有视频输入选择对应的价格值
 func selectVideoInputPrice(pricing VideoAudioPricing, hasVideoInput bool, name string) (float64, bool) {
 	value := 0.0

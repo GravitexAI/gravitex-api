@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -63,6 +64,18 @@ func parseAdminPage(c *gin.Context) (int, int) {
 		pageSize = 20
 	}
 	return page, pageSize
+}
+
+func unwrapByteplusResultMap(resp map[string]interface{}) map[string]interface{} {
+	if len(resp) == 0 {
+		return map[string]interface{}{}
+	}
+	if result, ok := resp["Result"]; ok {
+		if resultMap, ok := result.(map[string]interface{}); ok {
+			return resultMap
+		}
+	}
+	return resp
 }
 
 // ============================================================
@@ -448,4 +461,102 @@ func AdminByteplusDeleteAsset(c *gin.Context) {
 		return
 	}
 	adminAssetOK(c, gin.H{"deleted": true, "asset_id": assetId})
+}
+
+// AdminByteplusGetModerationResult queries BytePlus upstream for the complete
+// moderation result payload of a failed Seedance 2.0 task, without restricting
+// lookup to the current session user.
+// GET /api/asset-admin/byteplus/moderation-result/:task_id
+func AdminByteplusGetModerationResult(c *gin.Context) {
+	taskId := strings.TrimSpace(c.Param("task_id"))
+	if taskId == "" {
+		adminAssetErr(c, http.StatusBadRequest, "task_id is required")
+		return
+	}
+
+	task, exist, err := model.GetByOnlyTaskId(taskId)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("AdminByteplusGetModerationResult: DB lookup failed: %s", err.Error()))
+		adminAssetErr(c, http.StatusInternalServerError, "failed to load task: "+err.Error())
+		return
+	}
+	if !exist || task == nil {
+		adminAssetErr(c, http.StatusNotFound, "task not found")
+		return
+	}
+
+	if task.Status != model.TaskStatusFailure {
+		adminAssetErr(c, http.StatusBadRequest,
+			fmt.Sprintf("only failed tasks can be queried for moderation reasons (current status: %s)", task.Status))
+		return
+	}
+
+	if !isSeedance20Family(task) {
+		adminAssetErr(c, http.StatusBadRequest,
+			"moderation query is only supported for seedance-2-0 / seedance-2-0-fast models")
+		return
+	}
+
+	ch, err := model.CacheGetChannel(task.ChannelId)
+	if err != nil || ch == nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("AdminByteplusGetModerationResult: channel %d not found: %v", task.ChannelId, err))
+		adminAssetErr(c, http.StatusServiceUnavailable, "channel not available")
+		return
+	}
+	//other := ch.GetOtherSettings()
+	//if !other.IsModerationQueryEnabled() {
+	//	adminAssetErr(c, http.StatusForbidden,
+	//		"moderation query is not enabled on this channel; please contact admin to apply for BytePlus whitelist activation")
+	//	return
+	//}
+
+	cfg := getByteplusAssetConfig(ch)
+	upstreamResp, err := service.ByteplusGetModerationResultRaw(cfg, task.TaskID, service.ByteplusModerationIdTypeTaskId)
+	if err != nil {
+		if service.IsByteplusNotFoundError(err) {
+			adminAssetErr(c, http.StatusNotFound,
+				"no moderation result found: task may not have been blocked by moderation, the ID is invalid, or the channel is not yet whitelisted")
+			return
+		}
+		logger.LogError(c.Request.Context(), fmt.Sprintf("AdminByteplusGetModerationResult: upstream error task=%s channel=%d: %s",
+			task.TaskID, ch.Id, err.Error()))
+		adminAssetErr(c, http.StatusBadGateway, "BytePlus error: "+err.Error())
+		return
+	}
+
+	upstreamResult := unwrapByteplusResultMap(upstreamResp)
+
+	rawReasons, _ := upstreamResult["block_reasons"]
+	reasons := []service.ByteplusModerationBlockReason{}
+	if rawReasons != nil {
+		rawBytes, marshalErr := common.Marshal(rawReasons)
+		if marshalErr == nil {
+			_ = common.Unmarshal(rawBytes, &reasons)
+		}
+	}
+
+	now := common.GetTimestamp()
+	if err := writeCachedModerationResult(task, reasons, now); err != nil {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("AdminByteplusGetModerationResult: cache write failed task=%s: %s",
+			task.TaskID, err.Error()))
+	}
+
+	logger.LogInfo(c.Request.Context(),
+		fmt.Sprintf("AdminByteplusGetModerationResult: upstream hit admin=%d owner=%d channel=%d task=%s reasons=%d",
+			c.GetInt("id"), task.UserId, ch.Id, task.TaskID, len(reasons)))
+
+	adminAssetOK(c, gin.H{
+		"task_id":           task.TaskID,
+		"task_db_id":        task.ID,
+		"task_owner_id":     task.UserId,
+		"task_status":       task.Status,
+		"task_fail_reason":  task.FailReason,
+		"channel_id":        task.ChannelId,
+		"origin_model":      task.Properties.OriginModelName,
+		"upstream_model":    task.Properties.UpstreamModelName,
+		"queried_at":        now,
+		"block_reasons":     reasons,
+		"upstream_result":   upstreamResult,
+		"upstream_response": upstreamResp,
+	})
 }
