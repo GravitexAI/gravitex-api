@@ -76,7 +76,7 @@ spec:
         volumeMounts:
         - name: api-gateway-test-stg
           mountPath: /data/logs
-          subPathExpr: api-gateway-test-$(NODE_NAME)
+          subPathExpr: $(NODE_NAME)
       volumes:
       - name: api-gateway-test-stg
         persistentVolumeClaim:
