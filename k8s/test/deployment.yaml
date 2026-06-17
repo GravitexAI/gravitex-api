@@ -47,8 +47,6 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
-        - name: LOG_PATH
-          value: "/data/logs/$(NODE_NAME)"
         envFrom:
         - configMapRef:
             name: api-gateway-test-config
@@ -76,8 +74,9 @@ spec:
             cpu: "8000m"
             memory: "16Gi"
         volumeMounts:
-        - mountPath: /data/logs
-          name: api-gateway-test-stg
+        - name: api-gateway-test-stg
+          mountPath: /data/logs
+          subPathExpr: api-gateway-test-$(NODE_NAME)
       volumes:
       - name: api-gateway-test-stg
         persistentVolumeClaim:
