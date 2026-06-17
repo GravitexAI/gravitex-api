@@ -109,6 +109,11 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		info.UpstreamModelName = request.Model
 	}
 
+	// Translate OpenRouter-style reasoning field and top-level effort alias into
+	// Claude thinking/output_config. This mirrors the same normalization that
+	// RequestOpenAI2ClaudeMessage does on the OpenAI-compat path.
+	claude.ApplyClaudeThinkingPolicy(request)
+
 	if info.ChannelSetting.SystemPrompt != "" {
 		if request.System == nil {
 			request.SetStringSystem(info.ChannelSetting.SystemPrompt)
