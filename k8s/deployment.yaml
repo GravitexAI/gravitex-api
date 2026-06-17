@@ -80,7 +80,14 @@ spec:
           limits:
             cpu: "8000m"
             memory: "16Gi"
-
+        volumeMounts:
+        - name: api-gateway-stg
+          mountPath: /data/logs
+          subPathExpr: $(NODE_NAME)
+      volumes:
+      - name: api-gateway-stg
+        persistentVolumeClaim:
+          claimName: api-gateway-prod-claim
 ---
 
 apiVersion: v1
