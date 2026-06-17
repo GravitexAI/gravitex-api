@@ -298,8 +298,6 @@ func applyQuotaStreamEvent(ctx context.Context, consumerName string, event quota
 		case quotaDataLuaStateDoneAndReleased:
 			return nil
 		case quotaDataLuaStateDoneAndRetry:
-			common.SysLog(fmt.Sprintf("[QuotaStream][Consumer] retry dirty bucket immediately consumer=%s eventId=%s userId=%d model=%s bucket=%d round=%d",
-				consumerName, event.EventID, event.UserID, event.ModelName, event.BucketTS, round))
 			continue
 		case quotaDataLuaStateOwnerMismatch:
 			return fmt.Errorf("bucket owner mismatch requestId=%s userId=%d model=%s bucket=%d",
@@ -606,9 +604,7 @@ func moveQuotaStreamMessageToDLQ(ctx context.Context, consumerName string, messa
 func ackQuotaStreamMessage(ctx context.Context, consumerName string, messageID string) {
 	if err := common.RDB.XAck(ctx, quotaDataStreamName, quotaDataStreamGroup, messageID).Err(); err != nil {
 		common.SysError(fmt.Sprintf("[QuotaStream][Consumer] ack failed consumer=%s messageId=%s err=%v", consumerName, messageID, err))
-		return
 	}
-	common.SysLog(fmt.Sprintf("[QuotaStream][Consumer] ack ok consumer=%s messageId=%s", consumerName, messageID))
 }
 
 func quotaStreamRetryCount(ctx context.Context, messageID string) int64 {
