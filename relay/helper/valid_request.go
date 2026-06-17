@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -145,22 +147,31 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 	switch relayMode {
 	case relayconstant.RelayModeImagesEdits:
 		if strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
-			_, err := c.MultipartForm()
+			form, err := common.ParseMultipartFormReusable(c)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse image edit form request: %w", err)
 			}
-			formData := c.Request.PostForm
+			formData := url.Values(form.Value)
+			c.Request.MultipartForm = form
+			c.Request.PostForm = formData
 			imageRequest.Prompt = formData.Get("prompt")
 			imageRequest.Model = formData.Get("model")
 			imageRequest.N = common.GetPointer(uint(common.String2Int(formData.Get("n"))))
 			imageRequest.Quality = formData.Get("quality")
 			imageRequest.Size = formData.Get("size")
+			if streamValue := strings.TrimSpace(formData.Get("stream")); streamValue != "" {
+				stream, err := strconv.ParseBool(streamValue)
+				if err != nil {
+					return nil, fmt.Errorf("invalid stream value: %w", err)
+				}
+				imageRequest.Stream = common.GetPointer(stream)
+			}
 			if imageValue := formData.Get("image"); imageValue != "" {
-				imageRequest.Image, _ = json.Marshal(imageValue)
+				imageRequest.Image, _ = common.Marshal(imageValue)
 			}
 			// 解析 input_fidelity (图生图保真度)
 			if fidelity := formData.Get("input_fidelity"); fidelity != "" {
-				imageRequest.InputFidelity = fidelity
+				imageRequest.InputFidelity = &fidelity
 			}
 
 			if strings.HasPrefix(imageRequest.Model, "gpt-image") {
@@ -267,9 +278,9 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			}
 
 			// 验证 input_fidelity 参数（如果提供）
-			if imageRequest.InputFidelity != "" {
+			if imageRequest.InputFidelity != nil {
 				validFidelities := map[string]bool{"low": true, "medium": true, "high": true}
-				if !validFidelities[imageRequest.InputFidelity] {
+				if !validFidelities[*imageRequest.InputFidelity] {
 					return nil, errors.New("input_fidelity must be one of low, medium, or high")
 				}
 			}

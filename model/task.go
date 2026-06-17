@@ -497,6 +497,17 @@ func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 	return result.RowsAffected > 0, nil
 }
 
+// TaskBulkUpdate performs an unconditional bulk UPDATE by upstream task_id strings.
+// Same caveats as TaskBulkUpdateByID — no CAS guard.
+func TaskBulkUpdate(taskIds []string, params map[string]any) error {
+	if len(taskIds) == 0 {
+		return nil
+	}
+	return DB.Model(&Task{}).
+		Where("task_id in (?)", taskIds).
+		Updates(params).Error
+}
+
 // TaskBulkUpdateByID performs an unconditional bulk UPDATE by primary key IDs.
 // WARNING: This function has NO CAS (Compare-And-Swap) guard — it will overwrite
 // any concurrent status changes. DO NOT use in billing/quota lifecycle flows
@@ -508,16 +519,6 @@ func TaskBulkUpdateByID(ids []int64, params map[string]any) error {
 	}
 	return DB.Model(&Task{}).
 		Where("id in (?)", ids).
-		Updates(params).Error
-}
-
-// TaskBulkUpdate performs an unconditional bulk UPDATE by task_id strings.
-func TaskBulkUpdate(taskIDs []string, params map[string]any) error {
-	if len(taskIDs) == 0 {
-		return nil
-	}
-	return DB.Model(&Task{}).
-		Where("task_id in (?)", taskIDs).
 		Updates(params).Error
 }
 

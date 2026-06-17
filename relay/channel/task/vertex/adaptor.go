@@ -339,6 +339,22 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 func (a *TaskAdaptor) GetModelList() []string { return []string{"veo-3.0-generate-001"} }
 func (a *TaskAdaptor) GetChannelName() string { return "vertex" }
 
+func buildFetchOperationURL(baseURL, upstreamName string) (string, error) {
+	region := extractRegionFromOperationName(upstreamName)
+	if region == "" {
+		region = "us-central1"
+	}
+	project := extractProjectFromOperationName(upstreamName)
+	modelName := extractModelFromOperationName(upstreamName)
+	if strings.TrimSpace(modelName) == "" {
+		return "", fmt.Errorf("cannot extract model from operation name")
+	}
+	if strings.TrimSpace(project) == "" {
+		return "", fmt.Errorf("cannot extract project from operation name")
+	}
+	return vertexcore.BuildGoogleModelURL(baseURL, vertexcore.DefaultAPIVersion, project, region, modelName, "fetchPredictOperation"), nil
+}
+
 // FetchTask fetch task status
 func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy string) (*http.Response, error) {
 	taskID, ok := body["task_id"].(string)

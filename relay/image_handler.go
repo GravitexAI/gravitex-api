@@ -137,7 +137,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
-		// 透传模式下直接记录原始请求体，排查“用户传了什么”与“上游收到了什么”是否一致。
+		// 透传模式下直接记录原始请求体，排查"用户传了什么"与"上游收到了什么"是否一致。
 		if bodyBytes, err := storage.Bytes(); err == nil {
 			logger.LogInfo(c, fmt.Sprintf("image upstream request body(size=%d): %s", len(bodyBytes), truncateImageLogBody(bodyBytes)))
 		}
@@ -179,7 +179,14 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 				}
 				logger.LogDebug(c, fmt.Sprintf("image request body: %s", bodyStr))
 			}
-			requestBody = bytes.NewBuffer(jsonData)
+			body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			defer closer.Close()
+			jsonData = nil
+			info.UpstreamRequestBodySize = size
+			requestBody = body
 		}
 	}
 
