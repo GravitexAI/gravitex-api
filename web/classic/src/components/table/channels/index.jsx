@@ -34,23 +34,16 @@ import EditChannelModal from './modals/EditChannelModal';
 import EditTagModal from './modals/EditTagModal';
 import MultiKeyManageModal from './modals/MultiKeyManageModal';
 import ChannelUpstreamUpdateModal from './modals/ChannelUpstreamUpdateModal';
-import ChannelLogModal from './modals/ChannelLogModal';
 import { createCardProPagination } from '../../../helpers/utils';
-import { useState } from 'react';
 
 const ChannelsPage = () => {
   const channelsData = useChannelsData();
   const isMobile = useIsMobile();
-  const [showChannelLog, setShowChannelLog] = useState(false);
 
   return (
     <>
       {/* Modals */}
       <ColumnSelectorModal {...channelsData} />
-      <ChannelLogModal
-        visible={showChannelLog}
-        onClose={() => setShowChannelLog(false)}
-      />
       <EditTagModal
         visible={channelsData.showEditTag}
         tag={channelsData.editingTag}
@@ -102,7 +95,7 @@ const ChannelsPage = () => {
         type='type3'
         tabsArea={<ChannelsTabs {...channelsData} />}
         actionsArea={<ChannelsActions {...channelsData} />}
-        searchArea={<ChannelsFilters {...channelsData} setShowChannelLog={setShowChannelLog} />}
+        searchArea={<ChannelsFilters {...channelsData} />}
         paginationArea={createCardProPagination({
           currentPage: channelsData.activePage,
           pageSize: channelsData.pageSize,

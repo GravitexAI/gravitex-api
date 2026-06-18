@@ -1623,41 +1623,39 @@ export function renderTaskBillingProcess(other, content) {
   ]);
 }
 
-export function renderModelPrice(
-  inputTokens,
-  completionTokens,
-  modelRatio,
-  modelPrice = -1,
-  completionRatio,
-  groupRatio,
-  user_group_ratio,
-  cacheTokens = 0,
-  cacheRatio = 1.0,
-  image = false,
-  imageRatio = 1.0,
-  imageOutputTokens = 0,
-  webSearch = false,
-  webSearchCallCount = 0,
-  webSearchPrice = 0,
-  fileSearch = false,
-  fileSearchCallCount = 0,
-  fileSearchPrice = 0,
-  audioInputSeperatePrice = false,
-  audioInputTokens = 0,
-  audioInputPrice = 0,
-  imageGenerationCall = false,
-  imageGenerationCallPrice = 0,
-  geminiImageOutputTokens = 0,
-  geminiTextOutputTokens = 0,
-  effectiveImageOutputRatio = 0,
-  displayMode = 'price',
-) {
-  const { ratio: effectiveGroupRatio, label: ratioLabel } = getEffectiveRatio(
-    groupRatio,
+export function renderModelPrice(opts) {
+  const {
+    prompt_tokens: inputTokens = 0,
+    completion_tokens: completionTokens = 0,
+    model_ratio: modelRatio = 0,
+    model_price: modelPrice = -1,
+    completion_ratio: _completionRatio,
+    group_ratio: _groupRatio,
     user_group_ratio,
+    cache_tokens: cacheTokens = 0,
+    cache_ratio: cacheRatio = 1.0,
+    image = false,
+    image_ratio: imageRatio = 1.0,
+    image_output: imageOutputTokens = 0,
+    web_search: webSearch = false,
+    web_search_call_count: webSearchCallCount = 0,
+    web_search_price: webSearchPrice = 0,
+    file_search: fileSearch = false,
+    file_search_call_count: fileSearchCallCount = 0,
+    file_search_price: fileSearchPrice = 0,
+    audio_input_seperate_price: audioInputSeperatePrice = false,
+    audio_input_token_count: audioInputTokens = 0,
+    audio_input_price: audioInputPrice = 0,
+    image_generation_call: imageGenerationCall = false,
+    image_generation_call_price: imageGenerationCallPrice = 0,
+    displayMode = 'price',
+  } = opts;
+  const { ratio: effectiveGroupRatio, label: ratioLabel } = getEffectiveRatio(
+      _groupRatio,
+      user_group_ratio,
   );
-  groupRatio = effectiveGroupRatio;
-  completionRatio = completionRatio ?? 0;
+  let groupRatio = effectiveGroupRatio;
+  const completionRatio = _completionRatio ?? 0;
 
   const { symbol, rate } = getCurrencyConfig();
 
@@ -1697,29 +1695,13 @@ export function renderModelPrice(
     if (audioInputTokens > 0) {
       effectiveInputTokens -= audioInputTokens;
     }
-    const hasGeminiOutputSplit =
-      (geminiImageOutputTokens > 0 || geminiTextOutputTokens > 0) &&
-      (geminiImageOutputTokens === 0 || effectiveImageOutputRatio > 0);
-    const imageOutputRatioPrice =
-      effectiveImageOutputRatio > 0
-        ? modelRatio * 2.0 * effectiveImageOutputRatio
-        : 0;
-    let price =
-      (effectiveInputTokens / 1000000) * inputRatioPrice * groupRatio +
-      (audioInputTokens / 1000000) * audioInputPrice * groupRatio +
-      (webSearchCallCount / 1000) * webSearchPrice * groupRatio +
-      (fileSearchCallCount / 1000) * fileSearchPrice * groupRatio +
-      imageGenerationCallPrice * groupRatio;
-    if (hasGeminiOutputSplit) {
-      price +=
-        (geminiTextOutputTokens / 1000000) * completionRatioPrice * groupRatio +
-        (geminiImageOutputTokens / 1000000) *
-          imageOutputRatioPrice *
-          groupRatio;
-    } else {
-      price +=
-        (completionTokens / 1000000) * completionRatioPrice * groupRatio;
-    }
+    const price =
+        (effectiveInputTokens / 1000000) * inputRatioPrice * groupRatio +
+        (audioInputTokens / 1000000) * audioInputPrice * groupRatio +
+        (completionTokens / 1000000) * completionRatioPrice * groupRatio +
+        (webSearchCallCount / 1000) * webSearchPrice * groupRatio +
+        (fileSearchCallCount / 1000) * fileSearchPrice * groupRatio +
+        imageGenerationCallPrice * groupRatio;
 
     let inputDesc = '';
     if (image && imageOutputTokens > 0) {
@@ -1767,39 +1749,7 @@ export function renderModelPrice(
       );
     }
 
-    // 构建输出部分描述（Gemini 拆分为文本输出 + 图片输出时单独展示）
-    let outputDesc = '';
-    if (hasGeminiOutputSplit) {
-      const parts = [];
-      if (geminiTextOutputTokens > 0) {
-        parts.push(
-          buildBillingText(
-            '文本输出 {{text}} tokens / 1M tokens * {{symbol}}{{compPrice}}',
-            {
-              text: geminiTextOutputTokens,
-              symbol,
-              compPrice: formatBillingDisplayPrice(completionRatioPrice, rate),
-            },
-          ),
-        );
-      }
-      if (geminiImageOutputTokens > 0) {
-        parts.push(
-          buildBillingText(
-            '图片输出 {{image}} tokens / 1M tokens * {{symbol}}{{imagePrice}}',
-            {
-              image: geminiImageOutputTokens,
-              symbol,
-              imagePrice: formatBillingDisplayPrice(imageOutputRatioPrice, rate),
-            },
-          ),
-        );
-      }
-      outputDesc =
-        parts.join(' + ') +
-        `) * ${ratioLabel} ${groupRatio}`;
-    } else {
-      outputDesc = buildBillingText(
+    const outputDesc = buildBillingText(
         '输出 {{completion}} tokens / 1M tokens * {{symbol}}{{compPrice}}) * {{ratioType}} {{ratio}}',
         {
           completion: completionTokens,
@@ -1808,8 +1758,7 @@ export function renderModelPrice(
           ratio: groupRatio,
           ratioType: ratioLabel,
         },
-      );
-    }
+    );
 
     const extraServices = [
       webSearch && webSearchCallCount > 0
@@ -1864,36 +1813,12 @@ export function renderModelPrice(
                 : '',
           },
       ),
-      !hasGeminiOutputSplit
-        ? buildBillingPriceText('输出价格：{{symbol}}{{total}} / 1M tokens', {
-            symbol,
-            usdAmount: completionRatioPrice,
-            rate,
-            amountKey: 'total',
-          })
-        : null,
-      hasGeminiOutputSplit && geminiTextOutputTokens > 0
-        ? buildBillingPriceText(
-            '文本输出价格：{{symbol}}{{total}} / 1M tokens',
-            {
-              symbol,
-              usdAmount: completionRatioPrice,
-              rate,
-              amountKey: 'total',
-            },
-          )
-        : null,
-      hasGeminiOutputSplit && geminiImageOutputTokens > 0
-        ? buildBillingPriceText(
-            '图片输出价格：{{symbol}}{{total}} / 1M tokens',
-            {
-              symbol,
-              usdAmount: imageOutputRatioPrice,
-              rate,
-              amountKey: 'total',
-            },
-          )
-        : null,
+      buildBillingPriceText('输出价格：{{symbol}}{{total}} / 1M tokens', {
+        symbol,
+        usdAmount: completionRatioPrice,
+        rate,
+        amountKey: 'total',
+      }),
       cacheTokens > 0
           ? buildBillingPriceText(
               '缓存读取价格：{{symbol}}{{total}} / 1M tokens',

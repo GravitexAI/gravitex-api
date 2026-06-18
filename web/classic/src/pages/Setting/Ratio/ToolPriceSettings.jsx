@@ -30,9 +30,7 @@ import {
 } from '@douyinfe/semi-ui';
 import { IconCopy, IconDelete, IconPlus } from '@douyinfe/semi-icons';
 import { useTranslation } from 'react-i18next';
-import { API, copy, showError, showSuccess, showWarning } from '../../../helpers';
-import OperLogConfirmModal from '../../../components/oper-log/OperLogConfirmModal';
-import { createOperLog } from '../../../components/oper-log/operLogApi';
+import { API, copy, showError, showSuccess } from '../../../helpers';
 
 const { Text } = Typography;
 
@@ -74,7 +72,6 @@ export default function ToolPriceSettings({ options }) {
   const [jsonText, setJsonText] = useState('');
   const [jsonError, setJsonError] = useState('');
   const [saving, setSaving] = useState(false);
-  const [logModal, setLogModal] = useState({ visible: false, changes: [], defaultRemark: '' });
 
   useEffect(() => {
     let prices = {};
@@ -134,8 +131,7 @@ export default function ToolPriceSettings({ options }) {
 
   const currentPrices = useMemo(() => rowsToObject(rows), [rows]);
 
-  // 实际执行保存；logRemark/logContent 为 null 表示不记录日志
-  const doSave = async (logRemark, logContent) => {
+  const handleSave = async () => {
     setSaving(true);
     try {
       const res = await API.put('/api/option/', {
@@ -144,13 +140,6 @@ export default function ToolPriceSettings({ options }) {
       });
       if (res.data.success) {
         showSuccess(t('保存成功'));
-        if (logRemark !== null) {
-          await createOperLog({
-            oper_type: '工具定价',
-            content: logContent,
-            remark: logRemark,
-          });
-        }
       } else {
         showError(res.data.message || t('保存失败'));
       }
@@ -159,35 +148,6 @@ export default function ToolPriceSettings({ options }) {
     } finally {
       setSaving(false);
     }
-  };
-
-  const handleSave = () => {
-    let oldRaw = options?.[OPTION_KEY];
-    const oldStr =
-      oldRaw == null
-        ? ''
-        : typeof oldRaw === 'string'
-          ? oldRaw
-          : JSON.stringify(oldRaw, null, 2);
-    const newStr = JSON.stringify(currentPrices, null, 2);
-
-    const normalize = (s) => {
-      try {
-        return JSON.stringify(JSON.parse(s));
-      } catch {
-        return s || '';
-      }
-    };
-    if (normalize(oldStr) === normalize(newStr)) {
-      return showWarning(t('你似乎并没有修改什么'));
-    }
-
-    const changes = [{ key: OPTION_KEY, oldVal: oldStr, newVal: newStr }];
-    setLogModal({
-      visible: true,
-      changes,
-      defaultRemark: t('修改了工具调用价格'),
-    });
   };
 
   const columns = [
@@ -318,22 +278,6 @@ export default function ToolPriceSettings({ options }) {
           {t('保存')}
         </Button>
       </div>
-
-      <OperLogConfirmModal
-        visible={logModal.visible}
-        operType='工具定价'
-        changes={logModal.changes}
-        defaultRemark={logModal.defaultRemark}
-        onConfirm={(remark, content) => {
-          setLogModal((s) => ({ ...s, visible: false }));
-          doSave(remark, content);
-        }}
-        onSkip={() => {
-          setLogModal((s) => ({ ...s, visible: false }));
-          doSave(null, null);
-        }}
-        onCancel={() => setLogModal((s) => ({ ...s, visible: false }))}
-      />
     </div>
   );
 }

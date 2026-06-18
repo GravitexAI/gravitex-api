@@ -39,8 +39,10 @@ var buildFS embed.FS
 
 var indexPage []byte
 
+//go:embed web/classic/dist
 var classicBuildFS embed.FS
 
+//go:embed web/classic/dist/index.html
 var classicIndexPage []byte
 
 func main() {

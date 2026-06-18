@@ -47,6 +47,12 @@ export default defineConfig(({ envMode }) => {
           semiUiDir,
           'dist/css/semi.css',
         ),
+        // date-fns-tz@1.x uses private _lib paths removed in date-fns@4.x;
+        // resolve to the v2 copy that semi-foundation ships.
+        'date-fns': path.resolve(
+          semiUiDir,
+          '../semi-foundation/node_modules/date-fns',
+        ),
       },
     },
     html: {

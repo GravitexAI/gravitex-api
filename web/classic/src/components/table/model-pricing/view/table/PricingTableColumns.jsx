@@ -159,14 +159,7 @@ export const getPricingTableColumns = ({
   const quotaColumn = {
     title: t('计费类型'),
     dataIndex: 'quota_type',
-    render: (text, record) => {
-      if (record.billing_mode === 'tiered_expr') {
-        return (
-          <Tag color='amber' shape='circle'>
-            {t('动态计费')}
-          </Tag>
-        );
-      }
+    render: (text, record, index) => {
       return renderQuotaType(parseInt(text), t);
     },
     sorter: (a, b) => a.quota_type - b.quota_type,
