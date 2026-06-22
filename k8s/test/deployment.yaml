@@ -4,6 +4,7 @@ metadata:
   name: api-gateway-test
   namespace: test
 spec:
+  replicas: 2 # 固定启动 2 个 Pod 实例
   strategy:
     type: RollingUpdate
     rollingUpdate:
