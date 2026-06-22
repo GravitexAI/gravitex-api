@@ -492,7 +492,18 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if common.DataExportEnabled {
 		// 旧的内存缓存写法暂时保留，作为 Redis Stream 关闭时的兼容回退路径。
 		gopool.Go(func() {
-			LogQuotaData(userId, username, params.ModelName, params.Quota, createdAt, params.PromptTokens+params.CompletionTokens)
+			LogQuotaData(QuotaDataLogParams{
+				UserID:    userId,
+				Username:  username,
+				ModelName: params.ModelName,
+				Quota:     params.Quota,
+				CreatedAt: createdAt,
+				TokenUsed: params.PromptTokens + params.CompletionTokens,
+				UseGroup:  params.Group,
+				TokenID:   params.TokenId,
+				ChannelID: params.ChannelId,
+				NodeName:  common.NodeName,
+			})
 		})
 	}
 }
@@ -542,6 +553,21 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 	if params.LogType == LogTypeConsume && IsQuotaDataStreamEnabled() {
 		QueueConsumeLogToQuotaStream(log, "record_task_billing_log")
+	}
+	if params.LogType == LogTypeConsume && common.DataExportEnabled {
+		gopool.Go(func() {
+			LogQuotaData(QuotaDataLogParams{
+				UserID:    params.UserId,
+				Username:  username,
+				ModelName: params.ModelName,
+				Quota:     params.Quota,
+				CreatedAt: createdAt,
+				UseGroup:  params.Group,
+				TokenID:   params.TokenId,
+				ChannelID: params.ChannelId,
+				NodeName:  common.NodeName,
+			})
+		})
 	}
 }
 

@@ -57,6 +57,7 @@ const (
 	ChannelTypeCodex          = 57
 	ChannelTypeAzureVideo     = 58
 	ChannelTypeUptoken        = 59
+	ChannelTypeAdvancedCustom = 60
 	ChannelTypeDummy          // this one is only for count, do not add any channel after this
 
 )
@@ -122,6 +123,7 @@ var ChannelBaseURLs = []string{
 	"https://chatgpt.com",                       //57
 	"",                                          //58 AzureVideo — base URL set per-channel (Azure resource endpoint)
 	"https://uptoken.cc",                        //59 Uptoken
+	"",                                          //60
 }
 
 var ChannelTypeNames = map[int]string{
@@ -181,6 +183,7 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeCodex:          "ChatGPT Subscription (Codex)",
 	ChannelTypeAzureVideo:     "AzureVideo",
 	ChannelTypeUptoken:        "Uptoken",
+	ChannelTypeAdvancedCustom: "Advanced Custom",
 }
 
 func GetChannelTypeName(channelType int) string {
