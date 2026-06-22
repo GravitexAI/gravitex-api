@@ -19,6 +19,7 @@ CREATE TABLE
     `group` LowCardinality(Nullable(String)) DEFAULT '',
     `ip` Nullable(String) DEFAULT '',
     `request_id` Nullable(String) DEFAULT '',
+    `upstream_request_id` Nullable(String) DEFAULT '',
     `other` Nullable(String) DEFAULT '',
     INDEX idx_request_id request_id TYPE bloom_filter GRANULARITY 4,
     INDEX idx_username username TYPE bloom_filter GRANULARITY 4,
