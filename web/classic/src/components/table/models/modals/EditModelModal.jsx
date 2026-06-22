@@ -59,6 +59,20 @@ const nameRuleOptions = [
   { label: '后缀名称匹配', value: 3 },
 ];
 
+const showTabOptions = [
+  { label: '不展示', value: 0 },
+  { label: '对话', value: 1 },
+  { label: '图片', value: 2 },
+  { label: '视频', value: 3 },
+];
+
+const flagOptions = [
+  { label: '无', value: 0 },
+  { label: '新发布', value: 1 },
+  { label: '最先进', value: 2 },
+  { label: '火爆', value: 3 },
+];
+
 const EditModelModal = (props) => {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
@@ -115,8 +129,10 @@ const EditModelModal = (props) => {
   const getInitValues = () => ({
     model_name: props.editingModel?.model_name || '',
     description: '',
+    description_en: '',
     icon: '',
     tags: [],
+    tags_en: [],
     vendor_id: undefined,
     vendor: '',
     vendor_icon: '',
@@ -124,6 +140,9 @@ const EditModelModal = (props) => {
     name_rule: props.editingModel?.model_name ? 0 : undefined, // 通过未配置模型过来的固定为精确匹配
     status: true,
     sync_official: true,
+    show_tab: 0,
+    flag: 0,
+    sort_order: 0,
   });
 
   const handleCancel = () => {
@@ -144,6 +163,12 @@ const EditModelModal = (props) => {
         } else {
           data.tags = [];
         }
+        // 处理 tags_en
+        if (data.tags_en) {
+          data.tags_en = data.tags_en.split(',').filter(Boolean);
+        } else {
+          data.tags_en = [];
+        }
         // endpoints 保持原始 JSON 字符串，若为空设为空串
         if (!data.endpoints) {
           data.endpoints = '';
@@ -151,6 +176,9 @@ const EditModelModal = (props) => {
         // 处理status/sync_official，将数字转为布尔值
         data.status = data.status === 1;
         data.sync_official = (data.sync_official ?? 1) === 1;
+        data.show_tab = data.show_tab ?? 0;
+        data.flag = data.flag ?? 0;
+        data.sort_order = data.sort_order ?? 0;
         if (formApiRef.current) {
           formApiRef.current.setValues({ ...getInitValues(), ...data });
         }
@@ -195,9 +223,15 @@ const EditModelModal = (props) => {
       const submitData = {
         ...values,
         tags: Array.isArray(values.tags) ? values.tags.join(',') : values.tags,
+        tags_en: Array.isArray(values.tags_en)
+          ? values.tags_en.join(',')
+          : values.tags_en,
         endpoints: values.endpoints || '',
         status: values.status ? 1 : 0,
         sync_official: values.sync_official ? 1 : 0,
+        show_tab: values.show_tab ?? 0,
+        flag: values.flag ?? 0,
+        sort_order: values.sort_order ?? 0,
       };
 
       if (isEdit) {
@@ -366,6 +400,15 @@ const EditModelModal = (props) => {
                     />
                   </Col>
                   <Col span={24}>
+                    <Form.TextArea
+                      field='description_en'
+                      label={t('英文描述')}
+                      placeholder={t('请输入英文描述')}
+                      rows={3}
+                      showClear
+                    />
+                  </Col>
+                  <Col span={24}>
                     <Form.TagInput
                       field='tags'
                       label={t('标签')}
@@ -421,6 +464,34 @@ const EditModelModal = (props) => {
                           </Space>
                         ),
                       })}
+                    />
+                  </Col>
+                  <Col span={24}>
+                    <Form.TagInput
+                      field='tags_en'
+                      label={t('英文标签')}
+                      placeholder={t('输入英文标签或使用","分隔多个标签')}
+                      addOnBlur
+                      showClear
+                      onChange={(newTags) => {
+                        if (!formApiRef.current) return;
+                        const normalize = (tags) => {
+                          if (!Array.isArray(tags)) return [];
+                          return [
+                            ...new Set(
+                              tags.flatMap((tag) =>
+                                tag
+                                  .split(',')
+                                  .map((t) => t.trim())
+                                  .filter(Boolean),
+                              ),
+                            ),
+                          ];
+                        };
+                        const normalized = normalize(newTags);
+                        formApiRef.current.setValue('tags_en', normalized);
+                      }}
+                      style={{ width: '100%' }}
                     />
                   </Col>
                   <Col span={24}>
@@ -525,11 +596,47 @@ const EditModelModal = (props) => {
                     />
                   </Col>
                   <Col span={24}>
+                    <Form.Select
+                      field='show_tab'
+                      label={t('展示标签')}
+                      placeholder={t('请选择展示标签')}
+                      optionList={showTabOptions.map((o) => ({
+                        label: t(o.label),
+                        value: o.value,
+                      }))}
+                      extraText={t('设置模型在模型广场中的展示分类')}
+                      style={{ width: '100%' }}
+                    />
+                  </Col>
+                  <Col span={24}>
+                    <Form.Select
+                      field='flag'
+                      label={t('标示')}
+                      placeholder={t('请选择标示')}
+                      optionList={flagOptions.map((o) => ({
+                        label: t(o.label),
+                        value: o.value,
+                      }))}
+                      showClear
+                      style={{ width: '100%' }}
+                    />
+                  </Col>
+                  <Col span={24}>
+                    <Form.InputNumber
+                      field='sort_order'
+                      label={t('排序')}
+                      placeholder={t('越小优先级越高')}
+                      min={0}
+                      step={1}
+                      style={{ width: '100%' }}
+                    />
+                  </Col>
+                  <Col span={24}>
                     <Form.Switch
                       field='sync_official'
                       label={t('参与官方同步')}
                       extraText={t(
-                        '关闭后，此模型将不会被“同步官方”自动覆盖或创建',
+                        '关闭后，此模型将不会被”同步官方”自动覆盖或创建',
                       )}
                       size='large'
                     />

@@ -11,7 +11,8 @@ export default defineConfig(({ envMode }) => {
   const serverUrl =
     process.env.VITE_REACT_APP_SERVER_URL ||
     env.rawPublicVars.VITE_REACT_APP_SERVER_URL ||
-    'http://localhost:3000'
+    // 'http://localhost:3000'
+    'http://101.47.154.214:3003'
 
   const isProd = envMode === 'production'
   const devProxy = Object.fromEntries(

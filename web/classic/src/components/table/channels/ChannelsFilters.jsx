@@ -26,6 +26,7 @@ const ChannelsFilters = ({
   setShowEdit,
   refresh,
   setShowColumnSelector,
+  setShowChannelLog,
   formInitValues,
   setFormApi,
   searchChannels,
@@ -70,6 +71,15 @@ const ChannelsFilters = ({
           className='w-full md:w-auto'
         >
           {t('列设置')}
+        </Button>
+
+        <Button
+          size='small'
+          type='tertiary'
+          onClick={() => setShowChannelLog && setShowChannelLog(true)}
+          className='w-full md:w-auto'
+        >
+          {t('日志')}
         </Button>
       </div>
 

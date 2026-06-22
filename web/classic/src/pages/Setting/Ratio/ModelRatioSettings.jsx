@@ -36,6 +36,8 @@ import {
   verifyJSON,
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
+import OperLogConfirmModal, { fieldLabel } from '../../../components/oper-log/OperLogConfirmModal';
+import { createOperLog } from '../../../components/oper-log/operLogApi';
 
 export default function ModelRatioSettings(props) {
   const [loading, setLoading] = useState(false);
@@ -53,59 +55,61 @@ export default function ModelRatioSettings(props) {
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
   const { t } = useTranslation();
+  const [logModal, setLogModal] = useState({ visible: false, changes: [], updateArray: [] });
+
+  async function doSave(updateArray, logRemark, logContent) {
+    const requestQueue = updateArray.map((item) => {
+      const value =
+        typeof inputs[item.key] === 'boolean'
+          ? String(inputs[item.key])
+          : inputs[item.key];
+      return API.put('/api/option/', { key: item.key, value });
+    });
+
+    setLoading(true);
+    try {
+      const res = await Promise.all(requestQueue);
+      if (res.includes(undefined)) {
+        return showError(
+          requestQueue.length > 1 ? t('部分保存失败，请重试') : t('保存失败'),
+        );
+      }
+      for (let i = 0; i < res.length; i++) {
+        if (!res[i].data.success) {
+          return showError(res[i].data.message);
+        }
+      }
+      showSuccess(t('保存成功'));
+      if (logRemark !== null) {
+        await createOperLog({ oper_type: '模型价格', content: logContent, remark: logRemark });
+      }
+      props.refresh();
+    } catch (error) {
+      console.error('Unexpected error:', error);
+      showError(t('保存失败，请重试'));
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function onSubmit() {
     try {
-      await refForm.current
-        .validate()
-        .then(() => {
-          const updateArray = compareObjects(inputs, inputsRow);
-          if (!updateArray.length)
-            return showWarning(t('你似乎并没有修改什么'));
-
-          const requestQueue = updateArray.map((item) => {
-            const value =
-              typeof inputs[item.key] === 'boolean'
-                ? String(inputs[item.key])
-                : inputs[item.key];
-            return API.put('/api/option/', { key: item.key, value });
-          });
-
-          setLoading(true);
-          Promise.all(requestQueue)
-            .then((res) => {
-              if (res.includes(undefined)) {
-                return showError(
-                  requestQueue.length > 1
-                    ? t('部分保存失败，请重试')
-                    : t('保存失败'),
-                );
-              }
-
-              for (let i = 0; i < res.length; i++) {
-                if (!res[i].data.success) {
-                  return showError(res[i].data.message);
-                }
-              }
-
-              showSuccess(t('保存成功'));
-              props.refresh();
-            })
-            .catch((error) => {
-              console.error('Unexpected error:', error);
-              showError(t('保存失败，请重试'));
-            })
-            .finally(() => {
-              setLoading(false);
-            });
-        })
-        .catch(() => {
-          showError(t('请检查输入'));
-        });
-    } catch (error) {
+      await refForm.current.validate();
+    } catch {
       showError(t('请检查输入'));
-      console.error(error);
+      return;
     }
+
+    const updateArray = compareObjects(inputs, inputsRow);
+    if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
+
+    const changes = updateArray.map((item) => ({
+      key: item.key,
+      oldVal: inputsRow[item.key],
+      newVal: inputs[item.key],
+    }));
+    const defaultRemark = `修改了 ${changes.map((i) => fieldLabel(i.key)).join('、')}`;
+    setLogModal({ visible: true, changes, updateArray, defaultRemark });
   }
 
   async function resetModelRatio() {
@@ -343,6 +347,21 @@ export default function ModelRatioSettings(props) {
           <Button type={'danger'}>{t('重置模型倍率')}</Button>
         </Popconfirm>
       </Space>
+      <OperLogConfirmModal
+        visible={logModal.visible}
+        operType='模型价格'
+        changes={logModal.changes}
+        defaultRemark={logModal.defaultRemark}
+        onConfirm={(remark, content) => {
+          setLogModal((s) => ({ ...s, visible: false }));
+          doSave(logModal.updateArray, remark, content);
+        }}
+        onSkip={() => {
+          setLogModal((s) => ({ ...s, visible: false }));
+          doSave(logModal.updateArray, null, null);
+        }}
+        onCancel={() => setLogModal((s) => ({ ...s, visible: false }))}
+      />
     </Spin>
   );
 }

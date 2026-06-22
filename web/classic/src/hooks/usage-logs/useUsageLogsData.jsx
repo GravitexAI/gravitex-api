@@ -59,6 +59,9 @@ export const useLogsData = () => {
     PROMPT: 'prompt',
     COMPLETION: 'completion',
     COST: 'cost',
+    VENDOR_COST: 'vendor_cost',
+    ACTUAL_COST: 'actual_cost',
+    PROFIT: 'profit',
     RETRY: 'retry',
     IP: 'ip',
     DETAILS: 'details',
@@ -122,6 +125,9 @@ export const useLogsData = () => {
       [COLUMN_KEYS.PROMPT]: true,
       [COLUMN_KEYS.COMPLETION]: true,
       [COLUMN_KEYS.COST]: true,
+      [COLUMN_KEYS.VENDOR_COST]: false,
+      [COLUMN_KEYS.ACTUAL_COST]: false,
+      [COLUMN_KEYS.PROFIT]: false,
       [COLUMN_KEYS.RETRY]: isAdminUser,
       [COLUMN_KEYS.IP]: true,
       [COLUMN_KEYS.DETAILS]: true,
@@ -144,6 +150,9 @@ export const useLogsData = () => {
         merged[COLUMN_KEYS.CHANNEL] = false;
         merged[COLUMN_KEYS.USERNAME] = false;
         merged[COLUMN_KEYS.RETRY] = false;
+        merged[COLUMN_KEYS.VENDOR_COST] = false;
+        merged[COLUMN_KEYS.ACTUAL_COST] = false;
+        merged[COLUMN_KEYS.PROFIT] = false;
       }
 
       return merged;
@@ -477,7 +486,17 @@ export const useLogsData = () => {
             displayMode: billingDisplayMode,
           };
           const isTaskLog = other?.is_task === true || other?.task_id != null;
-          if (isTaskLog && other?.model_price === -1) {
+          if (other?.billing_type === 'per_second') {
+            const pricePerSec =
+              other?.video_price_per_second ??
+              other?.official_video_price_per_second ??
+              0;
+            const seconds =
+              other?.requested_seconds || logs[i].completion_tokens || 0;
+            content =
+              `单价 $${pricePerSec.toFixed(4)}/秒\n` +
+              `$${pricePerSec.toFixed(4)} × ${seconds}秒 = ${renderQuota(logs[i].quota)}`;
+          } else if (isTaskLog && other?.model_price === -1) {
             content = renderTaskBillingProcess(other, logs[i].content);
           } else if (other?.ws || other?.audio) {
             content = renderAudioModelPrice(logOpts);

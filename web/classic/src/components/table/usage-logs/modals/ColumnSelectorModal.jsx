@@ -108,7 +108,10 @@ const ColumnSelectorModal = ({
             !isAdminUser &&
             (column.key === COLUMN_KEYS.CHANNEL ||
               column.key === COLUMN_KEYS.USERNAME ||
-              column.key === COLUMN_KEYS.RETRY)
+              column.key === COLUMN_KEYS.RETRY ||
+              column.key === COLUMN_KEYS.VENDOR_COST ||
+              column.key === COLUMN_KEYS.ACTUAL_COST ||
+              column.key === COLUMN_KEYS.PROFIT)
           ) {
             return null;
           }

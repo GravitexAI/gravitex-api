@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Banner } from '@douyinfe/semi-ui';
 import { IconAlertTriangle } from '@douyinfe/semi-icons';
 import CardPro from '../../common/ui/CardPro';
@@ -34,16 +34,22 @@ import EditChannelModal from './modals/EditChannelModal';
 import EditTagModal from './modals/EditTagModal';
 import MultiKeyManageModal from './modals/MultiKeyManageModal';
 import ChannelUpstreamUpdateModal from './modals/ChannelUpstreamUpdateModal';
+import ChannelLogModal from './modals/ChannelLogModal';
 import { createCardProPagination } from '../../../helpers/utils';
 
 const ChannelsPage = () => {
   const channelsData = useChannelsData();
   const isMobile = useIsMobile();
+  const [showChannelLog, setShowChannelLog] = useState(false);
 
   return (
     <>
       {/* Modals */}
       <ColumnSelectorModal {...channelsData} />
+      <ChannelLogModal
+        visible={showChannelLog}
+        onClose={() => setShowChannelLog(false)}
+      />
       <EditTagModal
         visible={channelsData.showEditTag}
         tag={channelsData.editingTag}
@@ -95,7 +101,7 @@ const ChannelsPage = () => {
         type='type3'
         tabsArea={<ChannelsTabs {...channelsData} />}
         actionsArea={<ChannelsActions {...channelsData} />}
-        searchArea={<ChannelsFilters {...channelsData} />}
+        searchArea={<ChannelsFilters {...channelsData} setShowChannelLog={setShowChannelLog} />}
         paginationArea={createCardProPagination({
           currentPage: channelsData.activePage,
           pageSize: channelsData.pageSize,

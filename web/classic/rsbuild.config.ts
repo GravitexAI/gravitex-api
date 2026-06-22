@@ -19,7 +19,8 @@ export default defineConfig(({ envMode }) => {
     ''
   const proxyServerUrl =
     clientServerUrl ||
-    'http://localhost:3000'
+    // 'http://localhost:3000'
+    'http://101.47.154.214:3000'
   const isProd = envMode === 'production'
   const devProxy = Object.fromEntries(
     (['/api', '/mj', '/pg'] as const).map((key) => [
@@ -52,6 +53,18 @@ export default defineConfig(({ envMode }) => {
         'date-fns': path.resolve(
           semiUiDir,
           '../semi-foundation/node_modules/date-fns',
+        ),
+        // Force react-vchart and vchart to share the same vrender-core/kits singleton.
+        // Without this, bun installs separate copies for each package, giving them
+        // independent DI containers — canvas env registered in one won't be seen by
+        // the other, causing "createCanvas undefined" at render time.
+        '@visactor/vrender-core': path.resolve(
+          __dirname,
+          'node_modules/@visactor/vchart/node_modules/@visactor/vrender-core',
+        ),
+        '@visactor/vrender-kits': path.resolve(
+          __dirname,
+          'node_modules/@visactor/vchart/node_modules/@visactor/vrender-kits',
         ),
       },
     },

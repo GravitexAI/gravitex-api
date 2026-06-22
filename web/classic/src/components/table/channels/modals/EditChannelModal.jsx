@@ -83,6 +83,7 @@ import {
   IconBolt,
   IconSearch,
   IconChevronDown,
+  IconCoinMoneyStroked,
 } from '@douyinfe/semi-icons';
 
 const { Text, Title } = Typography;
@@ -214,6 +215,8 @@ const EditChannelModal = (props) => {
     upstream_model_update_last_check_time: 0,
     upstream_model_update_last_detected_models: [],
     upstream_model_update_ignored_models: '',
+    // 渠道成本设置
+    cost_discount: null,
   };
   const [batch, setBatch] = useState(false);
   const [multiToSingle, setMultiToSingle] = useState(false);
@@ -3637,6 +3640,43 @@ const EditChannelModal = (props) => {
                       handleInputChange('test_model', value)
                     }
                     showClear
+                  />
+                </Card>
+
+                {/* Channel Cost Settings Card */}
+                <Card className='!rounded-2xl shadow-sm border-0 mb-6'>
+                  <div className='flex items-center mb-4'>
+                    <Avatar
+                      size='small'
+                      color='green'
+                      className='mr-2 shadow-md'
+                    >
+                      <IconCoinMoneyStroked size={16} />
+                    </Avatar>
+                    <div>
+                      <Text className='text-lg font-medium'>
+                        {t('渠道成本设置')}
+                      </Text>
+                      <div className='text-xs text-gray-600'>
+                        {t('配置渠道级别的成本折扣')}
+                      </div>
+                    </div>
+                  </div>
+                  <Form.InputNumber
+                    field='cost_discount'
+                    label={t('成本折扣')}
+                    placeholder={t('不设置则不启用渠道级成本折扣，如 0.5 表示 5 折')}
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    precision={3}
+                    style={{ width: '100%' }}
+                    onNumberChange={(value) =>
+                      handleInputChange('cost_discount', value === undefined ? null : value)
+                    }
+                    extraText={t(
+                      '设置范围 0~1，例如 0.5 表示成本按 5 折计算。不设置则不启用渠道级成本折扣',
+                    )}
                   />
                 </Card>
 
