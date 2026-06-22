@@ -57,7 +57,11 @@ func Distribute() func(c *gin.Context) {
 			// Select a channel for the user
 			// check token model mapping
 			modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
-			if modelLimitEnable {
+			relayMode := c.GetInt("relay_mode")
+			// Video fetch requests contain only a task ID; ownership is checked when the
+			// task is loaded, so there is no request model to validate here.
+			isVideoFetch := c.Request.Method == http.MethodGet && relayMode == relayconstant.RelayModeVideoFetchByID
+			if modelLimitEnable && !isVideoFetch {
 				s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
 				if !ok {
 					// token model limit is empty, all models are not allowed
