@@ -122,7 +122,16 @@ func exchangeJwtForAccessToken(signedJWT string, info *relaycommon.RelayInfo) (s
 		client = service.GetHttpClient()
 	}
 
-	resp, err := client.PostForm(authURL, data)
+	var resp *http.Response
+	for i := range 3 {
+		resp, err = client.PostForm(authURL, data)
+		if err == nil {
+			break
+		}
+		if i < 2 {
+			time.Sleep(2 * time.Second)
+		}
+	}
 	if err != nil {
 		return "", err
 	}
@@ -165,7 +174,16 @@ func exchangeJwtForAccessTokenWithProxy(signedJWT string, proxy string) (string,
 		client = service.GetHttpClient()
 	}
 
-	resp, err := client.PostForm(authURL, data)
+	var resp *http.Response
+	for i := range 3 {
+		resp, err = client.PostForm(authURL, data)
+		if err == nil {
+			break
+		}
+		if i < 2 {
+			time.Sleep(2 * time.Second)
+		}
+	}
 	if err != nil {
 		return "", err
 	}
