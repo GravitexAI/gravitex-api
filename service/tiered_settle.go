@@ -1,6 +1,8 @@
 package service
 
 import (
+	"strings"
+
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -8,6 +10,37 @@ import (
 
 // TieredResultWrapper wraps billingexpr.TieredResult for use at the service layer.
 type TieredResultWrapper = billingexpr.TieredResult
+
+func isQwenModel(modelName string) bool {
+	return strings.HasPrefix(strings.ToLower(modelName), "qwen")
+}
+
+func outputTokensIncludingDetails(usage *dto.Usage) int {
+	if usage == nil {
+		return 0
+	}
+
+	reported := usage.CompletionTokens
+	detailsTotal := usage.CompletionTokenDetails.TextTokens +
+		usage.CompletionTokenDetails.ReasoningTokens +
+		usage.CompletionTokenDetails.ImageTokens +
+		usage.CompletionTokenDetails.AudioTokens
+
+	if detailsTotal > reported {
+		return detailsTotal
+	}
+	return reported
+}
+
+func outputTokensForModel(usage *dto.Usage, modelName string) int {
+	if isQwenModel(modelName) {
+		return outputTokensIncludingDetails(usage)
+	}
+	if usage == nil {
+		return 0
+	}
+	return usage.CompletionTokens
+}
 
 // BuildTieredTokenParams constructs billingexpr.TokenParams from a dto.Usage,
 // normalizing P and C so they mean "tokens not separately priced by the
@@ -19,8 +52,16 @@ type TieredResultWrapper = billingexpr.TieredResult
 // report them as text-only. This function normalizes to text-only when
 // sub-categories are separately priced.
 func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVars map[string]bool) billingexpr.TokenParams {
+	return buildTieredTokenParams(usage, isClaudeUsageSemantic, usedVars, usage.CompletionTokens)
+}
+
+func BuildTieredTokenParamsForModel(usage *dto.Usage, isClaudeUsageSemantic bool, usedVars map[string]bool, modelName string) billingexpr.TokenParams {
+	return buildTieredTokenParams(usage, isClaudeUsageSemantic, usedVars, outputTokensForModel(usage, modelName))
+}
+
+func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVars map[string]bool, completionTokens int) billingexpr.TokenParams {
 	p := float64(usage.PromptTokens)
-	c := float64(usage.CompletionTokens)
+	c := float64(completionTokens)
 	cr := float64(usage.PromptTokensDetails.CachedTokens)
 	cc5m := float64(usage.PromptTokensDetails.CachedCreationTokens)
 	cc1h := float64(0)

@@ -559,6 +559,70 @@ func TestBuildTieredTokenParams_GPT_AudioOutputNoVar(t *testing.T) {
 	}
 }
 
+func TestBuildTieredTokenParamsForModel_QwenReasoningOutputExcludedFromCompletion(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 500,
+		CompletionTokenDetails: dto.OutputTokenDetails{
+			TextTokens:      500,
+			ReasoningTokens: 300,
+		},
+	}
+	expr := `tier("base", p * 2 + c * 10)`
+	usedVars := billingexpr.UsedVars(expr)
+	params := BuildTieredTokenParamsForModel(usage, false, usedVars, "qwen3.6-plus")
+	cost, _, _ := billingexpr.RunExpr(expr, params)
+	got := cost / 1_000_000 * testQuotaPerUnit
+	// Qwen reports completion_tokens as visible text only.
+	// C should include reasoning details when the detail total is larger: 500 + 300.
+	want := 5000.0
+	if math.Abs(got-want) > 0.01 {
+		t.Fatalf("quota = %f, want %f", got, want)
+	}
+}
+
+func TestBuildTieredTokenParamsForModel_NonQwenReasoningDoesNotChangeCompletion(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 500,
+		CompletionTokenDetails: dto.OutputTokenDetails{
+			TextTokens:      500,
+			ReasoningTokens: 300,
+		},
+	}
+	expr := `tier("base", p * 2 + c * 10)`
+	usedVars := billingexpr.UsedVars(expr)
+	params := BuildTieredTokenParamsForModel(usage, false, usedVars, "grok-4-20-reasoning")
+	cost, _, _ := billingexpr.RunExpr(expr, params)
+	got := cost / 1_000_000 * testQuotaPerUnit
+	// The Qwen reasoning-token compensation is intentionally model-scoped.
+	want := 3500.0
+	if math.Abs(got-want) > 0.01 {
+		t.Fatalf("quota = %f, want %f", got, want)
+	}
+}
+
+func TestBuildTieredTokenParamsForModel_QwenReasoningOutputAlreadyInCompletion(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 800,
+		CompletionTokenDetails: dto.OutputTokenDetails{
+			TextTokens:      500,
+			ReasoningTokens: 300,
+		},
+	}
+	expr := `tier("base", p * 2 + c * 10)`
+	usedVars := billingexpr.UsedVars(expr)
+	params := BuildTieredTokenParamsForModel(usage, false, usedVars, "qwen3.7-plus")
+	cost, _, _ := billingexpr.RunExpr(expr, params)
+	got := cost / 1_000_000 * testQuotaPerUnit
+	// OpenAI semantics already include reasoning in completion_tokens, so do not add it twice.
+	want := 5000.0
+	if math.Abs(got-want) > 0.01 {
+		t.Fatalf("quota = %f, want %f", got, want)
+	}
+}
+
 func TestBuildTieredTokenParams_ParityWithRatio(t *testing.T) {
 	// GPT-5.4 prices: input=$2.5, output=$15, cacheRead=$0.25
 	// Ratio equivalents: modelRatio=1.25, completionRatio=6, cacheRatio=0.1
