@@ -212,6 +212,7 @@ func main() {
 		SameSite: http.SameSiteStrictMode,
 	})
 	server.Use(sessions.Sessions("session", store))
+	server.Use(middleware.RestrictAPIDomains())
 
 	InjectUmamiAnalytics()
 	InjectGoogleAnalytics()
