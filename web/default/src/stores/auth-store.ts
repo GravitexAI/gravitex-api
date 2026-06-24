@@ -24,7 +24,7 @@ export type UserPermissions = {
 }
 
 export interface AuthUser {
-  id: number
+  id: number | string
   username: string
   display_name?: string
   email?: string
