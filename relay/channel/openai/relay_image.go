@@ -38,6 +38,9 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	if oaiError := usageResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	if service.ValidUsage(&usageResp.Usage) {
+		info.SetUpstreamResponsesField("usage", usageResp.Usage)
+	}
 
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)
@@ -111,6 +114,7 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 		if err := common.Unmarshal(raw, &usageResp); err == nil {
 			normalizeOpenAIUsage(&usageResp.Usage)
 			if service.ValidUsage(&usageResp.Usage) {
+				info.SetUpstreamResponsesField("usage", usageResp.Usage)
 				usage = &usageResp.Usage
 			}
 		}
@@ -211,6 +215,9 @@ func OpenaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	normalizeOpenAIUsage(&usageResp.Usage)
+	if service.ValidUsage(&usageResp.Usage) {
+		info.SetUpstreamResponsesField("usage", usageResp.Usage)
+	}
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
 
 	helper.SetEventStreamHeaders(c)

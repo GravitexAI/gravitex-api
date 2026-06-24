@@ -36,6 +36,9 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	info.UpstreamResponseId = geminiResponse.ResponseId
+	if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
+		info.SetUpstreamResponsesField("usageMetadata", geminiResponse.UsageMetadata)
+	}
 
 	if len(geminiResponse.Candidates) == 0 && geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
 		common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", *geminiResponse.PromptFeedback.BlockReason))

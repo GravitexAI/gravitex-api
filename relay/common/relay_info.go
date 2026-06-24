@@ -149,6 +149,10 @@ type RelayInfo struct {
 	RequestId string
 	// UpstreamResponseId 上游返回的响应 ID（如 chatcmpl-xxx, msg_xxx, gemini responseId）
 	UpstreamResponseId string
+	// UpstreamResponses stores the raw upstream usage object for log persistence.
+	// It is shaped as {"usage": {...}} or {"usageMetadata": {...}} and is only
+	// attached to log.other when the corresponding option is enabled.
+	UpstreamResponses map[string]any
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.
 	SubscriptionAmountTotal               int64
 	SubscriptionAmountUsedAfterPreConsume int64
@@ -666,6 +670,26 @@ func (info *RelayInfo) SetFirstResponseTime() {
 	if info.isFirstResponse {
 		info.FirstResponseTime = time.Now()
 		info.isFirstResponse = false
+	}
+}
+
+func (info *RelayInfo) SetUpstreamResponsesField(field string, payload any) {
+	if info == nil || strings.TrimSpace(field) == "" || payload == nil {
+		return
+	}
+
+	data, err := common.Marshal(payload)
+	if err != nil || len(data) == 0 || string(data) == "null" {
+		return
+	}
+
+	var decoded any
+	if err := common.Unmarshal(data, &decoded); err != nil || decoded == nil {
+		return
+	}
+
+	info.UpstreamResponses = map[string]any{
+		field: decoded,
 	}
 }
 

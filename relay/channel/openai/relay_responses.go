@@ -54,6 +54,9 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		if responsesResponse.Usage.InputTokensDetails != nil {
 			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
 		}
+		if service.ValidUsage(&usage) {
+			info.SetUpstreamResponsesField("usage", responsesResponse.Usage)
+		}
 	}
 	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
 		return &usage, nil
@@ -107,6 +110,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					}
 					if streamResponse.Response.Usage.InputTokensDetails != nil {
 						usage.PromptTokensDetails.CachedTokens = streamResponse.Response.Usage.InputTokensDetails.CachedTokens
+					}
+					if service.ValidUsage(usage) {
+						info.SetUpstreamResponsesField("usage", streamResponse.Response.Usage)
 					}
 				}
 				if streamResponse.Response.HasImageGenerationCall() {
