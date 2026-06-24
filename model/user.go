@@ -55,6 +55,17 @@ type User struct {
 	LastLoginAt      int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
 }
 
+func (u User) MarshalJSON() ([]byte, error) {
+	type Alias User
+	return common.Marshal(&struct {
+		Alias
+		Id string `json:"id"`
+	}{
+		Alias: Alias(u),
+		Id:    strconv.Itoa(u.Id),
+	})
+}
+
 func (user *User) ToBaseUser() *UserBase {
 	cache := &UserBase{
 		Id:       user.Id,

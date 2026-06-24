@@ -71,7 +71,7 @@ export async function searchUsers(
 /**
  * Get single user by ID
  */
-export async function getUser(id: number): Promise<ApiResponse<User>> {
+export async function getUser(id: number | string): Promise<ApiResponse<User>> {
   const res = await api.get(`/api/user/${id}`)
   return res.data
 }
@@ -90,7 +90,7 @@ export async function createUser(
  * Update an existing user
  */
 export async function updateUser(
-  data: UserFormData & { id: number }
+  data: UserFormData & { id: number | string }
 ): Promise<ApiResponse<Partial<User>>> {
   const res = await api.put('/api/user/', data)
   return res.data
@@ -99,7 +99,7 @@ export async function updateUser(
 /**
  * Delete a single user (hard delete)
  */
-export async function deleteUser(id: number): Promise<ApiResponse> {
+export async function deleteUser(id: number | string): Promise<ApiResponse> {
   const res = await api.delete(`/api/user/${id}/`)
   return res.data
 }
@@ -108,7 +108,7 @@ export async function deleteUser(id: number): Promise<ApiResponse> {
  * Manage user (promote, demote, enable, disable, delete)
  */
 export async function manageUser(
-  id: number,
+  id: number | string,
   action: ManageUserAction
 ): Promise<ApiResponse<Partial<User>>> {
   const res = await api.post('/api/user/manage', { id, action })
@@ -128,7 +128,7 @@ export async function adjustUserQuota(
 /**
  * Reset user's Passkey registration
  */
-export async function resetUserPasskey(id: number): Promise<ApiResponse> {
+export async function resetUserPasskey(id: number | string): Promise<ApiResponse> {
   const res = await api.delete(`/api/user/${id}/reset_passkey`)
   return res.data
 }
@@ -136,7 +136,7 @@ export async function resetUserPasskey(id: number): Promise<ApiResponse> {
 /**
  * Reset user's Two-Factor Authentication setup
  */
-export async function resetUserTwoFA(id: number): Promise<ApiResponse> {
+export async function resetUserTwoFA(id: number | string): Promise<ApiResponse> {
   const res = await api.delete(`/api/user/${id}/2fa`)
   return res.data
 }
@@ -164,7 +164,7 @@ export interface OAuthBinding {
  * Get user's custom OAuth bindings (admin)
  */
 export async function getUserOAuthBindings(
-  userId: number
+  userId: number | string
 ): Promise<ApiResponse<OAuthBinding[]>> {
   const res = await api.get(`/api/user/${userId}/oauth/bindings`)
   return res.data
@@ -174,7 +174,7 @@ export async function getUserOAuthBindings(
  * Clear a user's built-in binding (admin)
  */
 export async function adminClearUserBinding(
-  userId: number,
+  userId: number | string,
   bindingType: string
 ): Promise<ApiResponse> {
   const res = await api.delete(`/api/user/${userId}/bindings/${bindingType}`)
@@ -185,7 +185,7 @@ export async function adminClearUserBinding(
  * Unbind custom OAuth for a user (admin)
  */
 export async function adminUnbindCustomOAuth(
-  userId: number,
+  userId: number | string,
   providerId: string
 ): Promise<ApiResponse> {
   const res = await api.delete(
