@@ -75,6 +75,12 @@ func normalizeOpenAIUsage(usage *dto.Usage) {
 		usage.PromptTokensDetails.TextTokens = usage.InputTokensDetails.TextTokens
 		usage.PromptTokensDetails.AudioTokens = usage.InputTokensDetails.AudioTokens
 	}
+	// 图片接口（generations/edits）的 output_tokens 都是图片输出，
+	// 写入 CompletionTokenDetails.ImageTokens 让 text_quota.go 按 ImageCompletionRatio
+	// 拆分计费，并在 logs.other 里回写 image_output_tokens / output_image_price 等字段。
+	if usage.OutputTokens > 0 && usage.CompletionTokenDetails.ImageTokens == 0 {
+		usage.CompletionTokenDetails.ImageTokens = usage.OutputTokens
+	}
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
