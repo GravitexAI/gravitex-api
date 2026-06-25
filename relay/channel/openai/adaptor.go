@@ -471,16 +471,12 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	switch info.RelayMode {
 	case relayconstant.RelayModeImagesEdits:
 		// 图生图：统一转为 multipart/form-data 格式（Azure OpenAI 要求）
-		// 对于纯 JSON 请求（非 gpt-image 系列），直接透传无需转换
-		if isJSONRequest(c) {
-			// gpt-image 系列：Azure / OpenAI 新版 /v1/images/edits JSON 接口要求 `images` 数组，
-			// 单数 `image` 会被拒绝（Unknown parameter: 'image'）。
-			// 统一把 image 字段规范化为 images 数组后再透传。
-			if strings.HasPrefix(request.Model, "gpt-image") {
-				if err := normalizeGPTImageEditsImages(&request); err != nil {
-					return nil, err
-				}
-			}
+		// 对于纯 JSON 请求（非 gpt-image 系列），直接透传无需转换。
+		// gpt-image 系列不能走 JSON 透传：Azure /v1/images/edits 的 JSON 模式既不接受
+		// 单数 `image` 字符串（报 Unknown parameter: 'image'），也不接受 `images` 字符串数组
+		// （报 Invalid type for 'images[0]': expected an object, but got a string）；
+		// 唯一稳定可用的是 multipart/form-data。强制走下方 multipart 转换路径。
+		if isJSONRequest(c) && !strings.HasPrefix(request.Model, "gpt-image") {
 			return request, nil
 		}
 
@@ -709,65 +705,6 @@ func isJSONRequest(c *gin.Context) bool {
 		return false
 	}
 	return strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json")
-}
-
-// normalizeGPTImageEditsImages 把 ImageRequest 上的单数 image 字段（可能在 request.Image
-// 或 request.Extra["image"]）统一规范化为 request.Images 数组，并清空 image 字段，
-// 让序列化输出只有 images 数组——Azure / OpenAI 新版 /v1/images/edits JSON 接口要求该形式。
-func normalizeGPTImageEditsImages(request *dto.ImageRequest) error {
-	if request == nil {
-		return nil
-	}
-	var images []string
-
-	extractFromRaw := func(raw json.RawMessage) {
-		if len(raw) == 0 {
-			return
-		}
-		var single string
-		if err := common.Unmarshal(raw, &single); err == nil && single != "" {
-			images = append(images, single)
-			return
-		}
-		var multi []string
-		if err := common.Unmarshal(raw, &multi); err == nil {
-			for _, s := range multi {
-				if s != "" {
-					images = append(images, s)
-				}
-			}
-		}
-	}
-
-	// 优先使用已有的 Images（防止上游已经填好的情况下被覆盖）
-	if len(request.Images) > 0 {
-		var existing []string
-		if err := common.Unmarshal(request.Images, &existing); err == nil && len(existing) > 0 {
-			images = append(images, existing...)
-		}
-	}
-	extractFromRaw(request.Image)
-	if request.Extra != nil {
-		extractFromRaw(request.Extra["image"])
-		extractFromRaw(request.Extra["images"])
-	}
-
-	if len(images) == 0 {
-		return errors.New("image or images field is required for edits endpoint")
-	}
-
-	encoded, err := common.Marshal(images)
-	if err != nil {
-		return err
-	}
-	request.Images = encoded
-	// 清掉单数 image，避免上游收到双字段
-	request.Image = nil
-	if request.Extra != nil {
-		delete(request.Extra, "image")
-		delete(request.Extra, "images")
-	}
-	return nil
 }
 
 // detectImageMimeType determines the MIME type based on the file extension

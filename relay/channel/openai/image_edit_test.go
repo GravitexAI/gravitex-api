@@ -99,63 +99,44 @@ func TestConvertImageEditRequestMultipart(t *testing.T) {
 	})
 }
 
-// TestConvertImageEditRequestJSONForGPTImage 验证 JSON 透传分支下 gpt-image 系列
-// 把单数 image 字段规范化为 images 数组（Azure/OpenAI 新版 edits 要求）。
+// TestConvertImageEditRequestJSONForGPTImage 验证 gpt-image 系列即使客户端发 JSON，
+// 也会被强制转成 multipart 提交给上游 —— Azure /v1/images/edits 的 JSON 模式既不接受
+// 单数 `image` 字符串，也不接受 `images` 字符串数组，唯一稳定可用的是 multipart。
+// 非 gpt-image 模型仍然走 JSON 透传 fast-path（保持上游官方行为）。
 func TestConvertImageEditRequestJSONForGPTImage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	newJSONContext := func(t *testing.T) *gin.Context {
+	newJSONContext := func(t *testing.T, body string) *gin.Context {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", nil)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader([]byte(body)))
 		c.Request.Header.Set("Content-Type", "application/json")
 		return c
 	}
 	info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeImagesEdits}
+	// 一个 1x1 透明 PNG 的 base64，避免 multipart 转换里的 MIME 嗅探报错
+	const tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPj/HwAEAgH/+OuFAAAAAElFTkSuQmCC"
 
-	t.Run("singular image string is normalized to images array", func(t *testing.T) {
+	t.Run("gpt-image with JSON content-type is converted to multipart", func(t *testing.T) {
 		req := dto.ImageRequest{
 			Model:  "gpt-image-2",
 			Prompt: "edit",
-			Image:  json.RawMessage(`"data:image/png;base64,abc"`),
+			Image:  json.RawMessage(`"data:image/png;base64,` + tinyPNG + `"`),
 		}
-		converted, err := (&Adaptor{}).ConvertImageRequest(newJSONContext(t), info, req)
+		converted, err := (&Adaptor{}).ConvertImageRequest(newJSONContext(t, "{}"), info, req)
 		require.NoError(t, err)
-		got, ok := converted.(dto.ImageRequest)
-		require.True(t, ok)
-		assert.Equal(t, json.RawMessage(nil), got.Image, "singular image should be cleared")
-		var images []string
-		require.NoError(t, json.Unmarshal(got.Images, &images))
-		assert.Equal(t, []string{"data:image/png;base64,abc"}, images)
+		// 强制走 multipart：返回 *bytes.Buffer 而不是原始 dto.ImageRequest
+		_, ok := converted.(*bytes.Buffer)
+		assert.True(t, ok, "gpt-image JSON 请求应被转换为 multipart body")
 	})
 
-	t.Run("array image input is preserved", func(t *testing.T) {
-		req := dto.ImageRequest{
-			Model: "gpt-image-2",
-			Image: json.RawMessage(`["a","b"]`),
-		}
-		converted, err := (&Adaptor{}).ConvertImageRequest(newJSONContext(t), info, req)
-		require.NoError(t, err)
-		got := converted.(dto.ImageRequest)
-		var images []string
-		require.NoError(t, json.Unmarshal(got.Images, &images))
-		assert.Equal(t, []string{"a", "b"}, images)
-	})
-
-	t.Run("non-gpt-image model is untouched", func(t *testing.T) {
+	t.Run("non-gpt-image JSON model still passes through", func(t *testing.T) {
 		req := dto.ImageRequest{
 			Model: "dall-e-3",
-			Image: json.RawMessage(`"data:image/png;base64,abc"`),
+			Image: json.RawMessage(`"data:image/png;base64,` + tinyPNG + `"`),
 		}
-		converted, err := (&Adaptor{}).ConvertImageRequest(newJSONContext(t), info, req)
+		converted, err := (&Adaptor{}).ConvertImageRequest(newJSONContext(t, "{}"), info, req)
 		require.NoError(t, err)
-		got := converted.(dto.ImageRequest)
-		assert.Equal(t, json.RawMessage(`"data:image/png;base64,abc"`), got.Image)
-		assert.Empty(t, got.Images)
-	})
-
-	t.Run("missing image returns clear error", func(t *testing.T) {
-		req := dto.ImageRequest{Model: "gpt-image-2", Prompt: "no images here"}
-		_, err := (&Adaptor{}).ConvertImageRequest(newJSONContext(t), info, req)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "image or images")
+		got, ok := converted.(dto.ImageRequest)
+		require.True(t, ok, "非 gpt-image 模型应原样透传 dto.ImageRequest")
+		assert.Equal(t, "dall-e-3", got.Model)
 	})
 }
