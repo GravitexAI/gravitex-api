@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
@@ -76,10 +77,14 @@ func shouldAppendClaudeBetaQuery(info *relaycommon.RelayInfo) bool {
 }
 
 func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) {
-	// common headers operation
+	// 透传 anthropic-beta header，但按目标渠道做白名单过滤 + 重命名，
+	// 避免把 Bedrock/Vertex 不支持的 flag 发上去触发 "invalid beta flag"。
 	anthropicBeta := c.Request.Header.Get("anthropic-beta")
 	if anthropicBeta != "" {
-		req.Set("anthropic-beta", anthropicBeta)
+		filtered := FilterBetaFlags(anthropicBeta, TargetFromChannelType(info.ChannelType), info.RequestId)
+		if len(filtered) > 0 {
+			req.Set("anthropic-beta", strings.Join(filtered, ","))
+		}
 	}
 	model_setting.GetClaudeSettings().WriteHeaders(info.OriginModelName, req)
 }
