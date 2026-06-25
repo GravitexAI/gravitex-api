@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -94,5 +96,66 @@ func TestConvertImageEditRequestMultipart(t *testing.T) {
 		c.Request.PostForm = nil
 
 		convertAndReplay(t, c, prompt)
+	})
+}
+
+// TestConvertImageEditRequestJSONForGPTImage 验证 JSON 透传分支下 gpt-image 系列
+// 把单数 image 字段规范化为 images 数组（Azure/OpenAI 新版 edits 要求）。
+func TestConvertImageEditRequestJSONForGPTImage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	newJSONContext := func(t *testing.T) *gin.Context {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", nil)
+		c.Request.Header.Set("Content-Type", "application/json")
+		return c
+	}
+	info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeImagesEdits}
+
+	t.Run("singular image string is normalized to images array", func(t *testing.T) {
+		req := dto.ImageRequest{
+			Model:  "gpt-image-2",
+			Prompt: "edit",
+			Image:  json.RawMessage(`"data:image/png;base64,abc"`),
+		}
+		converted, err := (&Adaptor{}).ConvertImageRequest(newJSONContext(t), info, req)
+		require.NoError(t, err)
+		got, ok := converted.(dto.ImageRequest)
+		require.True(t, ok)
+		assert.Equal(t, json.RawMessage(nil), got.Image, "singular image should be cleared")
+		var images []string
+		require.NoError(t, json.Unmarshal(got.Images, &images))
+		assert.Equal(t, []string{"data:image/png;base64,abc"}, images)
+	})
+
+	t.Run("array image input is preserved", func(t *testing.T) {
+		req := dto.ImageRequest{
+			Model: "gpt-image-2",
+			Image: json.RawMessage(`["a","b"]`),
+		}
+		converted, err := (&Adaptor{}).ConvertImageRequest(newJSONContext(t), info, req)
+		require.NoError(t, err)
+		got := converted.(dto.ImageRequest)
+		var images []string
+		require.NoError(t, json.Unmarshal(got.Images, &images))
+		assert.Equal(t, []string{"a", "b"}, images)
+	})
+
+	t.Run("non-gpt-image model is untouched", func(t *testing.T) {
+		req := dto.ImageRequest{
+			Model: "dall-e-3",
+			Image: json.RawMessage(`"data:image/png;base64,abc"`),
+		}
+		converted, err := (&Adaptor{}).ConvertImageRequest(newJSONContext(t), info, req)
+		require.NoError(t, err)
+		got := converted.(dto.ImageRequest)
+		assert.Equal(t, json.RawMessage(`"data:image/png;base64,abc"`), got.Image)
+		assert.Empty(t, got.Images)
+	})
+
+	t.Run("missing image returns clear error", func(t *testing.T) {
+		req := dto.ImageRequest{Model: "gpt-image-2", Prompt: "no images here"}
+		_, err := (&Adaptor{}).ConvertImageRequest(newJSONContext(t), info, req)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "image or images")
 	})
 }
