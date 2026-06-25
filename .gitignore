@@ -20,6 +20,7 @@ gravitex_llm.zip-ssr
 gravitex_llm
 one-api
 new-api
+.vite
 /__debug_bin*
 .DS_Store
 tiktoken_cache
