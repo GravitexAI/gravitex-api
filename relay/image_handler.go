@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/samber/lo"
 )
 
 func truncateImageLogBody(body []byte) string {
@@ -119,8 +120,8 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		if request.N != nil {
 			n = *request.N
 		}
-		logger.LogInfo(c, fmt.Sprintf("gpt-image edits user request: model=%s, prompt=%q, size=%s, quality=%s, n=%d, input_fidelity=%s, image_count=%d, image_preview=%s",
-			request.Model, request.Prompt, request.Size, request.Quality, n, request.InputFidelity, imageCount, imageSummary))
+		logger.LogInfo(c, fmt.Sprintf("gpt-image edits user request: model=%s, prompt=%q, size=%s, quality=%s, n=%d, input_fidelity=%q, image_count=%d, image_preview=%s",
+			request.Model, request.Prompt, request.Size, request.Quality, n, lo.FromPtr(request.InputFidelity), imageCount, imageSummary))
 	} else if strings.HasPrefix(request.Model, "gpt-image") && info.RelayMode == relayconstant.RelayModeImagesGenerations {
 		n := uint(1)
 		if request.N != nil {

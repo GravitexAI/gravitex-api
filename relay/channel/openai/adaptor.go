@@ -484,6 +484,24 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		writer := multipart.NewWriter(&requestBody)
 
 		writer.WriteField("model", request.Model)
+		// gpt-image 系列：在 multipart 转换路径里，prompt/size/quality/n/input_fidelity 必须
+		// 在这里手动写入，否则 Azure /v1/images/edits 会报 "Missing required parameter: 'prompt'"。
+		// 下面 multipart 输入分支的 skipFields 也依赖这里已经写过这些字段（避免重复写）。
+		if request.Prompt != "" {
+			writer.WriteField("prompt", request.Prompt)
+		}
+		if request.Size != "" {
+			writer.WriteField("size", request.Size)
+		}
+		if request.Quality != "" {
+			writer.WriteField("quality", request.Quality)
+		}
+		if request.N != nil && *request.N > 0 {
+			writer.WriteField("n", fmt.Sprintf("%d", *request.N))
+		}
+		if request.InputFidelity != nil && *request.InputFidelity != "" {
+			writer.WriteField("input_fidelity", *request.InputFidelity)
+		}
 
 		// 检测请求格式：JSON 还是 multipart
 		// 注意：不能用 c.GetHeader("Content-Type") 判断，因为重试时 Header 可能已被上一轮修改为 multipart
@@ -681,7 +699,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		}
 
 		// 日志：记录发送到上游的 multipart 表单参数摘要
-		logger.LogInfo(c.Request.Context(), fmt.Sprintf("gpt-image edits upstream request: model=%s, prompt=%q, size=%s, quality=%s, n=%v, input_fidelity=%s, content-type=%s, body_size=%d",
+		logger.LogInfo(c.Request.Context(), fmt.Sprintf("gpt-image edits upstream request: model=%s, prompt=%q, size=%s, quality=%s, n=%v, input_fidelity=%q, content-type=%s, body_size=%d",
 			request.Model, request.Prompt, request.Size, request.Quality,
 			func() string {
 				if request.N != nil {
@@ -689,7 +707,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 				}
 				return "nil"
 			}(),
-			request.InputFidelity, writer.FormDataContentType(), requestBody.Len()))
+			lo.FromPtr(request.InputFidelity), writer.FormDataContentType(), requestBody.Len()))
 
 		writer.Close()
 		c.Request.Header.Set("Content-Type", writer.FormDataContentType())
