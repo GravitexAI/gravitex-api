@@ -77,16 +77,25 @@ func shouldAppendClaudeBetaQuery(info *relaycommon.RelayInfo) bool {
 }
 
 func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) {
-	// 透传 anthropic-beta header，但按目标渠道做白名单过滤 + 重命名，
-	// 避免把 Bedrock/Vertex 不支持的 flag 发上去触发 "invalid beta flag"。
+	// 透传客户端 anthropic-beta 到 req，让 WriteHeaders 能合并 admin 配置。
 	anthropicBeta := c.Request.Header.Get("anthropic-beta")
 	if anthropicBeta != "" {
-		filtered := FilterBetaFlags(anthropicBeta, TargetFromChannelType(info.ChannelType), info.RequestId)
+		req.Set("anthropic-beta", anthropicBeta)
+	}
+	// 合并 admin 在 model_headers_settings 里为该模型配置的 anthropic-beta（如果有）。
+	model_setting.GetClaudeSettings().WriteHeaders(info.OriginModelName, req)
+
+	// 在 WriteHeaders 之后做白名单过滤：客户端原值 + admin 配置都过同一道闸，
+	// 保证最终发出的 flag 都在目标渠道（Bedrock / Vertex / 直连）的支持列表内。
+	// 否则 admin 在 model_headers_settings 配的 flag 会绕过过滤直达上游。
+	if merged := req.Get("anthropic-beta"); merged != "" {
+		filtered := FilterBetaFlags(merged, TargetFromChannelType(info.ChannelType), info.RequestId)
 		if len(filtered) > 0 {
 			req.Set("anthropic-beta", strings.Join(filtered, ","))
+		} else {
+			req.Del("anthropic-beta")
 		}
 	}
-	model_setting.GetClaudeSettings().WriteHeaders(info.OriginModelName, req)
 }
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {

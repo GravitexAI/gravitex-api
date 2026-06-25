@@ -138,6 +138,68 @@ func TestProcessHeaderOverride_PassthroughSkipsAcceptEncoding(t *testing.T) {
 	require.False(t, hasAcceptEncoding)
 }
 
+// anthropic-beta / anthropic-version 必须从通配符 passthrough 黑名单跳过，
+// 否则会绕过 claude.CommonClaudeHeadersOperation 里的白名单过滤，把客户端原始的
+// beta flag 直接透传给 Bedrock / Vertex，触发 "invalid beta flag" /
+// "Unexpected value(s) ..." 类报错（真实生产案例）。
+func TestProcessHeaderOverride_PassthroughSkipsAnthropicBetaAndVersion(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	ctx.Request.Header.Set("Anthropic-Beta", "advisor-tool-2026-03-01,prompt-caching-scope-2026-01-05")
+	ctx.Request.Header.Set("Anthropic-Version", "2023-06-01")
+	ctx.Request.Header.Set("X-Trace-Id", "trace-123")
+
+	info := &relaycommon.RelayInfo{
+		IsChannelTest: false,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"*": "",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+
+	// 非敏感 header 仍走 passthrough
+	require.Equal(t, "trace-123", headers["x-trace-id"])
+
+	// anthropic-beta / anthropic-version 必须被跳过，由渠道专属代码处理
+	_, hasBeta := headers["anthropic-beta"]
+	require.False(t, hasBeta, "anthropic-beta must not be passed through by wildcard")
+
+	_, hasVersion := headers["anthropic-version"]
+	require.False(t, hasVersion, "anthropic-version must not be passed through by wildcard")
+}
+
+// 显式 override 仍可以设置 anthropic-beta（场景：渠道管理员手动配置覆盖值）。
+// 仅"通配符 passthrough"被禁止，避免误透传客户端原值。
+func TestProcessHeaderOverride_ExplicitAnthropicBetaOverrideStillWorks(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	info := &relaycommon.RelayInfo{
+		IsChannelTest: false,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"anthropic-beta": "computer-use-2025-01-24",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	require.Equal(t, "computer-use-2025-01-24", headers["anthropic-beta"])
+}
+
 func TestProcessHeaderOverride_PassHeadersTemplateSetsRuntimeHeaders(t *testing.T) {
 	t.Parallel()
 

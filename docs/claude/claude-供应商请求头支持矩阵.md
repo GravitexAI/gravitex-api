@@ -23,6 +23,28 @@
 
 > ⚠️ **Bedrock 不接 HTTP header 形式的 anthropic-beta**，必须搬到 body 的 `anthropic_beta` 数组里。
 
+### 0.0 ⚠️ 重要认知：Beta Flag 和 body 字段是**绑定关系**
+
+很多 beta flag 不只是 header 层的开关，还**附带顶级 body 字段**。如果只过滤 beta flag、留下对应的 body 字段，Bedrock 会返回：
+
+```
+ValidationException: <field_name>: Extra inputs are not permitted
+```
+
+这意味着**过滤 beta 时，对应的 body 字段也必须同步清理**。已知的绑定关系：
+
+| Beta Flag | 对应 body 字段 |
+|-----------|--------------|
+| `context-management-2025-06-27` | `context_management: { edits: [...] }` |
+| `effort-2025-11-24` | `output_config: { effort: "high" }` |
+| `interleaved-thinking-2025-05-14` | `thinking: { type: "interleaved", ... }` |
+| `prompt-caching-2024-07-31` | 各 content block 里的 `cache_control: { type: "ephemeral" }` |
+| `output-128k-2025-02-19` | （隐式：max_tokens > 8192 时启用） |
+
+→ 代码实现见 `aws/dto.go` 的 `stripBodyFieldsForDroppedBetas()` 方法。后续发现新的绑定关系时，在那里追加映射即可。
+
+---
+
 ### 0.1 为什么需要"改写"和"迁移"？
 
 Anthropic 直连、Bedrock、Vertex 这三家虽然都跑 Claude 模型，但**协议外壳完全不一样**——Bedrock 套了一层 AWS SDK / SigV4 签名，Vertex 套了一层 GCP OAuth + URL 路由。同一份请求要适配到不同后端，就需要把客户端发的"Anthropic 原生 header"按目标改写。
@@ -538,14 +560,74 @@ var BetaFilterDebugLog = os.Getenv("BETA_FILTER_DEBUG") == "true"
 
 → 主人靠这些日志就能 **持续维护**：哪些 flag 该加进 Bedrock/Vertex 白名单、Anthropic 又出了什么新东西。
 
-### 4.6 实际改动统计
+### 4.6 真实生产案例：`context_management: Extra inputs are not permitted`
+
+**触发场景**：Claude Code v2.1.128 + Bedrock 渠道，客户端发：
+- `anthropic-beta: ..., context-management-2025-06-27, ...`（header）
+- `context_management: { edits: [{ type: clear_thinking_20251015, ... }] }`（body 顶级字段）
+
+**修复前的链路**：
+1. ✅ Filter 正确把 `context-management-2025-06-27` 从 `anthropic_beta` 数组剔除
+2. ❌ body 里 `context_management` 字段没被清理
+3. ❌ Bedrock 收到陌生顶级字段，报 `400 ValidationException: context_management: Extra inputs are not permitted`
+
+**修复后的链路**：
+- `aws/dto.go:formatRequest` 调用 `stripBodyFieldsForDroppedBetas(filtered)`
+- 检查 `kept` 数组里是否还有 `context-management-2025-06-27`，没有 → `awsClaudeRequest.ContextManagement = nil`
+- 同步清理 `output_config`（如果 `effort-2025-11-24` 也被丢）
+
+**回归测试**：`TestDoAwsClientRequest_StripsContextManagementWhenBetaDropped` 锁住该契约。
+
+### 4.7 隐蔽 bug：Header Passthrough 复活客户端原值
+
+**问题症状**：网关已部署了过滤器，但 Vertex 仍报：
+```
+400 Unexpected value(s) `advisor-tool-2026-03-01`, `prompt-caching-scope-2026-01-05` for the `anthropic-beta` header
+```
+日志能看到 `[anthropic_compat]` 过滤正常运行，丢弃了这两个 flag。**但请求最终发出去时它们又出现了**。
+
+**根因**：`relay/channel/api_request.go` 的 `DoApiRequest` 执行顺序：
+```
+1. SetupRequestHeader      → 我们的过滤器跑，anthropic-beta = 过滤后值 ✅
+2. processHeaderOverride   → 如果 channel 配了 "*" 或 "re:" 通配符 passthrough
+3. applyHeaderOverrideToRequest → 从 c.Request.Header 复制原值覆盖回去 ❌
+```
+
+第 2 步的 `passthroughSkipHeaderNamesLower` 黑名单没把 `anthropic-beta` 列进去，导致只要 channel 配了通配符 passthrough，过滤就被旁路了。
+
+**修复**：把 `anthropic-beta` 和 `anthropic-version` 加进通配符 passthrough 黑名单。
+
+```diff
+ var passthroughSkipHeaderNamesLower = map[string]struct{}{
+     ...
+     "authorization":  {},
+     "x-api-key":      {},
+     "x-goog-api-key": {},
++
++    // 有渠道特定语义，必须由 claude.CommonClaudeHeadersOperation /
++    // claude.FilterBetaFlags 处理，禁止通配符 passthrough 旁路
++    "anthropic-beta":    {},
++    "anthropic-version": {},
+ }
+```
+
+**注意**：仅通配符（`*` / `re:` / `regex:`）路径被禁，**显式 override**（如 `header_override: { "anthropic-beta": "xxx" }`）仍生效，给运维留出手动覆盖能力。
+
+**回归测试**：
+- `TestProcessHeaderOverride_PassthroughSkipsAnthropicBetaAndVersion`
+- `TestProcessHeaderOverride_ExplicitAnthropicBetaOverrideStillWorks`
+
+### 4.8 实际改动统计
 
 ```
-新增  relay/channel/claude/beta_filter.go   约 210 行（白名单 + 过滤函数 + 日志）
-修改  relay/channel/aws/dto.go              ±7 行（替换 split 为 FilterBetaFlags 调用）
-修改  relay/channel/aws/relay-aws.go        1 行（传入 info.RequestId）
-修改  relay/channel/claude/adaptor.go       6 行（在 CommonClaudeHeadersOperation 加过滤）
-不动  relay/channel/vertex/*.go             0 行（自动复用 CommonClaudeHeadersOperation）
+新增  relay/channel/claude/beta_filter.go     约 210 行（白名单 + 过滤函数 + 日志）
+修改  relay/channel/aws/dto.go                +约 18 行（过滤调用 + stripBodyFieldsForDroppedBetas）
+修改  relay/channel/aws/relay-aws.go          1 行（传入 info.RequestId）
+修改  relay/channel/claude/adaptor.go         6 行（CommonClaudeHeadersOperation 加过滤）
+修改  relay/channel/api_request.go            2 行（passthroughSkipHeaderNamesLower 黑名单）
+新增  relay/channel/aws/relay_aws_test.go     +约 50 行（context_management 清理回归测试）
+新增  relay/channel/api_request_test.go       +约 55 行（passthrough 黑名单回归测试）
+不动  relay/channel/vertex/*.go               0 行（自动复用）
 ```
 
 **编译 / 测试结果**：
@@ -577,20 +659,79 @@ Anthropic-Beta: claude-code-20250219,interleaved-thinking-2025-05-14,
 
 ---
 
-## 6. 排查 Checklist
+## 6. 客户端兜底方案（推荐告知用户）
 
-遇到 `invalid beta flag` 时按顺序排查：
+> 网关侧已有过滤器兜底（Section 4），但**客户端层面也可以主动减少噪声**，效果更好。这里是面向用户的"治标"方案。
 
-1. **确认目的端**：是 Bedrock InvokeModel？Converse？Vertex AI？规则不同
-2. **抓取入站请求**：`grep -i "anthropic-beta" <网关日志>` 看客户端发了哪些 flag
-3. **对照本文白名单**：找出不在列表的 flag
-4. **检查 body 字段位置**：Bedrock 必须用 body `anthropic_beta` 数组，不是 HTTP header
-5. **检查 anthropic_version**：Bedrock 必须 `bedrock-2023-05-31`，Vertex 必须 `vertex-2023-10-16`
-6. **重命名映射**：`advanced-tool-use-2025-11-20` → `tool-search-tool-2025-10-19`
+### 6.1 Claude Code CLI：`CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`
+
+Anthropic 把 Claude Code 自动发送的 beta 分两类，由这个**官方环境变量**控制：
+
+| 类型 | 是否受环境变量控制 | 包含的 beta（截至 Claude Code v2.1.128） |
+|------|----------------|---------------------------------------|
+| **稳定 beta**（必发，关不掉） | ❌ | `claude-code-20250219`<br>`interleaved-thinking-2025-05-14`<br>`effort-2025-11-24` |
+| **实验性 beta**（可关） | ✅ 设 `=1` 关闭 | `redact-thinking-2026-02-12`<br>`context-management-2025-06-27`<br>`prompt-caching-scope-2026-01-05`<br>`advisor-tool-2026-03-01` |
+
+**关键效果**：客户端关掉实验性 beta 后，**也不会再发送对应的 body 字段**（例如 `context_management`），从根源减少"Extra inputs are not permitted"类报错。
+
+**用户操作**：
+
+```bash
+# macOS / Linux
+export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1
+
+# 加到 ~/.zshrc 或 ~/.bashrc 让它持久化
+echo 'export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1' >> ~/.zshrc
+
+# Windows PowerShell
+$env:CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS = "1"
+```
+
+### 6.2 何时用环境变量 vs 依赖网关过滤器
+
+| 场景 | 推荐方案 |
+|------|---------|
+| 用户用 Claude Code CLI 直连 Bedrock/Vertex 渠道 | **环境变量 + 网关过滤器**（双重保险） |
+| 用户用 Anthropic SDK / 第三方客户端 | **仅网关过滤器**（环境变量不存在于 SDK） |
+| 客服收到客户报 `400 invalid beta flag` 紧急工单 | **先让客户加环境变量临时缓解**，再排查网关日志 |
+| 网关升级未部署期间 | **环境变量是唯一兜底**，强烈建议告知客户 |
+
+### 6.3 客服话术模板
+
+> 您好～ 这个报错是因为 Claude Code 最新版默认开启了一些实验性 beta 特性，AWS Bedrock 暂未完全适配。
+>
+> **临时方案（30 秒搞定）**：在终端执行 `export CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` 后重启 Claude Code 即可。
+>
+> 我们后端也已经做了自动过滤，新版网关上线后该问题会自动消失，您无需手动设置环境变量。
 
 ---
 
-## 7. 维护说明
+## 7. 排查 Checklist
+
+遇到 `invalid beta flag` 或 `Extra inputs are not permitted` 时按顺序排查：
+
+1. **快速止血**：让用户设置 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`（30 秒生效）
+2. **确认目的端**：是 Bedrock InvokeModel？Converse？Vertex AI？规则不同
+3. **抓取入站请求**：`grep "anthropic_compat" <网关日志>` 看过滤器丢弃了哪些 flag
+4. **对照本文白名单**（Section 1.2 / 2.2）：找出不在列表的 flag
+5. **检查 body 字段位置**：Bedrock 必须用 body `anthropic_beta` 数组，不是 HTTP header
+6. **检查 anthropic_version**：Bedrock 必须 `bedrock-2023-05-31`，Vertex 必须 `vertex-2023-10-16`
+7. **检查 beta ↔ body 字段绑定**（Section 0.0）：被丢弃的 beta 对应的顶级 body 字段是否也清理了？
+8. **重命名映射**：`advanced-tool-use-2025-11-20` → `tool-search-tool-2025-10-19`
+
+### 7.1 真实成功 vs 失败对比（Claude Code v2.1.128 + Bedrock）
+
+| 项目 | ❌ 失败时<br>（默认开启 experimental） | ✅ 成功时<br>（`DISABLE_EXPERIMENTAL_BETAS=1` 或网关过滤器兜底） |
+|------|-------------|-------------|
+| 客户端发的 `Anthropic-Beta` | 7 个 flag（含 4 个实验性） | 3 个 flag（仅稳定的） |
+| body 含 `context_management` 字段 | ✅ 存在 | ❌ 客户端不再发 |
+| 过滤后 `anthropic_beta` | `[effort-2025-11-24]` | `[effort-2025-11-24]` |
+| body `context_management` 是否清理 | ⚠️ 修复前没清→ 400<br>✅ 修复后清掉 → 200 | n/a（客户端没发） |
+| Bedrock 响应 | 400 ValidationException | 200 OK |
+
+---
+
+## 8. 维护说明
 
 - Anthropic 持续发新 beta，本表需定期对照 LiteLLM 的 [`anthropic_beta_headers_config.json`](https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/anthropic_beta_headers_config.json) 同步
 - AWS Bedrock 新增支持的 flag 见 [官方文档](https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html)
