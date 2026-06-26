@@ -305,6 +305,17 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 		return
 	}
 	for key, value := range headerOverride {
+		// anthropic-beta 必须由 claude.CommonClaudeHeadersOperation 内的白名单过滤器
+		// 独家管控（客户端原值 + admin model_headers_settings 都过同一道闸）。
+		// 任何形式的 channel header_override（含 {client_header:anthropic-beta}
+		// placeholder 与字面量）都不允许把"过滤后的安全值"重新覆盖成"未过滤的脏值"，
+		// 否则会出现 filter 日志显示已 drop 但上游仍返回 "Unexpected value(s) ...
+		// for the anthropic-beta header" 的诡异现象（真实生产案例）。
+		// 如需为模型固定开启某些 beta，请配置 model_headers_settings（会和客户端
+		// 值一起经过白名单过滤）。
+		if strings.EqualFold(key, "anthropic-beta") {
+			continue
+		}
 		req.Header.Set(key, value)
 		// set Host in req
 		if strings.EqualFold(key, "Host") {

@@ -578,6 +578,48 @@ var BetaFilterDebugLog = os.Getenv("BETA_FILTER_DEBUG") == "true"
 
 **回归测试**：`TestDoAwsClientRequest_StripsContextManagementWhenBetaDropped` 锁住该契约。
 
+### 4.7.2 隐蔽 bug Round 2：显式 Header Override 也能复活脏值
+
+**问题症状**：过滤器日志显示 `dropped=[advisor-tool-2026-03-01, prompt-caching-scope-2026-01-05]` 但 Vertex 仍报：
+```
+400 Unexpected value(s) `advisor-tool-2026-03-01`, `prompt-caching-scope-2026-01-05` for the `anthropic-beta` header
+```
+
+**根因**：`relay/channel/api_request.go` 的 `DoApiRequest` 执行顺序：
+```
+1. SetupRequestHeader        → 过滤器跑，anthropic-beta = 过滤后干净值 ✅
+2. processHeaderOverride     → 显式 override（含 {client_header:anthropic-beta} placeholder）通过
+                               applyHeaderOverridePlaceholders 从客户端原始 header 读取
+3. applyHeaderOverrideToRequest → 把客户端原值（脏的）覆盖回 req.Header ❌
+```
+
+第一轮修复（黑名单）只挡了**通配符 passthrough**（`*` / `re:`），**显式 override 路径没挡**。如果 channel 配了：
+```json
+{ "header_override": { "anthropic-beta": "{client_header:anthropic-beta}" } }
+```
+就把客户端**原始**值（含 advisor-tool 等脏 flag）原封不动覆盖回去。
+
+**修复**：在 `applyHeaderOverrideToRequest` 里跳过 `anthropic-beta` key。
+
+```diff
+ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]string) {
+     ...
+     for key, value := range headerOverride {
++        // anthropic-beta 必须由 claude.CommonClaudeHeadersOperation 独家管控，
++        // 禁止任何 header_override 路径复活脏值（含 {client_header:} placeholder）
++        if strings.EqualFold(key, "anthropic-beta") {
++            continue
++        }
+         req.Header.Set(key, value)
+         ...
+     }
+ }
+```
+
+**回归测试**：`TestApplyHeaderOverrideToRequest_SkipsAnthropicBetaToProtectFilter`
+
+**注意**：AWS 渠道走的是 `relay-aws.go` 里的 `requestHeader.Set(key, value)` 循环（不经过 `applyHeaderOverrideToRequest`），且最终在 `formatRequest` 里**重新过滤一次** body 数组，不受这次修复影响。
+
 ### 4.7 隐蔽 bug：Header Passthrough 复活客户端原值
 
 **问题症状**：网关已部署了过滤器，但 Vertex 仍报：
