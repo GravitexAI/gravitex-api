@@ -56,16 +56,26 @@ type Log struct {
 	Other             string `json:"other"`
 }
 
-// MarshalJSON 把 Log.UserId 序列化为字符串（同 User.Id 处理）。
-// 原因：UserId 实际存的是 Java Snowflake（19 位大整数），超过 JS Number.MAX_SAFE_INTEGER。
-// 前端拿到 JSON number 会精度丢失，再传回后端查 user 详情时找不到。
+// MarshalJSON 把 Log 的两个 ID 字段（Id、UserId）序列化为字符串。
+// 原因：
+//   - UserId 是用户 Snowflake（来自 User.Id，~19 位）。
+//   - 在 ByteHouse 日志库模式下，logs.id 由服务端 DEFAULT generateSnowflakeID()
+//     生成雪花 ID（~19 位）—— 见 log_buffer.go 的 Omit("id") 注释。
+//
+// 这两个字段都超过 JS Number.MAX_SAFE_INTEGER (2^53 - 1)，
+// 直接以 JSON number 输出会让前端精度丢失：
+//   - user_id 精度丢失 → 点击行查看用户详情失败
+//   - id 精度丢失 → React Table 用 logs[i].key = logs[i].id 时不同 log 的 key 冲突，
+//     展开行（expandData[record.key]）取到错位的内容，看起来"点击详情乱了"
 func (l Log) MarshalJSON() ([]byte, error) {
 	type Alias Log
 	return common.Marshal(&struct {
 		Alias
+		Id     string `json:"id"`
 		UserId string `json:"user_id"`
 	}{
 		Alias:  Alias(l),
+		Id:     strconv.Itoa(l.Id),
 		UserId: strconv.Itoa(l.UserId),
 	})
 }
