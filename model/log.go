@@ -784,27 +784,24 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
 
-	// 执行查询：分别 Scan 到独立临时结构再合并，避免第二次 Scan 覆盖第一次的 Quota 字段。
-	// 历史 bug：直接两次 Scan(&stat) 会让第二次查询（无 quota 列）把 stat.Quota 重置为 0。
-	var quotaRow struct {
-		Quota int `gorm:"column:quota"`
-	}
-	if err := tx.Scan(&quotaRow).Error; err != nil {
-		common.SysError("failed to query log stat: " + err.Error())
+	// 执行查询：用 Row().Scan() 按 SQL select 列顺序直接赋值给 int64 临时变量，
+	// 不依赖 GORM 的 column name → struct field 映射。
+	// 这样无论 sqlite/mysql/postgres/bytehouse 哪种数据库，行为都一致可预期。
+	// 历史 bug：直接两次 tx.Scan(&stat) 会让第二次查询（无 quota 列）把 stat.Quota 重置为 0。
+	var quotaSum int64
+	if err := tx.Row().Scan(&quotaSum); err != nil {
+		common.SysError("failed to query log quota stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
-	stat.Quota = quotaRow.Quota
+	stat.Quota = int(quotaSum)
 
-	var rpmTpmRow struct {
-		Rpm int `gorm:"column:rpm"`
-		Tpm int `gorm:"column:tpm"`
-	}
-	if err := rpmTpmQuery.Scan(&rpmTpmRow).Error; err != nil {
+	var rpm, tpm int64
+	if err := rpmTpmQuery.Row().Scan(&rpm, &tpm); err != nil {
 		common.SysError("failed to query rpm/tpm stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
-	stat.Rpm = rpmTpmRow.Rpm
-	stat.Tpm = rpmTpmRow.Tpm
+	stat.Rpm = int(rpm)
+	stat.Tpm = int(tpm)
 
 	return stat, nil
 }
