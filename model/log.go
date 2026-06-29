@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,6 +54,20 @@ type Log struct {
 	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(512);index:idx_logs_request_id;default:''"`
 	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
 	Other             string `json:"other"`
+}
+
+// MarshalJSON 把 Log.UserId 序列化为字符串（同 User.Id 处理）。
+// 原因：UserId 实际存的是 Java Snowflake（19 位大整数），超过 JS Number.MAX_SAFE_INTEGER。
+// 前端拿到 JSON number 会精度丢失，再传回后端查 user 详情时找不到。
+func (l Log) MarshalJSON() ([]byte, error) {
+	type Alias Log
+	return common.Marshal(&struct {
+		Alias
+		UserId string `json:"user_id"`
+	}{
+		Alias:  Alias(l),
+		UserId: strconv.Itoa(l.UserId),
+	})
 }
 
 // don't use iota, avoid change log type value
@@ -759,15 +774,27 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
 
-	// 执行查询
-	if err := tx.Scan(&stat).Error; err != nil {
+	// 执行查询：分别 Scan 到独立临时结构再合并，避免第二次 Scan 覆盖第一次的 Quota 字段。
+	// 历史 bug：直接两次 Scan(&stat) 会让第二次查询（无 quota 列）把 stat.Quota 重置为 0。
+	var quotaRow struct {
+		Quota int `gorm:"column:quota"`
+	}
+	if err := tx.Scan(&quotaRow).Error; err != nil {
 		common.SysError("failed to query log stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
-	if err := rpmTpmQuery.Scan(&stat).Error; err != nil {
+	stat.Quota = quotaRow.Quota
+
+	var rpmTpmRow struct {
+		Rpm int `gorm:"column:rpm"`
+		Tpm int `gorm:"column:tpm"`
+	}
+	if err := rpmTpmQuery.Scan(&rpmTpmRow).Error; err != nil {
 		common.SysError("failed to query rpm/tpm stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
+	stat.Rpm = rpmTpmRow.Rpm
+	stat.Tpm = rpmTpmRow.Tpm
 
 	return stat, nil
 }
