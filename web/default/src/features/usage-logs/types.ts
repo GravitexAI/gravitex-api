@@ -226,7 +226,7 @@ export interface LogStatistics {
 
 export interface MidjourneyLog {
   id: number
-  user_id: number
+  user_id: number | string
   channel_id: number
   code: number
   mj_id: string
@@ -254,7 +254,7 @@ export interface MidjourneyLog {
 
 export interface TaskLog {
   id: number
-  user_id: number
+  user_id: number | string
   username?: string
   platform: string // suno, kling, runway, etc.
   task_id: string
