@@ -50,6 +50,13 @@ export default function ModelRatioSettings(props) {
     ImageRatio: '',
     AudioRatio: '',
     AudioCompletionRatio: '',
+    ImageCompletionRatio: '',
+    VideoRatio: '',
+    VideoCompletionRatio: '',
+    ImageModelPricePerImage: '',
+    VideoModelPricePerSecond: '',
+    'billing_setting.billing_mode': '',
+    'billing_setting.billing_expr': '',
     ExposeRatioEnabled: false,
   });
   const refForm = useRef();
@@ -319,6 +326,188 @@ export default function ModelRatioSettings(props) {
               ]}
               onChange={(value) =>
                 setInputs({ ...inputs, AudioCompletionRatio: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('图片补全倍率（仅部分模型支持该计费）')}
+              extraText={t(
+                '图片输出补全相关的倍率设置，键为模型名称，值为倍率。如果图片倍率为空，则使用文本倍率作为基准',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，键为模型名称，值为倍率，例如：{"gpt-image-1": 4}',
+              )}
+              field={'ImageCompletionRatio'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, ImageCompletionRatio: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('视频倍率（仅部分模型支持该计费）')}
+              extraText={t(
+                '视频输入相关的倍率设置，键为模型名称，值为倍率',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，键为模型名称，值为倍率，例如：{"veo-2.0-generate": 5}',
+              )}
+              field={'VideoRatio'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, VideoRatio: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('视频补全倍率（仅部分模型支持该计费）')}
+              extraText={t(
+                '视频输出补全相关的倍率设置，键为模型名称，值为倍率。如果视频倍率为空则使用文本倍率作为基准，如果文本倍率也为空则直接使用此处配置的价格',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，键为模型名称，值为倍率，例如：{"kling-v2": 10}',
+              )}
+              field={'VideoCompletionRatio'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, VideoCompletionRatio: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('按张计费模型每张价格（单位美元）')}
+              extraText={t(
+                '按张计费的图片模型，每张图片的价格（美元），键为模型名称，值为每张价格',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，键为模型名称，值为每张价格，例如：{"dall-e-3": 0.04}',
+              )}
+              field={'ImageModelPricePerImage'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, ImageModelPricePerImage: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('按秒计费模型每秒价格（单位美元）')}
+              extraText={t(
+                '按秒计费的视频模型，每秒视频的价格（美元），键为模型名称，值为每秒价格',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，键为模型名称，值为每秒价格，例如：{"kling-v1": 0.01}',
+              )}
+              field={'VideoModelPricePerSecond'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, VideoModelPricePerSecond: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('计费模式（阶梯计费）')}
+              extraText={t(
+                '阶梯/表达式计费模式映射，键为模型名称，值为 tiered_expr。一般由可视化编辑器自动生成，手动修改请谨慎',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，例如：{"gpt-4o": "tiered_expr"}',
+              )}
+              field={'billing_setting.billing_mode'}
+              autosize={{ minRows: 4, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, 'billing_setting.billing_mode': value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('计费表达式（阶梯计费）')}
+              extraText={t(
+                '阶梯/表达式计费的具体表达式，键为模型名称，值为计费表达式。一般由可视化编辑器自动生成，手动修改请谨慎',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，键为模型名称，值为计费表达式',
+              )}
+              field={'billing_setting.billing_expr'}
+              autosize={{ minRows: 4, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, 'billing_setting.billing_expr': value })
               }
             />
           </Col>

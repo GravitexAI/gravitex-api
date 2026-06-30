@@ -151,7 +151,9 @@ const EditUserModal = (props) => {
     delete payload.quota;
     delete payload.quota_amount;
     if (userId) {
-      payload.id = parseInt(userId);
+      // userId 是 Java Snowflake（~19 位），不能 parseInt（会丢精度）
+      // 后端 common.Int64Flexible 接受字符串或数字
+      payload.id = userId;
     }
     const url = userId ? `/api/user/` : `/api/user/self`;
     const res = await API.put(url, payload);
@@ -174,7 +176,7 @@ const EditUserModal = (props) => {
     setAdjustLoading(true);
     try {
       const res = await API.post('/api/user/manage', {
-        id: parseInt(userId),
+        id: userId, // Snowflake 字符串透传，避免 parseInt 精度丢失
         action: 'add_quota',
         mode: adjustMode,
         value: adjustMode === 'override' ? quotaVal : Math.abs(quotaVal),

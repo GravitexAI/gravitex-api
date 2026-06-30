@@ -138,6 +138,100 @@ func TestProcessHeaderOverride_PassthroughSkipsAcceptEncoding(t *testing.T) {
 	require.False(t, hasAcceptEncoding)
 }
 
+// anthropic-beta / anthropic-version 必须从通配符 passthrough 黑名单跳过，
+// 否则会绕过 claude.CommonClaudeHeadersOperation 里的白名单过滤，把客户端原始的
+// beta flag 直接透传给 Bedrock / Vertex，触发 "invalid beta flag" /
+// "Unexpected value(s) ..." 类报错（真实生产案例）。
+func TestProcessHeaderOverride_PassthroughSkipsAnthropicBetaAndVersion(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	ctx.Request.Header.Set("Anthropic-Beta", "advisor-tool-2026-03-01,prompt-caching-scope-2026-01-05")
+	ctx.Request.Header.Set("Anthropic-Version", "2023-06-01")
+	ctx.Request.Header.Set("X-Trace-Id", "trace-123")
+
+	info := &relaycommon.RelayInfo{
+		IsChannelTest: false,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"*": "",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+
+	// 非敏感 header 仍走 passthrough
+	require.Equal(t, "trace-123", headers["x-trace-id"])
+
+	// anthropic-beta / anthropic-version 必须被跳过，由渠道专属代码处理
+	_, hasBeta := headers["anthropic-beta"]
+	require.False(t, hasBeta, "anthropic-beta must not be passed through by wildcard")
+
+	_, hasVersion := headers["anthropic-version"]
+	require.False(t, hasVersion, "anthropic-version must not be passed through by wildcard")
+}
+
+// 显式 override 仍可以设置 anthropic-beta 进入 headerOverride map
+// （场景：渠道管理员手动配置覆盖值，processHeaderOverride 不会过滤），
+// 但 applyHeaderOverrideToRequest 不会把它真正覆盖到最终请求上（见下一个测试）。
+func TestProcessHeaderOverride_ExplicitAnthropicBetaOverrideStillWorks(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	info := &relaycommon.RelayInfo{
+		IsChannelTest: false,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"anthropic-beta": "computer-use-2025-01-24",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	require.Equal(t, "computer-use-2025-01-24", headers["anthropic-beta"])
+}
+
+// applyHeaderOverrideToRequest 必须跳过 anthropic-beta，保护 SetupRequestHeader
+// 里 claude.CommonClaudeHeadersOperation 已经过滤好的安全值不被任何形式的
+// header_override（含 {client_header:anthropic-beta} placeholder）复活成脏值。
+// 真实生产案例：filter 日志显示 advisor-tool-2026-03-01 已 dropped，但 Vertex 仍报
+// "Unexpected value(s) advisor-tool-2026-03-01 for the anthropic-beta header"。
+func TestApplyHeaderOverrideToRequest_SkipsAnthropicBetaToProtectFilter(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodPost, "https://example.com/v1/messages", nil)
+	// 模拟 CommonClaudeHeadersOperation 已经过滤完毕，req 上是干净的值
+	req.Header.Set("anthropic-beta", "interleaved-thinking-2025-05-14,context-management-2025-06-27")
+	req.Header.Set("x-trace-id", "trace-123")
+
+	// 模拟 header_override 试图把脏值覆盖回去（典型场景：{client_header:anthropic-beta} 解析后）
+	headerOverride := map[string]string{
+		"anthropic-beta": "advisor-tool-2026-03-01,prompt-caching-scope-2026-01-05",
+		"x-custom-header": "custom-value",
+	}
+
+	applyHeaderOverrideToRequest(req, headerOverride)
+
+	// anthropic-beta 必须保持过滤后的干净值，不能被覆盖
+	require.Equal(t,
+		"interleaved-thinking-2025-05-14,context-management-2025-06-27",
+		req.Header.Get("anthropic-beta"),
+		"anthropic-beta must not be overridden by applyHeaderOverrideToRequest")
+
+	// 其他 header 正常被覆盖
+	require.Equal(t, "custom-value", req.Header.Get("x-custom-header"))
+}
+
 func TestProcessHeaderOverride_PassHeadersTemplateSetsRuntimeHeaders(t *testing.T) {
 	t.Parallel()
 

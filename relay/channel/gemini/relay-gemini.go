@@ -1518,6 +1518,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 
 		// 更新使用量统计
 		if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
+			info.SetUpstreamResponsesField("usageMetadata", geminiResponse.UsageMetadata)
 			// CHZ-PATCH(gemini-usage-fix): 打印上游 usageMetadata 原文，便于对账核对
 			// prompt/candidates/thoughts/modality 拆分是否准确
 			if metaJSON, jerr := common.Marshal(geminiResponse.UsageMetadata); jerr == nil {
@@ -1701,6 +1702,9 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	info.UpstreamResponseId = geminiResponse.ResponseId
+	if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
+		info.SetUpstreamResponsesField("usageMetadata", geminiResponse.UsageMetadata)
+	}
 
 	// CHZ-PATCH(gemini-usage-fix): 打印上游 usageMetadata 原文，便于对账核对
 	// prompt/candidates/thoughts/modality 拆分是否准确
@@ -2100,6 +2104,9 @@ func GeminiImagineImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, types.NewOpenAIError(jsonErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	info.UpstreamResponseId = geminiResponse.ResponseId
+	if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
+		info.SetUpstreamResponsesField("usageMetadata", geminiResponse.UsageMetadata)
+	}
 
 	// 与 GeminiChatHandler 保持一致：打印上游 usageMetadata 原文便于对账
 	if metaJSON, jerr := common.Marshal(geminiResponse.UsageMetadata); jerr == nil {

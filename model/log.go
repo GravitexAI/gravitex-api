@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,6 +54,30 @@ type Log struct {
 	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(512);index:idx_logs_request_id;default:''"`
 	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
 	Other             string `json:"other"`
+}
+
+// MarshalJSON 把 Log 的两个 ID 字段（Id、UserId）序列化为字符串。
+// 原因：
+//   - UserId 是用户 Snowflake（来自 User.Id，~19 位）。
+//   - 在 ByteHouse 日志库模式下，logs.id 由服务端 DEFAULT generateSnowflakeID()
+//     生成雪花 ID（~19 位）—— 见 log_buffer.go 的 Omit("id") 注释。
+//
+// 这两个字段都超过 JS Number.MAX_SAFE_INTEGER (2^53 - 1)，
+// 直接以 JSON number 输出会让前端精度丢失：
+//   - user_id 精度丢失 → 点击行查看用户详情失败
+//   - id 精度丢失 → React Table 用 logs[i].key = logs[i].id 时不同 log 的 key 冲突，
+//     展开行（expandData[record.key]）取到错位的内容，看起来"点击详情乱了"
+func (l Log) MarshalJSON() ([]byte, error) {
+	type Alias Log
+	return common.Marshal(&struct {
+		Alias
+		Id     string `json:"id"`
+		UserId string `json:"user_id"`
+	}{
+		Alias:  Alias(l),
+		Id:     strconv.Itoa(l.Id),
+		UserId: strconv.Itoa(l.UserId),
+	})
 }
 
 // don't use iota, avoid change log type value
@@ -759,15 +784,24 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
 
-	// 执行查询
-	if err := tx.Scan(&stat).Error; err != nil {
-		common.SysError("failed to query log stat: " + err.Error())
+	// 执行查询：用 Row().Scan() 按 SQL select 列顺序直接赋值给 int64 临时变量，
+	// 不依赖 GORM 的 column name → struct field 映射。
+	// 这样无论 sqlite/mysql/postgres/bytehouse 哪种数据库，行为都一致可预期。
+	// 历史 bug：直接两次 tx.Scan(&stat) 会让第二次查询（无 quota 列）把 stat.Quota 重置为 0。
+	var quotaSum int64
+	if err := tx.Row().Scan(&quotaSum); err != nil {
+		common.SysError("failed to query log quota stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
-	if err := rpmTpmQuery.Scan(&stat).Error; err != nil {
+	stat.Quota = int(quotaSum)
+
+	var rpm, tpm int64
+	if err := rpmTpmQuery.Row().Scan(&rpm, &tpm); err != nil {
 		common.SysError("failed to query rpm/tpm stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
+	stat.Rpm = int(rpm)
+	stat.Tpm = int(tpm)
 
 	return stat, nil
 }

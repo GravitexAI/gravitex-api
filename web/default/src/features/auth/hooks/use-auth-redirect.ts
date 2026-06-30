@@ -54,7 +54,7 @@ export function useAuthRedirect() {
    * @param redirectTo - Redirect path after login
    */
   const handleLoginSuccess = async (
-    userData?: { id?: number } | null,
+    userData?: { id?: number | string } | null,
     redirectTo?: string
   ) => {
     // Save user ID if available

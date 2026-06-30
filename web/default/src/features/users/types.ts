@@ -31,7 +31,7 @@ export const userRoleSchema = z.number()
 export type UserRole = z.infer<typeof userRoleSchema>
 
 export const userSchema = z.object({
-  id: z.number(),
+  id: z.union([z.number(), z.string()]),
   username: z.string(),
   display_name: z.string(),
   password: z.string().optional(),
@@ -119,7 +119,7 @@ export type ManageUserAction =
 export type QuotaAdjustMode = 'add' | 'subtract' | 'override'
 
 export interface ManageUserQuotaPayload {
-  id: number
+  id: number | string
   action: 'add_quota'
   mode: QuotaAdjustMode
   value: number

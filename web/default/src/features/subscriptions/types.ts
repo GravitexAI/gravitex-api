@@ -58,7 +58,7 @@ export interface PlanRecord {
 
 export const userSubscriptionSchema = z.object({
   id: z.number(),
-  user_id: z.number(),
+  user_id: z.union([z.number(), z.string()]),
   plan_id: z.number(),
   status: z.string(),
   source: z.string().optional(),

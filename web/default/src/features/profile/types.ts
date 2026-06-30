@@ -33,8 +33,8 @@ export interface ApiResponse<T = unknown> {
  * User profile data
  */
 export interface UserProfile {
-  /** User ID */
-  id: number
+  /** User ID (Snowflake, sent as string from backend) */
+  id: number | string
   /** Username */
   username: string
   /** Display name */
@@ -63,8 +63,8 @@ export interface UserProfile {
   aff_quota: number
   /** Total affiliate quota earned (historical) */
   aff_history_quota: number
-  /** Invite user ID */
-  invite_user_id?: number
+  /** Invite user ID (Snowflake, sent as string from backend) */
+  invite_user_id?: number | string
   /** Account creation timestamp */
   created_time: number
   /** User settings (JSON string) */

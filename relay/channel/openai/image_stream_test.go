@@ -8,8 +8,10 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -96,6 +98,41 @@ func TestOpenaiImageStreamHandlerWrapsJSONResponse(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"b64_json":"final"`)
 	require.Contains(t, recorder.Body.String(), `"revised_prompt":"draw a cat"`)
 	require.Contains(t, recorder.Body.String(), `data: [DONE]`)
+}
+
+// TestNormalizeOpenAIUsageMapsImageOutputTokens 验证 image relay 路径下
+// output_tokens 会被映射到 CompletionTokenDetails.ImageTokens，供 text_quota.go
+// 走 image output split billing；上游已显式给出非零 image_tokens 时不能覆盖。
+func TestNormalizeOpenAIUsageMapsImageOutputTokens(t *testing.T) {
+	t.Run("output_tokens fills CompletionTokenDetails.ImageTokens when absent", func(t *testing.T) {
+		usage := &dto.Usage{
+			InputTokens:  100,
+			OutputTokens: 5488,
+		}
+		normalizeOpenAIUsage(usage)
+		assert.Equal(t, 5488, usage.CompletionTokens)
+		assert.Equal(t, 5488, usage.CompletionTokenDetails.ImageTokens)
+	})
+
+	t.Run("preserves explicit non-zero image_tokens", func(t *testing.T) {
+		usage := &dto.Usage{
+			InputTokens:  100,
+			OutputTokens: 5488,
+		}
+		usage.CompletionTokenDetails.ImageTokens = 3000 // 上游单独给出的精确值
+		normalizeOpenAIUsage(usage)
+		assert.Equal(t, 3000, usage.CompletionTokenDetails.ImageTokens)
+	})
+
+	t.Run("noop when output_tokens is zero", func(t *testing.T) {
+		usage := &dto.Usage{InputTokens: 100}
+		normalizeOpenAIUsage(usage)
+		assert.Equal(t, 0, usage.CompletionTokenDetails.ImageTokens)
+	})
+
+	t.Run("nil usage is safe", func(t *testing.T) {
+		require.NotPanics(t, func() { normalizeOpenAIUsage(nil) })
+	})
 }
 
 // TestOpenaiImageHandlersReturnJSONError covers JSON error responses for both

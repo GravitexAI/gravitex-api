@@ -25,7 +25,7 @@ import { z } from 'zod'
 // Usage log schema
 export const usageLogSchema = z.object({
   id: z.number(),
-  user_id: z.number(),
+  user_id: z.union([z.number(), z.string()]),
   created_at: z.number(),
   type: z.number(),
   content: z.string(),

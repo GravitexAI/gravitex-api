@@ -24,7 +24,7 @@ import type { TimeGranularity } from '@/lib/time'
 
 export interface QuotaDataItem {
   id?: number
-  user_id?: number
+  user_id?: number | string
   username?: string
   model_name?: string
   created_at: number
@@ -34,7 +34,7 @@ export interface QuotaDataItem {
 }
 
 export interface FlowQuotaDataItem {
-  user_id?: number
+  user_id?: number | string
   username?: string
   node_name?: string
   use_group?: string

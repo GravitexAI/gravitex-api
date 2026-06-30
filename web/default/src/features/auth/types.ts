@@ -65,7 +65,7 @@ export interface LoginResponse {
   message: string
   data?: {
     require_2fa?: boolean
-    id?: number
+    id?: number | string
   }
 }
 

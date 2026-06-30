@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relay/channel/claude"
 )
 
 type AwsClaudeRequest struct {
@@ -31,7 +31,7 @@ type AwsClaudeRequest struct {
 	//Metadata         json.RawMessage     `json:"metadata,omitempty"`
 }
 
-func formatRequest(requestBody io.Reader, requestHeader http.Header) (*AwsClaudeRequest, error) {
+func formatRequest(requestBody io.Reader, requestHeader http.Header, requestID string) (*AwsClaudeRequest, error) {
 	var awsClaudeRequest AwsClaudeRequest
 	err := common.DecodeJson(requestBody, &awsClaudeRequest)
 	if err != nil {
@@ -39,21 +39,41 @@ func formatRequest(requestBody io.Reader, requestHeader http.Header) (*AwsClaude
 	}
 	awsClaudeRequest.AnthropicVersion = "bedrock-2023-05-31"
 
-	// check header anthropic-beta
+	// 把 anthropic-beta header 从客户端请求迁移到 Bedrock 的 body 数组，
+	// 过程中按 Bedrock 白名单过滤 + 必要时重命名（详见 claude.FilterBetaFlags）。
 	anthropicBetaValues := requestHeader.Get("anthropic-beta")
-	if len(anthropicBetaValues) > 0 {
-		var tempArray []string
-		tempArray = strings.Split(anthropicBetaValues, ",")
-		if len(tempArray) > 0 {
-			betaJson, err := json.Marshal(tempArray)
-			if err != nil {
-				return nil, err
-			}
-			awsClaudeRequest.AnthropicBeta = betaJson
+	filtered := claude.FilterBetaFlags(anthropicBetaValues, claude.TargetBedrock, requestID)
+	if len(filtered) > 0 {
+		betaJson, err := json.Marshal(filtered)
+		if err != nil {
+			return nil, err
 		}
+		awsClaudeRequest.AnthropicBeta = betaJson
 	}
+
+	// beta flag 与 body 顶级字段是绑定关系：beta 被过滤掉，对应 body 字段也必须清理，
+	// 否则 Bedrock 会返回 "Extra inputs are not permitted"。
+	awsClaudeRequest.stripBodyFieldsForDroppedBetas(filtered)
+
 	logger.LogJson(context.Background(), "json", awsClaudeRequest)
 	return &awsClaudeRequest, nil
+}
+
+// stripBodyFieldsForDroppedBetas 清理那些"对应 beta 未被保留"的顶级 body 字段。
+// 后续发现新的 beta ↔ body 绑定关系时，在此追加映射即可。
+func (r *AwsClaudeRequest) stripBodyFieldsForDroppedBetas(keptBetas []string) {
+	kept := make(map[string]bool, len(keptBetas))
+	for _, b := range keptBetas {
+		kept[b] = true
+	}
+	// context_management 顶级字段依赖 context-management-2025-06-27 beta（仅 Converse 支持）
+	if !kept["context-management-2025-06-27"] {
+		r.ContextManagement = nil
+	}
+	// output_config: { effort } 依赖 effort-2025-11-24 beta
+	if !kept["effort-2025-11-24"] {
+		r.OutputConfig = nil
+	}
 }
 
 // NovaMessage Nova模型使用messages-v1格式
