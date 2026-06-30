@@ -135,6 +135,9 @@ func TaskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
 // taskBillingOther 从 task 的 BillingContext 构建日志 Other 字段。
 func taskBillingOther(task *model.Task) map[string]interface{} {
 	other := make(map[string]interface{})
+	if task == nil {
+		return other
+	}
 	if bc := task.PrivateData.BillingContext; bc != nil {
 		other["model_price"] = bc.ModelPrice
 		if bc.ModelRatio > 0 {
@@ -152,7 +155,93 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = props.UpstreamModelName
 	}
+	appendTaskVideoBillingOther(task, other)
 	return other
+}
+
+func appendTaskVideoBillingOther(task *model.Task, other map[string]interface{}) {
+	if task == nil || other == nil || len(task.Data) == 0 {
+		return
+	}
+
+	var taskData map[string]interface{}
+	if err := common.Unmarshal(task.Data, &taskData); err != nil || taskData == nil {
+		return
+	}
+
+	for _, key := range []string{
+		"requested_seconds",
+		"billing_requested_seconds",
+		"tokens",
+		"generate_audio",
+		"has_video_input",
+		"video_resolution",
+		"video_price_per_second",
+		"official_video_price_per_second",
+		"video_price_per_million_tokens",
+		"video_ratio",
+		"video_completion_ratio_val",
+		"effective_video_ratio",
+		"ratio_mode",
+	} {
+		if value, ok := taskData[key]; ok {
+			other[key] = value
+		}
+	}
+
+	billingType, _ := taskData["billing_type"].(string)
+	if billingType == "" {
+		if taskDataNumber(taskData, "requested_seconds") > 0 || taskDataNumber(taskData, "billing_requested_seconds") > 0 {
+			billingType = "per_second"
+		} else if taskDataNumber(taskData, "tokens") > 0 ||
+			taskDataNumber(taskData, "video_price_per_million_tokens") > 0 ||
+			taskDataNumber(taskData, "effective_video_ratio") > 0 {
+			billingType = "video_token_ratio"
+		}
+	}
+	if billingType != "" {
+		other["billing_type"] = billingType
+	}
+
+	if billingType == "per_second" {
+		if _, ok := other["requested_seconds"]; !ok {
+			if seconds, ok := other["billing_requested_seconds"]; ok {
+				other["requested_seconds"] = seconds
+			}
+		}
+		if _, ok := other["video_price_per_second"]; !ok {
+			if price, ok := other["model_price"]; ok {
+				other["video_price_per_second"] = price
+			}
+		}
+		if _, ok := other["official_video_price_per_second"]; !ok {
+			if price, ok := other["video_price_per_second"]; ok {
+				other["official_video_price_per_second"] = price
+			}
+		}
+	}
+}
+
+func taskDataNumber(taskData map[string]interface{}, key string) float64 {
+	if taskData == nil {
+		return 0
+	}
+	switch value := taskData[key].(type) {
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case float64:
+		return value
+	case float32:
+		return float64(value)
+	case string:
+		var parsed float64
+		if _, err := fmt.Sscanf(value, "%f", &parsed); err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 // taskModelName 从 BillingContext 或 Properties 中获取模型名称。

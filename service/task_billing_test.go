@@ -219,6 +219,27 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 	assert.Equal(t, "test-model", log.ModelName)
 }
 
+func TestTaskBillingOtherIncludesVideoBillingFields(t *testing.T) {
+	task := makeTask(1, 1, 3000, 1, BillingSourceWallet, 0)
+	data, err := common.Marshal(map[string]interface{}{
+		"requested_seconds":               8,
+		"generate_audio":                  true,
+		"video_resolution":                "1080p",
+		"official_video_price_per_second": 0.12,
+	})
+	require.NoError(t, err)
+	task.Data = data
+
+	other := taskBillingOther(task)
+
+	assert.Equal(t, "per_second", other["billing_type"])
+	assert.Equal(t, 8, other["requested_seconds"])
+	assert.Equal(t, true, other["generate_audio"])
+	assert.Equal(t, "1080p", other["video_resolution"])
+	assert.Equal(t, 0.12, other["official_video_price_per_second"])
+	assert.Equal(t, 0.12, other["video_price_per_second"])
+}
+
 func TestRefundTaskQuota_Subscription(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()

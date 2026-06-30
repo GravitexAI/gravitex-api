@@ -510,6 +510,10 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["audio_input_token_count"] = summary.AudioTokens
 		other["audio_input_price"] = summary.AudioInputPrice
 	}
+	if summary.AudioTokens > 0 {
+		other["audio_input"] = summary.AudioTokens
+		other["audio_tokens"] = summary.AudioTokens
+	}
 	if summary.ImageGenerationCallPrice > 0 {
 		other["image_generation_call"] = true
 		other["image_generation_call_price"] = summary.ImageGenerationCallPrice
