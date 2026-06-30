@@ -1,15 +1,61 @@
 package claude
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func commonPointer[T any](value T) *T {
 	return &value
+}
+
+func TestResponseOpenAI2ClaudeToolUseInputIsObject(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+		want map[string]interface{}
+	}{
+		{name: "object", args: `{"q":"x"}`, want: map[string]interface{}{"q": "x"}},
+		{name: "empty", args: "", want: map[string]interface{}{}},
+		{name: "invalid", args: "{", want: map[string]interface{}{}},
+		{name: "null", args: "null", want: map[string]interface{}{}},
+		{name: "array", args: `["x"]`, want: map[string]interface{}{}},
+		{name: "string", args: `"x"`, want: map[string]interface{}{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := dto.Message{Role: "assistant"}
+			msg.SetToolCalls([]dto.ToolCallRequest{
+				{
+					ID:   "call_1",
+					Type: "function",
+					Function: dto.FunctionRequest{
+						Name:      "lookup",
+						Arguments: tt.args,
+					},
+				},
+			})
+			resp := service.ResponseOpenAI2Claude(&dto.OpenAITextResponse{
+				Id:    "chatcmpl_1",
+				Model: "gpt-test",
+				Choices: []dto.OpenAITextResponseChoice{
+					{Message: msg, FinishReason: "tool_calls"},
+				},
+			}, nil)
+
+			require.Len(t, resp.Content, 1)
+			assert.Equal(t, "tool_use", resp.Content[0].Type)
+			assert.Equal(t, tt.want, resp.Content[0].Input)
+		})
+	}
 }
 
 func TestFormatClaudeResponseInfo_MessageStart(t *testing.T) {
@@ -30,7 +76,7 @@ func TestFormatClaudeResponseInfo_MessageStart(t *testing.T) {
 		},
 	}
 
-	ok := FormatClaudeResponseInfo(claudeResponse, nil, claudeInfo)
+	ok := FormatClaudeResponseInfo(&relaycommon.RelayInfo{}, claudeResponse, nil, claudeInfo)
 	if !ok {
 		t.Fatal("expected true")
 	}
@@ -75,7 +121,7 @@ func TestFormatClaudeResponseInfo_MessageDelta_FullUsage(t *testing.T) {
 		},
 	}
 
-	ok := FormatClaudeResponseInfo(claudeResponse, nil, claudeInfo)
+	ok := FormatClaudeResponseInfo(&relaycommon.RelayInfo{}, claudeResponse, nil, claudeInfo)
 	if !ok {
 		t.Fatal("expected true")
 	}
@@ -117,7 +163,7 @@ func TestFormatClaudeResponseInfo_MessageDelta_OnlyOutputTokens(t *testing.T) {
 		},
 	}
 
-	ok := FormatClaudeResponseInfo(claudeResponse, nil, claudeInfo)
+	ok := FormatClaudeResponseInfo(&relaycommon.RelayInfo{}, claudeResponse, nil, claudeInfo)
 	if !ok {
 		t.Fatal("expected true")
 	}
@@ -151,7 +197,7 @@ func TestFormatClaudeResponseInfo_MessageDelta_OnlyOutputTokens(t *testing.T) {
 
 func TestFormatClaudeResponseInfo_NilClaudeInfo(t *testing.T) {
 	claudeResponse := &dto.ClaudeResponse{Type: "message_start"}
-	ok := FormatClaudeResponseInfo(claudeResponse, nil, nil)
+	ok := FormatClaudeResponseInfo(&relaycommon.RelayInfo{}, claudeResponse, nil, nil)
 	if ok {
 		t.Error("expected false for nil claudeInfo")
 	}
@@ -170,7 +216,7 @@ func TestFormatClaudeResponseInfo_ContentBlockDelta(t *testing.T) {
 		},
 	}
 
-	ok := FormatClaudeResponseInfo(claudeResponse, nil, claudeInfo)
+	ok := FormatClaudeResponseInfo(&relaycommon.RelayInfo{}, claudeResponse, nil, claudeInfo)
 	if !ok {
 		t.Fatal("expected true")
 	}

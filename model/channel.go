@@ -139,7 +139,7 @@ func NormalizeChannelGroupFilter(group string) string {
 }
 
 func channelGroupFilterCondition() string {
-	if common.UsingMySQL {
+	if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
 		return `CONCAT(',', ` + commonGroupCol + `, ',') LIKE ? ESCAPE '!'`
 	}
 	return `(',' || ` + commonGroupCol + ` || ',') LIKE ? ESCAPE '!'`
@@ -417,13 +417,13 @@ func SearchChannels(keyword string, group string, model string, idSort bool, reg
 	modelsCol := "`models`"
 
 	// 如果是 PostgreSQL，使用双引号
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		modelsCol = `"models"`
 	}
 
 	baseURLCol := "`base_url`"
 	// 如果是 PostgreSQL，使用双引号
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		baseURLCol = `"base_url"`
 	}
 
@@ -939,13 +939,13 @@ func SearchTags(keyword string, group string, model string, idSort bool, region 
 	modelsCol := "`models`"
 
 	// 如果是 PostgreSQL，使用双引号
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		modelsCol = `"models"`
 	}
 
 	baseURLCol := "`base_url`"
 	// 如果是 PostgreSQL，使用双引号
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		baseURLCol = `"base_url"`
 	}
 

@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -28,7 +29,7 @@ var logGroupCol string
 
 func initCol() {
 	// init common column names
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		commonGroupCol = `"group"`
 		commonKeyCol = `"key"`
 		commonTrueVal = "true"
@@ -39,27 +40,14 @@ func initCol() {
 		commonTrueVal = "1"
 		commonFalseVal = "0"
 	}
-	if os.Getenv("LOG_SQL_DSN") != "" {
-		switch common.LogSqlType {
-		case common.DatabaseTypePostgreSQL:
-			logGroupCol = `"group"`
-			logKeyCol = `"key"`
-		default:
-			logGroupCol = commonGroupCol
-			logKeyCol = commonKeyCol
-		}
-	} else {
-		// LOG_SQL_DSN 为空时，日志数据库与主数据库相同
-		if common.UsingPostgreSQL {
-			logGroupCol = `"group"`
-			logKeyCol = `"key"`
-		} else {
-			logGroupCol = commonGroupCol
-			logKeyCol = commonKeyCol
-		}
+	switch common.LogDatabaseType() {
+	case common.DatabaseTypePostgreSQL:
+		logGroupCol = `"group"`
+		logKeyCol = `"key"`
+	default:
+		logGroupCol = "`group`"
+		logKeyCol = "`key`"
 	}
-	// log sql type and database type
-	//common.SysLog("Using Log SQL Type: " + common.LogSqlType)
 }
 
 var DB *gorm.DB
@@ -116,50 +104,56 @@ func CheckSetup() {
 	}
 }
 
-func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
-	defer func() {
-		initCol()
-	}()
+func isClickHouseDSN(dsn string) bool {
+	return strings.HasPrefix(dsn, "clickhouse://") ||
+		strings.HasPrefix(dsn, "tcp://") ||
+		strings.HasPrefix(dsn, "http://") ||
+		strings.HasPrefix(dsn, "https://")
+}
 
+func normalizeClickHouseDSN(dsn string) string {
+	parsed, err := url.Parse(dsn)
+	if err != nil || parsed.Scheme != "https" {
+		return dsn
+	}
+	query := parsed.Query()
+	if _, ok := query["secure"]; !ok {
+		query.Set("secure", "true")
+		parsed.RawQuery = query.Encode()
+	}
+	return parsed.String()
+}
+
+func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error) {
 	dsn := os.Getenv(envName)
 	if dsn != "" {
-		if strings.HasPrefix(dsn, "clickhouse://") {
-			// ClickHouse/ByteHouse 仅支持作为日志库
+		if isClickHouseDSN(dsn) {
 			if !isLog {
-				common.FatalLog("ClickHouse/ByteHouse 只能作为日志库 (LOG_SQL_DSN)，不支持作为主库 SQL_DSN")
+				return nil, "", fmt.Errorf("%s does not support ClickHouse; use SQLite, MySQL, or PostgreSQL for the primary database and LOG_SQL_DSN for ClickHouse logs", envName)
 			}
 			common.SysLog("using ClickHouse/ByteHouse as log database")
-			common.UsingClickHouse = true
-			common.LogSqlType = common.DatabaseTypeClickHouse
-			return gorm.Open(clickhouse.Open(dsn), &gorm.Config{
+			db, err := gorm.Open(clickhouse.Open(normalizeClickHouseDSN(dsn)), &gorm.Config{
 				PrepareStmt: false,
 			})
+			return db, common.DatabaseTypeClickHouse, err
 		}
 		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
 			// Use PostgreSQL
 			common.SysLog("using PostgreSQL as database")
-			if !isLog {
-				common.UsingPostgreSQL = true
-			} else {
-				common.LogSqlType = common.DatabaseTypePostgreSQL
-			}
-			return gorm.Open(postgres.New(postgres.Config{
+			db, err := gorm.Open(postgres.New(postgres.Config{
 				DSN:                  dsn,
 				PreferSimpleProtocol: true, // disables implicit prepared statement usage
 			}), &gorm.Config{
 				PrepareStmt: true,
 			})
+			return db, common.DatabaseTypePostgreSQL, err
 		}
 		if strings.HasPrefix(dsn, "local") {
 			common.SysLog("SQL_DSN not set, using SQLite as database")
-			if !isLog {
-				common.UsingSQLite = true
-			} else {
-				common.LogSqlType = common.DatabaseTypeSQLite
-			}
-			return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
-				PrepareStmt: true,
+			db, err := gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
+				PrepareStmt: true, // precompile SQL
 			})
+			return db, common.DatabaseTypeSQLite, err
 		}
 		// Use MySQL
 		common.SysLog("using MySQL as database")
@@ -171,35 +165,36 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 				dsn += "?parseTime=true"
 			}
 		}
-		if !isLog {
-			common.UsingMySQL = true
-		} else {
-			common.LogSqlType = common.DatabaseTypeMySQL
-		}
 		// MySQL: disable PrepareStmt by default to avoid exceeding max_prepared_stmt_count
 		// under high concurrency (MaxOpenConns × unique_queries > 16382)
 		mysqlPrepareStmt := common.GetEnvOrDefaultBool("MYSQL_PREPARE_STMT", false)
-		return gorm.Open(mysql.Open(dsn), &gorm.Config{
+		db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
 			PrepareStmt: mysqlPrepareStmt,
 		})
+		return db, common.DatabaseTypeMySQL, err
 	}
 	// Use SQLite
 	common.SysLog("SQL_DSN not set, using SQLite as database")
-	common.UsingSQLite = true
-	return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
-		PrepareStmt: true,
+	db, err := gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
+		PrepareStmt: true, // precompile SQL
 	})
+	return db, common.DatabaseTypeSQLite, err
 }
 
 func InitDB() (err error) {
-	db, err := chooseDB("SQL_DSN", false)
+	db, dbType, err := chooseDB("SQL_DSN", false)
 	if err == nil {
+		common.SetMainDatabaseType(dbType)
+		if os.Getenv("LOG_SQL_DSN") == "" {
+			common.SetLogDatabaseType(dbType)
+		}
+		initCol()
 		if common.DebugEnabled {
 			db = db.Debug()
 		}
 		DB = db
 		// MySQL charset/collation startup check: ensure Chinese-capable charset
-		if common.UsingMySQL {
+		if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
 			if err := checkMySQLChineseSupport(DB); err != nil {
 				panic(err)
 			}
@@ -215,7 +210,7 @@ func InitDB() (err error) {
 		if !common.IsMasterNode {
 			return nil
 		}
-		if common.UsingMySQL {
+		if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
 			//_, _ = sqlDB.Exec("ALTER TABLE channels MODIFY model_mapping TEXT;") // TODO: delete this line when most users have upgraded
 		}
 		common.SysLog("database migration started")
@@ -230,16 +225,20 @@ func InitDB() (err error) {
 func InitLogDB() (err error) {
 	if os.Getenv("LOG_SQL_DSN") == "" {
 		LOG_DB = DB
+		common.SetLogDatabaseType(common.MainDatabaseType())
+		initCol()
 		return
 	}
-	db, err := chooseDB("LOG_SQL_DSN", true)
+	db, dbType, err := chooseDB("LOG_SQL_DSN", true)
 	if err == nil {
+		common.SetLogDatabaseType(dbType)
+		initCol()
 		if common.DebugEnabled {
 			db = db.Debug()
 		}
 		LOG_DB = db
 		// If log DB is MySQL, also ensure Chinese-capable charset
-		if common.LogSqlType == common.DatabaseTypeMySQL {
+		if common.UsingLogDatabase(common.DatabaseTypeMySQL) {
 			if err := checkMySQLChineseSupport(LOG_DB); err != nil {
 				panic(err)
 			}
@@ -253,7 +252,7 @@ func InitLogDB() (err error) {
 		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
 
 		// ClickHouse/ByteHouse 不适合单条 INSERT，所有节点都启用内存缓冲批量写入
-		if common.UsingClickHouse {
+		if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 			GlobalLogBuffer = NewLogBuffer(
 				common.GetEnvOrDefault("LOG_BUFFER_MAX_SIZE", 5000),
 				time.Duration(common.GetEnvOrDefault("LOG_BUFFER_INTERVAL_SEC", 5))*time.Second,
@@ -313,11 +312,16 @@ func migrateDB() error {
 		&OperLog{},
 		&OperLogPushJobLog{},
 		&PerfMetric{},
+		&SystemInstance{},
+		&SystemTask{},
+		&SystemTaskLock{},
+		&CasbinRule{},
+		&AuthzRole{},
 	)
 	if err != nil {
 		return err
 	}
-	if common.UsingSQLite {
+	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
 			return err
 		}
@@ -368,6 +372,9 @@ func migrateDBFast() error {
 		{&OperLog{}, "OperLog"},
 		{&OperLogPushJobLog{}, "OperLogPushJobLog"},
 		{&PerfMetric{}, "PerfMetric"},
+		{&SystemInstance{}, "SystemInstance"},
+		{&SystemTask{}, "SystemTask"},
+		{&SystemTaskLock{}, "SystemTaskLock"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
@@ -392,7 +399,7 @@ func migrateDBFast() error {
 			return err
 		}
 	}
-	if common.UsingSQLite {
+	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
 			return err
 		}
@@ -406,16 +413,108 @@ func migrateDBFast() error {
 }
 
 func migrateLOGDB() error {
-	if common.UsingClickHouse {
-		common.SysLog("ClickHouse log DB: skip AutoMigrate, use manual DDL (see docs/bytehouse_logs.sql)")
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		// 生产用 ByteHouse(CnchMergeTree)：手动建表（见 docs/bytehouse_logs.sql），跳过 AutoMigrate。
+		// 原生 ClickHouse 用户可改调 migrateClickHouseLogDB（main 引入的 MergeTree+TTL 流程）。
+		common.SysLog("ClickHouse/ByteHouse log DB: skip AutoMigrate, use manual DDL (see docs/bytehouse_logs.sql)")
 		return nil
 	}
-	var err error
-	if err = LOG_DB.AutoMigrate(&Log{}); err != nil {
+	if err := LOG_DB.AutoMigrate(&Log{}); err != nil {
 		return err
 	}
 	migrateLogRequestIdColumnLength()
 	return nil
+}
+
+// migrateClickHouseLogDB 等以下 ClickHouse 自动建表/TTL 函数来自 main，但生产 ByteHouse(CnchMergeTree)
+// 不能用 MergeTree 引擎建表，所以 migrateLOGDB 入口已跳过。保留以便后续切换原生 ClickHouse 时直接启用。
+func migrateClickHouseLogDB() error {
+	ttlDays := clickHouseLogTTLDays()
+	if err := LOG_DB.Exec(clickHouseLogCreateTableSQL(ttlDays)).Error; err != nil {
+		return err
+	}
+	return syncClickHouseLogTTL(ttlDays)
+}
+
+func clickHouseLogTTLDays() int {
+	ttlDays := common.GetEnvOrDefault("LOG_SQL_CLICKHOUSE_TTL_DAYS", 0)
+	if ttlDays < 0 {
+		return 0
+	}
+	return ttlDays
+}
+
+func clickHouseLogTTLExpression(ttlDays int) string {
+	if ttlDays <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("toDateTime(created_at) + INTERVAL %d DAY DELETE", ttlDays)
+}
+
+func clickHouseLogTTLClause(ttlDays int) string {
+	expression := clickHouseLogTTLExpression(ttlDays)
+	if expression == "" {
+		return ""
+	}
+	return "\nTTL " + expression
+}
+
+func clickHouseLogCreateTableSQL(ttlDays int) string {
+	return fmt.Sprintf(`
+CREATE TABLE IF NOT EXISTS logs (
+	id Int64 DEFAULT 0,
+	user_id Int32 DEFAULT 0,
+	created_at Int64 DEFAULT 0,
+	type Int32 DEFAULT 0,
+	content String DEFAULT '',
+	username String DEFAULT '',
+	token_name String DEFAULT '',
+	model_name String DEFAULT '',
+	quota Int32 DEFAULT 0,
+	prompt_tokens Int32 DEFAULT 0,
+	completion_tokens Int32 DEFAULT 0,
+	use_time Int32 DEFAULT 0,
+	is_stream UInt8 DEFAULT 0,
+	channel_id Int32 DEFAULT 0,
+	token_id Int32 DEFAULT 0,
+	`+"`group`"+` String DEFAULT '',
+	ip String DEFAULT '',
+	request_id String DEFAULT '',
+	upstream_request_id String DEFAULT '',
+	other String DEFAULT ''
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(toDateTime(created_at))
+ORDER BY (created_at, request_id)%s`, clickHouseLogTTLClause(ttlDays))
+}
+
+func syncClickHouseLogTTL(ttlDays int) error {
+	expression := clickHouseLogTTLExpression(ttlDays)
+	if expression != "" {
+		return LOG_DB.Exec("ALTER TABLE logs MODIFY TTL " + expression).Error
+	}
+
+	hasTTL, err := clickHouseLogTableHasTTL()
+	if err != nil {
+		return err
+	}
+	if !hasTTL {
+		return nil
+	}
+	return LOG_DB.Exec("ALTER TABLE logs REMOVE TTL").Error
+}
+
+func clickHouseLogTableHasTTL() (bool, error) {
+	var createTableSQL string
+	if err := LOG_DB.Raw("SHOW CREATE TABLE logs").Scan(&createTableSQL).Error; err != nil {
+		return false, err
+	}
+	return clickHouseCreateTableHasTTL(createTableSQL), nil
+}
+
+func clickHouseCreateTableHasTTL(createTableSQL string) bool {
+	upperSQL := strings.ToUpper(createTableSQL)
+	return strings.Contains(upperSQL, "\nTTL ") || strings.Contains(upperSQL, " TTL ")
 }
 
 type sqliteColumnDef struct {
@@ -424,7 +523,7 @@ type sqliteColumnDef struct {
 }
 
 func ensureSubscriptionPlanTableSQLite() error {
-	if !common.UsingSQLite {
+	if !common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		return nil
 	}
 	tableName := "subscription_plans"
@@ -506,7 +605,7 @@ PRIMARY KEY (` + "`id`" + `)
 // This is safe to run multiple times - it checks the column type first
 func migrateTokenModelLimitsToText() error {
 	// SQLite uses type affinity, so TEXT and VARCHAR are effectively the same — no migration needed
-	if common.UsingSQLite {
+	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		return nil
 	}
 
@@ -522,7 +621,7 @@ func migrateTokenModelLimitsToText() error {
 	}
 
 	var alterSQL string
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		var dataType string
 		if err := DB.Raw(`SELECT data_type FROM information_schema.columns
 			WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
@@ -532,7 +631,7 @@ func migrateTokenModelLimitsToText() error {
 			return nil
 		}
 		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE text`, tableName, columnName)
-	} else if common.UsingMySQL {
+	} else if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
 		var columnType string
 		if err := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
 				WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
@@ -560,7 +659,7 @@ func migrateTokenModelLimitsToText() error {
 func migrateSubscriptionPlanPriceAmount() {
 	// SQLite doesn't support ALTER COLUMN, and its type affinity handles this automatically
 	// Skip early to avoid GORM parsing the existing table DDL which may cause issues
-	if common.UsingSQLite {
+	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		return
 	}
 
@@ -578,7 +677,7 @@ func migrateSubscriptionPlanPriceAmount() {
 	}
 
 	var alterSQL string
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		// PostgreSQL: Check if already decimal/numeric
 		var dataType string
 		if err := DB.Raw(`SELECT data_type FROM information_schema.columns
@@ -590,7 +689,7 @@ func migrateSubscriptionPlanPriceAmount() {
 		}
 		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE decimal(10,6) USING %s::decimal(10,6)`,
 			tableName, columnName, columnName)
-	} else if common.UsingMySQL {
+	} else if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
 		// MySQL: Check if already decimal
 		var columnType string
 		if err := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
@@ -617,7 +716,7 @@ func migrateSubscriptionPlanPriceAmount() {
 
 // migrateTaskIDColumnLength 将 tasks.task_id 从 varchar(191) 扩为 varchar(512)，以支持 Veo/Vertex 的 base64 operation name
 func migrateTaskIDColumnLength() {
-	if common.UsingSQLite {
+	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		return // SQLite 不强制 varchar 长度，新表由 AutoMigrate 建为 512
 	}
 	tableName := "tasks"
@@ -629,9 +728,9 @@ func migrateTaskIDColumnLength() {
 		return
 	}
 	var alterSQL string
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE varchar(512)`, tableName, columnName)
-	} else if common.UsingMySQL {
+	} else if common.UsingMainDatabase(common.DatabaseTypeMySQL) {
 		// 保持原索引，仅扩展长度
 		alterSQL = fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` varchar(512) NOT NULL DEFAULT ''", tableName, columnName)
 	} else {
@@ -647,7 +746,7 @@ func migrateTaskIDColumnLength() {
 // migrateLogRequestIdColumnLength 将 logs.request_id 从 varchar(64) 扩为 varchar(512)，
 // 以支持 Vertex AI 视频任务的长 task_id（作为 request_id 记录日志）
 func migrateLogRequestIdColumnLength() {
-	if common.UsingSQLite {
+	if common.UsingLogDatabase(common.DatabaseTypeSQLite) {
 		return
 	}
 	tableName := "logs"
@@ -659,9 +758,9 @@ func migrateLogRequestIdColumnLength() {
 		return
 	}
 	var alterSQL string
-	if common.UsingPostgreSQL {
+	if common.UsingLogDatabase(common.DatabaseTypePostgreSQL) {
 		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE varchar(512)`, tableName, columnName)
-	} else if common.UsingMySQL {
+	} else if common.UsingLogDatabase(common.DatabaseTypeMySQL) {
 		alterSQL = fmt.Sprintf("ALTER TABLE `%s` MODIFY COLUMN `%s` varchar(512) NOT NULL DEFAULT ''", tableName, columnName)
 	} else {
 		return

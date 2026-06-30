@@ -84,7 +84,7 @@ func InitEnv() {
 	IsMasterNode = os.Getenv("NODE_TYPE") != "slave"
 	RuoYiAuthEnabled = GetEnvOrDefaultBool("RUOYI_AUTH_ENABLED", false)
 	RuoYiJWTSecret = GetEnvOrDefaultString("RUOYI_JWT_SECRET", "")
-	NodeName = os.Getenv("NODE_NAME")
+	initNodeNameIdentity()
 	TLSInsecureSkipVerify = GetEnvOrDefaultBool("TLS_INSECURE_SKIP_VERIFY", false)
 	if TLSInsecureSkipVerify {
 		if tr, ok := http.DefaultTransport.(*http.Transport); ok && tr != nil {
@@ -95,6 +95,8 @@ func InitEnv() {
 			}
 		}
 	}
+	SMTPStartTLSEnabled = GetEnvOrDefaultBool("SMTP_STARTTLS_ENABLE", GetEnvOrDefaultBool("SMTP_STARTTLS_ENABLED", false))
+	SMTPInsecureSkipVerify = GetEnvOrDefaultBool("SMTP_INSECURE_SKIP_VERIFY", GetEnvOrDefaultBool("SMTP_TLS_INSECURE_SKIP_VERIFY", false))
 
 	// Parse requestInterval and set RequestInterval
 	requestInterval, _ = strconv.Atoi(os.Getenv("POLLING_INTERVAL"))

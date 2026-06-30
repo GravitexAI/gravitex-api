@@ -23,13 +23,39 @@ func applyExplicitLogTextFilter(tx *gorm.DB, column string, value string) (*gorm
 		return tx, nil
 	}
 	if strings.Contains(value, "%") {
-		pattern, err := sanitizeLikePattern(value)
+		condition, pattern, err := buildLogLikeCondition(column, value)
 		if err != nil {
 			return nil, err
 		}
-		return tx.Where(column+" LIKE ? ESCAPE '!'", pattern), nil
+		return tx.Where(condition, pattern), nil
 	}
 	return tx.Where(column+" = ?", value), nil
+}
+
+func buildLogLikeCondition(column string, value string) (string, string, error) {
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		pattern, err := sanitizeClickHouseLikePattern(value)
+		if err != nil {
+			return "", "", err
+		}
+		return column + " LIKE ?", pattern, nil
+	}
+
+	pattern, err := sanitizeLikePattern(value)
+	if err != nil {
+		return "", "", err
+	}
+	return column + " LIKE ? ESCAPE '!'", pattern, nil
+}
+
+func sanitizeClickHouseLikePattern(input string) (string, error) {
+	input = strings.ReplaceAll(input, `\`, `\\`)
+	input = strings.ReplaceAll(input, `_`, `\_`)
+
+	if err := validateLikePattern(input); err != nil {
+		return "", err
+	}
+	return input, nil
 }
 
 type Log struct {
@@ -107,8 +133,15 @@ var logTypeNames = map[int]string{
 	LogTypeLogin:     "login",
 }
 
+func ensureLogRequestId(log *Log) {
+	if log != nil && log.RequestId == "" {
+		log.RequestId = common.NewRequestId()
+	}
+}
+
 // CreateLog 统一的日志写入入口，写入 DB 并打印完整日志信息
 func CreateLog(log *Log) error {
+	ensureLogRequestId(log)
 	ensureQuotaStreamEventIDOnLog(log)
 	typeName := logTypeNames[log.Type]
 	if typeName == "" {
@@ -119,7 +152,7 @@ func CreateLog(log *Log) error {
 	// ClickHouse/ByteHouse：进缓冲区批量写入，不做单条 INSERT。
 	// id 由 ByteHouse 列 DEFAULT generateSnowflakeID() 服务端生成（雪花时间有序），
 	// 写入时在 LogBuffer.Flush 里 Omit("id") 忽略该列，保证 DEFAULT 生效。
-	if common.UsingClickHouse && GlobalLogBuffer != nil {
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) && GlobalLogBuffer != nil {
 		GlobalLogBuffer.Add(log)
 		return nil
 	}
@@ -128,6 +161,16 @@ func CreateLog(log *Log) error {
 		common.SysLog(fmt.Sprintf("[LogInsert] FAILED type=%s userId=%d err=%s", typeName, log.UserId, err.Error()))
 	}
 	return err
+}
+
+func clickHouseLogOrder(prefix string) string {
+	return prefix + "created_at desc, " + prefix + "request_id desc"
+}
+
+func assignDisplayLogIds(logs []*Log, startIdx int) {
+	for i := range logs {
+		logs[i].Id = startIdx + i + 1
+	}
 }
 
 func ensureQuotaStreamEventIDOnLog(log *Log) {
@@ -160,15 +203,15 @@ func formatUserLogs(logs []*Log, startIdx int) {
 			delete(otherMap, "official_video_price_per_second")
 		}
 		logs[i].Other = common.MapToJsonStr(otherMap)
-		logs[i].Id = startIdx + i + 1
 	}
+	assignDisplayLogIds(logs, startIdx)
 }
 
 // applyModelNameLike 按日志库方言追加 model_name 模糊匹配条件。
 // MySQL/SQLite/PG 使用 sanitizeLikePattern 产出的 ! 转义 + ESCAPE '!'；
 // ClickHouse/ByteHouse 的 LIKE 固定以反斜杠为转义符且不支持自定义 ESCAPE 子句，需转换为反斜杠转义。
 func applyModelNameLike(tx *gorm.DB, col string, sanitized string) *gorm.DB {
-	if common.UsingClickHouse {
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return tx.Where(col+" LIKE ?", clickhouseLikePattern(sanitized))
 	}
 	return tx.Where(col+" LIKE ? ESCAPE '!'", sanitized)
@@ -202,7 +245,11 @@ func clickhouseLikePattern(sanitized string) string {
 }
 
 func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
-	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order("id desc").Limit(common.MaxRecentItems).Find(&logs).Error
+	order := "id desc"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("")
+	}
+	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
 	formatUserLogs(logs, 0)
 	return logs, err
 }
@@ -305,14 +352,14 @@ func RecordLoginLog(userId int, username string, content string, ip string, acti
 		Ip:        ip,
 		Other:     common.MapToJsonStr(other),
 	}
-	if err := LOG_DB.Create(log).Error; err != nil {
+	if err := CreateLog(log); err != nil {
 		common.SysLog("failed to record login log: " + err.Error())
 	}
 }
 
 // RecordOperationAuditLog 记录管理/高危操作审计日志（type=LogTypeManage）。
-// logUserId 为日志归属者（面向用户的操作如额度调整归属目标用户，资源类操作如渠道/系统设置归属操作者），
-// username 内部按 logUserId 查询。content 为英文兜底文本（导出/经典前端用）。
+// logUserId 为日志归属者，管理审计日志应归属实际操作者；目标资源/用户放入
+// action params。username 内部按 logUserId 查询。content 为英文兜底文本（导出/经典前端用）。
 // action+params 写入 Other.op，供前端本地化渲染（普通用户可见，不含敏感信息）。
 // adminInfo 存放操作者身份（写入 Other.admin_info，普通用户查询时剥离）；
 // auditInfo 存放路由/方法/结果等中间件兜底信息（写入 Other.audit_info，普通用户查询时剥离）。
@@ -336,7 +383,7 @@ func RecordOperationAuditLog(logUserId int, content string, ip string, action st
 		Ip:        ip,
 		Other:     common.MapToJsonStr(other),
 	}
-	if err := LOG_DB.Create(log).Error; err != nil {
+	if err := CreateLog(log); err != nil {
 		common.SysLog("failed to record operation audit log: " + err.Error())
 	}
 }
@@ -543,6 +590,7 @@ type RecordTaskBillingLogParams struct {
 	TokenId   int
 	Group     string
 	Other     map[string]interface{}
+	NodeName  string // 任务发起节点；为空时回退当前节点
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
@@ -580,6 +628,10 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		QueueConsumeLogToQuotaStream(log, "record_task_billing_log")
 	}
 	if params.LogType == LogTypeConsume && common.DataExportEnabled {
+		nodeName := params.NodeName
+		if nodeName == "" {
+			nodeName = common.NodeName
+		}
 		gopool.Go(func() {
 			LogQuotaData(QuotaDataLogParams{
 				UserID:    params.UserId,
@@ -590,7 +642,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 				UseGroup:  params.Group,
 				TokenID:   params.TokenId,
 				ChannelID: params.ChannelId,
-				NodeName:  common.NodeName,
+				NodeName:  nodeName,
 			})
 		})
 	}
@@ -635,9 +687,16 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	if err != nil {
 		return nil, 0, err
 	}
-	err = tx.Order("logs.created_at desc, logs.id desc").Limit(num).Offset(startIdx).Find(&logs).Error
+	order := "logs.created_at desc, logs.id desc"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("logs.")
+	}
+	err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error
 	if err != nil {
 		return nil, 0, err
+	}
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		assignDisplayLogIds(logs, startIdx)
 	}
 
 	channelIds := types.NewSet[int]()
@@ -723,7 +782,11 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 		common.SysError("failed to count user logs: " + err.Error())
 		return nil, 0, errors.New("查询日志失败")
 	}
-	err = tx.Order("logs.id desc").Limit(num).Offset(startIdx).Find(&logs).Error
+	order := "logs.id desc"
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		order = clickHouseLogOrder("logs.")
+	}
+	err = tx.Order(order).Limit(num).Offset(startIdx).Find(&logs).Error
 	if err != nil {
 		common.SysError("failed to search user logs: " + err.Error())
 		return nil, 0, errors.New("查询日志失败")
@@ -740,10 +803,10 @@ type Stat struct {
 }
 
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota),0) quota")
+	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota")
 
 	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens),0) + COALESCE(sum(completion_tokens),0) tpm")
+	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
 
 	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
 		return stat, err
@@ -807,7 +870,7 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 }
 
 func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {
-	tx := LOG_DB.Table("logs").Select("COALESCE(sum(prompt_tokens),0) + COALESCE(sum(completion_tokens),0)")
+	tx := LOG_DB.Table("logs").Select("COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0)")
 	if username != "" {
 		tx = tx.Where("username = ?", username)
 	}
@@ -827,10 +890,57 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	return token
 }
 
+func CountOldLog(ctx context.Context, targetTimestamp int64) (int64, error) {
+	var total int64
+	if err := LOG_DB.WithContext(ctx).Model(&Log{}).Where("created_at < ?", targetTimestamp).Count(&total).Error; err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if nil != ctx.Err() {
+		return 0, ctx.Err()
+	}
+
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		// ClickHouse DELETE is a heavy mutation that rewrites data parts, so
+		// per-batch mutations would be pathologically slow. Remove all matching
+		// rows in a single synchronous mutation regardless of limit; the reported
+		// count lets the caller's progress loop complete in one pass.
+		total, err := CountOldLog(ctx, targetTimestamp)
+		if err != nil {
+			return 0, err
+		}
+		if total == 0 {
+			return 0, nil
+		}
+		if err := LOG_DB.WithContext(ctx).Exec(
+			"ALTER TABLE logs DELETE WHERE created_at < ? SETTINGS mutations_sync = 1",
+			targetTimestamp,
+		).Error; err != nil {
+			return 0, err
+		}
+		return total, nil
+	}
+
+	result := LOG_DB.WithContext(ctx).Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&Log{})
+	if nil != result.Error {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
+}
+
 func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
 	// ByteHouse(CnchMergeTree) 不支持行级 DELETE，计费日志不可变，直接拒绝
-	if common.UsingClickHouse {
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return 0, errors.New("ByteHouse 不支持删除日志操作（CnchMergeTree 引擎不支持行级 DELETE）")
+	}
+	if limit <= 0 {
+		limit = 100
 	}
 
 	var total int64 = 0
@@ -840,14 +950,14 @@ func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64,
 			return total, ctx.Err()
 		}
 
-		result := LOG_DB.Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&Log{})
-		if nil != result.Error {
-			return total, result.Error
+		rowsAffected, err := DeleteOldLogBatch(ctx, targetTimestamp, limit)
+		if nil != err {
+			return total, err
 		}
 
-		total += result.RowsAffected
+		total += rowsAffected
 
-		if result.RowsAffected < int64(limit) {
+		if rowsAffected < int64(limit) {
 			break
 		}
 	}
