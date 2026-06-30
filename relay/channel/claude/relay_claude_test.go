@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -30,7 +31,7 @@ func TestFormatClaudeResponseInfo_MessageStart(t *testing.T) {
 		},
 	}
 
-	ok := FormatClaudeResponseInfo(claudeResponse, nil, claudeInfo)
+	ok := FormatClaudeResponseInfo(nil, claudeResponse, nil, claudeInfo)
 	if !ok {
 		t.Fatal("expected true")
 	}
@@ -75,7 +76,7 @@ func TestFormatClaudeResponseInfo_MessageDelta_FullUsage(t *testing.T) {
 		},
 	}
 
-	ok := FormatClaudeResponseInfo(claudeResponse, nil, claudeInfo)
+	ok := FormatClaudeResponseInfo(nil, claudeResponse, nil, claudeInfo)
 	if !ok {
 		t.Fatal("expected true")
 	}
@@ -117,7 +118,7 @@ func TestFormatClaudeResponseInfo_MessageDelta_OnlyOutputTokens(t *testing.T) {
 		},
 	}
 
-	ok := FormatClaudeResponseInfo(claudeResponse, nil, claudeInfo)
+	ok := FormatClaudeResponseInfo(nil, claudeResponse, nil, claudeInfo)
 	if !ok {
 		t.Fatal("expected true")
 	}
@@ -151,7 +152,7 @@ func TestFormatClaudeResponseInfo_MessageDelta_OnlyOutputTokens(t *testing.T) {
 
 func TestFormatClaudeResponseInfo_NilClaudeInfo(t *testing.T) {
 	claudeResponse := &dto.ClaudeResponse{Type: "message_start"}
-	ok := FormatClaudeResponseInfo(claudeResponse, nil, nil)
+	ok := FormatClaudeResponseInfo(nil, claudeResponse, nil, nil)
 	if ok {
 		t.Error("expected false for nil claudeInfo")
 	}
@@ -170,7 +171,7 @@ func TestFormatClaudeResponseInfo_ContentBlockDelta(t *testing.T) {
 		},
 	}
 
-	ok := FormatClaudeResponseInfo(claudeResponse, nil, claudeInfo)
+	ok := FormatClaudeResponseInfo(nil, claudeResponse, nil, claudeInfo)
 	if !ok {
 		t.Fatal("expected true")
 	}
