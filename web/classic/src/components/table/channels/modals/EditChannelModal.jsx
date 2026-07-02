@@ -200,6 +200,11 @@ const EditChannelModal = (props) => {
     vertex_key_type: 'json',
     // 仅 AWS: 密钥格式和区域（存入 settings.aws_key_type 和 settings.aws_region）
     aws_key_type: 'ak_sk',
+    // BytePlus Asset API 配置（存入 settings）
+    byteplus_asset_ak: '',
+    byteplus_asset_sk: '',
+    byteplus_asset_region: 'ap-southeast-1',
+    byteplus_asset_project_name: 'default',
     // 企业账户设置
     is_enterprise_account: false,
     // 字段透传控制默认值
@@ -898,6 +903,11 @@ const EditChannelModal = (props) => {
           data.vertex_key_type = parsedSettings.vertex_key_type || 'json';
           // 读取 AWS 密钥格式和区域
           data.aws_key_type = parsedSettings.aws_key_type || 'ak_sk';
+          // 读取 BytePlus Asset 配置
+          data.byteplus_asset_ak = parsedSettings.byteplus_asset_ak || '';
+          data.byteplus_asset_sk = parsedSettings.byteplus_asset_sk || '';
+          data.byteplus_asset_region = parsedSettings.byteplus_asset_region || 'ap-southeast-1';
+          data.byteplus_asset_project_name = parsedSettings.byteplus_asset_project_name || 'default';
           // 读取企业账户设置
           data.is_enterprise_account =
             parsedSettings.openrouter_enterprise === true;
@@ -934,6 +944,10 @@ const EditChannelModal = (props) => {
           data.region = '';
           data.vertex_key_type = 'json';
           data.aws_key_type = 'ak_sk';
+          data.byteplus_asset_ak = '';
+          data.byteplus_asset_sk = '';
+          data.byteplus_asset_region = 'ap-southeast-1';
+          data.byteplus_asset_project_name = 'default';
           data.is_enterprise_account = false;
           data.allow_service_tier = false;
           data.disable_store = false;
@@ -952,6 +966,10 @@ const EditChannelModal = (props) => {
         // 兼容历史数据：老渠道没有 settings 时，默认按 json 展示
         data.vertex_key_type = 'json';
         data.aws_key_type = 'ak_sk';
+        data.byteplus_asset_ak = '';
+        data.byteplus_asset_sk = '';
+        data.byteplus_asset_region = 'ap-southeast-1';
+        data.byteplus_asset_project_name = 'default';
         data.is_enterprise_account = false;
         data.allow_service_tier = false;
         data.disable_store = false;
@@ -1774,6 +1792,14 @@ const EditChannelModal = (props) => {
       settings.aws_key_type = localInputs.aws_key_type || 'ak_sk';
     }
 
+    // type === 54 (DoubaoVideo): 保存 BytePlus Asset 配置到 settings
+    if (localInputs.type === 54) {
+      if (localInputs.byteplus_asset_ak) settings.byteplus_asset_ak = localInputs.byteplus_asset_ak;
+      if (localInputs.byteplus_asset_sk) settings.byteplus_asset_sk = localInputs.byteplus_asset_sk;
+      if (localInputs.byteplus_asset_region) settings.byteplus_asset_region = localInputs.byteplus_asset_region;
+      if (localInputs.byteplus_asset_project_name) settings.byteplus_asset_project_name = localInputs.byteplus_asset_project_name;
+    }
+
     // type === 41 (Vertex): 始终保存 vertex_key_type 到 settings，避免编辑时被重置
     if (localInputs.type === 41) {
       settings.vertex_key_type = localInputs.vertex_key_type || 'json';
@@ -1836,6 +1862,11 @@ const EditChannelModal = (props) => {
     delete localInputs.vertex_key_type;
     // 顶层的 aws_key_type 不应发送给后端
     delete localInputs.aws_key_type;
+    // 顶层的 BytePlus Asset 配置不应发送给后端
+    delete localInputs.byteplus_asset_ak;
+    delete localInputs.byteplus_asset_sk;
+    delete localInputs.byteplus_asset_region;
+    delete localInputs.byteplus_asset_project_name;
     // 清理字段透传控制的临时字段
     delete localInputs.allow_service_tier;
     delete localInputs.disable_store;
@@ -2724,6 +2755,58 @@ const EditChannelModal = (props) => {
                             : t('JSON 模式支持手动输入或上传服务账号 JSON')
                         }
                       />
+                    )}
+                    {inputs.type === 54 && (
+                      <>
+                        <div className='mt-4 mb-2 text-sm font-medium text-gray-700'>
+                          {t('BytePlus 素材库配置')}
+                        </div>
+                        <Form.Input
+                          field='byteplus_asset_ak'
+                          label='Access Key'
+                          placeholder={t('BytePlus Access Key')}
+                          onChange={(value) =>
+                            handleChannelOtherSettingsChange('byteplus_asset_ak', value)
+                          }
+                          showClear
+                          extraText={t('BytePlus/火山引擎 Access Key，用于素材库 API 鉴权')}
+                        />
+                        <Form.Input
+                          field='byteplus_asset_sk'
+                          label='Secret Key'
+                          placeholder={t('BytePlus Secret Key')}
+                          mode='password'
+                          onChange={(value) =>
+                            handleChannelOtherSettingsChange('byteplus_asset_sk', value)
+                          }
+                          showClear
+                          extraText={t('BytePlus/火山引擎 Secret Key')}
+                        />
+                        <Form.Select
+                          field='byteplus_asset_region'
+                          label={t('Region')}
+                          optionList={[
+                            { label: 'ap-southeast-1', value: 'ap-southeast-1' },
+                            { label: 'cn-north-1', value: 'cn-north-1' },
+                          ]}
+                          style={{ width: '100%' }}
+                          value={inputs.byteplus_asset_region || 'ap-southeast-1'}
+                          onChange={(value) =>
+                            handleChannelOtherSettingsChange('byteplus_asset_region', value)
+                          }
+                          extraText={t('素材库 API 区域，海外选 ap-southeast-1，国内选 cn-north-1')}
+                        />
+                        <Form.Input
+                          field='byteplus_asset_project_name'
+                          label={t('Project Name')}
+                          placeholder='default'
+                          onChange={(value) =>
+                            handleChannelOtherSettingsChange('byteplus_asset_project_name', value)
+                          }
+                          showClear
+                          extraText={t('BytePlus 项目名称，默认 default')}
+                        />
+                      </>
                     )}
                     {batch ? (
                       inputs.type === 41 &&

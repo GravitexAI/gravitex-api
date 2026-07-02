@@ -28,8 +28,8 @@ func InitRedisClient() (err error) {
 		return nil
 	}
 	if os.Getenv("SYNC_FREQUENCY") == "" {
-		SysLog("SYNC_FREQUENCY not set, use default value 60")
-		SyncFrequency = 60
+		SysLog("SYNC_FREQUENCY not set, use default value 30")
+		SyncFrequency = 30
 	}
 	SysLog("Redis is enabled")
 	opt, err := redis.ParseURL(os.Getenv("REDIS_CONN_STRING"))

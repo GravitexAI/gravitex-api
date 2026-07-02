@@ -1353,6 +1353,18 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeResponse.Delta != nil && claudeResponse.Delta.StopReason != nil {
 		maybeMarkClaudeRefusal(c, *claudeResponse.Delta.StopReason)
 	}
+	// 与非流式 HandleClaudeResponseData 对齐:把 server_tool_use.web_search_requests 写入
+	// ctx,供 PostTextConsumeQuota 计算 Claude 内置工具调用 surcharge。流式下 server_tool_use
+	// 可能挂在 message_start.message.usage 或 message_delta.usage,两种事件都需要捕获。
+	if claudeResponse.Usage != nil && claudeResponse.Usage.ServerToolUse != nil &&
+		claudeResponse.Usage.ServerToolUse.WebSearchRequests > 0 {
+		c.Set("claude_web_search_requests", claudeResponse.Usage.ServerToolUse.WebSearchRequests)
+	}
+	if claudeResponse.Message != nil && claudeResponse.Message.Usage != nil &&
+		claudeResponse.Message.Usage.ServerToolUse != nil &&
+		claudeResponse.Message.Usage.ServerToolUse.WebSearchRequests > 0 {
+		c.Set("claude_web_search_requests", claudeResponse.Message.Usage.ServerToolUse.WebSearchRequests)
+	}
 	if info.RelayFormat == types.RelayFormatClaude {
 		FormatClaudeResponseInfo(info, &claudeResponse, nil, claudeInfo)
 
