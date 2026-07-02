@@ -1,0 +1,273 @@
+# main-alpha 独有功能清单（防丢清单）
+
+> **⚠️ 每次合并 origin/main 前必读、合完必核对。**
+>
+> 这里记录 main-alpha 相对官方 main 独有的功能和改动。合并 main 时，官方的 merge 冲突/silent overwrite 都可能把这些东西改没，导致生产环境功能回归。
+>
+> 每次发现新的 main-alpha 独有点，都补到这里。
+
+---
+
+## 一、渠道相关
+
+### 1.1 豆包视频渠道 BytePlus 素材库 AK/SK 配置
+- **位置**：web/classic 渠道编辑页面 + web/default 渠道抽屉
+- **字段**：`ChannelOtherSettings.ByteplusAssetAK/SK/Region/ProjectName`（`dto/channel_settings.go`）
+- **相关 API 路由**：`/api/asset-admin/*`（BytePlus 素材库管理，见 `router/api-router.go` 的 `assetAdminRoute`）
+- **用途**：豆包视频生成前需要把参考图/参考视频上传到 BytePlus 素材库，用 AK/SK 鉴权而不是 Bearer API Key
+- **另有**：`EnableModerationQuery` 字段 — 是否启用 BytePlus GetModerationResult API 白名单查询
+
+### 1.2 Channel.cost_discount 字段（成本折扣）
+- **位置**：`model/channel.go` 的 `CostDiscount *float64`
+- **用途**：单渠道成本折扣覆盖全局倍率
+- **注意点**：`controller/channel.go UpdateChannel` 中有一段"GORM Updates() 跳过 nil 指针字段，因此当用户清除 cost_discount 时需要显式置 NULL"的特殊处理，合并时不能删
+- **另有**：`controller/channel_authz.go` 的 `channelNonSensitiveFields` 必须包含 `"cost_discount"`，否则 `TestChannelFieldsAreClassified` 会失败
+
+### 1.3 Claude 三渠道 anthropic-beta header 白名单
+- **位置**：`relay/channel/claude/beta_filter.go` + `relay-claude.go` 的 `CommonClaudeHeadersOperation` / `applyHeaderOverrideToRequest`
+- **原因**：Vertex/Bedrock/Anthropic 三个渠道对 anthropic-beta header 的支持有差异，Vertex 会因 `advisor-tool-*`、`prompt-caching-scope-*` 等报错 400
+- **合并时注意**：`applyHeaderOverrideToRequest` 必须硬性跳过 `anthropic-beta`，由 `CommonClaudeHeadersOperation` 独家管控。任何 override/passthrough/wildcard 路径都不能绕过白名单
+
+### 1.4 AWS Claude 增强字段
+- **位置**：`relay/channel/aws/dto.go` 的 `AwsClaudeRequest`
+- **字段**：`Thinking`、`OutputConfig`、`context_management`
+- **合并时**：如果 body 字段过滤只清 anthropic-beta 不清这些绑定字段，Bedrock 会报错
+
+### 1.5 允许透传的 Claude 请求字段（channel-level 开关）
+- **位置**：`dto/channel_settings.go`
+- **字段**：`AllowInferenceGeo`（数据驻留）、`AllowSpeed`（推理速度模式）、`AllowSafetyIdentifier`、`DisableStore`、`AllowIncludeObfuscation`
+
+---
+
+## 二、用户 ID / Snowflake 精度处理
+
+### 2.1 User.Id、Log.Id、Log.UserId JSON 字符串化
+- **背景**：Go 后端的 User.Id 来自 Java 后端（RuoYi 系统），是 Snowflake 雪花 ID（19 位），超过 JS `Number.MAX_SAFE_INTEGER` (2^53 - 1)
+- **实现**：
+  - `model/user.go` — `func (u User) MarshalJSON()` 把 `Id` 输出为字符串
+  - `model/log.go` — `func (l Log) MarshalJSON()` 把 `Id` 和 `UserId` 都输出为字符串（ByteHouse 里 logs.id 也是 Snowflake）
+- **相关测试**：`model/log_marshal_test.go` — 回归保护
+- **合并时注意**：官方合并只有 `Id int`，MarshalJSON 别被删
+
+### 2.2 前端 user_id 类型兼容
+- **位置**：
+  - `web/default/src/features/profile/types.ts` — `UserProfile.id: number | string`
+  - `web/default/src/features/subscriptions/types.ts` / `usage-logs/types.ts` / `users/types.ts` / `dashboard/types.ts`
+  - `web/classic/src/components/table/users/modals/EditUserModal.jsx` — 不能对 userId 做 `parseInt`，直接透传字符串
+- **合并时注意**：官方前端会用 `number`，合并时保持 `number | string`
+
+### 2.3 common.Int64Flexible 类型
+- **位置**：`common/utils.go`
+- **用途**：接受 JSON 字符串或数字的 int64 字段（比如 Channel.Id 可能被前端以字符串形式发过来）
+- **⚠️ 注意**：`controller/channel.go UpdateChannel` 中我们已改回直接用 `PatchChannel + common.Unmarshal`，不再需要 Int64Flexible 转换。但 common.Int64Flexible 类型本身保留，其它地方可能还在用
+
+### 2.4 SumUsedQuota Row().Scan() 位置赋值
+- **位置**：`model/log.go` `SumUsedQuota` 函数
+- **背景**：GORM 的 `Scan(&struct)` 在 ByteHouse 下 column name 映射行为不一致，导致 stat.Quota 被 rpm/tpm 的二次 Scan 覆盖为 0
+- **实现**：改用 `tx.Row().Scan(&quotaSum)` 按 SQL 列位置直接赋值
+- **相关测试**：`model/sum_used_quota_test.go` — 回归保护
+
+---
+
+## 三、计费系统（按量 / 按秒 / 阶梯）
+
+### 3.1 gpt-image 系列图片计费
+- **支持路由**：`/v1/images/edits`、`/v1/images/generations`
+- **计费维度**：图片输入 tokens + 图片输出 tokens（`CompletionTokenDetails.ImageTokens`）
+- **位置**：`relay/channel/openai/adaptor.go` 及相关 dto
+- **关键**：gpt-image 系列强制走 multipart 路径（Azure 的 JSON 接口不接受 images 字符串数组），multipart 请求要写 `prompt/size/quality/n/input_fidelity` 5 个字段
+- **合并时注意**：`OpenAIResponse.output_tokens` 要填入 `CompletionTokenDetails.ImageTokens`，否则会按文本补全倍率计费
+
+### 3.2 视频按秒计费 / 按量计费
+- **位置**：`controller/task_video.go` 的 `handleVideoPerSecondBilling` / `handleVideoTokenRatioBilling`
+- **注入点**：`main.go` 里 `service.UpdateVideoTasksFn = controller.UpdateVideoTaskAll`（已由 main 的 SystemTaskRunner 接管，见 `system_task_handlers.go` 的 asyncTaskPollHandler，调用 `service.RunTaskPollingOnce`）
+- **视频回调 hook**：`relay.CompleteVideoTaskOnUpstreamSuccessFn` / `relay.MergeVideoTaskDataWithUpstreamResponseFn` — GET `/v1/videos` 收到上游终态时落库并计费，避免 Vertex 轮询仅返回 `{"name":"..."}` 时任务永不完成
+
+### 3.3 阶梯计费 / 表达式计费
+- **位置**：`pkg/billingexpr/` + `docs/功能更新/阶梯计费表达式使用指南.md`
+- **触发条件**：模型定价页面选择"阶梯计费"模式，填 `计费表达式`
+- **合并时注意**：整个 `pkg/billingexpr/expr.md` 是设计文档，改动要严格遵守
+
+### 3.4 音频计费 / seed 系列音频
+- **位置**：wpr 的 commit `f32225a4 seed-2-0-lite-260428 音频计费问题梳理`
+- **对应字段**：`Usage.AudioTokens` / `CompletionTokenDetails.AudioTokens`
+
+### 3.5 Claude 流式工具调用计费
+- **位置**：`relay/channel/claude/relay-claude.go HandleStreamResponseData` + `stream_server_tool_use_test.go`
+- **背景**：Claude 流式响应下 `server_tool_use.web_search_requests` 可能挂在 `message_start.message.usage` 或 `message_delta.usage`，两种事件都要捕获，写入 `c.Set("claude_web_search_requests", ...)`
+- **合并时注意**：这是 bingyu commit `14e1aa54` 的修复
+
+---
+
+## 四、classic 前端定价设置界面
+
+### 4.1 /console/setting?tab=ratio 模型定价手动编辑字段
+
+**位置**：`web/classic/src/pages/Setting/Ratio/`（`ModelRatioSettings.jsx` 等）
+
+**必须保留的字段清单**（官方合并时经常被删）：
+
+| 字段 | 说明 |
+|---|---|
+| 模型固定价格 | 每次请求固定收费 |
+| 模型倍率 | 全局输入倍率 |
+| 提示缓存倍率 | prompt caching read 倍率 |
+| 缓存创建倍率 | prompt caching create 倍率 |
+| 模型补全倍率 | 仅对自定义模型有效 |
+| 图片输入倍率 | 仅部分模型支持 |
+| 音频倍率 | 仅部分模型支持 |
+| 音频补全倍率 | 仅部分模型支持 |
+| 图片补全倍率 | 仅部分模型支持 |
+| 视频倍率 | 仅部分模型支持 |
+| 视频补全倍率 | 仅部分模型支持 |
+| 按张计费模型每张价格 | 单位美元 |
+| 按秒计费模型每秒价格 | 单位美元 |
+| 计费模式 | 阶梯计费开关 |
+| 计费表达式 | 阶梯计费公式 |
+
+**（清单待补充：主人如发现漏项请追加到这里。）**
+
+### 4.2 classic /console/setting?tab=ratio GroupRatioSettings 字段
+- 之前合并 main 时丢过 7 个字段，见 commit `19337350 恢复classic前端ratio设置丢失的视频按秒计费、阶梯计费等7个字段`
+- **合并后检查方式**：本地跑 `bun run dev`，进 classic 前端 → 系统设置 → 倍率设置，逐项对比字段是否齐全
+
+### 4.3 classic 用户/日志/订阅界面精度兼容
+- `EditUserModal.jsx` 不做 `parseInt(userId)`
+- Log 表的 render 用字符串 id 作为 React Table rowKey
+
+---
+
+## 五、中间件 / 环境变量 / 路由
+
+### 5.1 RestrictAPIDomains 中间件
+- **位置**：`middleware/restrict_api_domain.go` + `main.go` 里 `server.Use(...)` 注入
+- **默认值**：`api.gravitex.cn,api.gravitex.ai,api.tennda.ai`（拿不到 `API_ONLY_DOMAINS` 环境变量时兜底）
+- **行为**：这些域名只放行 `/api/*`、`/v1/*` 等 API 路径，其它路径返回空 HTML（关闭前端界面）
+- **配套**：`docs/nginx/nginx65.conf` 已拆分 api 域名 server 块
+- **合并时注意**：合并 main 前后要检查 `main.go` 中间件顺序，`RestrictAPIDomains` 一般在 CORS 之后
+
+### 5.2 BytePlus asset admin 路由
+- **位置**：`router/api-router.go` 的 `assetAdminRoute`
+- **路径**：`/api/asset-admin/groups`、`/api/asset-admin/assets`、`/api/asset-admin/byteplus/*`
+- **合并时注意**：官方合并把 channel 路由抽成了 `registerChannelRoutes(apiRouter)`；`assetAdminRoute` 是 main-alpha 独有，必须**独立保留**，紧跟 `registerChannelRoutes/registerAuthzRoutes` 之后
+
+### 5.3 RuoYi JWT 认证
+- **环境变量**：`RUOYI_AUTH_ENABLED`、`RUOYI_JWT_SECRET`
+- **位置**：`common/init.go` 读取环境变量，`middleware/auth.go` 中验证 JWT
+- **用途**：接受 Java 后端（RuoYi-Plus）发的 JWT token，实现 Java ↔ Go 双向 SSO
+
+### 5.4 MYSQL_PREPARE_STMT 环境变量
+- **位置**：`model/main.go chooseDB`
+- **默认值**：`false`（官方默认 true）
+- **原因**：MySQL 在高并发下 MaxOpenConns × unique_queries > 16382 会超 `max_prepared_stmt_count`，禁用 PrepareStmt 是安全默认
+- **合并时注意**：官方总想改成 true，必须坚守 false
+
+### 5.5 QuotaDataStream Redis Stream 配额数据流
+- **环境变量**：`QUOTA_DATA_STREAM_ENABLED`（默认 true）、`QUOTA_DATA_STREAM_CONSUMER_COUNT`、`QUOTA_DATA_STREAM_BATCH_SIZE` 等
+- **入口**：`model/StartQuotaDataStreamWorkers()`（在 `main.go` 里注入）
+- **fallback**：`QUOTA_DATA_STREAM_ENABLED=false` 时回落到 `model.UpdateQuotaData()`
+- **合并时注意**：`ensureQuotaStreamEventIDOnLog(log)` 是 `CreateLog` 里的必要步骤，会给 consume log 加 quota_stream_event_id
+
+### 5.6 StartTaskClearTask
+- **位置**：`service/` 里的 `StartTaskClearTask`
+- **用途**：清理 tasks 表里过期的 `fail_reason` payloads
+- **合并时注意**：`main.go` 里必须调用 `service.StartTaskClearTask()`
+
+---
+
+## 六、数据库 schema
+
+### 6.1 ByteHouse(CnchMergeTree) 作为日志库
+- **DSN 前缀**：`clickhouse://`
+- **建表**：**手动执行 `docs/bytehouse_logs.sql`**，Go 端 `migrateLOGDB` 跳过 AutoMigrate（ByteHouse 不支持 `ENGINE = MergeTree()`，必须用 CnchMergeTree）
+- **合并时注意**：官方 `migrateClickHouseLogDB` 里用 MergeTree 建表，在 ByteHouse 上会失败，所以 `migrateLOGDB` 入口就 skip
+- **DELETE 拒绝**：`model/log.go DeleteOldLog` 对 ClickHouse 直接返回 error（"ByteHouse 不支持删除日志操作"）
+
+### 6.2 varchar 长度扩展迁移
+- **函数**：`model/main.go` 的 `migrateTaskIDColumnLength` / `migrateLogRequestIdColumnLength`
+- **迁移**：`tasks.task_id` varchar(191) → 512（Veo/Vertex base64 operation name）；`logs.request_id` varchar(64) → 512
+- **仅对 MySQL/PostgreSQL 生效**，SQLite 不强制 varchar 长度
+
+### 6.3 User.Group 列宽 varchar(64)
+- 上次合并按主人指示接受 main 的 64（原来 256）
+- **不要**回改为 256
+
+### 6.4 与 Java 后端共享表
+- **共享表**：users、tokens、logs、channels、abilities
+- **不直接 HTTP 调用**，通过 MySQL 表协作
+- **合并时注意**：修改这些表的字段/索引前，要考虑 Java 后端（Gravitex-API-End 项目）是否也要同步
+
+---
+
+## 七、Log 表相关
+
+### 7.1 LogType 常量扩展
+- **位置**：`model/log.go`
+- **main-alpha 独有**：`LogTypeRetryFail = 7`（"重试"）、`LogTypeTest = 8`（测试）
+- **官方**：`LogTypeLogin = 7`
+- **实际映射**：main-alpha 把 `LogTypeLogin` 挪到 9，避免和 RetryFail 冲突
+- **合并时注意**：官方引入新 LogType 常量时要重新编号避免冲突
+
+### 7.2 Log content 面向用户 + 英文
+- **位置**：`model/log.go` `formatUserLogs`
+- **原则**：Content 在 Expenses 页直接渲染给用户看，用自然英文句子、不重复字段、不暴露内部概念
+- **删除的 admin-only 字段**：`admin_info`、`audit_info`、`reject_reason`、`stream_status`、`official_quota`、`official_video_price_per_second`
+
+### 7.3 GetTimeString 用 UTC+8 时区
+- **位置**：`common/utils.go`
+- **官方**：`time.Now().UTC()`
+- **main-alpha**：`time.Now().In(time.FixedZone("UTC+8", 8*60*60))`
+- **合并时注意**：不要被 main 改回 UTC
+
+---
+
+## 八、依赖包
+
+| 依赖 | 版本 | 用途 |
+|---|---|---|
+| `github.com/byteplus-sdk/byteplus-go-sdk-v2` | v1.0.59 | BytePlus 素材库 |
+| `gorm.io/driver/clickhouse` | v0.7.0 | ByteHouse/ClickHouse 日志库 |
+| `gorm.io/driver/mysql` | v1.6.0 | (main-alpha 版本更新) |
+| `gorm.io/gorm` | v1.30.0 | (main-alpha 版本更新) |
+
+---
+
+## 九、合并 main 时的检查清单（每次必做）
+
+- [ ] `model/user.go` 的 `MarshalJSON` 还在，Id 输出为 string
+- [ ] `model/log.go` 的 `MarshalJSON` 还在，Id + UserId 都输出为 string
+- [ ] `model/log.go` 的 `SumUsedQuota` 用 `Row().Scan()`，不用 `Scan(&stat)`
+- [ ] `main.go` 里 `service.StartTaskClearTask()` 还在
+- [ ] `main.go` 里 `relay.CompleteVideoTaskOnUpstreamSuccessFn`、`relay.MergeVideoTaskDataWithUpstreamResponseFn` 注入还在
+- [ ] `router/api-router.go` 里 `assetAdminRoute` 还在
+- [ ] `middleware/restrict_api_domain.go` 还在，且 `main.go` server.Use 里挂载
+- [ ] `common/init.go` 里 `RuoYiAuthEnabled`、`RuoYiJWTSecret`、`QUOTA_DATA_STREAM_*` 环境变量读取还在
+- [ ] `model/main.go chooseDB` MySQL 分支用 `MYSQL_PREPARE_STMT` env，默认 false
+- [ ] `model/main.go migrateLOGDB` 对 ClickHouse skip AutoMigrate
+- [ ] `dto/channel_settings.go` 的 `ByteplusAssetAK/SK/Region/ProjectName` / `EnableModerationQuery` / `AzureModelApiVersions` 还在
+- [ ] `controller/channel_authz.go` 的 `channelNonSensitiveFields` 包含 `"cost_discount"`
+- [ ] `common/utils.go GetTimeString` 用 UTC+8
+- [ ] web/classic 前端 `/console/setting?tab=ratio` 界面所有 15 个字段（见 4.1）
+- [ ] `model/log.go` 的 `LogTypeRetryFail=7`、`LogTypeTest=8`、`LogTypeLogin=9`（编号别被官方覆盖）
+- [ ] Go build 通过
+- [ ] `go test ./model/... ./relay/channel/claude/...` 关键回归通过：
+  - `TestSumUsedQuotaDoesNotResetQuotaByRpmTpmScan`
+  - `TestLogMarshalJSONIDsAreString`
+  - `TestFormatClaudeResponseInfo_*`
+  - `TestStreamServerToolUse*`
+- [ ] （如涉及）前端 `bun run build` 通过
+
+---
+
+## 十、未列举 / 待补充
+
+主人明确说过"有些我也忘记了没有列举出来"。每次合并中如果发现新的 main-alpha 独有点被覆盖了，都要补到这个文档。补充方式：
+
+1. 在对应的一级章节下新增小节
+2. 或在下面这个「新增记录」表里先粗略记，后续再整理
+
+### 新增记录（草稿区）
+
+| 日期 | 发现点 | 位置 | 说明 |
+|---|---|---|---|
+| _(留空待补)_ | | | |
