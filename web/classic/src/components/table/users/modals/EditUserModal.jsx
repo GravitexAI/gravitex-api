@@ -47,6 +47,7 @@ import {
   InputNumber,
   RadioGroup,
   Radio,
+  Switch,
 } from '@douyinfe/semi-ui';
 import {
   IconUser,
@@ -94,6 +95,7 @@ const EditUserModal = (props) => {
     quota_amount: 0,
     group: 'default',
     remark: '',
+    allow_negative_balance: false,
   });
 
   const fetchGroups = async () => {
@@ -117,6 +119,13 @@ const EditUserModal = (props) => {
       data.quota_amount = Number(
         quotaToDisplayAmount(data.quota || 0).toFixed(6),
       );
+      // 解析 setting JSON 字符串，提取 allow_negative_balance
+      try {
+        const parsedSetting = data.setting ? JSON.parse(data.setting) : {};
+        data.allow_negative_balance = !!parsedSetting.allow_negative_balance;
+      } catch (e) {
+        data.allow_negative_balance = false;
+      }
       setInputs({ ...getInitValues(), ...data });
     } else {
       showError(message);
@@ -150,6 +159,13 @@ const EditUserModal = (props) => {
     let payload = { ...values };
     delete payload.quota;
     delete payload.quota_amount;
+    // 组装 setting（当前只包含 admin 可改的 allow_negative_balance）
+    if (userId) {
+      payload.setting = {
+        allow_negative_balance: !!values.allow_negative_balance,
+      };
+    }
+    delete payload.allow_negative_balance;
     if (userId) {
       // userId 是 Java Snowflake（~19 位），不能 parseInt（会丢精度）
       // 后端 common.Int64Flexible 接受字符串或数字
@@ -412,6 +428,14 @@ const EditUserModal = (props) => {
                             readonly
                           />
                         </div>
+                      </Col>
+
+                      <Col span={24}>
+                        <Form.Switch
+                          field='allow_negative_balance'
+                          label={t('允许透支使用（欠费不拦截）')}
+                          extraText={t('⚠ 开启后该用户余额 ≤ 0 也可继续调用 API，请谨慎使用')}
+                        />
                       </Col>
                     </Row>
                   </Card>
