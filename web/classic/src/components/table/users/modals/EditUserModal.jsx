@@ -47,7 +47,6 @@ import {
   InputNumber,
   RadioGroup,
   Radio,
-  Switch,
 } from '@douyinfe/semi-ui';
 import {
   IconUser,
