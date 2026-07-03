@@ -16,6 +16,7 @@ type UserSetting struct {
 	SidebarModules                   string  `json:"sidebar_modules,omitempty"`                      // SidebarModules 左侧边栏模块配置
 	BillingPreference                string  `json:"billing_preference,omitempty"`                   // BillingPreference 扣费策略（订阅/钱包）
 	Language                         string  `json:"language,omitempty"`                             // Language 用户语言偏好 (zh, en)
+	AllowNegativeBalance             bool    `json:"allow_negative_balance,omitempty"`                // 管理员授权：允许用户欠费继续使用（钱包额度 <= 0 时不拦截）
 }
 
 var (
