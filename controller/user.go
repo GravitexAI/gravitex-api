@@ -1458,6 +1458,7 @@ func UpdateUserSetting(c *gin.Context) {
 	if user.Role >= common.RoleAdminUser && req.UpstreamModelUpdateNotifyEnabled != nil {
 		upstreamModelUpdateNotifyEnabled = *req.UpstreamModelUpdateNotifyEnabled
 	}
+	allowNegativeBalance := existingSettings.AllowNegativeBalance // ← NEW: preserve admin-granted flag
 
 	// 构建设置
 	settings := dto.UserSetting{
@@ -1466,6 +1467,7 @@ func UpdateUserSetting(c *gin.Context) {
 		UpstreamModelUpdateNotifyEnabled: upstreamModelUpdateNotifyEnabled,
 		AcceptUnsetRatioModel:            req.AcceptUnsetModelRatioModel,
 		RecordIpLog:                      req.RecordIpLog,
+		AllowNegativeBalance:             allowNegativeBalance, // ← NEW: preserve admin-granted flag
 	}
 
 	// 如果是webhook类型,添加webhook相关设置
