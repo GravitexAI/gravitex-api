@@ -614,6 +614,7 @@ func UpdateUser(c *gin.Context) {
 		Status      int                  `json:"status"`
 		Type        *int                 `json:"type,omitempty"`
 		Operation   *int                 `json:"operation,omitempty"`
+		Setting     *dto.UserSetting     `json:"setting,omitempty"`
 	}
 
 	var req updateUserRequest
@@ -670,6 +671,23 @@ func UpdateUser(c *gin.Context) {
 	if err := updatedUser.Edit(updatePassword); err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	// Merge admin-editable setting fields (currently only AllowNegativeBalance).
+	// Explicitly whitelist per-field to avoid admin accidentally overwriting
+	// user-managed notify/webhook preferences.
+	if req.Setting != nil {
+		current := originUser.GetSetting()
+		if current.AllowNegativeBalance != req.Setting.AllowNegativeBalance {
+			current.AllowNegativeBalance = req.Setting.AllowNegativeBalance
+			originUser.SetSetting(current)
+			if err := model.DB.Model(&model.User{}).
+				Where("id = ?", originUser.Id).
+				Update("setting", originUser.Setting).Error; err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			_ = model.InvalidateUserCache(originUser.Id)
+		}
 	}
 	if req.Quota != nil && quotaChanged {
 		if err := model.SetUserQuota(updatedUser.Id, newQuota); err != nil {
