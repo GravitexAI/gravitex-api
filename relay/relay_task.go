@@ -241,7 +241,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 				fmt.Errorf("查询用户额度失败: %v", err),
 				"query_quota_failed", http.StatusInternalServerError)
 		}
-		if userQuota <= 0 {
+		if userQuota <= 0 && !service.IsNegativeBalanceAllowed(c) {
 			return nil, service.TaskErrorWrapperLocal(
 				fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
 				"insufficient_user_quota", http.StatusForbidden)
