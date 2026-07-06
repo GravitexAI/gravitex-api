@@ -203,6 +203,11 @@ export const channelFormSchema = z
     allow_inference_geo: z.boolean().optional(), // OpenAI/Anthropic: inference geography
     allow_speed: z.boolean().optional(), // Anthropic: speed mode control
     claude_beta_query: z.boolean().optional(), // Anthropic: beta query passthrough
+    // Anthropic: 显式指定 anthropic-beta 白名单过滤目标，覆盖按 ChannelType 的默认判断。
+    // 空字符串 = 沿用后端默认；"bedrock" / "bedrock-converse" / "vertex" / "direct" = 强制。
+    anthropic_beta_target: z
+      .enum(['', 'bedrock', 'bedrock-converse', 'vertex', 'direct'])
+      .optional(),
     // Upstream model update settings (stored in settings JSON)
     upstream_model_update_check_enabled: z.boolean().optional(),
     upstream_model_update_auto_sync_enabled: z.boolean().optional(),
@@ -342,6 +347,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   allow_inference_geo: false,
   allow_speed: false,
   claude_beta_query: false,
+  anthropic_beta_target: '',
   upstream_model_update_check_enabled: false,
   upstream_model_update_auto_sync_enabled: false,
   upstream_model_update_ignored_models: '',
@@ -397,6 +403,7 @@ export function transformChannelToFormDefaults(
   let allowInferenceGeo = false
   let allowSpeed = false
   let claudeBetaQuery = false
+  let anthropicBetaTarget: '' | 'bedrock' | 'bedrock-converse' | 'vertex' | 'direct' = ''
   let upstreamModelUpdateCheckEnabled = false
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
@@ -416,6 +423,12 @@ export function transformChannelToFormDefaults(
       allowInferenceGeo = parsed.allow_inference_geo === true
       allowSpeed = parsed.allow_speed === true
       claudeBetaQuery = parsed.claude_beta_query === true
+      {
+        const raw = String(parsed.anthropic_beta_target ?? '').trim().toLowerCase()
+        if (raw === 'bedrock' || raw === 'bedrock-converse' || raw === 'vertex' || raw === 'direct') {
+          anthropicBetaTarget = raw
+        }
+      }
       upstreamModelUpdateCheckEnabled =
         parsed.upstream_model_update_check_enabled === true
       upstreamModelUpdateAutoSyncEnabled =
@@ -473,6 +486,7 @@ export function transformChannelToFormDefaults(
     allow_inference_geo: allowInferenceGeo,
     allow_speed: allowSpeed,
     claude_beta_query: claudeBetaQuery,
+    anthropic_beta_target: anthropicBetaTarget,
     allow_safety_identifier: allowSafetyIdentifier,
     upstream_model_update_check_enabled: upstreamModelUpdateCheckEnabled,
     upstream_model_update_auto_sync_enabled: upstreamModelUpdateAutoSyncEnabled,
@@ -566,14 +580,22 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       delete settingsObj.allow_inference_geo
   }
 
-  // Anthropic (type 14): claude_beta_query, allow_inference_geo, allow_speed
+  // Anthropic (type 14): claude_beta_query, allow_inference_geo, allow_speed, anthropic_beta_target
   if (formData.type === 14) {
     settingsObj.allow_inference_geo = formData.allow_inference_geo === true
     settingsObj.allow_speed = formData.allow_speed === true
     settingsObj.claude_beta_query = formData.claude_beta_query === true
+    // 空字符串 = 沿用后端 TargetFromChannelType 默认；仅在显式选择时下发
+    const betaTarget = String(formData.anthropic_beta_target ?? '').trim()
+    if (betaTarget) {
+      settingsObj.anthropic_beta_target = betaTarget
+    } else if ('anthropic_beta_target' in settingsObj) {
+      delete settingsObj.anthropic_beta_target
+    }
   } else {
     if ('allow_speed' in settingsObj) delete settingsObj.allow_speed
     if ('claude_beta_query' in settingsObj) delete settingsObj.claude_beta_query
+    if ('anthropic_beta_target' in settingsObj) delete settingsObj.anthropic_beta_target
   }
 
   // Upstream model update settings (for model-fetchable channel types)

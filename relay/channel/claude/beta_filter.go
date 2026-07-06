@@ -34,6 +34,23 @@ func TargetFromChannelType(channelType int) FilterTarget {
 	}
 }
 
+// ResolveBetaTarget 解析目标：override 非空且识别时优先使用，否则 fallback 到按 ChannelType。
+// 用于 Anthropic 类型渠道但实际上游是 Bedrock/Vertex 转发的场景：admin 在渠道配置里
+// 显式指定 anthropic_beta_target，即可让白名单过滤按真实底层执行，避免脏 flag 上打 400。
+func ResolveBetaTarget(channelType int, override string) FilterTarget {
+	switch strings.ToLower(strings.TrimSpace(override)) {
+	case "bedrock":
+		return TargetBedrock
+	case "bedrock-converse":
+		return TargetBedrockConverse
+	case "vertex":
+		return TargetVertex
+	case "direct", "anthropic":
+		return TargetAnthropicDirect
+	}
+	return TargetFromChannelType(channelType)
+}
+
 // Bedrock InvokeModel / InvokeModelWithResponseStream 支持的 beta flag 白名单。
 // 数据源：AWS 官方文档 + LiteLLM bedrock mapping。
 var bedrockInvokeBetaWhitelist = map[string]bool{

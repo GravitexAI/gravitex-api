@@ -89,7 +89,7 @@ func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relayc
 	// 保证最终发出的 flag 都在目标渠道（Bedrock / Vertex / 直连）的支持列表内。
 	// 否则 admin 在 model_headers_settings 配的 flag 会绕过过滤直达上游。
 	if merged := req.Get("anthropic-beta"); merged != "" {
-		filtered := FilterBetaFlags(merged, TargetFromChannelType(info.ChannelType), info.RequestId)
+		filtered := FilterBetaFlags(merged, ResolveBetaTarget(info.ChannelType, info.ChannelOtherSettings.AnthropicBetaTarget), info.RequestId)
 		if len(filtered) > 0 {
 			req.Set("anthropic-beta", strings.Join(filtered, ","))
 		} else {

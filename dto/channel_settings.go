@@ -35,6 +35,11 @@ type ChannelOtherSettings struct {
 	VertexKeyType                         VertexKeyType     `json:"vertex_key_type,omitempty"`          // "json" or "api_key"
 	OpenRouterEnterprise                  *bool             `json:"openrouter_enterprise,omitempty"`
 	ClaudeBetaQuery                       bool              `json:"claude_beta_query,omitempty"`         // Claude 渠道是否强制追加 ?beta=true
+	// AnthropicBetaTarget 显式指定 anthropic-beta 白名单过滤目标，覆盖按 ChannelType 的默认判断。
+	// 用于 Anthropic 类型渠道但上游实际是 Bedrock/Vertex 转发的场景（此时若按渠道类型走 direct 透传，
+	// 客户端脏 flag 会打到不支持这些 flag 的底层 AWS/Vertex 上游导致 400）。
+	// 空 = 沿用 TargetFromChannelType 的默认行为；"bedrock" / "vertex" = 强制按对应白名单过滤。
+	AnthropicBetaTarget                   string            `json:"anthropic_beta_target,omitempty"`
 	AllowServiceTier                      bool              `json:"allow_service_tier,omitempty"`        // 是否允许 service_tier 透传（默认过滤以避免额外计费）
 	AllowInferenceGeo                     bool              `json:"allow_inference_geo,omitempty"`       // 是否允许 inference_geo 透传（仅 Claude，默认过滤以满足数据驻留合规
 	AllowSpeed                            bool              `json:"allow_speed,omitempty"`               // 是否允许 speed 透传（仅 Claude，默认过滤以避免意外切换推理速度模式）
