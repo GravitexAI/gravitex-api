@@ -64,13 +64,13 @@ spec:
         readinessProbe:
           tcpSocket:
             port: 3000
-          initialDelaySeconds: 5
+          initialDelaySeconds: 60
           periodSeconds: 5
           failureThreshold: 2
         livenessProbe:
           tcpSocket:
             port: 3000
-          initialDelaySeconds: 15
+          initialDelaySeconds: 60
           periodSeconds: 10
           failureThreshold: 3
         resources:
