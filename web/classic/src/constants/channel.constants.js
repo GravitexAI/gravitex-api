@@ -204,6 +204,11 @@ export const CHANNEL_OPTIONS = [
     color: 'teal',
     label: '腾讯云 TokenHub',
   },
+  {
+    value: 62,
+    color: 'blue',
+    label: 'SeedanceGateway',
+  },
 ];
 
 // Channel types that support upstream model list fetching in UI.
