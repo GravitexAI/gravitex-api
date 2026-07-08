@@ -56,6 +56,16 @@ var defaultModelRatio = map[string]float64{
 	"gpt-4o-realtime-preview-2024-12-17":        2.5,
 	"gpt-4o-mini-realtime-preview":              0.3,
 	"gpt-4o-mini-realtime-preview-2024-12-17":   0.3,
+	// gpt-realtime series: text input $4/1M → ratio 2.0; mini: $0.60/1M → ratio 0.30
+	"gpt-realtime":                              2.0,
+	"gpt-realtime-2025-08-28":                   2.0,
+	"gpt-realtime-2":                            2.0,
+	"gpt-realtime-2.1":                          2.0,
+	"gpt-realtime-1.5":                          2.0,
+	"gpt-realtime-mini":                         0.30,
+	"gpt-realtime-mini-2025-10-06":              0.30,
+	"gpt-realtime-mini-2025-12-15":              0.30,
+	"gpt-realtime-2.1-mini":                     0.30,
 	"gpt-4.1":                                   1.0,  // $2 / 1M tokens
 	"gpt-4.1-2025-04-14":                        1.0,  // $2 / 1M tokens
 	"gpt-4.1-mini":                              0.2,  // $0.4 / 1M tokens
@@ -323,6 +333,17 @@ var defaultAudioRatio = map[string]float64{
 	"gpt-4o-realtime-preview":      8,
 	"gpt-4o-mini-realtime-preview": 16.67,
 	"gpt-4o-mini-tts":              25,
+	// gpt-realtime series: audio input $32/1M → audioRatio=8 (vs text input 2.0×$2=$4)
+	// mini: audio input $10/1M → audioRatio=16.67 (vs text input 0.30×$2=$0.60)
+	"gpt-realtime":                  8.0,
+	"gpt-realtime-2025-08-28":       8.0,
+	"gpt-realtime-2":                8.0,
+	"gpt-realtime-2.1":              8.0,
+	"gpt-realtime-1.5":              8.0,
+	"gpt-realtime-mini":             16.67,
+	"gpt-realtime-mini-2025-10-06":  16.67,
+	"gpt-realtime-mini-2025-12-15":  16.67,
+	"gpt-realtime-2.1-mini":         16.67,
 }
 
 var defaultAudioCompletionRatio = map[string]float64{
@@ -333,6 +354,16 @@ var defaultAudioCompletionRatio = map[string]float64{
 	"tts-1-hd":             0,
 	"tts-1-1106":           0,
 	"tts-1-hd-1106":        0,
+	// gpt-realtime series: audio output / audio input = $64/$32=2x (all variants)
+	"gpt-realtime":                  2.0,
+	"gpt-realtime-2025-08-28":       2.0,
+	"gpt-realtime-2":                2.0,
+	"gpt-realtime-2.1":              2.0,
+	"gpt-realtime-1.5":              2.0,
+	"gpt-realtime-mini":             2.0,
+	"gpt-realtime-mini-2025-10-06":  2.0,
+	"gpt-realtime-mini-2025-12-15":  2.0,
+	"gpt-realtime-2.1-mini":         2.0,
 }
 
 var modelPriceMap = types.NewRWMap[string, float64]()
@@ -345,6 +376,17 @@ var defaultCompletionRatio = map[string]float64{
 	"gpt-4-all":      2,
 	"gpt-image-1":    8,
 	"gpt-image-2":    2, // $10 / $5 = 2x (text output)
+	// gpt-realtime series: text output / text input ratio
+	// realtime-2/2.1: $24/$4=6x; realtime-1.5: $16/$4=4x; mini: $2.40/$0.60=4x
+	"gpt-realtime":               6.0,
+	"gpt-realtime-2025-08-28":    6.0,
+	"gpt-realtime-2":             6.0,
+	"gpt-realtime-2.1":           6.0,
+	"gpt-realtime-1.5":           4.0,
+	"gpt-realtime-mini":          4.0,
+	"gpt-realtime-mini-2025-10-06": 4.0,
+	"gpt-realtime-mini-2025-12-15": 4.0,
+	"gpt-realtime-2.1-mini":      4.0,
 }
 
 // InitRatioSettings initializes all model related settings maps with code defaults.
@@ -693,6 +735,17 @@ func ModelRatio2JSONString() string {
 var defaultImageRatio = map[string]float64{
 	"gpt-image-1": 2,
 	"gpt-image-2": 1.6, // $8 / $5 = 1.6x
+	// gpt-realtime-2/2.1/1.5: image input $5/1M = 1.25 × modelRatio(2.0) × $2
+	"gpt-realtime":                 1.25,
+	"gpt-realtime-2025-08-28":      1.25,
+	"gpt-realtime-2":               1.25,
+	"gpt-realtime-2.1":             1.25,
+	"gpt-realtime-1.5":             1.25,
+	// gpt-realtime-mini/2.1-mini: image input $0.80/1M = 1.333 × modelRatio(0.30) × $2
+	"gpt-realtime-mini":            1.333,
+	"gpt-realtime-mini-2025-10-06": 1.333,
+	"gpt-realtime-mini-2025-12-15": 1.333,
+	"gpt-realtime-2.1-mini":        1.333,
 }
 
 // defaultImageCompletionRatio 图片输出 token 计费倍率，未配置时 GetImageCompletionRatio 回退到 CompletionRatio

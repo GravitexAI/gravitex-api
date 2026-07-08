@@ -25,8 +25,11 @@ import (
 )
 
 type TokenDetails struct {
-	TextTokens  int
-	AudioTokens int
+	TextTokens        int
+	AudioTokens       int
+	ImageTokens       int
+	CachedTokens      int
+	CachedAudioTokens int // subset of CachedTokens that are audio; rest assumed text
 }
 
 type QuotaInfo struct {
@@ -39,12 +42,45 @@ type QuotaInfo struct {
 	GroupRatio    float64
 }
 
+// realtimeCacheRatioMap 硬编码 realtime 各模型的缓存折扣比例（相对 textRatio）。
+// 上游 cached_tokens 不区分文本/音频，统一用此比例折扣。
+// gpt-realtime-2/1.5：文本缓存 $0.40 = 音频缓存 $0.40，两者均等于 0.1 × textRatio（精确）。
+// gpt-realtime-mini：文本缓存 $0.06 = 0.1 × $0.60（精确）；音频缓存 $0.30 用相同比例（近似）。
+var realtimeCacheRatioMap = map[string]float64{
+	"gpt-realtime":                 0.1,
+	"gpt-realtime-2025-08-28":      0.1,
+	"gpt-realtime-2":               0.1,
+	"gpt-realtime-2.1":             0.1,
+	"gpt-realtime-1.5":             0.1,
+	"gpt-realtime-mini":            0.1,
+	"gpt-realtime-mini-2025-10-06": 0.1,
+	"gpt-realtime-mini-2025-12-15": 0.1,
+	"gpt-realtime-2.1-mini":        0.1,
+}
+
 func hasCustomModelRatio(modelName string, currentRatio float64) bool {
 	defaultRatio, exists := ratio_setting.GetDefaultModelRatioMap()[modelName]
 	if !exists {
 		return true
 	}
 	return currentRatio != defaultRatio
+}
+
+// cachedAudioTokensEstimate returns the number of cached tokens that are audio.
+// Uses cached_tokens_details when available (OpenAI native); otherwise estimates
+// proportionally from the audio share of total input tokens (Azure GA fallback).
+func cachedAudioTokensEstimate(usage *dto.RealtimeUsage) int {
+	if usage == nil || usage.InputTokenDetails.CachedTokens == 0 {
+		return 0
+	}
+	if d := usage.InputTokenDetails.CachedTokensDetails; d != nil {
+		return d.AudioTokens
+	}
+	total := usage.InputTokenDetails.TextTokens + usage.InputTokenDetails.AudioTokens
+	if total == 0 || usage.InputTokenDetails.AudioTokens == 0 {
+		return 0
+	}
+	return int(float64(usage.InputTokenDetails.CachedTokens) * float64(usage.InputTokenDetails.AudioTokens) / float64(total))
 }
 
 func calculateAudioQuota(info QuotaInfo) int {
@@ -79,6 +115,7 @@ func calculateAudioQuota(info QuotaInfo) int {
 	outputTextTokens := decimal.NewFromInt(int64(info.OutputDetails.TextTokens))
 	inputAudioTokens := decimal.NewFromInt(int64(info.InputDetails.AudioTokens))
 	outputAudioTokens := decimal.NewFromInt(int64(info.OutputDetails.AudioTokens))
+	inputImageTokens := decimal.NewFromInt(int64(info.InputDetails.ImageTokens))
 
 	quota := decimal.Zero
 	// 文本部分：使用 modelRatio 作为基础倍率
@@ -91,6 +128,35 @@ func calculateAudioQuota(info QuotaInfo) int {
 	// 音频部分：输入用 audioRatio × modelRatio；输出用 audioRatio × audioCompletionRatio × modelRatio
 	quota = quota.Add(inputAudioTokens.Mul(audioRatio).Mul(textRatio))
 	quota = quota.Add(outputAudioTokens.Mul(dEffectiveAudioOutputRatio).Mul(textRatio))
+
+	// 图片部分：输入图片用 imageRatio × modelRatio
+	if info.InputDetails.ImageTokens > 0 {
+		if imageRatioF, ok := ratio_setting.GetImageRatio(info.ModelName); ok {
+			imageRatio := decimal.NewFromFloat(imageRatioF)
+			quota = quota.Add(inputImageTokens.Mul(imageRatio).Mul(textRatio))
+		}
+	}
+
+	// 缓存折扣：cached_tokens 是输入 token 的子集，已按全价计入上方，此处补扣折扣差额。
+	// 目标：所有缓存 token 最终均按 cacheRatio × textRatio 计费。
+	// 文字缓存：原按 textRatio 收，退差 = cached_text × (cacheRatio-1) × textRatio
+	// 音频缓存：原按 audioRatio × textRatio 收，退差 = cached_audio × (cacheRatio-audioRatio) × textRatio
+	// 若上游未返回 cached_tokens_details（如 Azure GA），按文字/音频比例估算。
+	if info.InputDetails.CachedTokens > 0 {
+		if cacheRatio, ok := realtimeCacheRatioMap[info.ModelName]; ok {
+			cachedAudio := info.InputDetails.CachedAudioTokens
+			cachedText := info.InputDetails.CachedTokens - cachedAudio
+			if cachedText > 0 {
+				adj := decimal.NewFromInt(int64(cachedText)).Mul(decimal.NewFromFloat(cacheRatio - 1)).Mul(textRatio)
+				quota = quota.Add(adj)
+			}
+			if cachedAudio > 0 {
+				// 音频缓存目标价 = cacheRatio × textRatio；原已按 audioRatio × textRatio 计费
+				adj := decimal.NewFromInt(int64(cachedAudio)).Mul(decimal.NewFromFloat(cacheRatio - audioRatioF)).Mul(textRatio)
+				quota = quota.Add(adj)
+			}
+		}
+	}
 
 	// If quota is less than or equal to zero, set quota to 1
 	if quota.LessThanOrEqual(decimal.Zero) {
@@ -135,10 +201,14 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		actualGroupRatio = userGroupRatio
 	}
 
+	cachedAudioTokens := cachedAudioTokensEstimate(usage)
 	quotaInfo := QuotaInfo{
 		InputDetails: TokenDetails{
-			TextTokens:  textInputTokens,
-			AudioTokens: audioInputTokens,
+			TextTokens:        textInputTokens,
+			AudioTokens:       audioInputTokens,
+			ImageTokens:       usage.InputTokenDetails.ImageTokens,
+			CachedTokens:      usage.InputTokenDetails.CachedTokens,
+			CachedAudioTokens: cachedAudioTokens,
 		},
 		OutputDetails: TokenDetails{
 			TextTokens:  textOutTokens,
@@ -208,8 +278,11 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 
 	quotaInfo := QuotaInfo{
 		InputDetails: TokenDetails{
-			TextTokens:  textInputTokens,
-			AudioTokens: audioInputTokens,
+			TextTokens:        textInputTokens,
+			AudioTokens:       audioInputTokens,
+			ImageTokens:       usage.InputTokenDetails.ImageTokens,
+			CachedTokens:      usage.InputTokenDetails.CachedTokens,
+			CachedAudioTokens: cachedAudioTokensEstimate(usage),
 		},
 		OutputDetails: TokenDetails{
 			TextTokens:  textOutTokens,

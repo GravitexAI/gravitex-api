@@ -125,6 +125,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 				if realtimeEvent.Type == dto.RealtimeEventTypeResponseDone {
 					realtimeUsage := realtimeEvent.Response.Usage
 					if realtimeUsage != nil {
+						info.SetUpstreamResponsesField("usage", realtimeUsage)
 						usage.TotalTokens += realtimeUsage.TotalTokens
 						usage.InputTokens += realtimeUsage.InputTokens
 						usage.OutputTokens += realtimeUsage.OutputTokens
@@ -133,6 +134,13 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						usage.InputTokenDetails.TextTokens += realtimeUsage.InputTokenDetails.TextTokens
 						usage.OutputTokenDetails.AudioTokens += realtimeUsage.OutputTokenDetails.AudioTokens
 						usage.OutputTokenDetails.TextTokens += realtimeUsage.OutputTokenDetails.TextTokens
+						if d := realtimeUsage.InputTokenDetails.CachedTokensDetails; d != nil {
+							if usage.InputTokenDetails.CachedTokensDetails == nil {
+								usage.InputTokenDetails.CachedTokensDetails = &dto.CachedTokensDetails{}
+							}
+							usage.InputTokenDetails.CachedTokensDetails.TextTokens += d.TextTokens
+							usage.InputTokenDetails.CachedTokensDetails.AudioTokens += d.AudioTokens
+						}
 						err := preConsumeUsage(c, info, usage, sumUsage)
 						if err != nil {
 							errChan <- fmt.Errorf("error consume usage: %v", err)
