@@ -60,6 +60,7 @@ func authHelper(c *gin.Context, minRole int) {
 				id = user.Id
 				status = user.Status
 				group = user.Group
+				fromRuoYi = true
 			} else if err != nil && err != errNoRuoYiJWT {
 				// JWT 格式正确但验签/解析失败 -> 直接拒绝
 				c.JSON(http.StatusUnauthorized, gin.H{
