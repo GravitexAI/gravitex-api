@@ -31,7 +31,8 @@ const (
 
 type ChannelOtherSettings struct {
 	AzureResponsesVersion                 string            `json:"azure_responses_version,omitempty"`
-	AzureModelApiVersions                 map[string]string `json:"azure_model_api_versions,omitempty"` // 模型特定的 API 版本映射，适用于普通 API 和 Responses API
+	AzureModelApiVersions                 map[string]string `json:"azure_model_api_versions,omitempty"`          // 模型特定的普通 API 版本映射
+	AzureModelResponsesVersions           map[string]string `json:"azure_model_responses_versions,omitempty"`    // 模型特定的 Responses API 版本映射（独立于普通 API 版本）
 	VertexKeyType                         VertexKeyType     `json:"vertex_key_type,omitempty"`          // "json" or "api_key"
 	OpenRouterEnterprise                  *bool             `json:"openrouter_enterprise,omitempty"`
 	ClaudeBetaQuery                       bool              `json:"claude_beta_query,omitempty"`         // Claude 渠道是否强制追加 ?beta=true

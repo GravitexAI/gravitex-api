@@ -221,6 +221,10 @@ const EditChannelModal = (props) => {
     upstream_model_update_last_check_time: 0,
     upstream_model_update_last_detected_models: [],
     upstream_model_update_ignored_models: '',
+    // Azure 特定设置
+    azure_responses_version: '',
+    azure_model_api_versions: '',
+    azure_model_responses_versions: '',
     // 渠道成本设置
     cost_discount: null,
   };
@@ -573,6 +577,61 @@ const EditChannelModal = (props) => {
     handleInputChange('settings', settingsJson);
   };
 
+  const handleAzureModelApiVersionsChange = (value) => {
+    if (formApiRef.current) {
+      formApiRef.current.setValue('azure_model_api_versions', value);
+    }
+    setInputs((prev) => ({ ...prev, azure_model_api_versions: value }));
+
+    let settings = {};
+    if (inputs.settings) {
+      try {
+        settings = JSON.parse(inputs.settings);
+      } catch (error) {
+        console.error('解析设置失败:', error);
+      }
+    }
+    if (value && value.trim()) {
+      try {
+        settings.azure_model_api_versions = JSON.parse(value);
+      } catch (error) {
+        // JSON 还没输完，暂不更新 settings，等用户输完
+        return;
+      }
+    } else {
+      delete settings.azure_model_api_versions;
+    }
+    const settingsJson = JSON.stringify(settings);
+    handleInputChange('settings', settingsJson);
+  };
+
+  const handleAzureModelResponsesVersionsChange = (value) => {
+    if (formApiRef.current) {
+      formApiRef.current.setValue('azure_model_responses_versions', value);
+    }
+    setInputs((prev) => ({ ...prev, azure_model_responses_versions: value }));
+
+    let settings = {};
+    if (inputs.settings) {
+      try {
+        settings = JSON.parse(inputs.settings);
+      } catch (error) {
+        console.error('解析设置失败:', error);
+      }
+    }
+    if (value && value.trim()) {
+      try {
+        settings.azure_model_responses_versions = JSON.parse(value);
+      } catch (error) {
+        return;
+      }
+    } else {
+      delete settings.azure_model_responses_versions;
+    }
+    const settingsJson = JSON.stringify(settings);
+    handleInputChange('settings', settingsJson);
+  };
+
   const applyClipboardConfig = (config) => {
     if (!config) return;
     setInputs((prev) => ({
@@ -900,6 +959,12 @@ const EditChannelModal = (props) => {
           const parsedSettings = JSON.parse(data.settings);
           data.azure_responses_version =
             parsedSettings.azure_responses_version || '';
+          data.azure_model_api_versions = parsedSettings.azure_model_api_versions
+            ? JSON.stringify(parsedSettings.azure_model_api_versions, null, 2)
+            : '';
+          data.azure_model_responses_versions = parsedSettings.azure_model_responses_versions
+            ? JSON.stringify(parsedSettings.azure_model_responses_versions, null, 2)
+            : '';
           // 读取 Vertex 密钥格式
           data.vertex_key_type = parsedSettings.vertex_key_type || 'json';
           // 读取 AWS 密钥格式和区域
@@ -943,6 +1008,8 @@ const EditChannelModal = (props) => {
         } catch (error) {
           console.error('解析其他设置失败:', error);
           data.azure_responses_version = '';
+          data.azure_model_api_versions = '';
+          data.azure_model_responses_versions = '';
           data.region = '';
           data.vertex_key_type = 'json';
           data.aws_key_type = 'ak_sk';
@@ -967,6 +1034,9 @@ const EditChannelModal = (props) => {
         }
       } else {
         // 兼容历史数据：老渠道没有 settings 时，默认按 json 展示
+        data.azure_responses_version = '';
+        data.azure_model_api_versions = '';
+        data.azure_model_responses_versions = '';
         data.vertex_key_type = 'json';
         data.aws_key_type = 'ak_sk';
         data.byteplus_asset_ak = '';
@@ -1785,6 +1855,36 @@ const EditChannelModal = (props) => {
       }
     }
 
+    // type === 3 (Azure): 显式保存 azure_responses_version 和 azure_model_api_versions，防止偶发丢失
+    if (localInputs.type === 3) {
+      const respVer = (localInputs.azure_responses_version || '').trim();
+      if (respVer) {
+        settings.azure_responses_version = respVer;
+      } else {
+        delete settings.azure_responses_version;
+      }
+      const modelVerJson = (localInputs.azure_model_api_versions || '').trim();
+      if (modelVerJson) {
+        try {
+          settings.azure_model_api_versions = JSON.parse(modelVerJson);
+        } catch (e) {
+          // 保留旧值，不覆盖
+        }
+      } else {
+        delete settings.azure_model_api_versions;
+      }
+      const modelRespVerJson = (localInputs.azure_model_responses_versions || '').trim();
+      if (modelRespVerJson) {
+        try {
+          settings.azure_model_responses_versions = JSON.parse(modelRespVerJson);
+        } catch (e) {
+          // 保留旧值，不覆盖
+        }
+      } else {
+        delete settings.azure_model_responses_versions;
+      }
+    }
+
     // type === 20: 设置企业账户标识，无论是true还是false都要传到后端
     if (localInputs.type === 20) {
       settings.openrouter_enterprise =
@@ -1867,6 +1967,10 @@ const EditChannelModal = (props) => {
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
     delete localInputs.is_enterprise_account;
+    // 顶层的 Azure 特定字段不应发送给后端（已序列化到 settings）
+    delete localInputs.azure_responses_version;
+    delete localInputs.azure_model_api_versions;
+    delete localInputs.azure_model_responses_versions;
     // 顶层的 vertex_key_type 不应发送给后端
     delete localInputs.vertex_key_type;
     // 顶层的 aws_key_type 不应发送给后端
@@ -3405,6 +3509,38 @@ const EditChannelModal = (props) => {
                               showClear
                             />
                           </div>
+                          <JSONEditor
+                            key={`azure_model_api_versions-${isEdit ? channelId : 'new'}`}
+                            field='azure_model_api_versions'
+                            label={t('模型特定 API 版本（可选）')}
+                            placeholder={
+                              t('为不同模型指定不同的普通 API 版本，覆盖上方默认版本。例如：') +
+                              `\n${JSON.stringify({ 'gpt-realtime-2': '2025-04-01', 'gpt-4o': '2025-04-01-preview' }, null, 2)}`
+                            }
+                            value={inputs.azure_model_api_versions || ''}
+                            onChange={handleAzureModelApiVersionsChange}
+                            template={{ 'gpt-realtime-2': '2025-04-01', 'gpt-4o': '2025-04-01-preview' }}
+                            templateLabel={t('填入模板')}
+                            editorType='keyValue'
+                            formApi={formApiRef.current}
+                            extraText={t('键为模型名，值为该模型使用的 API 版本；值为空字符串时沿用默认版本')}
+                          />
+                          <JSONEditor
+                            key={`azure_model_responses_versions-${isEdit ? channelId : 'new'}`}
+                            field='azure_model_responses_versions'
+                            label={t('模型特定 Responses API 版本（可选）')}
+                            placeholder={
+                              t('独立于普通 API 版本，专为 Responses API 路径指定每个模型的版本。例如：') +
+                              `\n${JSON.stringify({ 'gpt-4o': '2025-04-01-preview', 'o3': '2025-04-01' }, null, 2)}`
+                            }
+                            value={inputs.azure_model_responses_versions || ''}
+                            onChange={handleAzureModelResponsesVersionsChange}
+                            template={{ 'gpt-4o': '2025-04-01-preview', 'o3': '2025-04-01' }}
+                            templateLabel={t('填入模板')}
+                            editorType='keyValue'
+                            formApi={formApiRef.current}
+                            extraText={t('键为模型名，值为该模型 Responses API 使用的版本；值为空字符串时沿用默认 Responses 版本')}
+                          />
                         </>
                       )}
 
