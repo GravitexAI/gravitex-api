@@ -60,7 +60,6 @@ func authHelper(c *gin.Context, minRole int) {
 				id = user.Id
 				status = user.Status
 				group = user.Group
-				fromRuoYi = true
 			} else if err != nil && err != errNoRuoYiJWT {
 				// JWT 格式正确但验签/解析失败 -> 直接拒绝
 				c.JSON(http.StatusUnauthorized, gin.H{
@@ -201,6 +200,141 @@ func authHelper(c *gin.Context, minRole int) {
 	finishAdminAudit(c, auditWriter)
 }
 
+func authTokenHelper(c *gin.Context, minRole int) {
+	session := sessions.Default(c)
+	username := session.Get("username")
+	role := session.Get("role")
+	id := session.Get("id")
+	status := session.Get("status")
+	useAccessToken := false
+	group := session.Get("group")
+	if username == nil {
+		// 优先尝试 RuoYi JWT 鉴权
+		if common.RuoYiAuthEnabled {
+			user, err := tryRuoYiJWTAuth(c)
+			if err == nil && user != nil {
+				if !validUserInfo(user.Username, user.Role) {
+					c.JSON(http.StatusOK, gin.H{
+						"success": false,
+						"message": "Unauthorized, invalid user info",
+					})
+					c.Abort()
+					return
+				}
+				username = user.Username
+				role = user.Role
+				id = user.Id
+				status = user.Status
+				group = user.Group
+			} else if err != nil && err != errNoRuoYiJWT {
+				// JWT 格式正确但验签/解析失败 -> 直接拒绝
+				c.JSON(http.StatusUnauthorized, gin.H{
+					"success": false,
+					"message": "Unauthorized, invalid token",
+				})
+				c.Abort()
+				return
+			}
+		}
+	}
+	if username == nil {
+		// 回退到原有的 access token 方案
+		accessToken := c.Request.Header.Get("Authorization")
+		if accessToken == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, i18n.MsgAuthNotLoggedIn),
+			})
+			c.Abort()
+			return
+		}
+		user, authErr := model.ValidateAccessToken(accessToken)
+		if authErr != nil {
+			if errors.Is(authErr, model.ErrDatabase) {
+				common.SysLog("ValidateAccessToken database error: " + authErr.Error())
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"success": false,
+					"message": common.TranslateMessage(c, i18n.MsgDatabaseError),
+				})
+			} else {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": common.TranslateMessage(c, i18n.MsgAuthAccessTokenInvalid),
+				})
+			}
+			c.Abort()
+			return
+		}
+		if user != nil && user.Username != "" {
+			if !validUserInfo(user.Username, user.Role) {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid),
+				})
+				c.Abort()
+				return
+			}
+			// Token is valid
+			username = user.Username
+			role = user.Role
+			id = user.Id
+			status = user.Status
+			useAccessToken = true
+		} else {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, i18n.MsgAuthAccessTokenInvalid),
+			})
+			c.Abort()
+			return
+		}
+	}
+	if status.(int) == common.UserStatusDisabled {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": common.TranslateMessage(c, i18n.MsgAuthUserBanned),
+		})
+		c.Abort()
+		return
+	}
+	if role.(int) < minRole {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege),
+		})
+		c.Abort()
+		return
+	}
+	if !validUserInfo(username.(string), role.(int)) {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid),
+		})
+		c.Abort()
+		return
+	}
+	// 防止不同newapi版本冲突，导致数据不通用
+	c.Header("Auth-Version", "864b7076dbcd0a3c01b5520316720ebf")
+	c.Set("username", username)
+	c.Set("role", role)
+	c.Set("id", id)
+	c.Set("group", group)
+	c.Set("user_group", group)
+	c.Set("use_access_token", useAccessToken)
+
+	// 管理/root 写操作审计兜底：内聚在鉴权链路里，保证任何经过 AdminAuth/RootAuth
+	// 的写接口都会自动留痕（无需在路由上单独挂审计中间件，避免漏挂）。
+	// handler 内手动埋点者会设置 ContextKeyAuditLogged，finishAdminAudit 据此跳过。
+	var auditWriter *auditResponseWriter
+	if minRole >= common.RoleAdminUser {
+		auditWriter = beginAdminAudit(c)
+	}
+
+	c.Next()
+
+	finishAdminAudit(c, auditWriter)
+}
+
 func TryUserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		session := sessions.Default(c)
@@ -215,6 +349,12 @@ func TryUserAuth() func(c *gin.Context) {
 func UserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		authHelper(c, common.RoleCommonUser)
+	}
+}
+
+func UserTokenAuth() func(c *gin.Context) {
+	return func(c *gin.Context) {
+		authTokenHelper(c, common.RoleCommonUser)
 	}
 }
 

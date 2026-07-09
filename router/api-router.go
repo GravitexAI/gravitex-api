@@ -301,7 +301,7 @@ func SetApiRouter(router *gin.Engine) {
 			assetAdminRoute.DELETE("/byteplus/assets/:asset_id", controller.AdminByteplusDeleteAsset)
 		}
 		tokenRoute := apiRouter.Group("/token")
-		tokenRoute.Use(middleware.UserAuth())
+		tokenRoute.Use(middleware.UserTokenAuth())
 		{
 			tokenRoute.GET("/", controller.GetAllTokens)
 			tokenRoute.GET("/search", middleware.SearchRateLimit(), controller.SearchTokens)
