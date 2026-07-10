@@ -63,7 +63,8 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	p := float64(usage.PromptTokens)
 	c := float64(completionTokens)
 	cr := float64(usage.PromptTokensDetails.CachedTokens)
-	cc5m := float64(usage.PromptTokensDetails.CachedCreationTokens)
+	// gpt-5.6+ 缓存写入 token 并入 cc（通用缓存创建变量），复用同一计价系数
+	cc5m := float64(usage.PromptTokensDetails.CachedCreationTokens + usage.PromptTokensDetails.CacheWriteTokens)
 	cc1h := float64(0)
 
 	if usage.UsageSemantic == "anthropic" {

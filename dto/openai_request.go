@@ -75,9 +75,11 @@ type GeneralOpenAIRequest struct {
 	// Used by OpenAI to cache responses for similar requests to optimize your cache hit rates. Replaces the user field
 	PromptCacheKey       string          `json:"prompt_cache_key,omitempty"`
 	PromptCacheRetention json.RawMessage `json:"prompt_cache_retention,omitempty"`
-	LogitBias            json.RawMessage `json:"logit_bias,omitempty"`
-	Metadata             json.RawMessage `json:"metadata,omitempty"`
-	Prediction           json.RawMessage `json:"prediction,omitempty"`
+	// gpt-5.6+: request-wide explicit cache breakpoint policy ({"mode": "implicit"|"explicit"})
+	PromptCacheOptions json.RawMessage `json:"prompt_cache_options,omitempty"`
+	LogitBias          json.RawMessage `json:"logit_bias,omitempty"`
+	Metadata           json.RawMessage `json:"metadata,omitempty"`
+	Prediction         json.RawMessage `json:"prediction,omitempty"`
 	// gemini
 	ExtraBody json.RawMessage `json:"extra_body,omitempty"`
 	//xai
@@ -318,6 +320,8 @@ type MediaContent struct {
 	VideoUrl   any    `json:"video_url,omitempty"`
 	// OpenRouter Params
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
+	// gpt-5.6+: explicit cache breakpoint marker ({"mode": "explicit"})
+	PromptCacheBreakpoint json.RawMessage `json:"prompt_cache_breakpoint,omitempty"`
 }
 
 func (m *MediaContent) GetImageMedia() *MessageImageUrl {
@@ -986,6 +990,8 @@ type MediaInput struct {
 	FileUrl  string `json:"file_url,omitempty"`
 	ImageUrl string `json:"image_url,omitempty"`
 	Detail   string `json:"detail,omitempty"` // 仅 input_image 有效
+	// gpt-5.6+: explicit cache breakpoint marker ({"mode": "explicit"})
+	PromptCacheBreakpoint json.RawMessage `json:"prompt_cache_breakpoint,omitempty"`
 }
 
 // ParseInput parses the Responses API `input` field into a normalized slice of MediaInput.

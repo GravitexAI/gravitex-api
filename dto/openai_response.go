@@ -262,12 +262,14 @@ type CachedTokensDetails struct {
 }
 
 type InputTokenDetails struct {
-	CachedTokens         int                  `json:"cached_tokens"`
-	CachedCreationTokens int                  `json:"cached_creation_tokens,omitempty"`
-	CachedTokensDetails  *CachedTokensDetails `json:"cached_tokens_details,omitempty"`
-	TextTokens           int                  `json:"text_tokens"`
-	AudioTokens          int                  `json:"audio_tokens"`
-	ImageTokens          int                  `json:"image_tokens"`
+	CachedTokens         int `json:"cached_tokens"`
+	CachedCreationTokens int `json:"cached_creation_tokens,omitempty"`
+	// gpt-5.6+: tokens newly written to the prompt cache this request, billed at the cache-write rate
+	CacheWriteTokens    int                  `json:"cache_write_tokens,omitempty"`
+	CachedTokensDetails *CachedTokensDetails `json:"cached_tokens_details,omitempty"`
+	TextTokens          int                  `json:"text_tokens"`
+	AudioTokens         int                  `json:"audio_tokens"`
+	ImageTokens         int                  `json:"image_tokens"`
 }
 
 type OutputTokenDetails struct {

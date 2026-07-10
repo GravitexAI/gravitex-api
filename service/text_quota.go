@@ -193,7 +193,9 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.CompletionTokens = outputTokensForModel(usage, summary.ModelName)
 	summary.TotalTokens = summary.PromptTokens + summary.CompletionTokens
 	summary.CacheTokens = usage.PromptTokensDetails.CachedTokens
-	summary.CacheCreationTokens = usage.PromptTokensDetails.CachedCreationTokens
+	// gpt-5.6+ 显式/隐式缓存写入（cache_write_tokens）与 CachedCreationTokens 共用同一档
+	// CacheCreationRatio 计价（写入统一按未缓存输入价的 1.25x 计费）
+	summary.CacheCreationTokens = usage.PromptTokensDetails.CachedCreationTokens + usage.PromptTokensDetails.CacheWriteTokens
 	summary.CacheCreationTokens5m = usage.ClaudeCacheCreation5mTokens
 	summary.CacheCreationTokens1h = usage.ClaudeCacheCreation1hTokens
 	summary.ImageTokens = usage.PromptTokensDetails.ImageTokens

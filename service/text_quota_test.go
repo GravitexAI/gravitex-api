@@ -207,6 +207,42 @@ func TestCalculateTextQuotaSummaryHandlesLegacyClaudeDerivedOpenAIUsage(t *testi
 	require.Equal(t, 1624, summary.Quota)
 }
 
+func TestCalculateTextQuotaSummaryBillsOpenAICacheWriteTokensAsCacheCreation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	relayInfo := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-5.6-sol",
+		PriceData: types.PriceData{
+			ModelRatio:         1,
+			CompletionRatio:    1,
+			CacheRatio:         0.1,
+			CacheCreationRatio: 1.25,
+			GroupRatioInfo:     types.GroupRatioInfo{GroupRatio: 1},
+		},
+		StartTime: time.Now(),
+	}
+
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 100,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:     200,
+			CacheWriteTokens: 300,
+		},
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+
+	// gpt-5.6+ cache_write_tokens must be billed at CacheCreationRatio (1.25x),
+	// same slot as CachedCreationTokens, and excluded from the base prompt tokens.
+	// (1000-200-300) + 200*0.1 + 300*1.25 + 100 = 995
+	require.Equal(t, 300, summary.CacheCreationTokens)
+	require.Equal(t, 995, summary.Quota)
+}
+
 func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheReadFromPromptBilling(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

@@ -469,6 +469,26 @@ func TestBuildTieredTokenParams_GPT_WithCache(t *testing.T) {
 	}
 }
 
+func TestBuildTieredTokenParams_GPT56_CacheWriteTokensFeedCC(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 500,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:     200,
+			CacheWriteTokens: 300,
+			TextTokens:       500,
+		},
+	}
+	// gpt-5.6-sol style: read discount 0.1x, write premium 1.25x of the $5 base rate
+	expr := `tier("base", p * 5 + c * 30 + cr * 0.5 + cc * 6.25)`
+	got := tieredQuota(expr, usage, false, 1.0)
+	// P = 1000-200-300 = 500 → (500*5 + 500*30 + 200*0.5 + 300*6.25) * 0.5 = 9737.5
+	want := 9737.5
+	if math.Abs(got-want) > 0.01 {
+		t.Fatalf("quota = %f, want %f", got, want)
+	}
+}
+
 func TestBuildTieredTokenParams_GPT_NoCacheVar(t *testing.T) {
 	usage := &dto.Usage{
 		PromptTokens:     1000,
