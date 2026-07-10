@@ -256,7 +256,12 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			}
 		}
 		if prompt == "" {
-			return nil, errors.New("prompt is required for image generation")
+			return nil, types.NewErrorWithStatusCode(
+				errors.New("prompt is required for image generation"),
+				types.ErrorCodeInvalidRequest,
+				http.StatusBadRequest,
+				types.ErrOptionWithSkipRetry(),
+			)
 		}
 
 		imgReq := dto.ImageRequest{
