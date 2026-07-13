@@ -1,6 +1,8 @@
 # GPT-5.6 Prompt Caching 机制说明
 
 > 调研时间：2026-07-10，来源：OpenAI 官方文档 `developers.openai.com/api/docs/guides/prompt-caching`、`/pricing`、`/guides/latest-model`。
+>
+> **本文档第 1-6 节描述的显式缓存机制（`prompt_cache_options`/`prompt_cache_breakpoint`/`cache_write_tokens`）专指 OpenAI 官方原生 API（`api.openai.com`）。Azure OpenAI 目前不支持这套机制，也还没有上架 GPT-5.6，详见第 7 节。本项目 commit `8c84ed53` 的透传字段与计费改动，实现的正是第 1-6 节这套 OpenAI 原生机制。**
 
 ## 1. 与老模型的区别
 
@@ -30,7 +32,105 @@ GPT-5.6（Sol / Terra / Luna）首次把"隐式缓存"和"显式缓存"统一成
 - 只有 `explicit` 是 `prompt_cache_breakpoint.mode` 的合法值；打在不支持/不可缓存的块上返回 `400 invalid_request_error`。
 - 老模型（GPT-5.6 之前）若收到 `prompt_cache_options`/`prompt_cache_breakpoint` 会直接报错拒绝。
 
-## 3. 如何创建显式缓存 —— curl 示例
+## 3. OpenAI 官方到底怎么"创建"缓存
+
+### 3.1 关键认知：没有单独的"创建缓存"接口
+
+这是最容易被误解的一点：OpenAI 不像 Gemini（`models.cachedContents.create` 单独建缓存、拿到一个 `cache_name` 再引用）那样有一个专门的"创建缓存"API。**"创建缓存"和"正常对话请求"是同一个 API 调用**——你打的 `prompt_cache_breakpoint`，只是告诉 OpenAI "这里往前的内容值得存一份"，创建动作是这次请求的**副作用**，不是一个独立步骤：
+
+1. 你正常调用 `/v1/chat/completions` 或 `/v1/responses`，在某个内容块上加 `prompt_cache_breakpoint: {"mode": "explicit"}`。
+2. 服务端检查这个断点之前的内容有没有缓存命中：
+   - **没命中（第一次调用，或缓存已过期）** → 正常跑完整推理，同时把断点之前的内容写入缓存 → 这次请求的 `cache_write_tokens > 0`，`cached_tokens = 0`，多付 1.25× 的钱。**这次调用本身就是"创建缓存"的动作**。
+   - **命中（后续调用，prompt_cache_key 一致、前缀完全一致、还在 TTL 内）** → 跳过重新计算，直接复用 → `cached_tokens > 0`，`cache_write_tokens = 0`，按 10% 折扣计费。
+3. 同一个断点一旦写入成功，30 分钟 TTL 内的后续调用只会"读"不会"重写"——即使中间又调用了 10 次，也不会再产生 `cache_write_tokens`（除非过期后重新触发一次写入）。
+
+所以"创建缓存"= **带着 `prompt_cache_breakpoint` 打第一次请求**，没有第二个动作。
+
+### 3.2 完整生命周期示例：从创建到命中
+
+用同一个 `prompt_cache_key` + 完全相同的前缀连续打两次 Chat Completions，观察 usage 字段的变化：
+
+**第 1 次调用（创建 / cache miss）**——注意此时缓存里还没有这段内容：
+
+```bash
+curl https://api.openai.com/v1/chat/completions \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.6",
+    "prompt_cache_key": "tenant:acme:support-assistant-v1",
+    "prompt_cache_options": { "mode": "explicit" },
+    "messages": [
+      {
+        "role": "system",
+        "content": [
+          {
+            "type": "text",
+            "text": "You are a support assistant. <...1024+ tokens 的稳定说明/知识库...>",
+            "prompt_cache_breakpoint": { "mode": "explicit" }
+          }
+        ]
+      },
+      { "role": "user", "content": "第一个用户的问题" }
+    ]
+  }'
+```
+
+对应响应（节选）——`cache_write_tokens` 非零，说明这次请求把断点之前的内容**新写入**了缓存：
+
+```json
+"usage": {
+  "prompt_tokens": 1300,
+  "completion_tokens": 120,
+  "prompt_tokens_details": {
+    "cached_tokens": 0,
+    "cache_write_tokens": 1200
+  }
+}
+```
+
+**第 2 次调用（命中 / cache read）**——`prompt_cache_key` 不变，断点之前的内容一字不差，只换了 user 消息：
+
+```bash
+curl https://api.openai.com/v1/chat/completions \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.6",
+    "prompt_cache_key": "tenant:acme:support-assistant-v1",
+    "prompt_cache_options": { "mode": "explicit" },
+    "messages": [
+      {
+        "role": "system",
+        "content": [
+          {
+            "type": "text",
+            "text": "You are a support assistant. <...和上一次逐字节完全相同的说明/知识库...>",
+            "prompt_cache_breakpoint": { "mode": "explicit" }
+          }
+        ]
+      },
+      { "role": "user", "content": "第二个用户的问题（内容可以不同）" }
+    ]
+  }'
+```
+
+对应响应（节选）——这次 `cached_tokens` 非零、`cache_write_tokens` 归零，说明命中了第一次写入的缓存：
+
+```json
+"usage": {
+  "prompt_tokens": 1310,
+  "completion_tokens": 95,
+  "prompt_tokens_details": {
+    "cached_tokens": 1200,
+    "cache_write_tokens": 0
+  }
+}
+```
+
+两次调用的差异只在断点之后的 `user` 消息内容；断点之前的 1200 tokens 逐字节相同，所以第 2 次命中。30 分钟内继续用同一个 `prompt_cache_key` 打相同前缀，会一直读到这份缓存；超过 30 分钟没人用（或被更长时间挤出），下一次调用就会退回"cache miss → 重新写入"，回到第 1 次的状态。
+
+### 3.3 标记断点的两种写法（Responses API / Chat Completions API）
 
 **Responses API**（隐式断点 + 对一个稳定文件手动加显式断点）：
 
@@ -123,29 +223,83 @@ Responses API 对应字段是 `usage.input_tokens_details.cached_tokens` / `cach
 - Batch/Flex 档价格是 Standard 的一半；Priority 档是 Standard 的 2 倍，规律一致。
 - 2026-03-05 后发布的模型走 data residency（区域处理）端点会再加 10% uplift。
 
-## 6. 本项目（gravitex-api 网关）支持现状
 
-调研时的结论（详见对应 commit 的代码改动）：
+## 7. Azure OpenAI 是否支持这套显式缓存？—— 不支持，且目前连模型都没有
 
-- **已支持**：`prompt_cache_key`、`prompt_cache_retention`（老式字段）在 `GeneralOpenAIRequest` 里有透传字段；`cached_tokens`（读取命中）已被解析并计入 `InputTokenDetails.CachedTokens`，参与计费折扣。隐式缓存（自动缓存）本身可以正常工作。
-- **未支持（本次改动前）**：
-  1. 新的 `prompt_cache_options`（`mode`/`ttl`）字段未在请求结构体里声明，客户端传了会被静默丢弃，无法转发给上游。
-  2. 内容块级别的 `prompt_cache_breakpoint` 字段（打在 `input_text`/`input_file`/`text` 等 block 上）同样未声明，会被丢弃。
-  3. 全仓库对 `cache_write_tokens`/`CacheWriteTokens` 零匹配 —— 上游返回的缓存写入 token 数完全没有被解析和计费，会导致成本核算偏差（网关侵蚀这部分差价）。
+结论先说：**同事的判断是对的，有官方依据**。而且比"创建缓存不行"更彻底——Azure 上目前根本没有 GPT-5.6 这个模型，显式缓存断点机制对 Azure 渠道来说无从谈起。
 
-本次改动补齐了以上三点，具体改动点：
+### 7.1 证据 1：Azure 官方文档只字未提"显式缓存"
 
-| 改动 | 文件 |
-|---|---|
-| 请求透传 `prompt_cache_options`（顶层，mode/ttl） | `dto/openai_request.go`（`GeneralOpenAIRequest`） |
-| 请求透传 `prompt_cache_breakpoint`（内容块级别） | `dto/openai_request.go`（Chat Completions 用 `MediaContent`，Responses API 用 `MediaInput`） |
-| 响应新增 `cache_write_tokens` 字段 | `dto/openai_response.go`（`InputTokenDetails`），Chat Completions 因与上游 JSON 结构一致可自动解析，无需额外代码 |
-| Responses API 用量拷贝到内部 `dto.Usage` | `relay/channel/openai/relay_responses.go`（非流式 + 流式）、`chat_via_responses.go`、`relay_image.go` |
-| 计费：写入 token 并入现有"缓存创建"计价档 | `service/text_quota.go`（默认比例计费）、`service/tiered_settle.go`（`cc` 表达式变量，供 tiered_expr 计费模型使用） |
-| 默认比例：读取 0.1x、写入 1.25x | `setting/ratio_setting/cache_ratio.go`（新增 `gpt-5.6-sol/terra/luna` 三个模型的 `defaultCacheRatio`/`defaultCreateCacheRatio` 条目） |
+Azure 官方 Prompt Caching 文档：
 
-**设计取舍**：没有新增独立的"缓存写入倍率"字段/表达式变量，而是把 `cache_write_tokens` 直接并入已有的 `CachedCreationTokens`/`cc` 计价档（Claude 的 cache creation 概念）。两者语义一致——都是"本次新写入缓存、按溢价计费的 token"，复用现有 `CacheCreationRatio` 与表达式引擎的 `cc` 变量，避免了对 `pkg/billingexpr` 引擎、前端计价编辑器等大范围改动。
+- https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/prompt-caching （`ms.date: 2026-05-13`）
 
-**已知限制 / 后续工作**：
-- 本次改动只处理缓存机制本身，不包含 `gpt-5.6-sol`/`terra`/`luna` 的基础模型倍率（`ModelRatio`）录入——渠道要实际转发这三个模型，管理员仍需在后台补充模型倍率/价格配置，否则请求会报 "模型价格未配置" 错误。
-- `prompt_cache_options`/`prompt_cache_breakpoint` 目前是纯透传（`json.RawMessage`），网关不校验其内容，格式错误由上游 OpenAI 返回 `400` 给客户端。
+全文抓取后逐字检索 `explicit` / `breakpoint` / `cache_write` / `prompt_cache_options` —— **零匹配**。文档里只讲了两种策略：
+
+```
+"prompt_cache_retention": "in_memory"
+```
+
+或：
+
+```
+"prompt_cache_retention": "24h"
+```
+
+以及路由用的 `prompt_cache_key`，返回侧只定义了 `prompt_tokens_details.cached_tokens`，没有 `cache_write_tokens`。这与本目录下 `Azure_gpt.md` 里同事的原始判断完全一致。
+
+### 7.2 证据 2：Azure 模型清单里根本没有 GPT-5.6
+
+Azure 官方模型目录页：
+
+- https://aka.ms/oai/modelupdates （"Foundry Models sold by Azure"）
+
+列出的最新系列是：
+
+```
+GPT-5.5 series   NEW  gpt-5.5
+GPT-5.4 series   gpt-5.4-mini, gpt-5.4-nano, gpt-5.4, gpt-5.4-pro
+GPT-5.3 series   gpt-5.3-chat, gpt-5.3-codex
+...
+```
+
+**没有 gpt-5.6 / sol / terra / luna 任何条目。** GPT-5.6 是 2026-06-26 才开始"限量预览"（OpenAI 官方博客 [Previewing GPT-5.6 Sol](https://openai.com/index/previewing-gpt-5-6-sol/)），2026-07-09 才 GA（[GPT-5.6: Frontier intelligence that scales with your ambition](https://openai.com/index/gpt-5-6/)），目前还是政府协调的小范围放量。Azure 侧连模型本身都没上架，自然不存在"创建缓存"这个问题——不是"不行"，是"还没有"。
+
+### 7.3 证据 3：历史规律——Azure 对 OpenAI 新缓存参数一贯滞后数月
+
+三个 Microsoft Q&A 官方论坛帖子显示同一模式：OpenAI 每出新的缓存能力，Azure 都要晚很久才跟上（甚至一直没跟上）：
+
+1. **2025-11-15**，[Is the new openai prompt_cache_retention setting working for azure?](https://learn.microsoft.com/en-us/answers/questions/5623446/is-the-new-openai-prompt-cache-retention-setting-w) —— 用户在 Azure 上传 GPT-5.1 新增的 `prompt_cache_retention` 参数，返回 **400 Bad Request**；微软员工回复：功能仍在滚动上线，还没覆盖所有部署。
+2. **2026-03-04**，[Does Azure OpenAI support "Extended Prompt Cache Retention"?](https://learn.microsoft.com/en-us/answers/questions/5807188/does-azure-openai-support-extended-prompt-cache-re) —— 同样的参数用在 `gpt-5.2` 上仍报错 `prompt_cache_retention is not supported on this model`；官方回复明确：**Azure OpenAI 目前只支持标准 in-memory 缓存，不支持 Extended Retention，且没有支持时间表**。
+3. **2026-03-31**，[Realtime API caching behavior available through OpenAI but not through Azure OpenAI](https://learn.microsoft.com/en-us/answers/questions/5845663/realtime-api-caching-behavior-available-through-op) —— 用户反馈同一套实时对话逻辑在 OpenAI 直连能命中缓存，Azure 上 `cached_tokens` 始终为 0。
+
+### 7.4 那 Azure 现在该怎么调用缓存？
+
+既然确认不支持显式断点，Azure 上能用的只有**自动/隐式缓存**——跟 GPT-5.6 之前的老机制一样，不需要任何"创建"动作：
+
+```bash
+curl https://{your-resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions?api-version=2025-04-01-preview \
+  -H "api-key: $AZURE_OPENAI_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      {"role": "system", "content": "..."},
+      {"role": "user", "content": "..."}
+    ],
+    "prompt_cache_key": "tenant:acme:support-assistant"
+  }'
+```
+
+- 前 1024 tokens 完全一致即可自动命中，之后每多 128 个相同 token 再多命中一档；
+- 加 `prompt_cache_key` 能提升路由到同一台机器的概率，是目前 Azure 上唯一能"半主动"影响缓存命中率的手段；
+- 不要发 `prompt_cache_options` / `prompt_cache_breakpoint`，Azure 目前不认，发了要么被忽略要么报错；
+- 响应里只有 `cached_tokens`，没有 `cache_write_tokens`——不能从第一次请求 `cached_tokens=0` 就反推所有输入 token 都算"缓存写入"，因为 Azure 官方没有提供这个计费口径，本项目也不应该替 Azure 编造这个字段。
+
+### 7.5 小结
+
+```
+Azure Chat 缓存行为符合预期：自动缓存 + cached_tokens 读取折扣
+Azure 不支持显式缓存创建（prompt_cache_options / prompt_cache_breakpoint）
+Azure 官方 usage 不包含 cache_write_tokens
+
+```
