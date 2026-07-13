@@ -23,6 +23,7 @@ type TokenParams struct {
 	Img  float64 // image input tokens
 	ImgO float64 // image output tokens
 	AI   float64 // audio input tokens
+	VI   float64 // video input tokens
 	AO   float64 // audio output tokens
 }
 

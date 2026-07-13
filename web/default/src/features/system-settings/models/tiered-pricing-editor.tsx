@@ -888,7 +888,7 @@ function RawExprEditor({ exprString, onChange }: RawExprEditorProps) {
           <div>
             {t('Variables')}: <code>len</code>, <code>p</code>, <code>c</code>,{' '}
             <code>cr</code>, <code>cc</code>, <code>cc1h</code>,{' '}
-            <code>img</code>, <code>img_o</code>, <code>ai</code>,{' '}
+            <code>img</code>, <code>img_o</code>, <code>ai</code>, <code>vi</code>,{' '}
             <code>ao</code>
           </div>
           <div>
@@ -1488,6 +1488,7 @@ Input side:
 - cc1h — cache-create token count (1-hour TTL, Claude-specific)
 - img — image input token count
 - ai — audio input token count
+- vi — video input token count
 
 Output side:
 - c — output token count. Also auto-excludes sub-categories priced separately

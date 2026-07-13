@@ -1178,6 +1178,8 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 			usage.PromptTokensDetails.TextTokens += detail.TokenCount
 		case strings.EqualFold(mod, "IMAGE"):
 			usage.PromptTokensDetails.ImageTokens += detail.TokenCount
+		case strings.EqualFold(mod, "VIDEO"):
+			usage.PromptTokensDetails.VideoTokens += detail.TokenCount
 		}
 	}
 	for _, detail := range metadata.ToolUsePromptTokensDetails {
@@ -1189,6 +1191,8 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 			usage.PromptTokensDetails.TextTokens += detail.TokenCount
 		case strings.EqualFold(mod, "IMAGE"):
 			usage.PromptTokensDetails.ImageTokens += detail.TokenCount
+		case strings.EqualFold(mod, "VIDEO"):
+			usage.PromptTokensDetails.VideoTokens += detail.TokenCount
 		}
 	}
 	// CHZ-PATCH(gemini-usage-fix): 原代码对 CandidatesTokensDetails 写了两个循环导致
@@ -2222,11 +2226,12 @@ func buildImageUsageFromGeminiUsage(u *dto.Usage) *dto.ImageUsage {
 	}
 	inputDetails := u.PromptTokensDetails
 	if inputDetails.TextTokens > 0 || inputDetails.ImageTokens > 0 ||
-		inputDetails.AudioTokens > 0 || inputDetails.CachedTokens > 0 {
+		inputDetails.AudioTokens > 0 || inputDetails.VideoTokens > 0 || inputDetails.CachedTokens > 0 {
 		usage.InputTokensDetails = &dto.InputTokenDetails{
 			TextTokens:   inputDetails.TextTokens,
 			ImageTokens:  inputDetails.ImageTokens,
 			AudioTokens:  inputDetails.AudioTokens,
+			VideoTokens:  inputDetails.VideoTokens,
 			CachedTokens: inputDetails.CachedTokens,
 		}
 	}

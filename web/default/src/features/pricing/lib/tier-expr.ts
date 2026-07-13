@@ -41,6 +41,7 @@ export type VisualTier = {
   image_output_unit_cost?: number
   audio_input_unit_cost?: number
   audio_output_unit_cost?: number
+  video_input_unit_cost?: number
   [field: string]: unknown
 }
 
@@ -75,6 +76,7 @@ export function normalizeVisualTier(
     image_output_unit_cost: Number(tier.image_output_unit_cost) || 0,
     audio_input_unit_cost: Number(tier.audio_input_unit_cost) || 0,
     audio_output_unit_cost: Number(tier.audio_output_unit_cost) || 0,
+    video_input_unit_cost: Number(tier.video_input_unit_cost) || 0,
   }
 }
 
@@ -254,6 +256,7 @@ const ESTIMATOR_VARS = [
   { var: 'img', stateKey: 'imageTokens' },
   { var: 'img_o', stateKey: 'imageOutputTokens' },
   { var: 'ai', stateKey: 'audioInputTokens' },
+  { var: 'vi', stateKey: 'videoInputTokens' },
   { var: 'ao', stateKey: 'audioOutputTokens' },
 ] as const
 
