@@ -171,6 +171,16 @@ func AddToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// 企业主账号（已开启限制）无权创建 API 密钥
+	restricted, err := model.IsEnterpriseApikeyRestrictedOwner(c.GetInt("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if restricted {
+		common.ApiErrorI18n(c, i18n.MsgEnterpriseOwnerApikeyForbidden)
+		return
+	}
 	if len(token.Name) > 50 {
 		common.ApiErrorI18n(c, i18n.MsgTokenNameTooLong)
 		return
@@ -270,6 +280,18 @@ func UpdateToken(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	// 企业主账号（已开启限制）无权修改 API 密钥；仅启用/禁用（status_only）不拦截
+	if statusOnly != "true" {
+		restricted, rerr := model.IsEnterpriseApikeyRestrictedOwner(userId)
+		if rerr != nil {
+			common.ApiError(c, rerr)
+			return
+		}
+		if restricted {
+			common.ApiErrorI18n(c, i18n.MsgEnterpriseOwnerApikeyForbidden)
+			return
+		}
 	}
 
 	token := model.Token{
