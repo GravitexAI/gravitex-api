@@ -164,6 +164,41 @@ func GetTokenUsage(c *gin.Context) {
 	})
 }
 
+// capModelLimitsForEnterpriseSubAccount 若调用者是受限企业子账号，则将其 token 的模型范围
+// 收敛到企业允许集合内：强制启用模型限制，取"提交值∩允许集合"（提交为空则取全部允许集合）。
+// 非受限用户返回原值不变。返回 (enabled, limits)。
+func capModelLimitsForEnterpriseSubAccount(userId int, submittedEnabled bool, submittedLimits string) (bool, string) {
+	allowed, restricted, err := model.GetSubAccountAllowedModelSet(userId)
+	if err != nil {
+		common.SysError("check enterprise allowed models failed: " + err.Error())
+		return submittedEnabled, submittedLimits
+	}
+	if !restricted {
+		return submittedEnabled, submittedLimits
+	}
+	// 解析提交的模型限制（逗号分隔）
+	var effective []string
+	submitted := strings.Split(submittedLimits, ",")
+	hasSubmitted := false
+	for _, m := range submitted {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
+		}
+		hasSubmitted = true
+		if allowed[m] {
+			effective = append(effective, m)
+		}
+	}
+	if !hasSubmitted {
+		// 未提交任何限制 → 收敛为全部允许模型
+		for m := range allowed {
+			effective = append(effective, m)
+		}
+	}
+	return true, strings.Join(effective, ",")
+}
+
 func AddToken(c *gin.Context) {
 	token := model.Token{}
 	err := c.ShouldBindJSON(&token)
@@ -217,6 +252,7 @@ func AddToken(c *gin.Context) {
 		common.SysLog("failed to generate token key: " + err.Error())
 		return
 	}
+	cappedEnabled, cappedLimits := capModelLimitsForEnterpriseSubAccount(c.GetInt("id"), token.ModelLimitsEnabled, token.ModelLimits)
 	cleanToken := model.Token{
 		UserId:             c.GetInt("id"),
 		Name:               token.Name,
@@ -226,8 +262,8 @@ func AddToken(c *gin.Context) {
 		ExpiredTime:        token.ExpiredTime,
 		RemainQuota:        token.RemainQuota,
 		UnlimitedQuota:     token.UnlimitedQuota,
-		ModelLimitsEnabled: token.ModelLimitsEnabled,
-		ModelLimits:        token.ModelLimits,
+		ModelLimitsEnabled: cappedEnabled,
+		ModelLimits:        cappedLimits,
 		AllowIps:           token.AllowIps,
 		Group:              token.Group,
 		CrossGroupRetry:    token.CrossGroupRetry,
@@ -292,6 +328,7 @@ func UpdateToken(c *gin.Context) {
 		}
 	}
 
+	cappedEnabled, cappedLimits := capModelLimitsForEnterpriseSubAccount(userId, req.ModelLimitsEnabled, req.ModelLimits)
 	token := model.Token{
 		Id:                 req.Id.Int(),
 		Status:             req.Status,
@@ -299,8 +336,8 @@ func UpdateToken(c *gin.Context) {
 		ExpiredTime:        req.ExpiredTime,
 		RemainQuota:        req.RemainQuota,
 		UnlimitedQuota:     req.UnlimitedQuota,
-		ModelLimitsEnabled: req.ModelLimitsEnabled,
-		ModelLimits:        req.ModelLimits,
+		ModelLimitsEnabled: cappedEnabled,
+		ModelLimits:        cappedLimits,
 		AllowIps:           req.AllowIps,
 		Group:              req.Group,
 		CrossGroupRetry:    req.CrossGroupRetry,
