@@ -37,6 +37,7 @@ func (EnterpriseInfo) TableName() string { return "t_enterprise_info" }
 // enterpriseSettingsPartial 只声明 Go 关心的字段；未知键被忽略，Java 可自由扩展。
 type enterpriseSettingsPartial struct {
 	OwnerApikeyRestrictionEnabled bool `json:"ownerApikeyRestrictionEnabled"`
+	SensitiveOpAlertEnabled       bool `json:"sensitiveOpAlertEnabled"`
 }
 
 // parseOwnerApikeyRestriction 从 enterprise_settings JSON 字符串中安全读取
@@ -119,4 +120,39 @@ func GetSubAccountAllowedModelSet(userId int) (map[string]bool, bool, error) {
 		return nil, false, nil
 	}
 	return set, true, nil
+}
+
+// GetSubAccountSensitiveOpAlert 返回该用户所属企业是否开启了"敏感操作邮件提醒"。
+// 仅当用户是 userType=2 的子账号且其企业的 enterprise_settings 配置了
+// sensitiveOpAlertEnabled=true 时 enabled=true；同时返回其所属企业 id。
+// 非企业用户、主账号、未开启提醒，一律返回 (0, false, nil)，保证不影响其他用户。
+// 真实数据库错误才作为 error 返回，其它异常情况一律视为不告警。
+func GetSubAccountSensitiveOpAlert(userId int) (enterpriseId int64, enabled bool, err error) {
+	var eu EnterpriseUser
+	err = DB.Where("user_id = ? AND del_flag = 0", userId).First(&eu).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if eu.UserType != 2 {
+		return 0, false, nil
+	}
+	var ent EnterpriseInfo
+	err = DB.Where("id = ? AND del_flag = 0", eu.EnterpriseId).First(&ent).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if ent.EnterpriseSettings == "" {
+		return eu.EnterpriseId, false, nil
+	}
+	var s enterpriseSettingsPartial
+	if err := common.UnmarshalJsonStr(ent.EnterpriseSettings, &s); err != nil {
+		return eu.EnterpriseId, false, nil
+	}
+	return eu.EnterpriseId, s.SensitiveOpAlertEnabled, nil
 }

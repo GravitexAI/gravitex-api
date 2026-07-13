@@ -9,8 +9,10 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
 
@@ -273,6 +275,12 @@ func AddToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// 企业子账号敏感操作告警：新增 API 密钥。best-effort，绝不影响本次响应。
+	userId := c.GetInt("id")
+	tokenName := token.Name
+	gopool.Go(func() {
+		service.NotifySensitiveOp(userId, "apikey_created", "新增API密钥提醒", "<p>子账号新增了一个 API 密钥。名称："+tokenName+"</p>")
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -395,6 +403,13 @@ func UpdateToken(c *gin.Context) {
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	// 企业子账号敏感操作告警：更新出口 IP 白名单。仅当本次请求非纯状态更新且
+	// 携带了 allow_ips 字段时触发；不区分"是否真的发生变化"，best-effort，绝不影响本次响应。
+	if statusOnly != "true" && req.AllowIps != nil {
+		gopool.Go(func() {
+			service.NotifySensitiveOp(userId, "ip_whitelist_updated", "更新出口IP白名单提醒", "<p>子账号更新了出口 IP 白名单。</p>")
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
