@@ -171,13 +171,13 @@ func AddToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	// 企业主账号（已开启限制）无权创建 API 密钥
-	restricted, err := model.IsEnterpriseApikeyRestrictedOwner(c.GetInt("id"))
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if restricted {
+	// 企业主账号（已开启限制）无权创建 API 密钥。
+	// 判定依赖 Java 维护的企业表；查询出错时按"不受限"处理并记录日志，
+	// 避免因企业表异常波及全体（含非企业）用户创建密钥。
+	restricted, rerr := model.IsEnterpriseApikeyRestrictedOwner(c.GetInt("id"))
+	if rerr != nil {
+		common.SysError("check enterprise apikey restriction failed (AddToken): " + rerr.Error())
+	} else if restricted {
 		common.ApiErrorI18n(c, i18n.MsgEnterpriseOwnerApikeyForbidden)
 		return
 	}
@@ -285,10 +285,8 @@ func UpdateToken(c *gin.Context) {
 	if statusOnly != "true" {
 		restricted, rerr := model.IsEnterpriseApikeyRestrictedOwner(userId)
 		if rerr != nil {
-			common.ApiError(c, rerr)
-			return
-		}
-		if restricted {
+			common.SysError("check enterprise apikey restriction failed (UpdateToken): " + rerr.Error())
+		} else if restricted {
 			common.ApiErrorI18n(c, i18n.MsgEnterpriseOwnerApikeyForbidden)
 			return
 		}
