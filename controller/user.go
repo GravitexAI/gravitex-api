@@ -606,58 +606,38 @@ func GetUserModelsAccount(c *gin.Context) {
 	if err != nil {
 		id64 = int64(c.GetInt("id"))
 	}
-	user, err := model.GetUserCache(int(id64))
+	_, err = model.GetUserCache(int(id64))
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	enterpriseUser, err := model.GetEnterpriseInfoByUserId(user.Id)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-
-	var allowedModels struct {
-		Models []string `json:"models"`
-	}
-	if err := common.UnmarshalJsonStr(enterpriseUser.AllowedModels, &allowedModels); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-
 	type accountModel struct {
 		Id        int    `json:"id"`
 		ModelName string `json:"model_name"`
 	}
 	type accountVendor struct {
+		VendorID   int            `json:"vendor_id"`
 		VendorName string         `json:"vendor_name"`
 		Models     []accountModel `json:"models"`
 	}
 
-	modelRows := make([]model.Model, 0, len(allowedModels.Models))
-	if len(allowedModels.Models) > 0 {
-		if err := model.DB.Where("model_name IN ?", allowedModels.Models).Find(&modelRows).Error; err != nil {
-			common.ApiError(c, err)
-			return
-		}
-	}
-	modelByName := make(map[string]model.Model, len(modelRows))
-	for _, row := range modelRows {
-		modelByName[row.ModelName] = row
+	modelRows := make([]model.Model, 0)
+	if err := model.DB.Where("status = ?", 1).Order("id ASC").Find(&modelRows).Error; err != nil {
+		common.ApiError(c, err)
+		return
 	}
 
 	vendorIDs := make([]int, 0)
 	seenVendorIDs := make(map[int]bool)
-	for _, modelName := range allowedModels.Models {
-		row, ok := modelByName[modelName]
-		if ok && !seenVendorIDs[row.VendorID] {
+	for _, row := range modelRows {
+		if !seenVendorIDs[row.VendorID] {
 			vendorIDs = append(vendorIDs, row.VendorID)
 			seenVendorIDs[row.VendorID] = true
 		}
 	}
 	vendors := make([]model.Vendor, 0, len(vendorIDs))
 	if len(vendorIDs) > 0 {
-		if err := model.DB.Where("id IN ?", vendorIDs).Find(&vendors).Error; err != nil {
+		if err := model.DB.Where("id IN ? AND status = ?", vendorIDs, 1).Find(&vendors).Error; err != nil {
 			common.ApiError(c, err)
 			return
 		}
@@ -669,17 +649,16 @@ func GetUserModelsAccount(c *gin.Context) {
 
 	result := make([]accountVendor, 0, len(vendorIDs))
 	resultIndex := make(map[int]int, len(vendorIDs))
-	for _, modelName := range allowedModels.Models {
-		row, ok := modelByName[modelName]
+	for _, row := range modelRows {
 		vendorName, vendorExists := vendorByID[row.VendorID]
-		if !ok || !vendorExists {
+		if !vendorExists {
 			continue
 		}
 		index, exists := resultIndex[row.VendorID]
 		if !exists {
 			index = len(result)
 			resultIndex[row.VendorID] = index
-			result = append(result, accountVendor{VendorName: vendorName})
+			result = append(result, accountVendor{VendorID: row.VendorID, VendorName: vendorName})
 		}
 		result[index].Models = append(result[index].Models, accountModel{Id: row.Id, ModelName: row.ModelName})
 	}

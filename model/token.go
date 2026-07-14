@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ type Token struct {
 	UnlimitedQuota      bool           `json:"unlimited_quota"`
 	ModelLimitsEnabled  bool           `json:"model_limits_enabled"`
 	ModelLimits         string         `json:"model_limits" gorm:"type:text"`
+	VendorLimits        string         `json:"vendor_limits" gorm:"type:text"`
 	AllowIps            *string        `json:"allow_ips" gorm:"default:''"`
 	UsedQuota           int            `json:"used_quota" gorm:"default:0"` // used quota
 	Group               string         `json:"group" gorm:"default:''"`
@@ -297,7 +299,7 @@ func (token *Token) Update() (err error) {
 		}
 	}()
 	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry", "daily_spend_threshold").Updates(token).Error
+		"model_limits_enabled", "model_limits", "vendor_limits", "allow_ips", "group", "cross_group_retry", "daily_spend_threshold").Updates(token).Error
 	return err
 }
 
@@ -347,6 +349,17 @@ func (token *Token) GetModelLimitsMap() map[string]bool {
 	limitsMap := make(map[string]bool)
 	for _, limit := range limits {
 		limitsMap[limit] = true
+	}
+	return limitsMap
+}
+
+func (token *Token) GetVendorLimitsMap() map[int]bool {
+	limitsMap := make(map[int]bool)
+	for _, limit := range strings.Split(token.VendorLimits, ",") {
+		vendorId, err := strconv.Atoi(strings.TrimSpace(limit))
+		if err == nil && vendorId > 0 {
+			limitsMap[vendorId] = true
+		}
 	}
 	return limitsMap
 }

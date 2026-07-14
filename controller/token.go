@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -166,44 +167,49 @@ func GetTokenUsage(c *gin.Context) {
 			"unlimited_quota":      token.UnlimitedQuota,
 			"model_limits":         token.GetModelLimitsMap(),
 			"model_limits_enabled": token.ModelLimitsEnabled,
+			"vendor_limits":        token.GetVendorLimitsMap(),
 			"expires_at":           expiredAt,
 		},
 	})
 }
 
-// capModelLimitsForEnterpriseSubAccount 若调用者是受限企业子账号，则将其 token 的模型范围
-// 收敛到企业允许集合内：强制启用模型限制，取"提交值∩允许集合"（提交为空则取全部允许集合）。
-// 非受限用户返回原值不变。返回 (enabled, limits)。
-func capModelLimitsForEnterpriseSubAccount(userId int, submittedEnabled bool, submittedLimits string) (bool, string) {
+// capTokenLimitsForEnterpriseSubAccount keeps the existing enterprise model
+// limit behavior. Vendor limits are persisted as submitted and are checked
+// against the enterprise allowlist during request authentication.
+func capTokenLimitsForEnterpriseSubAccount(userId int, submittedEnabled bool, submittedModelLimits string, submittedVendorLimits string) (bool, string, string) {
 	allowed, restricted, err := model.GetSubAccountAllowedModelSet(userId)
 	if err != nil {
 		common.SysError("check enterprise allowed models failed: " + err.Error())
-		return submittedEnabled, submittedLimits
+		return submittedEnabled, submittedModelLimits, submittedVendorLimits
 	}
 	if !restricted {
-		return submittedEnabled, submittedLimits
+		return submittedEnabled, submittedModelLimits, submittedVendorLimits
 	}
-	// 解析提交的模型限制（逗号分隔）
-	var effective []string
-	submitted := strings.Split(submittedLimits, ",")
+
+	effectiveSet := make(map[string]bool)
 	hasSubmitted := false
-	for _, m := range submitted {
+	for _, m := range strings.Split(submittedModelLimits, ",") {
 		m = strings.TrimSpace(m)
 		if m == "" {
 			continue
 		}
 		hasSubmitted = true
 		if allowed[m] {
-			effective = append(effective, m)
+			effectiveSet[m] = true
 		}
 	}
+
 	if !hasSubmitted {
-		// 未提交任何限制 → 收敛为全部允许模型
 		for m := range allowed {
-			effective = append(effective, m)
+			effectiveSet[m] = true
 		}
 	}
-	return true, strings.Join(effective, ",")
+	effective := make([]string, 0, len(effectiveSet))
+	for modelName := range effectiveSet {
+		effective = append(effective, modelName)
+	}
+	slices.Sort(effective)
+	return true, strings.Join(effective, ","), submittedVendorLimits
 }
 
 func AddToken(c *gin.Context) {
@@ -259,7 +265,7 @@ func AddToken(c *gin.Context) {
 		common.SysLog("failed to generate token key: " + err.Error())
 		return
 	}
-	cappedEnabled, cappedLimits := capModelLimitsForEnterpriseSubAccount(c.GetInt("id"), token.ModelLimitsEnabled, token.ModelLimits)
+	cappedEnabled, cappedModelLimits, cappedVendorLimits := capTokenLimitsForEnterpriseSubAccount(c.GetInt("id"), token.ModelLimitsEnabled, token.ModelLimits, token.VendorLimits)
 	cleanToken := model.Token{
 		UserId:              c.GetInt("id"),
 		Name:                token.Name,
@@ -270,7 +276,8 @@ func AddToken(c *gin.Context) {
 		RemainQuota:         token.RemainQuota,
 		UnlimitedQuota:      token.UnlimitedQuota,
 		ModelLimitsEnabled:  cappedEnabled,
-		ModelLimits:         cappedLimits,
+		ModelLimits:         cappedModelLimits,
+		VendorLimits:        cappedVendorLimits,
 		AllowIps:            token.AllowIps,
 		Group:               token.Group,
 		CrossGroupRetry:     token.CrossGroupRetry,
@@ -326,6 +333,7 @@ func UpdateToken(c *gin.Context) {
 		UnlimitedQuota      bool                 `json:"unlimited_quota"`
 		ModelLimitsEnabled  bool                 `json:"model_limits_enabled"`
 		ModelLimits         string               `json:"model_limits"`
+		VendorLimits        string               `json:"vendor_limits"`
 		AllowIps            *string              `json:"allow_ips"`
 		Group               string               `json:"group"`
 		CrossGroupRetry     bool                 `json:"cross_group_retry"`
@@ -349,7 +357,7 @@ func UpdateToken(c *gin.Context) {
 		}
 	}
 
-	cappedEnabled, cappedLimits := capModelLimitsForEnterpriseSubAccount(userId, req.ModelLimitsEnabled, req.ModelLimits)
+	cappedEnabled, cappedModelLimits, cappedVendorLimits := capTokenLimitsForEnterpriseSubAccount(userId, req.ModelLimitsEnabled, req.ModelLimits, req.VendorLimits)
 	token := model.Token{
 		Id:                  req.Id.Int(),
 		Status:              req.Status,
@@ -358,7 +366,8 @@ func UpdateToken(c *gin.Context) {
 		RemainQuota:         req.RemainQuota,
 		UnlimitedQuota:      req.UnlimitedQuota,
 		ModelLimitsEnabled:  cappedEnabled,
-		ModelLimits:         cappedLimits,
+		ModelLimits:         cappedModelLimits,
+		VendorLimits:        cappedVendorLimits,
 		AllowIps:            req.AllowIps,
 		Group:               req.Group,
 		CrossGroupRetry:     req.CrossGroupRetry,
@@ -409,6 +418,7 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.UnlimitedQuota = token.UnlimitedQuota
 		cleanToken.ModelLimitsEnabled = token.ModelLimitsEnabled
 		cleanToken.ModelLimits = token.ModelLimits
+		cleanToken.VendorLimits = token.VendorLimits
 		cleanToken.AllowIps = token.AllowIps
 		cleanToken.Group = token.Group
 		cleanToken.CrossGroupRetry = token.CrossGroupRetry

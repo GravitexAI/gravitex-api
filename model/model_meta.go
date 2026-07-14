@@ -263,3 +263,18 @@ func GetVendorIdFromModel(modelName string) *int64 {
 	id := int64(m.VendorID)
 	return &id
 }
+
+// GetEnabledVendorIdFromModel returns the vendor ID only when both the model
+// and its vendor are enabled. Vendor-level token access must not revive models
+// hidden by model or vendor metadata.
+func GetEnabledVendorIdFromModel(modelName string) (int, bool) {
+	var result struct {
+		VendorID int
+	}
+	err := DB.Model(&Model{}).
+		Select("models.vendor_id").
+		Joins("JOIN vendors ON vendors.id = models.vendor_id").
+		Where("models.model_name = ? AND models.status = ? AND vendors.status = ? AND vendors.deleted_at IS NULL", modelName, 1, 1).
+		Take(&result).Error
+	return result.VendorID, err == nil && result.VendorID > 0
+}
