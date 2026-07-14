@@ -256,19 +256,20 @@ func AddToken(c *gin.Context) {
 	}
 	cappedEnabled, cappedLimits := capModelLimitsForEnterpriseSubAccount(c.GetInt("id"), token.ModelLimitsEnabled, token.ModelLimits)
 	cleanToken := model.Token{
-		UserId:             c.GetInt("id"),
-		Name:               token.Name,
-		Key:                key,
-		CreatedTime:        common.GetTimestamp(),
-		AccessedTime:       common.GetTimestamp(),
-		ExpiredTime:        token.ExpiredTime,
-		RemainQuota:        token.RemainQuota,
-		UnlimitedQuota:     token.UnlimitedQuota,
-		ModelLimitsEnabled: cappedEnabled,
-		ModelLimits:        cappedLimits,
-		AllowIps:           token.AllowIps,
-		Group:              token.Group,
-		CrossGroupRetry:    token.CrossGroupRetry,
+		UserId:              c.GetInt("id"),
+		Name:                token.Name,
+		Key:                 key,
+		CreatedTime:         common.GetTimestamp(),
+		AccessedTime:        common.GetTimestamp(),
+		ExpiredTime:         token.ExpiredTime,
+		RemainQuota:         token.RemainQuota,
+		UnlimitedQuota:      token.UnlimitedQuota,
+		ModelLimitsEnabled:  cappedEnabled,
+		ModelLimits:         cappedLimits,
+		AllowIps:            token.AllowIps,
+		Group:               token.Group,
+		CrossGroupRetry:     token.CrossGroupRetry,
+		DailySpendThreshold: token.DailySpendThreshold,
 	}
 	err = cleanToken.Insert()
 	if err != nil {
@@ -306,17 +307,18 @@ func UpdateToken(c *gin.Context) {
 	userId := c.GetInt("id")
 	statusOnly := c.Query("status_only")
 	type updateTokenRequest struct {
-		Id                 common.Int64Flexible `json:"id"`
-		Status             int                  `json:"status"`
-		Name               string               `json:"name"`
-		ExpiredTime        int64                `json:"expired_time"`
-		RemainQuota        int                  `json:"remain_quota"`
-		UnlimitedQuota     bool                 `json:"unlimited_quota"`
-		ModelLimitsEnabled bool                 `json:"model_limits_enabled"`
-		ModelLimits        string               `json:"model_limits"`
-		AllowIps           *string              `json:"allow_ips"`
-		Group              string               `json:"group"`
-		CrossGroupRetry    bool                 `json:"cross_group_retry"`
+		Id                  common.Int64Flexible `json:"id"`
+		Status              int                  `json:"status"`
+		Name                string               `json:"name"`
+		ExpiredTime         int64                `json:"expired_time"`
+		RemainQuota         int                  `json:"remain_quota"`
+		UnlimitedQuota      bool                 `json:"unlimited_quota"`
+		ModelLimitsEnabled  bool                 `json:"model_limits_enabled"`
+		ModelLimits         string               `json:"model_limits"`
+		AllowIps            *string              `json:"allow_ips"`
+		Group               string               `json:"group"`
+		CrossGroupRetry     bool                 `json:"cross_group_retry"`
+		DailySpendThreshold int                  `json:"daily_spend_threshold"`
 	}
 
 	var req updateTokenRequest
@@ -338,17 +340,18 @@ func UpdateToken(c *gin.Context) {
 
 	cappedEnabled, cappedLimits := capModelLimitsForEnterpriseSubAccount(userId, req.ModelLimitsEnabled, req.ModelLimits)
 	token := model.Token{
-		Id:                 req.Id.Int(),
-		Status:             req.Status,
-		Name:               req.Name,
-		ExpiredTime:        req.ExpiredTime,
-		RemainQuota:        req.RemainQuota,
-		UnlimitedQuota:     req.UnlimitedQuota,
-		ModelLimitsEnabled: cappedEnabled,
-		ModelLimits:        cappedLimits,
-		AllowIps:           req.AllowIps,
-		Group:              req.Group,
-		CrossGroupRetry:    req.CrossGroupRetry,
+		Id:                  req.Id.Int(),
+		Status:              req.Status,
+		Name:                req.Name,
+		ExpiredTime:         req.ExpiredTime,
+		RemainQuota:         req.RemainQuota,
+		UnlimitedQuota:      req.UnlimitedQuota,
+		ModelLimitsEnabled:  cappedEnabled,
+		ModelLimits:         cappedLimits,
+		AllowIps:            req.AllowIps,
+		Group:               req.Group,
+		CrossGroupRetry:     req.CrossGroupRetry,
+		DailySpendThreshold: req.DailySpendThreshold,
 	}
 
 	if token.Id == 0 {
@@ -398,6 +401,7 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.AllowIps = token.AllowIps
 		cleanToken.Group = token.Group
 		cleanToken.CrossGroupRetry = token.CrossGroupRetry
+		cleanToken.DailySpendThreshold = token.DailySpendThreshold
 	}
 	err = cleanToken.Update()
 	if err != nil {
