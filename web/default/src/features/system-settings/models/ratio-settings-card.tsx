@@ -103,6 +103,7 @@ const createModelSchema = (t: Translate) =>
     CreateCacheRatio: createJsonStringField(t),
     CompletionRatio: createJsonStringField(t),
     ImageRatio: createJsonStringField(t),
+    VideoRatio: createJsonStringField(t),
     AudioRatio: createJsonStringField(t),
     AudioCompletionRatio: createJsonStringField(t),
     ExposeRatioEnabled: z.boolean(),
@@ -173,6 +174,7 @@ export function RatioSettingsCard({
     CreateCacheRatio: normalizeJsonString(modelDefaults.CreateCacheRatio),
     CompletionRatio: normalizeJsonString(modelDefaults.CompletionRatio),
     ImageRatio: normalizeJsonString(modelDefaults.ImageRatio),
+    VideoRatio: normalizeJsonString(modelDefaults.VideoRatio),
     AudioRatio: normalizeJsonString(modelDefaults.AudioRatio),
     AudioCompletionRatio: normalizeJsonString(
       modelDefaults.AudioCompletionRatio
@@ -242,7 +244,8 @@ export function RatioSettingsCard({
       CacheRatio: normalizeJsonString(modelDefaults.CacheRatio),
       CreateCacheRatio: normalizeJsonString(modelDefaults.CreateCacheRatio),
       CompletionRatio: normalizeJsonString(modelDefaults.CompletionRatio),
-      ImageRatio: normalizeJsonString(modelDefaults.ImageRatio),
+        ImageRatio: normalizeJsonString(modelDefaults.ImageRatio),
+        VideoRatio: normalizeJsonString(modelDefaults.VideoRatio),
       AudioRatio: normalizeJsonString(modelDefaults.AudioRatio),
       AudioCompletionRatio: normalizeJsonString(
         modelDefaults.AudioCompletionRatio
@@ -305,6 +308,7 @@ export function RatioSettingsCard({
         CreateCacheRatio: normalizeJsonString(values.CreateCacheRatio),
         CompletionRatio: normalizeJsonString(values.CompletionRatio),
         ImageRatio: normalizeJsonString(values.ImageRatio),
+        VideoRatio: normalizeJsonString(values.VideoRatio),
         AudioRatio: normalizeJsonString(values.AudioRatio),
         AudioCompletionRatio: normalizeJsonString(values.AudioCompletionRatio),
         ExposeRatioEnabled: values.ExposeRatioEnabled,
@@ -431,6 +435,7 @@ export function RatioSettingsCard({
           CacheRatio: modelDefaults.CacheRatio,
           CreateCacheRatio: modelDefaults.CreateCacheRatio,
           ImageRatio: modelDefaults.ImageRatio,
+          VideoRatio: modelDefaults.VideoRatio,
           AudioRatio: modelDefaults.AudioRatio,
           AudioCompletionRatio: modelDefaults.AudioCompletionRatio,
           'billing_setting.billing_mode': modelDefaults.BillingMode,

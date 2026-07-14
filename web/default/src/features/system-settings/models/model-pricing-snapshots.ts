@@ -27,6 +27,7 @@ export type ModelPricingSnapshotInput = {
   createCacheRatio: string
   completionRatio: string
   imageRatio: string
+  videoRatio: string
   audioRatio: string
   audioCompletionRatio: string
   billingMode: string
@@ -41,6 +42,7 @@ export type ModelPricingSnapshot = {
   createCacheRatio?: string
   completionRatio?: string
   imageRatio?: string
+  videoRatio?: string
   audioRatio?: string
   audioCompletionRatio?: string
   billingMode?: string
@@ -162,7 +164,8 @@ export const buildModelSnapshots = ({
   cacheRatio,
   createCacheRatio,
   completionRatio,
-  imageRatio,
+    imageRatio,
+    videoRatio,
   audioRatio,
   audioCompletionRatio,
   billingMode,
@@ -192,6 +195,10 @@ export const buildModelSnapshots = ({
     fallback: {},
     context: 'image ratios',
   })
+  const videoMap = safeJsonParse<Record<string, number>>(videoRatio, {
+    fallback: {},
+    context: 'video ratios',
+  })
   const audioMap = safeJsonParse<Record<string, number>>(audioRatio, {
     fallback: {},
     context: 'audio ratios',
@@ -216,6 +223,7 @@ export const buildModelSnapshots = ({
     ...Object.keys(createCacheMap),
     ...Object.keys(completionMap),
     ...Object.keys(imageMap),
+    ...Object.keys(videoMap),
     ...Object.keys(audioMap),
     ...Object.keys(audioCompletionMap),
     ...Object.keys(billingModeMap),
@@ -229,6 +237,7 @@ export const buildModelSnapshots = ({
     const createCache = createCacheMap[name]?.toString() || ''
     const completion = completionMap[name]?.toString() || ''
     const image = imageMap[name]?.toString() || ''
+    const video = videoMap[name]?.toString() || ''
     const audio = audioMap[name]?.toString() || ''
     const audioCompletion = audioCompletionMap[name]?.toString() || ''
 
@@ -248,6 +257,7 @@ export const buildModelSnapshots = ({
         createCacheRatio: createCache,
         completionRatio: completion,
         imageRatio: image,
+        videoRatio: video,
         audioRatio: audio,
         audioCompletionRatio: audioCompletion,
         hasConflict: false,
@@ -262,6 +272,7 @@ export const buildModelSnapshots = ({
       createCacheRatio: createCache,
       completionRatio: completion,
       imageRatio: image,
+      videoRatio: video,
       audioRatio: audio,
       audioCompletionRatio: audioCompletion,
       billingMode: price !== '' ? 'per-request' : 'per-token',
@@ -287,6 +298,7 @@ export const getSnapshotSignature = (snapshot?: ModelPricingSnapshot) => {
     createCacheRatio: snapshot.createCacheRatio || '',
     completionRatio: snapshot.completionRatio || '',
     imageRatio: snapshot.imageRatio || '',
+    videoRatio: snapshot.videoRatio || '',
     audioRatio: snapshot.audioRatio || '',
     audioCompletionRatio: snapshot.audioCompletionRatio || '',
     billingMode: snapshot.billingMode || 'per-token',
