@@ -16,6 +16,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// isAllowIpsBlank 判断出口 IP 白名单是否为空（nil、空串或仅含空白字符）。
+func isAllowIpsBlank(allowIps *string) bool {
+	return allowIps == nil || strings.TrimSpace(*allowIps) == ""
+}
+
 func buildMaskedTokenResponse(token *model.Token) *model.Token {
 	if token == nil {
 		return nil
@@ -282,6 +287,12 @@ func AddToken(c *gin.Context) {
 	gopool.Go(func() {
 		service.NotifySensitiveOp(userId, "apikey_created", "新增API密钥提醒", "<p>子账号新增了一个 API 密钥。名称："+tokenName+"</p>")
 	})
+	// 企业子账号风险预警：新增的 API 密钥未设置出口 IP 白名单。best-effort，绝不影响本次响应。
+	if isAllowIpsBlank(token.AllowIps) {
+		gopool.Go(func() {
+			service.NotifyRiskWarning(userId, "ip_whitelist_missing", "子账号API密钥未设置出口IP白名单提醒", "<p>子账号创建的 API 密钥未设置出口 IP 白名单。名称："+tokenName+"</p>")
+		})
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -414,6 +425,12 @@ func UpdateToken(c *gin.Context) {
 		gopool.Go(func() {
 			service.NotifySensitiveOp(userId, "ip_whitelist_updated", "更新出口IP白名单提醒", "<p>子账号更新了出口 IP 白名单。</p>")
 		})
+		// 企业子账号风险预警：更新后的 API 密钥未设置出口 IP 白名单。best-effort，绝不影响本次响应。
+		if isAllowIpsBlank(req.AllowIps) {
+			gopool.Go(func() {
+				service.NotifyRiskWarning(userId, "ip_whitelist_missing", "子账号API密钥未设置出口IP白名单提醒", "<p>子账号更新后的 API 密钥未设置出口 IP 白名单。</p>")
+			})
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

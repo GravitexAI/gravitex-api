@@ -42,7 +42,34 @@ func NotifySensitiveOp(userId int, scene string, subject string, htmlContent str
 	if !enabled {
 		return
 	}
+	postEnterpriseAlert(userId, scene, subject, htmlContent)
+}
 
+// NotifyRiskWarning 在企业子账号触发风险事件（如新建/编辑的 API 密钥未设置出口 IP 白名单）后，
+// best-effort 通知 Java 后端向该企业的告警收件人发送邮件。
+//
+// 仅当该用户是已开启 riskWarningEnabled 的企业子账号时才会真正发出请求；
+// 非企业用户、主账号、未开启该开关的企业，直接跳过。
+//
+// 所有失败路径均只记录日志，绝不向调用方返回错误，调用方应在独立 goroutine 中调用本函数。
+func NotifyRiskWarning(userId int, scene string, subject string, htmlContent string) {
+	_, enabled, err := model.GetSubAccountRiskWarning(userId)
+	if err != nil {
+		common.SysError("check risk warning setting failed: " + err.Error())
+		return
+	}
+	if !enabled {
+		return
+	}
+	postEnterpriseAlert(userId, scene, subject, htmlContent)
+}
+
+// postEnterpriseAlert 向 Java 后端发起企业告警邮件请求。
+//
+// 所有失败路径（未配置 GRAVITEX_API_END、HTTP 错误、非 2xx 响应）均只记录日志，
+// 绝不向调用方返回错误，调用方应在独立 goroutine 中调用本函数，
+// 确保令牌创建/修改操作永不因告警失败而受影响。
+func postEnterpriseAlert(userId int, scene string, subject string, htmlContent string) {
 	api := strings.TrimRight(strings.TrimSpace(os.Getenv("GRAVITEX_API_END")), "/")
 	if api == "" {
 		common.SysLog("GRAVITEX_API_END not set, skip sensitive op alert")
