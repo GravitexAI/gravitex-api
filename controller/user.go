@@ -601,6 +601,92 @@ func GetUserModels(c *gin.Context) {
 	return
 }
 
+func GetUserModelsAccount(c *gin.Context) {
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		id64 = int64(c.GetInt("id"))
+	}
+	user, err := model.GetUserCache(int(id64))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	enterpriseUser, err := model.GetEnterpriseInfoByUserId(user.Id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	var allowedModels struct {
+		Models []string `json:"models"`
+	}
+	if err := common.UnmarshalJsonStr(enterpriseUser.AllowedModels, &allowedModels); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	type accountModel struct {
+		Id        int    `json:"id"`
+		ModelName string `json:"model_name"`
+	}
+	type accountVendor struct {
+		VendorName string         `json:"vendor_name"`
+		Models     []accountModel `json:"models"`
+	}
+
+	modelRows := make([]model.Model, 0, len(allowedModels.Models))
+	if len(allowedModels.Models) > 0 {
+		if err := model.DB.Where("model_name IN ?", allowedModels.Models).Find(&modelRows).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+	modelByName := make(map[string]model.Model, len(modelRows))
+	for _, row := range modelRows {
+		modelByName[row.ModelName] = row
+	}
+
+	vendorIDs := make([]int, 0)
+	seenVendorIDs := make(map[int]bool)
+	for _, modelName := range allowedModels.Models {
+		row, ok := modelByName[modelName]
+		if ok && !seenVendorIDs[row.VendorID] {
+			vendorIDs = append(vendorIDs, row.VendorID)
+			seenVendorIDs[row.VendorID] = true
+		}
+	}
+	vendors := make([]model.Vendor, 0, len(vendorIDs))
+	if len(vendorIDs) > 0 {
+		if err := model.DB.Where("id IN ?", vendorIDs).Find(&vendors).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+	vendorByID := make(map[int]string, len(vendors))
+	for _, vendor := range vendors {
+		vendorByID[vendor.Id] = vendor.Name
+	}
+
+	result := make([]accountVendor, 0, len(vendorIDs))
+	resultIndex := make(map[int]int, len(vendorIDs))
+	for _, modelName := range allowedModels.Models {
+		row, ok := modelByName[modelName]
+		vendorName, vendorExists := vendorByID[row.VendorID]
+		if !ok || !vendorExists {
+			continue
+		}
+		index, exists := resultIndex[row.VendorID]
+		if !exists {
+			index = len(result)
+			resultIndex[row.VendorID] = index
+			result = append(result, accountVendor{VendorName: vendorName})
+		}
+		result[index].Models = append(result[index].Models, accountModel{Id: row.Id, ModelName: row.ModelName})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": result})
+}
+
 func UpdateUser(c *gin.Context) {
 	type updateUserRequest struct {
 		Id          common.Int64Flexible `json:"id"`

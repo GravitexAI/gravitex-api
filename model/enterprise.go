@@ -192,3 +192,14 @@ func GetSubAccountRiskWarning(userId int) (enterpriseId int64, enabled bool, err
 	}
 	return eu.EnterpriseId, s.RiskWarningEnabled, nil
 }
+
+//根据用户id查询是否有企业信息
+
+func GetEnterpriseInfoByUserId(userId int) (*EnterpriseUser, error) {
+	var ent EnterpriseUser
+	err := DB.Where("user_id = ? AND del_flag = 0", userId).First(&ent).Error
+	if err != nil {
+		return nil, err
+	}
+	return &ent, nil
+}
