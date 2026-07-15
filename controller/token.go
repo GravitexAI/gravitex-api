@@ -173,9 +173,9 @@ func GetTokenUsage(c *gin.Context) {
 	})
 }
 
-// capTokenLimitsForEnterpriseSubAccount keeps the existing enterprise model
-// limit behavior. Vendor limits are persisted as submitted and are checked
-// against the enterprise allowlist during request authentication.
+// capTokenLimitsForEnterpriseSubAccount keeps enterprise defaults for tokens
+// without an explicit restriction. Explicit model/vendor limits are persisted
+// as submitted and are checked against the enterprise allowlist at call time.
 func capTokenLimitsForEnterpriseSubAccount(userId int, submittedEnabled bool, submittedModelLimits string, submittedVendorLimits string) (bool, string, string) {
 	allowed, restricted, err := model.GetSubAccountAllowedModelSet(userId)
 	if err != nil {
@@ -183,6 +183,9 @@ func capTokenLimitsForEnterpriseSubAccount(userId int, submittedEnabled bool, su
 		return submittedEnabled, submittedModelLimits, submittedVendorLimits
 	}
 	if !restricted {
+		return submittedEnabled, submittedModelLimits, submittedVendorLimits
+	}
+	if strings.TrimSpace(submittedModelLimits) != "" || strings.TrimSpace(submittedVendorLimits) != "" {
 		return submittedEnabled, submittedModelLimits, submittedVendorLimits
 	}
 

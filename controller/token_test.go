@@ -482,8 +482,8 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 		"expired_time":         -1,
 		"remain_quota":         100,
 		"unlimited_quota":      true,
-		"model_limits_enabled": false,
-		"model_limits":         "",
+		"model_limits_enabled": true,
+		"model_limits":         "model-a,model-b",
 		"vendor_limits":        "1,2",
 		"group":                "default",
 		"cross_group_retry":    false,
@@ -507,6 +507,8 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 	require.Equal(t, "1,2", detail.VendorLimits)
 	var updated model.Token
 	require.NoError(t, db.First(&updated, token.Id).Error)
+	require.True(t, updated.ModelLimitsEnabled)
+	require.Equal(t, "model-a,model-b", updated.ModelLimits)
 	require.Equal(t, "1,2", updated.VendorLimits)
 	if strings.Contains(recorder.Body.String(), token.Key) {
 		t.Fatalf("update response leaked raw token key: %s", recorder.Body.String())
@@ -520,8 +522,8 @@ func TestAddTokenPersistsVendorLimits(t *testing.T) {
 		"expired_time":          -1,
 		"remain_quota":          100,
 		"unlimited_quota":       true,
-		"model_limits_enabled":  false,
-		"model_limits":          "",
+		"model_limits_enabled":  true,
+		"model_limits":          "model-a,model-b",
 		"vendor_limits":         "3,5",
 		"group":                 "default",
 		"cross_group_retry":     false,
@@ -535,6 +537,8 @@ func TestAddTokenPersistsVendorLimits(t *testing.T) {
 	require.True(t, response.Success, response.Message)
 	var token model.Token
 	require.NoError(t, db.Where("user_id = ? AND name = ?", 1, "vendor-limited-token").First(&token).Error)
+	require.True(t, token.ModelLimitsEnabled)
+	require.Equal(t, "model-a,model-b", token.ModelLimits)
 	require.Equal(t, "3,5", token.VendorLimits)
 }
 

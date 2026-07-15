@@ -616,7 +616,7 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	} else {
 		common.SetContextKey(c, constant.ContextKeyTokenVendorLimitEnabled, false)
 	}
-	if token.VendorLimits != "" {
+	if token.VendorLimits != "" || token.ModelLimitsEnabled {
 		allowedModels, enterpriseRestricted, err := model.GetSubAccountAllowedModelSet(token.UserId)
 		if err != nil {
 			common.SysLog("check enterprise model access failed: " + err.Error())
