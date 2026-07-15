@@ -18,10 +18,10 @@ import (
 const sensitiveOpNotifyTimeout = 10 * time.Second
 
 type sensitiveOpAlertRequest struct {
-	UserId  int    `json:"user_id"`
-	Scene   string `json:"scene"`
-	Subject string `json:"subject"`
-	Content string `json:"content"`
+	UserId    int    `json:"user_id"`
+	TokenId   int    `json:"token_id"`
+	Operation string `json:"operation"`
+	Scene     string `json:"scene"`
 }
 
 // NotifySensitiveOp 在企业子账号执行敏感操作（新增 API 密钥、修改 IP 白名单等）后，
@@ -33,7 +33,7 @@ type sensitiveOpAlertRequest struct {
 // 所有失败路径（未配置 GRAVITEX_API_END、HTTP 错误、非 2xx 响应）均只记录日志，
 // 绝不向调用方返回错误，调用方应在独立 goroutine 中调用本函数，
 // 确保令牌创建/修改操作永不因告警失败而受影响。
-func NotifySensitiveOp(userId int, scene string, subject string, htmlContent string) {
+func NotifySensitiveOp(userId int, tokenId int, operation string, scene string) {
 	_, enabled, err := model.GetSubAccountSensitiveOpAlert(userId)
 	if err != nil {
 		common.SysError("check sensitive op alert setting failed: " + err.Error())
@@ -42,7 +42,7 @@ func NotifySensitiveOp(userId int, scene string, subject string, htmlContent str
 	if !enabled {
 		return
 	}
-	postEnterpriseAlert(userId, scene, subject, htmlContent)
+	postEnterpriseAlert(userId, tokenId, operation, scene)
 }
 
 // NotifyRiskWarning 在企业子账号触发风险事件（如新建/编辑的 API 密钥未设置出口 IP 白名单）后，
@@ -52,7 +52,7 @@ func NotifySensitiveOp(userId int, scene string, subject string, htmlContent str
 // 非企业用户、主账号、未开启该开关的企业，直接跳过。
 //
 // 所有失败路径均只记录日志，绝不向调用方返回错误，调用方应在独立 goroutine 中调用本函数。
-func NotifyRiskWarning(userId int, scene string, subject string, htmlContent string) {
+func NotifyRiskWarning(userId int, tokenId int, operation string, scene string) {
 	_, enabled, err := model.GetSubAccountRiskWarning(userId)
 	if err != nil {
 		common.SysError("check risk warning setting failed: " + err.Error())
@@ -61,7 +61,7 @@ func NotifyRiskWarning(userId int, scene string, subject string, htmlContent str
 	if !enabled {
 		return
 	}
-	postEnterpriseAlert(userId, scene, subject, htmlContent)
+	postEnterpriseAlert(userId, tokenId, operation, scene)
 }
 
 // postEnterpriseAlert 向 Java 后端发起企业告警邮件请求。
@@ -69,7 +69,7 @@ func NotifyRiskWarning(userId int, scene string, subject string, htmlContent str
 // 所有失败路径（未配置 GRAVITEX_API_END、HTTP 错误、非 2xx 响应）均只记录日志，
 // 绝不向调用方返回错误，调用方应在独立 goroutine 中调用本函数，
 // 确保令牌创建/修改操作永不因告警失败而受影响。
-func postEnterpriseAlert(userId int, scene string, subject string, htmlContent string) {
+func postEnterpriseAlert(userId int, tokenId int, operation string, scene string) {
 	api := strings.TrimRight(strings.TrimSpace(os.Getenv("GRAVITEX_API_END")), "/")
 	if api == "" {
 		common.SysLog("GRAVITEX_API_END not set, skip sensitive op alert")
@@ -77,10 +77,10 @@ func postEnterpriseAlert(userId int, scene string, subject string, htmlContent s
 	}
 
 	reqBody := sensitiveOpAlertRequest{
-		UserId:  userId,
-		Scene:   scene,
-		Subject: subject,
-		Content: htmlContent,
+		UserId:    userId,
+		TokenId:   tokenId,
+		Operation: operation,
+		Scene:     scene,
 	}
 	jsonData, err := common.Marshal(reqBody)
 	if err != nil {

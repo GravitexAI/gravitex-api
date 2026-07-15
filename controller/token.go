@@ -293,14 +293,14 @@ func AddToken(c *gin.Context) {
 	}
 	// 企业子账号敏感操作告警：新增 API 密钥。best-effort，绝不影响本次响应。
 	userId := c.GetInt("id")
-	tokenName := token.Name
-	gopool.Go(func() {
-		service.NotifySensitiveOp(userId, "apikey_created", "新增API密钥提醒", "<p>子账号新增了一个 API 密钥。名称："+tokenName+"</p>")
-	})
 	// 企业子账号风险预警：新增的 API 密钥未设置出口 IP 白名单。best-effort，绝不影响本次响应。
 	if isAllowIpsBlank(token.AllowIps) {
 		gopool.Go(func() {
-			service.NotifyRiskWarning(userId, "ip_whitelist_missing", "子账号API密钥未设置出口IP白名单提醒", "<p>子账号创建的 API 密钥未设置出口 IP 白名单。名称："+tokenName+"</p>")
+			service.NotifyRiskWarning(userId, cleanToken.Id, "create", "ip_whitelist_missing")
+		})
+	} else {
+		gopool.Go(func() {
+			service.NotifySensitiveOp(userId, cleanToken.Id, "create", "apikey_created")
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -318,6 +318,10 @@ func DeleteToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// 删除后仍传入当前 token ID，由 Java 侧按 token_id 生成邮件内容。
+	gopool.Go(func() {
+		service.NotifySensitiveOp(userId, id, "delete", "apikey_deleted")
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -435,13 +439,14 @@ func UpdateToken(c *gin.Context) {
 	// 企业子账号敏感操作告警：更新出口 IP 白名单。仅当本次请求非纯状态更新且
 	// 携带了 allow_ips 字段时触发；不区分"是否真的发生变化"，best-effort，绝不影响本次响应。
 	if statusOnly != "true" && req.AllowIps != nil {
-		gopool.Go(func() {
-			service.NotifySensitiveOp(userId, "ip_whitelist_updated", "更新出口IP白名单提醒", "<p>子账号更新了出口 IP 白名单。</p>")
-		})
 		// 企业子账号风险预警：更新后的 API 密钥未设置出口 IP 白名单。best-effort，绝不影响本次响应。
 		if isAllowIpsBlank(req.AllowIps) {
 			gopool.Go(func() {
-				service.NotifyRiskWarning(userId, "ip_whitelist_missing", "子账号API密钥未设置出口IP白名单提醒", "<p>子账号更新后的 API 密钥未设置出口 IP 白名单。</p>")
+				service.NotifyRiskWarning(userId, cleanToken.Id, "update", "ip_whitelist_missing")
+			})
+		} else {
+			gopool.Go(func() {
+				service.NotifySensitiveOp(userId, cleanToken.Id, "update", "apikey_updated")
 			})
 		}
 	}
