@@ -22,6 +22,8 @@ type sensitiveOpAlertRequest struct {
 	TokenId   int    `json:"token_id"`
 	Operation string `json:"operation"`
 	Scene     string `json:"scene"`
+	// Java 当前 BO 仍要求 content 非空；正文实际由 Java 根据 user_id/token_id 生成。
+	Content string `json:"content"`
 }
 
 // NotifySensitiveOp 在企业子账号执行敏感操作（新增 API 密钥、修改 IP 白名单等）后，
@@ -81,6 +83,7 @@ func postEnterpriseAlert(userId int, tokenId int, operation string, scene string
 		TokenId:   tokenId,
 		Operation: operation,
 		Scene:     scene,
+		Content:   "generated_by_java",
 	}
 	jsonData, err := common.Marshal(reqBody)
 	if err != nil {
