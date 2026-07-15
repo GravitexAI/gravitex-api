@@ -18,13 +18,6 @@ func IsTokenModelAccessLimited(c *gin.Context) bool {
 // accessible. Callers should invoke this only when token access is limited.
 func IsModelAllowedByToken(c *gin.Context, modelName string) bool {
 	matchName := ratio_setting.FormatMatchingModelName(modelName)
-	if common.GetContextKeyBool(c, constant.ContextKeyEnterpriseModelLimitEnabled) {
-		value, ok := common.GetContextKey(c, constant.ContextKeyEnterpriseModelLimit)
-		allowedModels, valid := value.(map[string]bool)
-		if !ok || !valid || !allowedModels[matchName] {
-			return false
-		}
-	}
 	if value, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit); ok {
 		if limits, ok := value.(map[string]bool); ok && limits[matchName] {
 			return true

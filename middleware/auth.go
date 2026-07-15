@@ -616,17 +616,6 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	} else {
 		common.SetContextKey(c, constant.ContextKeyTokenVendorLimitEnabled, false)
 	}
-	if token.VendorLimits != "" || token.ModelLimitsEnabled {
-		allowedModels, enterpriseRestricted, err := model.GetSubAccountAllowedModelSet(token.UserId)
-		if err != nil {
-			common.SysLog("check enterprise model access failed: " + err.Error())
-		} else if enterpriseRestricted {
-			common.SetContextKey(c, constant.ContextKeyEnterpriseModelLimitEnabled, true)
-			common.SetContextKey(c, constant.ContextKeyEnterpriseModelLimit, allowedModels)
-		} else {
-			common.SetContextKey(c, constant.ContextKeyEnterpriseModelLimitEnabled, false)
-		}
-	}
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, token.Group)
 	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
 	if len(parts) > 1 {
