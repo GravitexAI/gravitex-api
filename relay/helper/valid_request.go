@@ -243,10 +243,11 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 					imageRequest.Size = "1024x1024"
 				}
 			} else {
+				// gpt-image-1/1-mini/1.5 尺寸校验交给上游，此处仅设默认值
 				// gpt-image-1/1-mini/1.5 仅支持 3 个固定尺寸
-				if imageRequest.Size != "" && imageRequest.Size != "1024x1024" && imageRequest.Size != "1024x1536" && imageRequest.Size != "1536x1024" {
-					return nil, errors.New("size must be one of 1024x1024, 1024x1536 or 1536x1024 for gpt-image-1")
-				}
+				// if imageRequest.Size != "" && imageRequest.Size != "1024x1024" && imageRequest.Size != "1024x1536" && imageRequest.Size != "1536x1024" {
+				// 	return nil, errors.New("size must be one of 1024x1024, 1024x1536 or 1536x1024 for gpt-image-1")
+				// }
 				if imageRequest.Size == "" {
 					imageRequest.Size = "1024x1024"
 				}
@@ -260,30 +261,32 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 					imageRequest.Quality = "high"
 				}
 			}
-			// 验证质量参数值
-			validQualities := map[string]bool{"low": true, "medium": true, "high": true}
-			if !validQualities[imageRequest.Quality] {
-				return nil, errors.New("quality must be one of low, medium, or high for gpt-image models")
-			}
+			// 质量取值校验交给上游（OpenAI 支持 low/medium/high/auto，且会自行拒绝非法值）
+			// validQualities := map[string]bool{"low": true, "medium": true, "high": true}
+			// if !validQualities[imageRequest.Quality] {
+			// 	return nil, errors.New("quality must be one of low, medium, or high for gpt-image models")
+			// }
 
 			// gpt-image 只支持 b64_json 格式输出（Azure 不支持 response_format 参数）
-			if imageRequest.ResponseFormat != "" && imageRequest.ResponseFormat != "b64_json" {
-				return nil, errors.New("gpt-image models only support response_format: b64_json")
-			}
+			// response_format 取值校验交给上游，此处仍统一清空以兼容 Azure
+			// if imageRequest.ResponseFormat != "" && imageRequest.ResponseFormat != "b64_json" {
+			// 	return nil, errors.New("gpt-image models only support response_format: b64_json")
+			// }
 			imageRequest.ResponseFormat = ""
 
+			// n 数量校验交给上游
 			// gpt-image 支持 1-10 张图片
-			if imageRequest.N != nil && *imageRequest.N > 10 {
-				return nil, errors.New("n must be between 1 and 10 for gpt-image models")
-			}
+			// if imageRequest.N != nil && *imageRequest.N > 10 {
+			// 	return nil, errors.New("n must be between 1 and 10 for gpt-image models")
+			// }
 
-			// 验证 input_fidelity 参数（如果提供）
-			if imageRequest.InputFidelity != nil {
-				validFidelities := map[string]bool{"low": true, "medium": true, "high": true}
-				if !validFidelities[*imageRequest.InputFidelity] {
-					return nil, errors.New("input_fidelity must be one of low, medium, or high")
-				}
-			}
+			// input_fidelity 取值校验交给上游
+			// if imageRequest.InputFidelity != nil {
+			// 	validFidelities := map[string]bool{"low": true, "medium": true, "high": true}
+			// 	if !validFidelities[*imageRequest.InputFidelity] {
+			// 		return nil, errors.New("input_fidelity must be one of low, medium, or high")
+			// 	}
+			// }
 		}
 
 		//if imageRequest.Prompt == "" {
