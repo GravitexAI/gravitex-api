@@ -46,7 +46,21 @@ func NotifySensitiveOp(userId int, tokenId int, operation string, scene string) 
 	if !enabled {
 		return
 	}
-	postEnterpriseAlert(userId, tokenId, operation, scene)
+	postEnterpriseAlert(userId, tokenId, operation, scene, "generated_by_java", "generated_by_java")
+}
+
+// NotifyDailySpendAlert 通知 Java 发送 token 日消费超额邮件。
+// 日消费邮件正文由 Go 侧生成，因此保留 subject/content 原文传给 Java。
+func NotifyDailySpendAlert(userId int, tokenId int, subject string, htmlContent string) {
+	_, enabled, err := model.GetSubAccountSensitiveOpAlert(userId)
+	if err != nil {
+		common.SysError("check daily spend alert setting failed: " + err.Error())
+		return
+	}
+	if !enabled {
+		return
+	}
+	postEnterpriseAlert(userId, tokenId, "daily_spend_exceeded", "daily_spend_exceeded", subject, htmlContent)
 }
 
 // NotifyRiskWarning 在企业子账号触发风险事件（如新建/编辑的 API 密钥未设置出口 IP 白名单）后，
@@ -65,7 +79,7 @@ func NotifyRiskWarning(userId int, tokenId int, operation string, scene string) 
 	if !enabled {
 		return
 	}
-	postEnterpriseAlert(userId, tokenId, operation, scene)
+	postEnterpriseAlert(userId, tokenId, operation, scene, "generated_by_java", "generated_by_java")
 }
 
 // postEnterpriseAlert 向 Java 后端发起企业告警邮件请求。
@@ -73,7 +87,7 @@ func NotifyRiskWarning(userId int, tokenId int, operation string, scene string) 
 // 所有失败路径（未配置 GRAVITEX_API_END、HTTP 错误、非 2xx 响应）均只记录日志，
 // 绝不向调用方返回错误，调用方应在独立 goroutine 中调用本函数，
 // 确保令牌创建/修改操作永不因告警失败而受影响。
-func postEnterpriseAlert(userId int, tokenId int, operation string, scene string) {
+func postEnterpriseAlert(userId int, tokenId int, operation string, scene string, subject string, content string) {
 	api := strings.TrimRight(strings.TrimSpace(os.Getenv("GRAVITEX_API_END")), "/")
 	if api == "" {
 		common.SysLog("GRAVITEX_API_END not set, skip sensitive op alert")
@@ -85,8 +99,8 @@ func postEnterpriseAlert(userId int, tokenId int, operation string, scene string
 		TokenId:   tokenId,
 		Operation: operation,
 		Scene:     scene,
-		Content:   "generated_by_java",
-		Subject:   "generated_by_java",
+		Content:   content,
+		Subject:   subject,
 	}
 	jsonData, err := common.Marshal(reqBody)
 	if err != nil {

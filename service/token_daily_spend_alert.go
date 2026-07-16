@@ -67,6 +67,5 @@ func CheckAndAlertDailySpend(tokenId int, userId int, tokenName string, threshol
 		"<p>API 密钥「%s」今日消费已超过设定的日消费告警阈值。</p><p>阈值：%s</p><p>今日消费：%s</p>",
 		tokenName, logger.FormatQuota(threshold), logger.FormatQuota(int(spend)),
 	)
-	_ = htmlContent
-	NotifySensitiveOp(userId, tokenId, "update", "daily_spend_exceeded")
+	NotifyDailySpendAlert(userId, tokenId, "API密钥日消费超额提醒", htmlContent)
 }
