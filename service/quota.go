@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"time"
 
@@ -591,9 +592,20 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 	return nil
 }
 
-// DefaultQuotaWarningWebhookURL 额度预警默认回调地址（Java 后端统一通知入口）。
+// defaultQuotaWarningAPIEndFallback 是未配置 GRAVITEX_API_END 环境变量时的默认 Java 后端地址（生产环境）。
+const defaultQuotaWarningAPIEndFallback = "https://maas.gravitex.ai/prod-api"
+
+// DefaultQuotaWarningWebhookURL 返回额度预警默认回调地址（Java 后端统一通知入口）。
+// 基址取自环境变量 GRAVITEX_API_END（去掉尾部斜杠），未配置时回落到生产环境地址，
+// 再拼接固定路径 /api/user/quota-warning-notify/send。
 // 用户未在个人设置中自定义 webhook 地址时，默认回调到此接口。
-const DefaultQuotaWarningWebhookURL = "https://maas.gravitex.ai/prod-api/api/user/quota-warning-notify/send"
+func DefaultQuotaWarningWebhookURL() string {
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv("GRAVITEX_API_END")), "/")
+	if base == "" {
+		base = defaultQuotaWarningAPIEndFallback
+	}
+	return base + "/api/user/quota-warning-notify/send"
+}
 
 func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int) {
 	gopool.Go(func() {
@@ -639,7 +651,7 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 			if notifyType == dto.NotifyTypeWebhook {
 				webhookURL := userSetting.WebhookUrl
 				if webhookURL == "" {
-					webhookURL = DefaultQuotaWarningWebhookURL
+					webhookURL = DefaultQuotaWarningWebhookURL()
 				}
 				err := SendQuotaWarningWebhookNotify(
 					webhookURL,
@@ -710,7 +722,7 @@ func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
 		if notifyType == dto.NotifyTypeWebhook {
 			webhookURL := userSetting.WebhookUrl
 			if webhookURL == "" {
-				webhookURL = DefaultQuotaWarningWebhookURL
+				webhookURL = DefaultQuotaWarningWebhookURL()
 			}
 			err := SendQuotaWarningWebhookNotify(
 				webhookURL,
