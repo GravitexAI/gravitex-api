@@ -224,11 +224,25 @@ Responses API 对应字段是 `usage.input_tokens_details.cached_tokens` / `cach
 - 2026-03-05 后发布的模型走 data residency（区域处理）端点会再加 10% uplift。
 
 
-## 7. Azure OpenAI 是否支持这套显式缓存？—— 不支持，且目前连模型都没有
+## 7. Azure OpenAI 是否支持这套显式缓存？—— 模型已上架，但显式缓存机制目前是"收了不生效"，且这是全行业未解决的已知问题
 
-结论先说：**同事的判断是对的，有官方依据**。而且比"创建缓存不行"更彻底——Azure 上目前根本没有 GPT-5.6 这个模型，显式缓存断点机制对 Azure 渠道来说无从谈起。
+> **2026-07-14 更新**：本节第 7.1-7.5 小节写于 2026-07-10，其中"Azure 模型清单里根本没有 GPT-5.6"这条结论**已被后续事实推翻**，请以本节最新内容（7.6）为准，历史小节保留仅作调研过程存档。
 
-### 7.1 证据 1：Azure 官方文档只字未提"显式缓存"
+### 7.6（最新结论，2026-07-14 联网复核）
+
+1. **Azure 已经上架 GPT-5.6**。Azure 官方模型目录（[Foundry Models sold by Azure](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure)）现在明确列出 "GPT-5.6 series NEW：`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`"；[AI Model Catalog 的 gpt-5.6-luna 页面](https://ai.azure.com/catalog/models/gpt-5.6-luna) 显示 Version `2026-07-09`、Lifecycle **Generally available (GA)**、Type "Chat completion, Responses"。即与 OpenAI 官方 GA 同一天（2026-07-09）上架，早于 7.1-7.5 小节调研时间（2026-07-10），说明当时的调研没有查到最新目录页，不是 Azure 后来才补的。
+2. **但显式缓存机制（`prompt_cache_options` / `prompt_cache_breakpoint`）仍然只是"接收不生效"**，这是当前全行业公开、未解决的问题，不是本平台或某个渠道的独有 bug：
+   - Azure 官方 Prompt Caching 文档（[learn.microsoft.com/.../prompt-caching](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/prompt-caching)）截至 2026-07-14 仍然只字未提 `explicit` / `prompt_cache_breakpoint` / `cache_write_tokens`，只讲 `prompt_cache_retention`（`in_memory` / `24h`）+ `prompt_cache_key` 路由；且其"Extended Prompt Cache Retention 支持的模型列表"里没有 `gpt-5.6`（列表止于 `gpt-5.4`），文档尚未针对 GPT-5.6 更新。
+   - OpenAI 开发者社区 2026-07-12 的帖子 [《Prompt Caching Is a Core GPT-5.6 Feature. Why Are Customers Still Reverse-Engineering It?》](https://community.openai.com/t/prompt-caching-is-a-core-gpt-5-6-feature-why-are-customers-still-reverse-engineering-it/1386612) 是目前最详细的第三方复现报告，结论与本项目实测高度吻合：
+     > Azure Chat Completions → ~96% prompt cache hit（路由稳定时可以命中）
+     > Azure Responses API → 0 cached tokens（完全不命中）
+     > `prompt_cache_options` / `prompt_cache_breakpoint` 会被 Azure **接受并校验通过**，但从不产生 cache write 或 cache read（即"收了不报错，但也不生效"）
+   - OpenAI 官方人员 2026-07-13 在该帖回复，承认问题、索要 request id 复现，并明确 **Azure 侧具体行为建议去 Microsoft Tech Community 反馈** —— 说明截至今天（2026-07-14）这仍是一个**尚未修复、且官方尚未给出时间表**的上游问题。
+3. **结论对应到本项目两条用户反馈**：
+   - 「usage 缺少 cache_write_tokens」：本项目代码（commit `8c84ed536` + `fcce37769`）已经把 `cache_write_tokens` 的解析/透传补齐了（Chat Completions 走 `dto.Usage.PromptTokensDetails` 直接反序列化即可拿到，Responses/兼容层已手工补了字段映射），**只要上游返回这个字段就能正确显示**。用户反馈里那次测试命中的是 Azure 渠道（响应里的 `content_filter_results`/`prompt_filter_results` 是 Azure 特征字段），而 Azure 目前压根不会在响应里放 `cache_write_tokens`——这是上游未提供，不是本项目丢字段。
+   - 「相同输入多次无法命中 cache 读取」：如果测试用的是 `/v1/responses`，这与上面的 Azure Responses API 已知问题完全一致（0 cached_tokens 是当前 Azure 的普遍行为，不只本项目）。如果测试用的是 `/v1/chat/completions` 且仍然 0 命中，鉴于其他用户反馈 Azure Chat Completions 在路由稳定时能到 ~96%，需要额外排查两个本项目侧变量：（a）请求是否带了 `prompt_cache_key`——本项目对该字段是纯透传（见 `dto/openai_request.go` 与 `relay/channel/openai/adaptor.go`，未做任何默认值注入或覆盖），需要调用方自己传一个稳定值；（b）该模型在渠道管理里是否配置了多个同优先级的 Azure 渠道/部署——`service/channel_select.go` 的 `CacheGetRandomSatisfiedChannel` 对同优先级渠道做的是**按权重随机选择**，每次请求都可能落到不同的 Azure 部署/区域，而 Azure 的缓存是部署本地的，跨部署天然不共享，会进一步降低本就不稳定的命中率。建议去日志页查这几次测试请求命中的 `channel_id` 是否一致来确认。
+
+### 7.1 证据 1：Azure 官方文档只字未提"显式缓存"（历史存档，写于 2026-07-10）
 
 Azure 官方 Prompt Caching 文档：
 
@@ -248,7 +262,9 @@ Azure 官方 Prompt Caching 文档：
 
 以及路由用的 `prompt_cache_key`，返回侧只定义了 `prompt_tokens_details.cached_tokens`，没有 `cache_write_tokens`。这与本目录下 `Azure_gpt.md` 里同事的原始判断完全一致。
 
-### 7.2 证据 2：Azure 模型清单里根本没有 GPT-5.6
+### 7.2 证据 2（历史存档，写于 2026-07-10，结论已被 7.6 推翻）：Azure 模型清单里根本没有 GPT-5.6
+
+> **此结论已过期，见上方 7.6。** 以下为原文存档。
 
 Azure 官方模型目录页：
 
@@ -273,9 +289,11 @@ GPT-5.3 series   gpt-5.3-chat, gpt-5.3-codex
 2. **2026-03-04**，[Does Azure OpenAI support "Extended Prompt Cache Retention"?](https://learn.microsoft.com/en-us/answers/questions/5807188/does-azure-openai-support-extended-prompt-cache-re) —— 同样的参数用在 `gpt-5.2` 上仍报错 `prompt_cache_retention is not supported on this model`；官方回复明确：**Azure OpenAI 目前只支持标准 in-memory 缓存，不支持 Extended Retention，且没有支持时间表**。
 3. **2026-03-31**，[Realtime API caching behavior available through OpenAI but not through Azure OpenAI](https://learn.microsoft.com/en-us/answers/questions/5845663/realtime-api-caching-behavior-available-through-op) —— 用户反馈同一套实时对话逻辑在 OpenAI 直连能命中缓存，Azure 上 `cached_tokens` 始终为 0。
 
+这个"滞后数月"的历史规律，与 7.6 中 2026-07-12/13 才被大规模复现、官方仍未修复的 GPT-5.6 显式缓存问题，属于同一模式的延续。
+
 ### 7.4 那 Azure 现在该怎么调用缓存？
 
-既然确认不支持显式断点，Azure 上能用的只有**自动/隐式缓存**——跟 GPT-5.6 之前的老机制一样，不需要任何"创建"动作：
+既然显式断点目前"接收不生效"，Azure 上能稳定拿到收益的只有**自动/隐式缓存**——跟 GPT-5.6 之前的老机制一样，不需要任何"创建"动作：
 
 ```bash
 curl https://{your-resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions?api-version=2025-04-01-preview \
@@ -291,11 +309,11 @@ curl https://{your-resource}.openai.azure.com/openai/deployments/{deployment}/ch
 ```
 
 - 前 1024 tokens 完全一致即可自动命中，之后每多 128 个相同 token 再多命中一档；
-- 加 `prompt_cache_key` 能提升路由到同一台机器的概率，是目前 Azure 上唯一能"半主动"影响缓存命中率的手段；
-- 不要发 `prompt_cache_options` / `prompt_cache_breakpoint`，Azure 目前不认，发了要么被忽略要么报错；
+- 加 `prompt_cache_key` 能提升路由到同一台机器的概率，是目前 Azure 上唯一能"半主动"影响缓存命中率的手段（社区反馈显示命中率从 60% 提升到 87%~96%）；
+- 可以发 `prompt_cache_options` / `prompt_cache_breakpoint`（Azure 不会报错），但**不要指望它们生效**——目前只是被接收和校验，不产生实际的缓存写入/命中，这是 2026-07 全行业公开的未解决问题；
 - 响应里只有 `cached_tokens`，没有 `cache_write_tokens`——不能从第一次请求 `cached_tokens=0` 就反推所有输入 token 都算"缓存写入"，因为 Azure 官方没有提供这个计费口径，本项目也不应该替 Azure 编造这个字段。
 
-### 7.5 小结
+### 7.5 小结（已过期，见 7.6）
 
 ```
 Azure Chat 缓存行为符合预期：自动缓存 + cached_tokens 读取折扣
