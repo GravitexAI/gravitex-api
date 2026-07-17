@@ -1,8 +1,15 @@
 package doubao
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,4 +69,26 @@ func TestExtractAssetVirtualIdsFromRaw_NoAssets(t *testing.T) {
 	raw := []byte(`{"content":[{"type":"text","text":"plain text only"}]}`)
 	ids := extractAssetVirtualIdsFromRaw(raw)
 	assert.Empty(t, ids)
+}
+
+func TestDoResponse_RawMirror_WritesUpstreamBodyVerbatim(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstreamBody := `{"id":"cgt-20260708094649-mxfjc","model":"seedance-2-0","status":"queued","created_at":1783475210,"updated_at":1783475210}`
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set(common.KeySeedanceRawMirror, true)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}
+
+	adaptor := &TaskAdaptor{}
+	taskID, taskData, taskErr := adaptor.DoResponse(c, resp, &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{}})
+
+	require.Nil(t, taskErr)
+	assert.Equal(t, "cgt-20260708094649-mxfjc", taskID)
+	assert.JSONEq(t, upstreamBody, string(taskData))
+	assert.JSONEq(t, upstreamBody, w.Body.String())
 }

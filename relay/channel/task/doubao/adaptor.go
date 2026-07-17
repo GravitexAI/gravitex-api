@@ -306,6 +306,15 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	// 使用上游真实 ID 作为公开 ID（避免依赖 private_data.upstream_task_id）
 	info.PublicTaskID = dResp.ID
 
+	// Raw-mirror routes: return the upstream response verbatim instead of the
+	// platform's normalized OpenAIVideo shape. Local task persistence below
+	// this function (in the shared relay dispatch flow) still uses the
+	// returned taskData (= responseBody), unchanged.
+	if c.GetBool(common.KeySeedanceRawMirror) {
+		c.Data(http.StatusOK, "application/json", responseBody)
+		return dResp.ID, responseBody, nil
+	}
+
 	ov := dto.NewOpenAIVideo()
 	ov.ID = info.PublicTaskID
 	ov.TaskID = info.PublicTaskID
