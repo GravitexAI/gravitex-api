@@ -82,6 +82,7 @@ export const RULE_TEMPLATES: Record<string, RuleTemplate> = {
     ),
     value_regex: '',
     ttl_seconds: 0,
+    fixed_ttl: true,
     skip_retry_on_failure: true,
     include_using_group: true,
     include_model_name: false,

@@ -3675,6 +3675,10 @@
     "并确认自行承担部署": "confirm that I bear legal responsibility arising from deployment",
     "运营和收费行为产生的法律责任": "operation and charging behavior",
     "，": ", ",
-    "、": ", "
+    "、": ", ",
+    "固定过期（命中后不刷新 TTL）": "Expiration fixe (ne pas renouveler le TTL en cas de correspondance)",
+    "开启后，命中同一亲和渠道不会续期 TTL，缓存从首次写入起自然到期，到期后重新负载均衡；关闭时每次成功请求都会续期（滑动过期），只要持续有请求就会一直粘在同一渠道。": "Si activé, le fait d'utiliser le même canal d'affinité ne renouvelle pas le TTL. Le cache expire naturellement depuis la première écriture, ce qui permet un rééquilibrage périodique entre les canaux de même priorité. Si désactivé, chaque requête réussie renouvelle le TTL (expiration glissante), maintenant l'affinité tant que des requêtes continuent d'arriver.",
+    "固定过期": "Expiration fixe",
+    "滑动过期": "Expiration glissante"
   }
 }

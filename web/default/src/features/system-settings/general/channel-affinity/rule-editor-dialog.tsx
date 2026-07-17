@@ -76,6 +76,7 @@ interface RuleFormValues {
   user_agent_include_text: string
   value_regex: string
   ttl_seconds: number
+  fixed_ttl: boolean
   skip_retry_on_failure: boolean
   include_using_group: boolean
   include_model_name: boolean
@@ -125,6 +126,7 @@ export function RuleEditorDialog(props: Props) {
       user_agent_include_text: '',
       value_regex: '',
       ttl_seconds: 0,
+      fixed_ttl: false,
       skip_retry_on_failure: false,
       include_using_group: true,
       include_model_name: false,
@@ -141,6 +143,7 @@ export function RuleEditorDialog(props: Props) {
       user_agent_include_text: (r.user_agent_include || []).join('\n'),
       value_regex: r.value_regex || '',
       ttl_seconds: r.ttl_seconds || 0,
+      fixed_ttl: !!r.fixed_ttl,
       skip_retry_on_failure: !!r.skip_retry_on_failure,
       include_using_group: r.include_using_group ?? true,
       include_model_name: !!r.include_model_name,
@@ -173,6 +176,7 @@ export function RuleEditorDialog(props: Props) {
         user_agent_include_text: '',
         value_regex: '',
         ttl_seconds: 0,
+        fixed_ttl: false,
         skip_retry_on_failure: false,
         include_using_group: true,
         include_model_name: false,
@@ -227,6 +231,7 @@ export function RuleEditorDialog(props: Props) {
       key_sources: validKeySources,
       value_regex: values.value_regex.trim(),
       ttl_seconds: Number(values.ttl_seconds || 0),
+      fixed_ttl: values.fixed_ttl,
       skip_retry_on_failure: values.skip_retry_on_failure,
       include_using_group: values.include_using_group,
       include_model_name: values.include_model_name,
@@ -430,6 +435,15 @@ export function RuleEditorDialog(props: Props) {
                 />
               </div>
             </div>
+
+            <SettingsSwitchField
+              checked={form.watch('fixed_ttl')}
+              onCheckedChange={(v) => form.setValue('fixed_ttl', v)}
+              label={t('Fixed expiration (do not refresh TTL on hit)')}
+              description={t(
+                'When enabled, hitting the same affinity channel does not renew the TTL. The cache expires naturally from first write, allowing periodic rebalancing across channels of equal priority. When disabled, every successful request renews the TTL (sliding expiration), keeping the affinity sticky as long as requests keep coming.'
+              )}
+            />
 
             <div className='grid gap-1.5'>
               <Label>{t('Parameter Override Template (JSON)')}</Label>
