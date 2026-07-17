@@ -173,6 +173,10 @@ func hasVideoInMetadata(metadata map[string]interface{}) bool {
 
 // BuildRequestBody converts request into Doubao specific format.
 func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
+	if c.GetBool(common.KeySeedanceRawMirror) {
+		return a.buildRawMirrorRequestBody(c, info)
+	}
+
 	req, err := relaycommon.GetTaskRequest(c)
 	if err != nil {
 		return nil, err
@@ -228,6 +232,49 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		}
 	}
 	return bytes.NewReader(data), nil
+}
+
+// buildRawMirrorRequestBody forwards the client's original request bytes
+// verbatim to the upstream Seedance/Ark endpoint, preserving fields
+// (execution_expires_after, service_tier, safety_identifier, frames, ...)
+// that TaskSubmitReq would silently drop. Only reached via the
+// official-mirror routes (see middleware.SeedanceOfficialMirror) — the
+// normal /v1/video/generations path never sets common.KeySeedanceRawMirror
+// and is unaffected.
+func (a *TaskAdaptor) buildRawMirrorRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return nil, errors.Wrap(err, "get body storage failed")
+	}
+	raw, err := storage.Bytes()
+	if err != nil {
+		return nil, errors.Wrap(err, "read raw request body failed")
+	}
+	if _, err := storage.Seek(0, io.SeekStart); err != nil {
+		return nil, errors.Wrap(err, "seek body storage failed")
+	}
+
+	hasVideoInput, resolution, err := probeRawMirrorBillingFields(raw)
+	if err != nil {
+		return nil, errors.Wrap(err, "probe billing fields failed")
+	}
+	c.Set("has_video_input", hasVideoInput)
+	if resolution != "" {
+		c.Set("video_resolution", resolution)
+	}
+
+	if assetIds := extractAssetVirtualIdsFromRaw(raw); len(assetIds) > 0 {
+		userId := c.GetInt("id")
+		notOwned, checkErr := model.CheckUserOwnsAssets(userId, assetIds)
+		if checkErr != nil {
+			return nil, errors.Wrap(checkErr, "validate asset ownership failed")
+		}
+		if len(notOwned) > 0 {
+			return nil, fmt.Errorf("asset not found or access denied: %s", strings.Join(notOwned, ", "))
+		}
+	}
+
+	return bytes.NewReader(raw), nil
 }
 
 // DoRequest delegates to common helper.
@@ -579,6 +626,76 @@ func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, taskResult *rela
 
 func (a *TaskAdaptor) AdjustBillingOnSubmit(info *relaycommon.RelayInfo, taskData []byte) map[string]float64 {
 	return nil
+}
+
+// probeRawMirrorBillingFields does a lightweight, non-strict scan of the raw
+// client JSON body for the two fields the billing pipeline reads via gin
+// context ("has_video_input", "video_resolution") — without decoding into
+// requestPayload, so unknown official fields (execution_expires_after,
+// service_tier, safety_identifier, ...) are never lost by this probe (they
+// are forwarded verbatim by buildRawMirrorRequestBody regardless).
+func probeRawMirrorBillingFields(raw []byte) (hasVideoInput bool, resolution string, err error) {
+	var probe struct {
+		Resolution string `json:"resolution"`
+		Content    []struct {
+			Type     string `json:"type"`
+			VideoURL *struct {
+				URL string `json:"url"`
+			} `json:"video_url"`
+		} `json:"content"`
+	}
+	if err := common.Unmarshal(raw, &probe); err != nil {
+		return false, "", err
+	}
+	for _, item := range probe.Content {
+		if item.Type == "video_url" && item.VideoURL != nil && item.VideoURL.URL != "" {
+			hasVideoInput = true
+			break
+		}
+	}
+	return hasVideoInput, probe.Resolution, nil
+}
+
+// extractAssetVirtualIdsFromRaw mirrors extractAssetVirtualIds but scans a
+// raw, unstructured JSON body (used by the raw-mirror path, which never
+// builds []ContentItem).
+func extractAssetVirtualIdsFromRaw(raw []byte) []string {
+	var probe struct {
+		Content []struct {
+			ImageURL *struct {
+				URL string `json:"url"`
+			} `json:"image_url"`
+			VideoURL *struct {
+				URL string `json:"url"`
+			} `json:"video_url"`
+			AudioURL *struct {
+				URL string `json:"url"`
+			} `json:"audio_url"`
+		} `json:"content"`
+	}
+	if err := common.Unmarshal(raw, &probe); err != nil {
+		return nil
+	}
+	var ids []string
+	extract := func(url string) {
+		if strings.HasPrefix(url, "asset://") {
+			if vid := strings.TrimPrefix(url, "asset://"); vid != "" {
+				ids = append(ids, vid)
+			}
+		}
+	}
+	for _, item := range probe.Content {
+		if item.ImageURL != nil {
+			extract(item.ImageURL.URL)
+		}
+		if item.VideoURL != nil {
+			extract(item.VideoURL.URL)
+		}
+		if item.AudioURL != nil {
+			extract(item.AudioURL.URL)
+		}
+	}
+	return ids
 }
 
 // extractAssetVirtualIds scans content items for asset:// URLs and returns their virtual IDs.
