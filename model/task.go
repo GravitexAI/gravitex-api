@@ -39,6 +39,9 @@ const (
 	TaskStatusFailure               = "FAILURE"
 	TaskStatusSuccess               = "SUCCESS"
 	TaskStatusUnknown               = "UNKNOWN"
+	// TaskStatusCancelled marks a task cancelled via the Seedance official-mirror
+	// DELETE endpoint while it was still queued. Not used by any other flow.
+	TaskStatusCancelled TaskStatus = "CANCELLED"
 )
 
 type Task struct {
@@ -395,6 +398,14 @@ func GetByTaskId(userId int, taskId string) (*Task, bool, error) {
 		return nil, false, err
 	}
 	return task, exist, err
+}
+
+// DeleteTaskByID permanently removes a task record. Used by the Seedance
+// official-mirror DELETE endpoint when the upstream task was in a terminal
+// state (succeeded/failed/expired), matching the official semantics of
+// "the task record is deleted and will no longer be queryable".
+func DeleteTaskByID(id int64) error {
+	return DB.Where("id = ?", id).Delete(&Task{}).Error
 }
 
 func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
