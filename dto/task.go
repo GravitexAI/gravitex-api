@@ -11,6 +11,12 @@ type TaskError struct {
 	StatusCode int    `json:"-"`
 	LocalError bool   `json:"-"`
 	Error      error  `json:"-"`
+	// RawBody, when non-empty, holds the verbatim upstream response body that
+	// should be written to the client as-is instead of this struct's own JSON
+	// shape. Only honored when the request carries
+	// common.KeySeedanceRawMirror — see controller.respondTaskError. Ignored
+	// by normal JSON marshaling.
+	RawBody []byte `json:"-"`
 }
 
 type TaskData interface {
