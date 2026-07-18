@@ -61,6 +61,25 @@ func byteplusCall(cfg ByteplusAssetConfig, action string, body map[string]interf
 	return resp, nil
 }
 
+// ByteplusRawAction transparently forwards an arbitrary Action + request body
+// to BytePlus Ark and returns the unprocessed raw response map (including the
+// genuine ResponseMetadata BytePlus returns), for callers that need the
+// official response shape verbatim — e.g. the Seedance asset-library
+// official-mirror endpoint. Unlike the ByteplusXxx wrapper functions in this
+// file, it does not narrow the request to named parameters, so
+// SortBy/SortOrder/per-call ProjectName and any other officially-supported
+// field are preserved.
+func ByteplusRawAction(cfg ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+	resp, err := byteplusCall(cfg, action, body)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("byteplus %s: nil response", action)
+	}
+	return *resp, nil
+}
+
 // parseResponse converts the SDK response map to a typed struct via JSON round-trip.
 // If the response contains a "Result" key (BytePlus SDK envelope), it unwraps that level first.
 func parseResponse(resp *map[string]interface{}, target interface{}) error {
