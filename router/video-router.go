@@ -65,6 +65,24 @@ func SetVideoRouter(router *gin.Engine) {
 		videoV1Router.GET("/videos/:task_id", controller.RelayTaskFetch)
 	}
 
+	// Seedance 2.0 official-mirror routes — byte-identical request/response to
+	// BytePlus Ark's own API, only the base URL differs. See
+	// docs/byteplus/seedance-2.0-official-api-mirror-design.md.
+	seedanceOfficialRouter := router.Group("/api/v3/contents/generations")
+	seedanceOfficialRouter.Use(middleware.RouteTag("relay"))
+	seedanceOfficialRouter.Use(middleware.SeedanceOfficialMirror(), middleware.TokenAuth(), middleware.AssetResolveChannel(), middleware.Distribute())
+	{
+		seedanceOfficialRouter.POST("/tasks", controller.RelayTask)
+		seedanceOfficialRouter.GET("/tasks/:id", controller.RelayTaskFetch)
+	}
+
+	seedanceOfficialCancelRouter := router.Group("/api/v3/contents/generations")
+	seedanceOfficialCancelRouter.Use(middleware.RouteTag("relay"))
+	seedanceOfficialCancelRouter.Use(middleware.SeedanceOfficialMirror(), middleware.TokenAuth())
+	{
+		seedanceOfficialCancelRouter.DELETE("/tasks/:id", controller.RelayTaskCancel)
+	}
+
 	klingV1Router := router.Group("/kling/v1")
 	klingV1Router.Use(middleware.RouteTag("relay"))
 	klingV1Router.Use(middleware.KlingRequestConvert(), middleware.TokenAuth(), middleware.Distribute())
