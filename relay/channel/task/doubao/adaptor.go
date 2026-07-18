@@ -359,6 +359,28 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	return client.Do(req)
 }
 
+// CancelTask cancels a queued task or deletes a terminal task's record via
+// DELETE /api/v3/contents/generations/tasks/{id}, mirroring FetchTask's
+// existing request-building pattern. Implements controller.TaskCancelAdaptor
+// (an interface defined at the consumer side, not on the shared TaskAdaptor
+// interface — see docs/byteplus/seedance-2.0-official-api-mirror-design.md §3.4).
+func (a *TaskAdaptor) CancelTask(baseUrl, key, taskID, proxy string) (*http.Response, error) {
+	uri := fmt.Sprintf("%s/api/v3/contents/generations/tasks/%s", baseUrl, taskID)
+
+	req, err := http.NewRequest(http.MethodDelete, uri, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+
+	client, err := service.GetHttpClientWithProxy(proxy)
+	if err != nil {
+		return nil, fmt.Errorf("new proxy http client failed: %w", err)
+	}
+	return client.Do(req)
+}
+
 func (a *TaskAdaptor) GetModelList() []string {
 	return ModelList
 }

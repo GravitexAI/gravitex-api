@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -91,4 +92,28 @@ func TestDoResponse_RawMirror_WritesUpstreamBodyVerbatim(t *testing.T) {
 	assert.Equal(t, "cgt-20260708094649-mxfjc", taskID)
 	assert.JSONEq(t, upstreamBody, string(taskData))
 	assert.JSONEq(t, upstreamBody, w.Body.String())
+}
+
+func TestCancelTask_SendsDeleteWithBearerAuth(t *testing.T) {
+	service.InitHttpClient()
+
+	var gotMethod, gotPath, gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	adaptor := &TaskAdaptor{}
+	resp, err := adaptor.CancelTask(server.URL, "test-api-key", "cgt-20260708094649-mxfjc", "")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.MethodDelete, gotMethod)
+	assert.Equal(t, "/api/v3/contents/generations/tasks/cgt-20260708094649-mxfjc", gotPath)
+	assert.Equal(t, "Bearer test-api-key", gotAuth)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
