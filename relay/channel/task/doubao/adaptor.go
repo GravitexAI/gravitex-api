@@ -254,6 +254,18 @@ func (a *TaskAdaptor) buildRawMirrorRequestBody(c *gin.Context, info *relaycommo
 		return nil, errors.Wrap(err, "seek body storage failed")
 	}
 
+	// 渠道 model_mapping：与非镜像分支（第 187 行）同一条规则——统一以
+	// RelayInfo.UpstreamModelName 为准（若未映射则保持原样）。镜像路径转发
+	// 客户端原始字节，若不在这里改写 "model" 字段，渠道配置的模型重定向会被
+	// 静默跳过，客户端传的原始 model 字符串会原样透传给上游。
+	if info != nil && info.UpstreamModelName != "" {
+		rewritten, err := applyUpstreamModelName(raw, info.UpstreamModelName)
+		if err != nil {
+			return nil, errors.Wrap(err, "apply upstream model mapping failed")
+		}
+		raw = rewritten
+	}
+
 	hasVideoInput, resolution, err := probeRawMirrorBillingFields(raw)
 	if err != nil {
 		return nil, errors.Wrap(err, "probe billing fields failed")
@@ -685,6 +697,25 @@ func probeRawMirrorBillingFields(raw []byte) (hasVideoInput bool, resolution str
 		}
 	}
 	return hasVideoInput, probe.Resolution, nil
+}
+
+// applyUpstreamModelName rewrites the top-level "model" field of a raw
+// mirror request body to upstreamModelName, leaving every other field's raw
+// bytes untouched (each value round-trips through json.RawMessage, so
+// numbers/strings/nested objects are not reformatted). Used to apply a
+// channel's configured model_mapping redirect on the raw-mirror path, which
+// otherwise forwards the client's original "model" string unchanged.
+func applyUpstreamModelName(raw []byte, upstreamModelName string) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	modelJSON, err := common.Marshal(upstreamModelName)
+	if err != nil {
+		return nil, err
+	}
+	fields["model"] = modelJSON
+	return common.Marshal(fields)
 }
 
 // extractAssetVirtualIdsFromRaw mirrors extractAssetVirtualIds but scans a

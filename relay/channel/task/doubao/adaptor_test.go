@@ -72,6 +72,70 @@ func TestExtractAssetVirtualIdsFromRaw_NoAssets(t *testing.T) {
 	assert.Empty(t, ids)
 }
 
+func TestApplyUpstreamModelName_RewritesModelOnly(t *testing.T) {
+	raw := []byte(`{"model":"seedance-2-0-fast","content":[{"type":"text","text":"a cat"}],"resolution":"720p","execution_expires_after":172800}`)
+	rewritten, err := applyUpstreamModelName(raw, "doubao-seedance-2-0-fast-260128")
+	require.NoError(t, err)
+
+	var got map[string]interface{}
+	require.NoError(t, common.Unmarshal(rewritten, &got))
+	assert.Equal(t, "doubao-seedance-2-0-fast-260128", got["model"])
+	assert.Equal(t, "720p", got["resolution"])
+	assert.EqualValues(t, 172800, got["execution_expires_after"])
+	assert.Len(t, got["content"], 1)
+}
+
+func TestBuildRawMirrorRequestBody_AppliesChannelModelMapping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	raw := []byte(`{"model":"seedance-2-0-fast","content":[{"type":"text","text":"a cat"}]}`)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/contents/generations/tasks", strings.NewReader(string(raw)))
+	c.Set(common.KeyRequestBody, raw)
+
+	info := &relaycommon.RelayInfo{
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
+		OriginModelName: "seedance-2-0-fast",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "doubao-seedance-2-0-fast-260128"},
+	}
+
+	adaptor := &TaskAdaptor{}
+	reader, err := adaptor.buildRawMirrorRequestBody(c, info)
+	require.NoError(t, err)
+
+	body, err := io.ReadAll(reader)
+	require.NoError(t, err)
+
+	var got map[string]interface{}
+	require.NoError(t, common.Unmarshal(body, &got))
+	assert.Equal(t, "doubao-seedance-2-0-fast-260128", got["model"])
+}
+
+func TestBuildRawMirrorRequestBody_NoMappingKeepsOriginalModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	raw := []byte(`{"model":"seedance-2-0","content":[{"type":"text","text":"a cat"}]}`)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/contents/generations/tasks", strings.NewReader(string(raw)))
+	c.Set(common.KeyRequestBody, raw)
+
+	info := &relaycommon.RelayInfo{
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{},
+		OriginModelName: "seedance-2-0",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "seedance-2-0"},
+	}
+
+	adaptor := &TaskAdaptor{}
+	reader, err := adaptor.buildRawMirrorRequestBody(c, info)
+	require.NoError(t, err)
+
+	body, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(raw), string(body))
+}
+
 func TestDoResponse_RawMirror_WritesUpstreamBodyVerbatim(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	upstreamBody := `{"id":"cgt-20260708094649-mxfjc","model":"seedance-2-0","status":"queued","created_at":1783475210,"updated_at":1783475210}`
