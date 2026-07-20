@@ -112,3 +112,65 @@ func TestSeedanceOfficialAssetDispatch_ListAssets_ForwardsBodyAndReturnsRawRespo
 	assert.Equal(t, "CreateTime", filter["SortBy"], "SortBy must be forwarded verbatim, not dropped")
 	assert.Contains(t, w.Body.String(), `"TotalCount":0`)
 }
+
+func TestSeedanceOfficialAssetDispatch_CreateAssetGroup_PersistsLocally(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		assert.Equal(t, service.ByteplusGroupTypeAIGC, body["GroupType"])
+		return map[string]interface{}{"Id": "group-20260710-abcde"}, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 42)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	c.Request = httptest.NewRequest(http.MethodPost, "/ark/seedance/v3?Action=CreateAssetGroup&Version=2024-01-01",
+		strings.NewReader(`{"Name":"角色A","Description":"desc"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	group, err := model.GetUserAssetGroupByUserIdAndGroupId(42, "group-20260710-abcde")
+	require.NoError(t, err)
+	assert.Equal(t, "角色A", group.Name)
+	assert.Equal(t, "aigc", group.GroupType)
+}
+
+func TestSeedanceOfficialAssetDispatch_CreateAsset_PersistsLocallyAndUsableByCheckUserOwnsAssets(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		return map[string]interface{}{"Id": "asset-20260710-xyz"}, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 42)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	reqBody := `{"GroupId":"group-1","URL":"https://cdn.example.com/face.jpg","AssetType":"Image","Name":"face.jpg"}`
+	c.Request = httptest.NewRequest(http.MethodPost, "/ark/seedance/v3?Action=CreateAsset&Version=2024-01-01", strings.NewReader(reqBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	asset, err := model.GetUserAssetByUserIdAndVirtualId(42, "asset-20260710-xyz")
+	require.NoError(t, err)
+	assert.Equal(t, "group-1", asset.GroupId)
+	assert.Equal(t, "asset://asset-20260710-xyz", asset.AssetUrl)
+	assert.Equal(t, "Image", asset.AssetType)
+
+	notOwned, err := model.CheckUserOwnsAssets(42, []string{"asset-20260710-xyz"})
+	require.NoError(t, err)
+	assert.Empty(t, notOwned, "asset created via the mirror endpoint must be recognized as owned by the user")
+}

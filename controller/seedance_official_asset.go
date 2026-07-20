@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
@@ -103,9 +104,45 @@ func seedanceExtractResultId(resp map[string]interface{}) string {
 	return ""
 }
 
-// syncSeedanceAssetLocalState is implemented in Task 12/13; declared here as
-// a no-op stub so this task compiles and its tests (which only exercise
-// read-only Actions) pass in isolation.
+// syncSeedanceAssetLocalState replicates the local bookkeeping that
+// controller/asset.go and controller/asset_group.go perform after their own
+// ByteplusXxx calls, so assets/groups created via this mirror endpoint stay
+// visible to model.CheckUserOwnsAssets and the existing /v1/assets,
+// /v1/asset-groups endpoints. This is mandatory, not optional — see design
+// doc §4.2.
 func syncSeedanceAssetLocalState(userId, channelId int, action string, reqBody map[string]interface{}, resp map[string]interface{}) error {
-	return nil
+	switch action {
+	case "CreateAssetGroup":
+		id := seedanceExtractResultId(resp)
+		if id == "" {
+			return fmt.Errorf("CreateAssetGroup: empty Id in response")
+		}
+		name, _ := reqBody["Name"].(string)
+		desc, _ := reqBody["Description"].(string)
+		return model.InsertUserAssetGroup(&model.UserAssetGroup{
+			UserId: userId, ChannelId: channelId, GroupId: id,
+			GroupType: "aigc", Name: name, Description: desc,
+		})
+	case "CreateAsset":
+		id := seedanceExtractResultId(resp)
+		if id == "" {
+			return fmt.Errorf("CreateAsset: empty Id in response")
+		}
+		groupId, _ := reqBody["GroupId"].(string)
+		url, _ := reqBody["URL"].(string)
+		assetType, _ := reqBody["AssetType"].(string)
+		if assetType == "" {
+			assetType = "Image"
+		}
+		name, _ := reqBody["Name"].(string)
+		return model.InsertUserAsset(&model.UserAsset{
+			UserId: userId, ChannelId: channelId, GroupId: groupId,
+			VirtualId: id, AssetUrl: "asset://" + id, Url: url,
+			Filename: name, AssetType: assetType, Status: "pending",
+		})
+	default:
+		// Handled by Task 13 (Update/Delete) or is a read-only action with no
+		// local state to sync.
+		return nil
+	}
 }
