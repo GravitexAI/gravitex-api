@@ -60,20 +60,10 @@ func formatRequest(requestBody io.Reader, requestHeader http.Header, requestID s
 }
 
 // stripBodyFieldsForDroppedBetas 清理那些"对应 beta 未被保留"的顶级 body 字段。
-// 后续发现新的 beta ↔ body 绑定关系时，在此追加映射即可。
 func (r *AwsClaudeRequest) stripBodyFieldsForDroppedBetas(keptBetas []string) {
-	kept := make(map[string]bool, len(keptBetas))
-	for _, b := range keptBetas {
-		kept[b] = true
-	}
-	// context_management 顶级字段依赖 context-management-2025-06-27 beta（仅 Converse 支持）
-	if !kept["context-management-2025-06-27"] {
-		r.ContextManagement = nil
-	}
-	// output_config: { effort } 依赖 effort-2025-11-24 beta
-	if !kept["effort-2025-11-24"] {
-		r.OutputConfig = nil
-	}
+	kept := claude.KeptBetaSet(keptBetas)
+	r.ContextManagement = claude.StripContextManagementForDroppedBetas(r.ContextManagement, kept)
+	r.OutputConfig = claude.StripOutputConfigForDroppedBetas(r.OutputConfig, kept)
 }
 
 // NovaMessage Nova模型使用messages-v1格式

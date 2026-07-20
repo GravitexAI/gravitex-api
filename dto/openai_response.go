@@ -235,8 +235,8 @@ type Usage struct {
 	InputTokensDetails     *InputTokenDetails `json:"input_tokens_details"`
 
 	// claude cache 1h
-	ClaudeCacheCreation5mTokens int `json:"claude_cache_creation_5_m_tokens"`
-	ClaudeCacheCreation1hTokens int `json:"claude_cache_creation_1_h_tokens"`
+	ClaudeCacheCreation5mTokens int `json:"claude_cache_creation_5_m_tokens,omitempty"`
+	ClaudeCacheCreation1hTokens int `json:"claude_cache_creation_1_h_tokens,omitempty"`
 
 	// OpenRouter Params
 	Cost any `json:"cost,omitempty"`
