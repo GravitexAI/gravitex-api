@@ -174,3 +174,93 @@ func TestSeedanceOfficialAssetDispatch_CreateAsset_PersistsLocallyAndUsableByChe
 	require.NoError(t, err)
 	assert.Empty(t, notOwned, "asset created via the mirror endpoint must be recognized as owned by the user")
 }
+
+func TestSeedanceOfficialAssetDispatch_UpdateAsset_UpdatesLocalName(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+	require.NoError(t, model.InsertUserAsset(&model.UserAsset{
+		UserId: 42, ChannelId: 1, VirtualId: "asset-upd-1", AssetUrl: "asset://asset-upd-1", Filename: "old.jpg", AssetType: "Image", Status: "active",
+	}))
+
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		return map[string]interface{}{"Id": "asset-upd-1"}, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 42)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	c.Request = httptest.NewRequest(http.MethodPost, "/ark/seedance/v3?Action=UpdateAsset&Version=2024-01-01",
+		strings.NewReader(`{"Id":"asset-upd-1","Name":"new.jpg"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	asset, err := model.GetUserAssetByUserIdAndVirtualId(42, "asset-upd-1")
+	require.NoError(t, err)
+	assert.Equal(t, "new.jpg", asset.Filename)
+}
+
+func TestSeedanceOfficialAssetDispatch_DeleteAsset_RemovesLocalRecord(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+	require.NoError(t, model.InsertUserAsset(&model.UserAsset{
+		UserId: 42, ChannelId: 1, VirtualId: "asset-del-1", AssetUrl: "asset://asset-del-1", AssetType: "Image", Status: "active",
+	}))
+
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		return map[string]interface{}{}, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 42)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	c.Request = httptest.NewRequest(http.MethodPost, "/ark/seedance/v3?Action=DeleteAsset&Version=2024-01-01",
+		strings.NewReader(`{"Id":"asset-del-1"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	_, err := model.GetUserAssetByUserIdAndVirtualId(42, "asset-del-1")
+	assert.Error(t, err, "record should no longer exist")
+}
+
+func TestSeedanceOfficialAssetDispatch_DeleteAssetGroup_RemovesLocalRecordAndCascadesAssets(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+	require.NoError(t, model.InsertUserAssetGroup(&model.UserAssetGroup{
+		UserId: 42, ChannelId: 1, GroupId: "group-del-1", GroupType: "aigc", Name: "g",
+	}))
+	require.NoError(t, model.InsertUserAsset(&model.UserAsset{
+		UserId: 42, ChannelId: 1, GroupId: "group-del-1", VirtualId: "asset-in-group", AssetUrl: "asset://asset-in-group", AssetType: "Image", Status: "active",
+	}))
+
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		return map[string]interface{}{}, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 42)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	c.Request = httptest.NewRequest(http.MethodPost, "/ark/seedance/v3?Action=DeleteAssetGroup&Version=2024-01-01",
+		strings.NewReader(`{"Id":"group-del-1"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	_, err := model.GetUserAssetGroupByUserIdAndGroupId(42, "group-del-1")
+	assert.Error(t, err)
+	_, err = model.GetUserAssetByUserIdAndVirtualId(42, "asset-in-group")
+	assert.Error(t, err, "cascade delete must remove assets belonging to the deleted group")
+}

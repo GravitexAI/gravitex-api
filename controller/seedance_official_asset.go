@@ -140,9 +140,42 @@ func syncSeedanceAssetLocalState(userId, channelId int, action string, reqBody m
 			VirtualId: id, AssetUrl: "asset://" + id, Url: url,
 			Filename: name, AssetType: assetType, Status: "pending",
 		})
+	case "UpdateAsset":
+		id, _ := reqBody["Id"].(string)
+		if id == "" {
+			return fmt.Errorf("UpdateAsset: missing Id in request")
+		}
+		updates := map[string]interface{}{}
+		if name, ok := reqBody["Name"].(string); ok {
+			updates["filename"] = name
+		}
+		if len(updates) == 0 {
+			return nil
+		}
+		return model.UpdateUserAssetFields(id, updates)
+	case "UpdateAssetGroup":
+		id, _ := reqBody["Id"].(string)
+		if id == "" {
+			return fmt.Errorf("UpdateAssetGroup: missing Id in request")
+		}
+		name, _ := reqBody["Name"].(string)
+		desc, _ := reqBody["Description"].(string)
+		return model.UpdateUserAssetGroupName(id, name, desc)
+	case "DeleteAsset":
+		id, _ := reqBody["Id"].(string)
+		if id == "" {
+			return fmt.Errorf("DeleteAsset: missing Id in request")
+		}
+		return model.DeleteUserAssetByVirtualId(id)
+	case "DeleteAssetGroup":
+		id, _ := reqBody["Id"].(string)
+		if id == "" {
+			return fmt.Errorf("DeleteAssetGroup: missing Id in request")
+		}
+		return model.DeleteUserAssetGroupByGroupId(id)
 	default:
-		// Handled by Task 13 (Update/Delete) or is a read-only action with no
-		// local state to sync.
+		// Read-only actions (ListAssets/ListAssetGroups/GetAsset/GetAssetGroup)
+		// have no local state to sync.
 		return nil
 	}
 }
