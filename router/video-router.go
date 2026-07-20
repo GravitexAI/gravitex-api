@@ -83,6 +83,16 @@ func SetVideoRouter(router *gin.Engine) {
 		seedanceOfficialCancelRouter.DELETE("/tasks/:id", controller.RelayTaskCancel)
 	}
 
+	// Seedance asset-library official-mirror route — single endpoint, Action
+	// query param dispatch, same shape as the existing jimeng channel's
+	// convention. See docs/byteplus/seedance-2.0-official-api-mirror-design.md §4.
+	assetOfficialRouter := router.Group("/ark/seedance/v3")
+	assetOfficialRouter.Use(middleware.RouteTag("relay"))
+	assetOfficialRouter.Use(middleware.TokenAuth())
+	{
+		assetOfficialRouter.POST("", controller.SeedanceOfficialAssetDispatch)
+	}
+
 	klingV1Router := router.Group("/kling/v1")
 	klingV1Router.Use(middleware.RouteTag("relay"))
 	klingV1Router.Use(middleware.KlingRequestConvert(), middleware.TokenAuth(), middleware.Distribute())
