@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 
@@ -39,10 +40,17 @@ func ConvertURLSourcesToBase64(c *gin.Context, request *dto.ClaudeRequest) error
 			if mediaMessage.Source == nil || mediaMessage.Source.Type != "url" {
 				continue
 			}
+			label := mediaSourceLabel(mediaMessage.Type)
 			source := types.NewURLFileSource(mediaMessage.Source.Url)
-			base64Data, mimeType, err := service.GetBase64Data(c, source, "formatting media for Claude")
+			base64Data, mimeType, err := service.GetBase64Data(c, source, fmt.Sprintf("formatting %s for Claude", label))
 			if err != nil {
-				return fmt.Errorf("get file base64 from url failed: %s", err.Error())
+				// 下载失败（源站因 User-Agent/风控策略返回 403、超时、DNS 失败等）时不
+				// 阻断整个请求：保留原始 URL source 不做修改，把用户原始请求原样转发给
+				// 上游。Bedrock/Vertex 本身不支持 URL source，上游会用它自己的报错拒绝，
+				// 但这样不会把"我们这边下载失败"和"上游本身不支持"这两种不同性质的错误
+				// 混在一起，也不会因为一次可能是暂时性的下载失败就直接拒绝整个请求。
+				logger.LogWarn(c, fmt.Sprintf("failed to fetch %s from url, keep original url source and forward as-is: %s", label, err.Error()))
+				continue
 			}
 			mediaMessage.Source.MediaType = mimeType
 			mediaMessage.Source.Data = base64Data
@@ -57,4 +65,13 @@ func ConvertURLSourcesToBase64(c *gin.Context, request *dto.ClaudeRequest) error
 		}
 	}
 	return nil
+}
+
+// mediaSourceLabel 把 content block 的 type 转成日志里可读的媒体类型名，
+// 用于区分是图片下载失败还是文档下载失败。
+func mediaSourceLabel(blockType string) string {
+	if blockType == "image" {
+		return "image"
+	}
+	return "document"
 }
