@@ -304,8 +304,21 @@ func CreateBodyStorageFromReader(reader io.Reader, contentLength int64, maxBytes
 
 // ReaderOnly wraps an io.Reader to hide io.Closer, preventing http.NewRequest
 // from type-asserting io.ReadCloser and closing the underlying BodyStorage.
+//
+// When the underlying reader is seekable (BodyStorage is an io.ReadSeeker), the
+// seek capability is preserved so callers can wire http.Request.GetBody to rewind
+// and retry the body after a lost connection (see setRewindableBody), avoiding
+// "net/http: cannot rewind body after connection loss". io.Closer stays hidden.
 func ReaderOnly(r io.Reader) io.Reader {
+	if rs, ok := r.(io.ReadSeeker); ok {
+		return readSeekerOnly{rs}
+	}
 	return struct{ io.Reader }{r}
+}
+
+// readSeekerOnly exposes Read and Seek while hiding io.Closer.
+type readSeekerOnly struct {
+	io.ReadSeeker
 }
 
 // CleanupOldCacheFiles 清理旧的缓存文件（用于启动时清理残留）

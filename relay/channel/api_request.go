@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -39,6 +40,29 @@ func applyUpstreamContentLength(req *http.Request, info *common.RelayInfo) {
 	}
 	if info.UpstreamRequestBodySize > 0 && req.ContentLength <= 0 {
 		req.ContentLength = info.UpstreamRequestBodySize
+	}
+}
+
+// setRewindableBody wires req.GetBody so that net/http can rewind the upstream
+// request body and transparently retry the request on a fresh connection when a
+// reused keep-alive connection is dropped mid-flight. Without GetBody the
+// transport fails with "net/http: cannot rewind body after connection loss".
+//
+// http.NewRequest only auto-populates GetBody for known in-memory types
+// (*bytes.Reader/*bytes.Buffer/*strings.Reader). The upstream body is a
+// type-erased ReaderOnly(BodyStorage) (see relay/common/outbound_body.go), so it
+// is wired here whenever the body is seekable. Non-seekable bodies are left
+// untouched (GetBody stays nil, same as before).
+func setRewindableBody(req *http.Request, requestBody io.Reader) {
+	seeker, ok := requestBody.(io.Seeker)
+	if !ok {
+		return
+	}
+	req.GetBody = func() (io.ReadCloser, error) {
+		if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+		return io.NopCloser(requestBody), nil
 	}
 }
 
@@ -335,6 +359,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
 	applyUpstreamContentLength(req, info)
+	setRewindableBody(req, requestBody)
 	headers := req.Header
 	err = a.SetupRequestHeader(c, &headers, info)
 	if err != nil {
@@ -365,6 +390,7 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
 	applyUpstreamContentLength(req, info)
+	setRewindableBody(req, requestBody)
 	// set form data
 	req.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	headers := req.Header
@@ -537,7 +563,14 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	resp, err := client.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
-		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
+		// 遮罩文案保留底层失败原因（如 "net/http: cannot rewind body after connection loss"），
+		// 但剥掉 *url.Error 外层携带的上游 URL，避免泄露上游地址
+		reason := err.Error()
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) && urlErr.Err != nil {
+			reason = urlErr.Err.Error()
+		}
+		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: "+reason))
 	}
 	if resp == nil {
 		return nil, errors.New("resp is nil")
