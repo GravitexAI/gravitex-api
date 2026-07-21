@@ -28,9 +28,9 @@ func TestSeedanceOfficialAssetRoute_Registered(t *testing.T) {
 
 	found := false
 	for _, rt := range r.Routes() {
-		if rt.Path == "/ark/seedance/v3" && rt.Method == http.MethodPost {
+		if rt.Path == "/api/v3/seedance" && rt.Method == http.MethodPost {
 			found = true
 		}
 	}
-	assert.True(t, found, "POST /ark/seedance/v3 not registered")
+	assert.True(t, found, "POST /api/v3/seedance not registered")
 }

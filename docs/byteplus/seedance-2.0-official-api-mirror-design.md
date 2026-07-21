@@ -13,12 +13,13 @@
 覆盖两块：
 
 1. **视频生成任务**：提交 / 查询 / 取消，镜像 `POST|GET|DELETE https://ark.../api/v3/contents/generations/tasks[/{id}]`
-2. **素材库**（虚拟 + 真人两类共用同一套接口）：CreateAssetGroup / CreateAsset / ListAssetGroups / ListAssets / GetAsset / GetAssetGroup / UpdateAsset / UpdateAssetGroup / DeleteAsset / DeleteAssetGroup，镜像 `POST https://ark.../?Action=X&Version=2024-01-01`
+2. **素材库**（虚拟 + 真人两类共用同一套接口）：CreateAssetGroup / CreateAsset / ListAssetGroups / ListAssets / GetAsset / GetAssetGroup / UpdateAsset / UpdateAssetGroup / DeleteAsset / DeleteAssetGroup / CreateVisualValidateSession / GetVisualValidateResult，镜像 `POST https://ark.../?Action=X&Version=2024-01-01`
+
+> **补充（本轮追加）**：真人核验（`CreateVisualValidateSession`/`GetVisualValidateResult`）原先被排除在镜像范围外，现已纳入——见 §4.2 表格。`CreateVisualValidateSession` 的 `CallbackURL` 会被强制改写为平台自己的回调页地址（与 `CreateAssetGroup` 强制 `GroupType=aigc` 是同一种"镜像里覆盖必要字段"模式），因为镜像的 `GetVisualValidateResult` 走的是带 Bearer 鉴权的同一个端点，不依赖回调页携带任何状态。同时补上了 `CreateAssetGroup`/`CreateVisualValidateSession`/`GetVisualValidateResult` 的素材组配额硬拦截（超限 `403 QuotaExceeded`，见 §4.2）——这是本轮一并订正的遗漏，之前的 `CreateAssetGroup` 镜像完全没做配额检查。配额检查放在 `CreateVisualValidateSession`（而不是只放在 `GetVisualValidateResult`）是因为火山侧的真人素材组在用户 H5 核验通过的那一刻就已经创建，`GetVisualValidateResult` 只是事后查询，配额满时若不在发起核验前拦截，会导致用户核验通过后却在本地永久同步不到、素材组在火山侧变成孤儿；详见 §4.2 表格下方说明。现有平台专属流程 `/v1/visual-validate/session`、`/v1/visual-validate/result`（`controller/visual_validate.go`）不受影响，与新镜像 Action 并存。
 
 **明确不做**（已与用户确认排除在本期范围外）：
 
 - 素材库官方鉴权协议（Volcengine AK/SK SigV4 签名校验）——本期仅镜像请求/响应体形状，鉴权仍走平台自己的 `Bearer sk-xxx`。
-- 真人核验（`CreateVisualValidateSession`/`GetVisualValidateResult`）的官方形状镜像——现有 H5 回调机制（`/v1/visual-validate/session`、`/v1/visual-validate/result`）保持不变，不重复实现。
 - 审核拦截原因查询（`GetModerationResult`）的官方形状镜像——这是平台自研的白名单能力，官方没有对应的公开 REST 端点。
 - 取消任务（DELETE）不反向补充到现有 `/v1/video/generations/:task_id`，仅在新的官方镜像路由上生效。
 
@@ -36,16 +37,16 @@
 
 | 方法 | 完整 URL |
 |---|---|
-| POST | `https://api.gravitex.ai/ark/seedance/v3?Action=CreateAssetGroup&Version=2024-01-01` |
-| POST | `https://api.gravitex.ai/ark/seedance/v3?Action=CreateAsset&Version=2024-01-01` |
-| POST | `https://api.gravitex.ai/ark/seedance/v3?Action=ListAssetGroups&Version=2024-01-01` |
-| POST | `https://api.gravitex.ai/ark/seedance/v3?Action=ListAssets&Version=2024-01-01` |
-| POST | `https://api.gravitex.ai/ark/seedance/v3?Action=GetAsset&Version=2024-01-01` |
-| POST | `https://api.gravitex.ai/ark/seedance/v3?Action=GetAssetGroup&Version=2024-01-01` |
-| POST | `https://api.gravitex.ai/ark/seedance/v3?Action=UpdateAsset&Version=2024-01-01` |
-| POST | `https://api.gravitex.ai/ark/seedance/v3?Action=UpdateAssetGroup&Version=2024-01-01` |
-| POST | `https://api.gravitex.ai/ark/seedance/v3?Action=DeleteAsset&Version=2024-01-01` |
-| POST | `https://api.gravitex.ai/ark/seedance/v3?Action=DeleteAssetGroup&Version=2024-01-01` |
+| POST | `https://api.gravitex.ai/api/v3/seedance?Action=CreateAssetGroup&Version=2024-01-01` |
+| POST | `https://api.gravitex.ai/api/v3/seedance?Action=CreateAsset&Version=2024-01-01` |
+| POST | `https://api.gravitex.ai/api/v3/seedance?Action=ListAssetGroups&Version=2024-01-01` |
+| POST | `https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=2024-01-01` |
+| POST | `https://api.gravitex.ai/api/v3/seedance?Action=GetAsset&Version=2024-01-01` |
+| POST | `https://api.gravitex.ai/api/v3/seedance?Action=GetAssetGroup&Version=2024-01-01` |
+| POST | `https://api.gravitex.ai/api/v3/seedance?Action=UpdateAsset&Version=2024-01-01` |
+| POST | `https://api.gravitex.ai/api/v3/seedance?Action=UpdateAssetGroup&Version=2024-01-01` |
+| POST | `https://api.gravitex.ai/api/v3/seedance?Action=DeleteAsset&Version=2024-01-01` |
+| POST | `https://api.gravitex.ai/api/v3/seedance?Action=DeleteAssetGroup&Version=2024-01-01` |
 
 > `https://api.gravitex.ai` 是先占位的域名，若正式上线时域名不同，只是替换这一处，不影响路由本身的实现。
 
@@ -143,22 +144,24 @@ seedanceOfficialRouter.Use(middleware.SeedanceOfficialMirror(), middleware.Token
 单端点 + `Action` 查询参数，与官方完全一致的调用形状（对齐即梦渠道已用过的模式）：
 
 ```
-POST /ark/seedance/v3?Action=CreateAssetGroup&Version=2024-01-01
-POST /ark/seedance/v3?Action=CreateAsset&Version=2024-01-01
-POST /ark/seedance/v3?Action=ListAssetGroups&Version=2024-01-01
-POST /ark/seedance/v3?Action=ListAssets&Version=2024-01-01
-POST /ark/seedance/v3?Action=GetAsset&Version=2024-01-01
-POST /ark/seedance/v3?Action=GetAssetGroup&Version=2024-01-01
-POST /ark/seedance/v3?Action=UpdateAsset&Version=2024-01-01
-POST /ark/seedance/v3?Action=UpdateAssetGroup&Version=2024-01-01
-POST /ark/seedance/v3?Action=DeleteAsset&Version=2024-01-01
-POST /ark/seedance/v3?Action=DeleteAssetGroup&Version=2024-01-01
+POST /api/v3/seedance?Action=CreateAssetGroup&Version=2024-01-01
+POST /api/v3/seedance?Action=CreateAsset&Version=2024-01-01
+POST /api/v3/seedance?Action=ListAssetGroups&Version=2024-01-01
+POST /api/v3/seedance?Action=ListAssets&Version=2024-01-01
+POST /api/v3/seedance?Action=GetAsset&Version=2024-01-01
+POST /api/v3/seedance?Action=GetAssetGroup&Version=2024-01-01
+POST /api/v3/seedance?Action=UpdateAsset&Version=2024-01-01
+POST /api/v3/seedance?Action=UpdateAssetGroup&Version=2024-01-01
+POST /api/v3/seedance?Action=DeleteAsset&Version=2024-01-01
+POST /api/v3/seedance?Action=DeleteAssetGroup&Version=2024-01-01
+POST /api/v3/seedance?Action=CreateVisualValidateSession&Version=2024-01-01
+POST /api/v3/seedance?Action=GetVisualValidateResult&Version=2024-01-01
 ```
 
 鉴权：`Authorization: Bearer sk-xxx`（平台 token，`TokenAuth()` 中间件），**不是**真实 AK/SK，也不做 Volcengine SigV4 签名校验——已与用户确认此为本期范围。
 
 ```go
-assetOfficialRouter := router.Group("/ark/seedance/v3")
+assetOfficialRouter := router.Group("/api/v3/seedance")
 assetOfficialRouter.Use(middleware.RouteTag("relay"))
 assetOfficialRouter.Use(middleware.TokenAuth())
 {
@@ -201,7 +204,7 @@ func ByteplusRawAction(cfg ByteplusAssetConfig, action string, body map[string]i
 
 | Action | 调用方式 | 本地表同步（写操作才需要） |
 |---|---|---|
-| `CreateAssetGroup` | `ByteplusRawAction`，`GroupType` 固定视作 `aigc`（与现有 `/v1/asset-groups` 一致，`liveness_face` 仍只能走 H5 流程） | 从响应 `Result.Id` 取 `group_id` → `model.InsertUserAssetGroup(...)` |
+| `CreateAssetGroup` | 先做素材组配额硬拦截（`checkSeedanceGroupQuota`，超限 `403 QuotaExceeded`，不调用火山），通过后 `ByteplusRawAction`，`GroupType` 固定视作 `aigc`（与现有 `/v1/asset-groups` 一致，`liveness_face` 仍只能走真人核验流程） | 从响应 `Result.Id` 取 `group_id` → `model.InsertUserAssetGroup(...)` |
 | `CreateAsset` | `ByteplusRawAction`，body 原样透传（`GroupId`/`URL`/`AssetType`/`Name`/`Moderation`/`ProjectName` 等） | 从响应 `Result.Id` 取 `virtual_id` → `model.InsertUserAsset(...)` |
 | `ListAssetGroups` | `ByteplusRawAction`，body（含 `Filter`/`PageNumber`/`PageSize`/`SortBy`/`SortOrder`）原样透传 | 无 |
 | `ListAssets` | `ByteplusRawAction`，body 原样透传 | 无 |
@@ -211,8 +214,12 @@ func ByteplusRawAction(cfg ByteplusAssetConfig, action string, body map[string]i
 | `UpdateAssetGroup` | `ByteplusRawAction` | 按 `Id` 更新本地 `UserAssetGroup` 的对应字段 |
 | `DeleteAsset` | `ByteplusRawAction` | 按 `Id` 删除本地 `UserAsset` 记录 |
 | `DeleteAssetGroup` | `ByteplusRawAction` | 按 `Id` 删除本地 `UserAssetGroup` 记录（含级联，与现有 `/v1/asset-groups` DELETE 行为一致） |
+| `CreateVisualValidateSession` | 先做素材组配额硬拦截（`checkSeedanceGroupQuota`，`groupType=liveness_face`，超限 `403 QuotaExceeded`，不调用火山），通过后 `ByteplusRawAction`，`CallbackURL` 强制改写为 `{ServerAddress}` + `VisualValidateCallbackPath`（不带 `state` 参数，忽略客户端传入的任意值，防止跳转到攻击者地址）。响应是官方原始扁平结构 `{BytedToken,H5Link,CallbackURL}`，不是 `{ResponseMetadata,Result}` 信封 | 无（未产生本地记录，核验完成前不确定是否会成功） |
+| `GetVisualValidateResult` | 再做一次同样的配额硬拦截（`groupType=liveness_face`）作为第二道闸——见下文race说明，通过后 `ByteplusRawAction`。响应同样是扁平结构 `{GroupId}` | 从响应 `GroupId` → `model.InsertUserAssetGroup(..., GroupType: liveness_face)`——这是"本地记录真正被创建"的时刻，而不是 `CreateVisualValidateSession` |
 
 ID 直接透传（`group-xxx`/`asset-xxx` 本来就是火山真实 ID，本地表 `UserAssetGroup.GroupId`/`UserAsset.VirtualId` 存的也是同一个值，无需转换层）。
+
+**为什么配额检查放在 `CreateVisualValidateSession`，而不是只放在 `GetVisualValidateResult`**：官方文档明确写了 `GetVisualValidateResult` 的 `GroupId` 是 "the newly created portrait asset group"——也就是说**火山侧的真人素材组，是在用户完成 H5 真人核验（`resultCode=10000`）的那一刻就已经创建好的**，`GetVisualValidateResult` 只是事后查询这个已经存在的 `GroupId`，不是"调用它才创建"。如果配额检查只放在 `GetVisualValidateResult`，会出现这种情况：用户配额已满 → 我们仍然放行 `CreateVisualValidateSession`（当时没查配额）→ 用户在 H5 页面完成真人核验、火山侧已经创建了素材组 → 用户来查 `GetVisualValidateResult` 时才被 403 拦截、永远查不到这个 `GroupId`——素材组在火山侧变成孤儿，用户核验白做了。所以真正该拦截的时机是 `CreateVisualValidateSession`（发起核验会话之前），这样配额满时直接不发起 H5 核验，从源头避免。`GetVisualValidateResult` 仍保留同样的配额检查作为第二道闸，只是不能完全消除竞态（两次调用之间配额可能被别的请求占满），属于尽力而为的兜底，不是主要防线。
 
 用户/渠道解析：与现有 `/v1/asset-groups`、`/v1/assets` 一致的方式——从 token 关联的用户下已配置 AK/SK 的 BytePlus 渠道里选取（不引入新的渠道选择逻辑）。
 
@@ -220,10 +227,12 @@ ID 直接透传（`group-xxx`/`asset-xxx` 本来就是火山真实 ID，本地�
 
 | 文件 | 改动类型 | 说明 |
 |---|---|---|
-| `controller/seedance_official_asset.go` | 新增 | Action 分发 + body 原样透传给 `ByteplusRawAction` + 6 个写操作各自的本地表同步（`InsertUserAsset`/`InsertUserAssetGroup`/删除/更新，见上文关键约束） |
+| `controller/seedance_official_asset.go` | 新增 | Action 分发 + body 原样透传给 `ByteplusRawAction` + 6 个写操作各自的本地表同步（`InsertUserAsset`/`InsertUserAssetGroup`/删除/更新，见上文关键约束）+ `CreateAssetGroup`/`CreateVisualValidateSession`/`GetVisualValidateResult` 的素材组配额硬拦截 + `CreateVisualValidateSession` 的 CallbackURL 强制改写 |
 | `router/video-router.go`（或新 router 文件） | 新增路由注册 | 一个新 POST 路由 |
 | `service/byteplus_asset.go` | 新增一个导出函数 | **已确认采用**：新增 `ByteplusRawAction`（包一层现有私有 `byteplusCall`），换取完整字段保真度（`SortBy`/`SortOrder`/按次 `ProjectName` 等边缘字段不再被忽略）；不修改任何现有函数 |
+| `setting/system_setting/byteplus_asset.go` | 读取，不改动 | 配额硬拦截复用已有的 `GetByteplusAssetGroupLimit()` |
 | `controller/asset.go` / `asset_group.go` | **不改动** | 现有 `/v1/assets`、`/v1/asset-groups` 行为不变，本地表结构/字段也不变 |
+| `controller/visual_validate.go` | **不改动** | 平台专属真人核验流程（`/v1/visual-validate/session`、`/v1/visual-validate/result`）保持不动，与新镜像 Action 并存 |
 
 ## 五、测试计划
 

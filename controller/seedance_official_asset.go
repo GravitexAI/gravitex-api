@@ -3,12 +3,14 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -25,6 +27,7 @@ var seedanceOfficialAssetActions = map[string]bool{
 	"GetAsset": true, "GetAssetGroup": true,
 	"UpdateAsset": true, "UpdateAssetGroup": true,
 	"DeleteAsset": true, "DeleteAssetGroup": true,
+	"CreateVisualValidateSession": true, "GetVisualValidateResult": true,
 }
 
 func seedanceAssetErrorEnvelope(action string, code, message string) gin.H {
@@ -38,8 +41,27 @@ func seedanceAssetErrorEnvelope(action string, code, message string) gin.H {
 	}
 }
 
+// checkSeedanceGroupQuota enforces the per-user asset-group limit before an
+// upstream call that would create a new group (CreateAssetGroup, or
+// GetVisualValidateResult — the moment a liveness-verified group is
+// materialized locally). Writes its own error response and returns false
+// when the caller must abort; returns true when the call may proceed.
+func checkSeedanceGroupQuota(c *gin.Context, action string, userId, channelId int, groupType string) bool {
+	limit := system_setting.GetByteplusAssetGroupLimit()
+	count, err := model.CountUserAssetGroupsByChannel(userId, channelId, groupType)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, seedanceAssetErrorEnvelope(action, "QuotaCheckFailed", "failed to check asset group quota"))
+		return false
+	}
+	if int(count) >= limit {
+		c.JSON(http.StatusForbidden, seedanceAssetErrorEnvelope(action, "QuotaExceeded", fmt.Sprintf("asset group quota exceeded: limit %d", limit)))
+		return false
+	}
+	return true
+}
+
 // SeedanceOfficialAssetDispatch handles POST
-// /ark/seedance/v3?Action=X&Version=2024-01-01 — the BytePlus asset-library
+// /api/v3/seedance?Action=X&Version=2024-01-01 — the BytePlus asset-library
 // official-shape mirror. See
 // docs/byteplus/seedance-2.0-official-api-mirror-design.md §4.
 func SeedanceOfficialAssetDispatch(c *gin.Context) {
@@ -70,9 +92,36 @@ func SeedanceOfficialAssetDispatch(c *gin.Context) {
 
 	if action == "CreateAssetGroup" {
 		// GroupType is always forced to aigc — liveness_face can only be
-		// created via the existing H5 flow (/v1/visual-validate/session),
-		// unchanged by this mirror. See design doc §4.2.
+		// created via CreateVisualValidateSession/GetVisualValidateResult
+		// (mirrored below) or the existing H5 flow. See design doc §4.2.
+		if !checkSeedanceGroupQuota(c, action, userId, ch.Id, model.GroupTypeAIGC) {
+			return
+		}
 		body["GroupType"] = service.ByteplusGroupTypeAIGC
+	}
+	if action == "CreateVisualValidateSession" {
+		// Quota is checked here, not in GetVisualValidateResult: BytePlus creates
+		// the liveness-face asset group upstream the moment H5 verification
+		// succeeds, before we ever call GetVisualValidateResult. Gating on the
+		// later call would let a user finish H5 verification against a full
+		// quota and then get locked out of a GroupId we can never sync. See
+		// design doc §4.2.
+		if !checkSeedanceGroupQuota(c, action, userId, ch.Id, model.GroupTypeLivenessFace) {
+			return
+		}
+		// CallbackURL is always forced to the platform's own callback page —
+		// the mirror's GetVisualValidateResult is authenticated and doesn't
+		// depend on anything carried through the redirect. See design doc §4.2.
+		body["CallbackURL"] = strings.TrimRight(system_setting.ServerAddress, "/") + VisualValidateCallbackPath
+	}
+	if action == "GetVisualValidateResult" {
+		// Second gate, not redundant: quota could have filled up between
+		// CreateVisualValidateSession and the user finishing H5 verification.
+		// Doesn't fully close the race (BytePlus already created the group
+		// upstream by this point) but stops us from syncing past the limit.
+		if !checkSeedanceGroupQuota(c, action, userId, ch.Id, model.GroupTypeLivenessFace) {
+			return
+		}
 	}
 
 	resp, err := seedanceAssetRawAction(cfg, action, body)
@@ -88,16 +137,18 @@ func SeedanceOfficialAssetDispatch(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// seedanceExtractResultId pulls the "Id" field out of a raw BytePlus response
-// map, checking the top level first, then inside "Result" — mirroring the
-// existing extractStringField's behavior in byteplus_asset.go, since
-// different upstream Actions place Id at different nesting levels.
-func seedanceExtractResultId(resp map[string]interface{}) string {
-	if v, ok := resp["Id"].(string); ok && v != "" {
+// seedanceExtractStringField pulls a named string field out of a raw
+// BytePlus response map, checking the top level first, then inside
+// "Result" — mirroring the existing extractStringField's behavior in
+// byteplus_asset.go, since different upstream Actions place fields at
+// different nesting levels (and the two visual-validate Actions return a
+// flat response with no "Result" envelope at all).
+func seedanceExtractStringField(resp map[string]interface{}, field string) string {
+	if v, ok := resp[field].(string); ok && v != "" {
 		return v
 	}
 	if result, ok := resp["Result"].(map[string]interface{}); ok {
-		if v, ok := result["Id"].(string); ok {
+		if v, ok := result[field].(string); ok {
 			return v
 		}
 	}
@@ -113,7 +164,7 @@ func seedanceExtractResultId(resp map[string]interface{}) string {
 func syncSeedanceAssetLocalState(userId, channelId int, action string, reqBody map[string]interface{}, resp map[string]interface{}) error {
 	switch action {
 	case "CreateAssetGroup":
-		id := seedanceExtractResultId(resp)
+		id := seedanceExtractStringField(resp, "Id")
 		if id == "" {
 			return fmt.Errorf("CreateAssetGroup: empty Id in response")
 		}
@@ -121,10 +172,10 @@ func syncSeedanceAssetLocalState(userId, channelId int, action string, reqBody m
 		desc, _ := reqBody["Description"].(string)
 		return model.InsertUserAssetGroup(&model.UserAssetGroup{
 			UserId: userId, ChannelId: channelId, GroupId: id,
-			GroupType: "aigc", Name: name, Description: desc,
+			GroupType: model.GroupTypeAIGC, Name: name, Description: desc,
 		})
 	case "CreateAsset":
-		id := seedanceExtractResultId(resp)
+		id := seedanceExtractStringField(resp, "Id")
 		if id == "" {
 			return fmt.Errorf("CreateAsset: empty Id in response")
 		}
@@ -173,9 +224,19 @@ func syncSeedanceAssetLocalState(userId, channelId int, action string, reqBody m
 			return fmt.Errorf("DeleteAssetGroup: missing Id in request")
 		}
 		return model.DeleteUserAssetGroupByGroupId(id)
+	case "GetVisualValidateResult":
+		groupId := seedanceExtractStringField(resp, "GroupId")
+		if groupId == "" {
+			return fmt.Errorf("GetVisualValidateResult: empty GroupId in response")
+		}
+		return model.InsertUserAssetGroup(&model.UserAssetGroup{
+			UserId: userId, ChannelId: channelId, GroupId: groupId,
+			GroupType: model.GroupTypeLivenessFace,
+		})
 	default:
 		// Read-only actions (ListAssets/ListAssetGroups/GetAsset/GetAssetGroup)
-		// have no local state to sync.
+		// and CreateVisualValidateSession (no local state until verification
+		// completes) have no local state to sync.
 		return nil
 	}
 }

@@ -86,7 +86,7 @@ func SetVideoRouter(router *gin.Engine) {
 	// Seedance asset-library official-mirror route — single endpoint, Action
 	// query param dispatch, same shape as the existing jimeng channel's
 	// convention. See docs/byteplus/seedance-2.0-official-api-mirror-design.md §4.
-	assetOfficialRouter := router.Group("/ark/seedance/v3")
+	assetOfficialRouter := router.Group("/api/v3/seedance")
 	assetOfficialRouter.Use(middleware.RouteTag("relay"))
 	assetOfficialRouter.Use(middleware.TokenAuth())
 	{

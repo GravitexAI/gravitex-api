@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -71,7 +72,7 @@ func TestSeedanceOfficialAssetDispatch_UnsupportedAction_Returns400(t *testing.T
 	c, _ := gin.CreateTestContext(w)
 	c.Set("id", 1)
 	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
-	c.Request = httptest.NewRequest(http.MethodPost, "/ark/seedance/v3?Action=NotARealAction&Version=2024-01-01", strings.NewReader(`{}`))
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=NotARealAction&Version=2024-01-01", strings.NewReader(`{}`))
 
 	SeedanceOfficialAssetDispatch(c)
 
@@ -101,7 +102,7 @@ func TestSeedanceOfficialAssetDispatch_ListAssets_ForwardsBodyAndReturnsRawRespo
 	c.Set("id", 1)
 	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
 	reqBody := `{"Filter":{"GroupIds":["group-1"],"SortBy":"CreateTime","SortOrder":"Desc"},"PageNumber":1,"PageSize":10}`
-	c.Request = httptest.NewRequest(http.MethodPost, "/ark/seedance/v3?Action=ListAssets&Version=2024-01-01", strings.NewReader(reqBody))
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=ListAssets&Version=2024-01-01", strings.NewReader(reqBody))
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	SeedanceOfficialAssetDispatch(c)
@@ -128,7 +129,7 @@ func TestSeedanceOfficialAssetDispatch_CreateAssetGroup_PersistsLocally(t *testi
 	c, _ := gin.CreateTestContext(w)
 	c.Set("id", 42)
 	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
-	c.Request = httptest.NewRequest(http.MethodPost, "/ark/seedance/v3?Action=CreateAssetGroup&Version=2024-01-01",
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=CreateAssetGroup&Version=2024-01-01",
 		strings.NewReader(`{"Name":"角色A","Description":"desc"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 
@@ -157,7 +158,7 @@ func TestSeedanceOfficialAssetDispatch_CreateAsset_PersistsLocallyAndUsableByChe
 	c.Set("id", 42)
 	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
 	reqBody := `{"GroupId":"group-1","URL":"https://cdn.example.com/face.jpg","AssetType":"Image","Name":"face.jpg"}`
-	c.Request = httptest.NewRequest(http.MethodPost, "/ark/seedance/v3?Action=CreateAsset&Version=2024-01-01", strings.NewReader(reqBody))
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=CreateAsset&Version=2024-01-01", strings.NewReader(reqBody))
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	SeedanceOfficialAssetDispatch(c)
@@ -192,7 +193,7 @@ func TestSeedanceOfficialAssetDispatch_UpdateAsset_UpdatesLocalName(t *testing.T
 	c, _ := gin.CreateTestContext(w)
 	c.Set("id", 42)
 	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
-	c.Request = httptest.NewRequest(http.MethodPost, "/ark/seedance/v3?Action=UpdateAsset&Version=2024-01-01",
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=UpdateAsset&Version=2024-01-01",
 		strings.NewReader(`{"Id":"asset-upd-1","Name":"new.jpg"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 
@@ -221,7 +222,7 @@ func TestSeedanceOfficialAssetDispatch_DeleteAsset_RemovesLocalRecord(t *testing
 	c, _ := gin.CreateTestContext(w)
 	c.Set("id", 42)
 	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
-	c.Request = httptest.NewRequest(http.MethodPost, "/ark/seedance/v3?Action=DeleteAsset&Version=2024-01-01",
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=DeleteAsset&Version=2024-01-01",
 		strings.NewReader(`{"Id":"asset-del-1"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 
@@ -252,7 +253,7 @@ func TestSeedanceOfficialAssetDispatch_DeleteAssetGroup_RemovesLocalRecordAndCas
 	c, _ := gin.CreateTestContext(w)
 	c.Set("id", 42)
 	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
-	c.Request = httptest.NewRequest(http.MethodPost, "/ark/seedance/v3?Action=DeleteAssetGroup&Version=2024-01-01",
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=DeleteAssetGroup&Version=2024-01-01",
 		strings.NewReader(`{"Id":"group-del-1"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 
@@ -263,4 +264,153 @@ func TestSeedanceOfficialAssetDispatch_DeleteAssetGroup_RemovesLocalRecordAndCas
 	assert.Error(t, err)
 	_, err = model.GetUserAssetByUserIdAndVirtualId(42, "asset-in-group")
 	assert.Error(t, err, "cascade delete must remove assets belonging to the deleted group")
+}
+
+func TestSeedanceOfficialAssetDispatch_CreateVisualValidateSession_ForcesCallbackURL(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+
+	var capturedBody map[string]interface{}
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		capturedBody = body
+		return map[string]interface{}{"BytedToken": "tok-1", "H5Link": "https://byteplus.example/verify", "CallbackURL": body["CallbackURL"]}, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 42)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=CreateVisualValidateSession&Version=2024-01-01",
+		strings.NewReader(`{"CallbackURL":"https://attacker.example/steal"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	expected := strings.TrimRight(system_setting.ServerAddress, "/") + VisualValidateCallbackPath
+	assert.Equal(t, expected, capturedBody["CallbackURL"], "client-supplied CallbackURL must be overridden, not forwarded")
+	assert.Contains(t, w.Body.String(), "BytedToken")
+}
+
+func TestSeedanceOfficialAssetDispatch_CreateVisualValidateSession_QuotaExceeded_Returns403WithoutCallingUpstream(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+	withByteplusAssetGroupLimit(t, 0)
+
+	upstreamCalled := false
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		upstreamCalled = true
+		return map[string]interface{}{"BytedToken": "tok-should-not-be-issued"}, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 42)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=CreateVisualValidateSession&Version=2024-01-01",
+		strings.NewReader(`{}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "QuotaExceeded")
+	assert.False(t, upstreamCalled, "quota check must block the H5 session from ever being issued, not just the later sync")
+}
+
+func TestSeedanceOfficialAssetDispatch_GetVisualValidateResult_PersistsLivenessFaceGroup(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		assert.Equal(t, "GetVisualValidateResult", action)
+		return map[string]interface{}{"GroupId": "group-face-20260710-abcde"}, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 42)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=GetVisualValidateResult&Version=2024-01-01",
+		strings.NewReader(`{"BytedToken":"tok-1"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	group, err := model.GetUserAssetGroupByUserIdAndGroupId(42, "group-face-20260710-abcde")
+	require.NoError(t, err)
+	assert.Equal(t, model.GroupTypeLivenessFace, group.GroupType)
+}
+
+func withByteplusAssetGroupLimit(t *testing.T, limit int) {
+	t.Helper()
+	// Force the lazy env-override read once so a direct assignment below isn't
+	// clobbered by GetByteplusAssetGroupLimit's first-call ENV lookup.
+	system_setting.GetByteplusAssetGroupLimit()
+	original := system_setting.ByteplusAssetGroupLimit
+	system_setting.ByteplusAssetGroupLimit = limit
+	t.Cleanup(func() { system_setting.ByteplusAssetGroupLimit = original })
+}
+
+func TestSeedanceOfficialAssetDispatch_CreateAssetGroup_QuotaExceeded_Returns403WithoutCallingUpstream(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+	withByteplusAssetGroupLimit(t, 0)
+
+	upstreamCalled := false
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		upstreamCalled = true
+		return map[string]interface{}{"Id": "group-should-not-be-created"}, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 42)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=CreateAssetGroup&Version=2024-01-01",
+		strings.NewReader(`{"Name":"角色A"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "QuotaExceeded")
+	assert.False(t, upstreamCalled, "quota check must block the upstream call, not just the local sync")
+}
+
+func TestSeedanceOfficialAssetDispatch_GetVisualValidateResult_QuotaExceeded_Returns403WithoutCallingUpstream(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+	withByteplusAssetGroupLimit(t, 0)
+
+	upstreamCalled := false
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		upstreamCalled = true
+		return map[string]interface{}{"GroupId": "group-should-not-be-created"}, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 42)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=GetVisualValidateResult&Version=2024-01-01",
+		strings.NewReader(`{"BytedToken":"tok-1"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "QuotaExceeded")
+	assert.False(t, upstreamCalled, "quota check must block the upstream call, not just the local sync")
 }
