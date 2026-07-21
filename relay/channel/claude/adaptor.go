@@ -32,6 +32,14 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	// Claude 限制。直连 /v1/messages 的调用方应自行遵循 Anthropic 协议规范，
 	// 不符合时由上游统一返回 400。
 	stripClaudeRequestFieldsForDroppedBetas(c, info, request)
+	// 渠道类型是 Anthropic，但 anthropic_beta_target 指向 Bedrock/Vertex 兼容
+	// 资源时，image/document 的 URL source 同样需要转 base64（这两个目标硬性
+	// 不支持 URL source），否则会被上游拒绝。直连 Anthropic 场景保持透传。
+	if ResolveBetaTarget(info.ChannelType, info.ChannelOtherSettings.AnthropicBetaTarget) != TargetAnthropicDirect {
+		if err := ConvertURLSourcesToBase64(c, request); err != nil {
+			return nil, err
+		}
+	}
 	return request, nil
 }
 

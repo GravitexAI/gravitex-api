@@ -10,7 +10,6 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/pkg/errors"
@@ -39,38 +38,9 @@ func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dt
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
-	for i, message := range request.Messages {
-		updated := false
-		if !message.IsStringContent() {
-			content, err := message.ParseContent()
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to parse message content")
-			}
-			for i2, mediaMessage := range content {
-				if mediaMessage.Source != nil {
-					if mediaMessage.Source.Type == "url" {
-						// 使用统一的文件服务获取图片数据
-						source := types.NewURLFileSource(mediaMessage.Source.Url)
-						base64Data, mimeType, err := service.GetBase64Data(c, source, "formatting image for Claude")
-						if err != nil {
-							return nil, fmt.Errorf("get file base64 from url failed: %s", err.Error())
-						}
-						mediaMessage.Source.MediaType = mimeType
-						mediaMessage.Source.Data = base64Data
-						mediaMessage.Source.Url = ""
-						mediaMessage.Source.Type = "base64"
-						content[i2] = mediaMessage
-						updated = true
-					}
-				}
-			}
-			if updated {
-				message.SetContent(content)
-			}
-		}
-		if updated {
-			request.Messages[i] = message
-		}
+	// Bedrock 硬性不支持 image/document 的 URL source（仅 base64），始终转换。
+	if err := claude.ConvertURLSourcesToBase64(c, request); err != nil {
+		return nil, err
 	}
 	return request, nil
 }
