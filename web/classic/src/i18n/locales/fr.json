@@ -3569,6 +3569,7 @@
     "音频补全倍率（仅部分模型支持该计费）": "Ratio d'achèvement audio (seuls certains modèles prennent en charge cette facturation)",
     "音频输入：{{tokens}} / 1M * 模型倍率 {{modelRatio}} * 音频倍率 {{audioRatio}} * {{ratioType}} {{ratio}} = {{amount}}": "Entrée audio : {{tokens}} / 1M * ratio du modèle {{modelRatio}} * ratio audio {{audioRatio}} * {{ratioType}} {{ratio}} = {{amount}}",
     "音频输入价格": "Prix d'entrée audio",
+    "视频输入价格": "Prix d'entrée vidéo",
     "音频输入价格：{{symbol}}{{price}} / 1M tokens": "Prix d'entrée audio : {{symbol}}{{price}} / 1M tokens",
     "音频输入倍率": "",
     "音频输入相关的倍率设置，键为模型名称，值为倍率": "Paramètres de ratio liés à l'entrée audio, la clé est le nom du modèle, la valeur est le ratio",

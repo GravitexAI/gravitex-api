@@ -134,7 +134,7 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
             className='flex items-center gap-1.5 text-left'
             onClick={(e) => {
               e.stopPropagation()
-              setSelectedUserId(log.user_id)
+              setSelectedUserId(Number(log.user_id))
               setUserInfoDialogOpen(true)
             }}
           >

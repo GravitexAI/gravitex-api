@@ -3589,6 +3589,7 @@
     "音频补全倍率（仅部分模型支持该计费）": "音频补全倍率（仅部分模型支持该计费）",
     "音频输入：{{tokens}} / 1M * 模型倍率 {{modelRatio}} * 音频倍率 {{audioRatio}} * {{ratioType}} {{ratio}} = {{amount}}": "音频输入：{{tokens}} / 1M * 模型倍率 {{modelRatio}} * 音频倍率 {{audioRatio}} * {{ratioType}} {{ratio}} = {{amount}}",
     "音频输入价格": "音频输入价格",
+    "视频输入价格": "视频输入价格",
     "音频输入价格：{{symbol}}{{price}} / 1M tokens": "音频输入价格：{{symbol}}{{price}} / 1M tokens",
     "音频输入倍率": "音频输入倍率",
     "音频输入相关的倍率设置，键为模型名称，值为倍率": "音频输入相关的倍率设置，键为模型名称，值为倍率",

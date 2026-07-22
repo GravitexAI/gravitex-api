@@ -15,6 +15,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCalculateTextQuotaSummaryBillsVideoInputAlongsideImageOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	relayInfo := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatGemini,
+		OriginModelName: "gemini-3.1-flash-image",
+		PriceData: types.PriceData{
+			ModelRatio:           0.25,
+			CompletionRatio:      6,
+			ImageCompletionRatio: 120,
+			VideoRatio:           2,
+			GroupRatioInfo:       types.GroupRatioInfo{GroupRatio: 1},
+		},
+		StartTime: time.Now(),
+	}
+	usage := &dto.Usage{
+		PromptTokens:     213,
+		CompletionTokens: 1248,
+		PromptTokensDetails: dto.InputTokenDetails{
+			TextTokens:  3,
+			VideoTokens: 210,
+		},
+		CompletionTokenDetails: dto.OutputTokenDetails{
+			TextTokens:  128,
+			ImageTokens: 1120,
+		},
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+
+	// (213-210 + 210*2 + 128*6 + 1120*120) * 0.25 = 33897.75 -> 33898
+	require.Equal(t, 210, summary.VideoTokens)
+	require.Equal(t, 33898, summary.Quota)
+}
+
 func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

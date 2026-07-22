@@ -4807,6 +4807,10 @@
     "Fixed expiration (do not refresh TTL on hit)": "Expiration fixe (ne pas renouveler le TTL en cas de correspondance)",
     "When enabled, hitting the same affinity channel does not renew the TTL. The cache expires naturally from first write, allowing periodic rebalancing across channels of equal priority. When disabled, every successful request renews the TTL (sliding expiration), keeping the affinity sticky as long as requests keep coming.": "Si activé, le fait d'utiliser le même canal d'affinité ne renouvelle pas le TTL. Le cache expire naturellement depuis la première écriture, ce qui permet un rééquilibrage périodique entre les canaux de même priorité. Si désactivé, chaque requête réussie renouvelle le TTL (expiration glissante), maintenant l'affinité tant que des requêtes continuent d'arriver.",
     "Fixed": "Fixe",
+    "Video input price": "Prix d'entrée vidéo",
+    "Token price for video input.": "Prix en tokens pour l'entrée vidéo.",
+    "Video ratio": "Ratio vidéo",
+    "Ratio applied to video inputs for video billing.": "Ratio appliqué aux entrées vidéo pour la facturation vidéo.",
     "Sliding": "Glissant"
   }
 }

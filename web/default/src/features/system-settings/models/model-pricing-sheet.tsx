@@ -167,6 +167,7 @@ export const ModelPricingEditorPanel = forwardRef<
       imageRatio: '',
       audioRatio: '',
       audioCompletionRatio: '',
+      videoRatio: '',
     },
   })
 
@@ -184,6 +185,7 @@ export const ModelPricingEditorPanel = forwardRef<
         imageRatio: editData.imageRatio || '',
         audioRatio: editData.audioRatio || '',
         audioCompletionRatio: editData.audioCompletionRatio || '',
+        videoRatio: editData.videoRatio || '',
       })
       setPricingMode(
         editData.billingMode === 'tiered_expr'
@@ -205,6 +207,7 @@ export const ModelPricingEditorPanel = forwardRef<
         imageRatio: '',
         audioRatio: '',
         audioCompletionRatio: '',
+        videoRatio: '',
       })
       setPricingMode('per-token')
       setBillingExpr('')
@@ -373,6 +376,7 @@ export const ModelPricingEditorPanel = forwardRef<
         editData.imageRatio,
         editData.audioRatio,
         editData.audioCompletionRatio,
+        editData.videoRatio,
       ].some(hasValue)
 
     if (hasConflict) {
@@ -447,6 +451,7 @@ export const ModelPricingEditorPanel = forwardRef<
         imageRatio: values.imageRatio || '',
         audioRatio: values.audioRatio || '',
         audioCompletionRatio: values.audioCompletionRatio || '',
+        videoRatio: values.videoRatio || '',
       }
 
       if (pricingMode === 'tiered_expr') {

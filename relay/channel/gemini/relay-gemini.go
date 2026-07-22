@@ -1178,6 +1178,8 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 			usage.PromptTokensDetails.TextTokens += detail.TokenCount
 		case strings.EqualFold(mod, "IMAGE"):
 			usage.PromptTokensDetails.ImageTokens += detail.TokenCount
+		case strings.EqualFold(mod, "VIDEO"):
+			usage.PromptTokensDetails.VideoTokens += detail.TokenCount
 		}
 	}
 	for _, detail := range metadata.ToolUsePromptTokensDetails {
@@ -1189,6 +1191,8 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 			usage.PromptTokensDetails.TextTokens += detail.TokenCount
 		case strings.EqualFold(mod, "IMAGE"):
 			usage.PromptTokensDetails.ImageTokens += detail.TokenCount
+		case strings.EqualFold(mod, "VIDEO"):
+			usage.PromptTokensDetails.VideoTokens += detail.TokenCount
 		}
 	}
 	// CHZ-PATCH(gemini-usage-fix): 原代码对 CandidatesTokensDetails 写了两个循环导致

@@ -27,6 +27,7 @@ var completionRatioMetaOptionKeys = []string{
 	"ImageRatio",
 	"AudioRatio",
 	"AudioCompletionRatio",
+	"VideoRatio",
 }
 
 func isPaymentComplianceOptionKey(key string) bool {

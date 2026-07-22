@@ -284,14 +284,14 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
       <UserBindingDialog
         open={bindingDialogOpen}
         onOpenChange={setBindingDialogOpen}
-        userId={user.id}
+        userId={Number(user.id)}
         onUnbindSuccess={triggerRefresh}
       />
 
       <UserSubscriptionsDialog
         open={subscriptionsDialogOpen}
         onOpenChange={setSubscriptionsDialogOpen}
-        user={{ id: user.id, username: user.username }}
+        user={{ id: Number(user.id), username: user.username }}
         onSuccess={triggerRefresh}
       />
     </div>
