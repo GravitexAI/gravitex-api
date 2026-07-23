@@ -35,7 +35,16 @@ func NativeInteractions() gin.HandlerFunc {
 			}
 			c.Set("native_interactions", true)
 			c.Set("native_interactions_model", modelName)
-			c.Request.Body = io.NopCloser(strings.NewReader(string(converted)))
+			convertedStorage, err := common.CreateBodyStorage(converted)
+			if err != nil {
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "code": "invalid_request"}})
+				return
+			}
+			// The distributor reads the reusable BodyStorage cache, not only
+			// Request.Body, so both must point at the converted request.
+			_ = body.Close()
+			c.Set(common.KeyBodyStorage, convertedStorage)
+			c.Request.Body = io.NopCloser(convertedStorage)
 		}
 
 		// Reuse the existing task distributor and controller. GET needs the
