@@ -1797,6 +1797,8 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	ratioMode := hasVR && vr != 0
 
 	actualQuota := 0
+	logPromptTokens := 0
+	logCompletionTokens := tokens
 	otherMap := map[string]interface{}{
 		"billing_type":               "video_token_ratio",
 		"tokens":                     tokens,
@@ -1829,6 +1831,10 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		textTokens := taskResult.TextOutputTokens
 		actualCost := float64(inputTokens)*1.5 + float64(textTokens)*9.0 + float64(videoTokens)*17.5
 		actualQuota = int(actualCost / 1000000.0 * common.QuotaPerUnit * groupRatio)
+		// The legacy log columns are generic: map Omni text input to prompt
+		// tokens and include thought/text output with video output in completion.
+		logPromptTokens = inputTokens
+		logCompletionTokens = videoTokens + textTokens
 		otherMap["input_tokens"] = inputTokens
 		otherMap["text_output_tokens"] = textTokens
 		otherMap["video_output_tokens"] = videoTokens
@@ -1913,7 +1919,8 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		ChannelId:        task.ChannelId,
 		ModelName:        modelName,
 		Quota:            actualQuota,
-		CompletionTokens: tokens,
+		PromptTokens:     logPromptTokens,
+		CompletionTokens: logCompletionTokens,
 		TokenName:        tokenName,
 		TokenId:          tokenId,
 		UseTime:          useTime,
