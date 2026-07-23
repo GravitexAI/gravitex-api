@@ -958,15 +958,18 @@ func (t *TaskSubmitReq) UnmarshalMetadata(v any) error {
 }
 
 type TaskInfo struct {
-	Code             int    `json:"code"`
-	TaskID           string `json:"task_id"`
-	Status           string `json:"status"`
-	Reason           string `json:"reason,omitempty"`
-	Url              string `json:"url,omitempty"`
-	RemoteUrl        string `json:"remote_url,omitempty"`
-	Progress         string `json:"progress,omitempty"`
-	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
-	TotalTokens      int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
+	Code              int    `json:"code"`
+	TaskID            string `json:"task_id"`
+	Status            string `json:"status"`
+	Reason            string `json:"reason,omitempty"`
+	Url               string `json:"url,omitempty"`
+	RemoteUrl         string `json:"remote_url,omitempty"`
+	Progress          string `json:"progress,omitempty"`
+	CompletionTokens  int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
+	TotalTokens       int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
+	InputTokens       int    `json:"input_tokens,omitempty"`
+	VideoOutputTokens int    `json:"video_output_tokens,omitempty"`
+	TextOutputTokens  int    `json:"text_output_tokens,omitempty"`
 	// 实际使用量（由上游 usage 字段提供，优先用于计费）
 	ActualSize     string `json:"actual_size,omitempty"`     // 实际分辨率，如 "1280*720"（阿里 wan2.6）
 	ActualSR       int    `json:"actual_sr,omitempty"`       // 实际 SR（分辨率数值，如 720）
