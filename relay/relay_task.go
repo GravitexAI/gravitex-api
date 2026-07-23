@@ -528,6 +528,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool, rawMirror bool) [
 	resp, err := adaptor.FetchTask(baseURL, channelModel.Key, map[string]any{
 		"task_id": task.GetUpstreamTaskID(),
 		"action":  task.Action,
+		"model":   task.Properties.OriginModelName,
 	}, proxy)
 	if err != nil || resp == nil {
 		return nil

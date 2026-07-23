@@ -159,6 +159,9 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 
 // BuildRequestURL constructs the upstream URL.
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	if isOmniModel(info.OriginModelName) {
+		return buildOmniRequestURL(a.baseURL), nil
+	}
 	modelName := info.OriginModelName
 	version := model_setting.GetGeminiVersionSetting(modelName)
 
@@ -187,6 +190,14 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	req, ok := v.(relaycommon.TaskSubmitReq)
 	if !ok {
 		return nil, fmt.Errorf("unexpected task_request type")
+	}
+	if isOmniModel(info.OriginModelName) {
+		data, err := buildOmniRequestBody(req)
+		if err != nil {
+			return nil, err
+		}
+		c.Set("video_seconds", sanitizeDurationSecondsFromMetadata(req.Metadata))
+		return bytes.NewReader(data), nil
 	}
 
 	body := GeminiVideoPayload{
@@ -260,6 +271,27 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return "", nil, service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)
 	}
 	_ = resp.Body.Close()
+	if isOmniModel(info.OriginModelName) {
+		var interaction omniInteraction
+		if err := common.Unmarshal(responseBody, &interaction); err != nil || strings.TrimSpace(interaction.ID) == "" {
+			if err == nil {
+				err = fmt.Errorf("missing interaction id")
+			}
+			return "", nil, service.TaskErrorWrapper(err, "invalid_response", http.StatusInternalServerError)
+		}
+		info.PublicTaskID = interaction.ID
+		video := dto.NewOpenAIVideo()
+		video.ID, video.TaskID, video.Model = interaction.ID, interaction.ID, info.OriginModelName
+		video.CreatedAt = time.Now().Unix()
+		if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
+			if body, err := common.Marshal(video); err == nil {
+				c.Set(relaycommon.TaskSubmitResponseBody, body)
+			}
+			return interaction.ID, responseBody, nil
+		}
+		c.JSON(http.StatusOK, video)
+		return interaction.ID, responseBody, nil
+	}
 
 	var s submitResponse
 	if err := common.Unmarshal(responseBody, &s); err != nil {
@@ -289,7 +321,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 }
 
 func (a *TaskAdaptor) GetModelList() []string {
-	return []string{"veo-3.0-generate-001", "veo-3.1-generate-preview", "veo-3.1-fast-generate-preview"}
+	return []string{"veo-3.0-generate-001", "veo-3.1-generate-preview", "veo-3.1-fast-generate-preview", omniModelName}
 }
 
 func (a *TaskAdaptor) GetChannelName() string {
@@ -301,6 +333,20 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	taskID, ok := body["task_id"].(string)
 	if !ok {
 		return nil, fmt.Errorf("invalid task_id")
+	}
+	if strings.HasPrefix(taskID, "v1_") || isOmniModel(taskModelFromBody(body)) {
+		url := omniInteractionURL(baseUrl, taskID)
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("x-goog-api-key", key)
+		client, err := service.GetHttpClientWithProxy(proxy)
+		if err != nil {
+			return nil, fmt.Errorf("new proxy http client failed: %w", err)
+		}
+		return client.Do(req)
 	}
 
 	upstreamName, err := decodeLocalTaskID(taskID)
@@ -328,6 +374,12 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 }
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
+	var probe struct {
+		Status string `json:"status"`
+	}
+	if common.Unmarshal(respBody, &probe) == nil && probe.Status != "" {
+		return ParseOmniTaskResult(respBody)
+	}
 	var op operationResponse
 	if err := common.Unmarshal(respBody, &op); err != nil {
 		return nil, fmt.Errorf("unmarshal operation response failed: %w", err)
@@ -419,6 +471,11 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 
 	// 视频 URL：alpha 引擎存放在 PrivateData.ResultURL，兼容旧数据 fallback 到 FailReason
 	resultURL := strings.TrimSpace(task.GetResultURL())
+	if isOmniModel(modelName) && (resultURL == "" || isOmniDataURL(resultURL)) {
+		if dataURL := OmniVideoURLFromTaskData(task.Data); dataURL != "" {
+			resultURL = dataURL
+		}
+	}
 	if resultURL != "" {
 		if strings.HasPrefix(resultURL, "http") || strings.HasPrefix(resultURL, "data:") {
 			video.URL = resultURL

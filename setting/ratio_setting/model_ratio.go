@@ -30,32 +30,33 @@ const (
 // 1 === ￥0.014 / 1k tokens
 
 var defaultModelRatio = map[string]float64{
+	"gemini-omni-flash-preview": 0.75, // $1.50 / 1M input tokens
 	//"midjourney":                50,
-	"gpt-4-gizmo-*":                             15,
-	"gpt-4o-gizmo-*":                            2.5,
-	"gpt-4-all":                                 15,
-	"gpt-4o-all":                                15,
-	"gpt-4":                                     15,
-	"gpt-4-0613":                                15,
-	"gpt-4-32k":                                 30,
-	"gpt-4-32k-0613":                            30,
-	"gpt-4-1106-preview":                        5,    // $10 / 1M tokens
-	"gpt-4-0125-preview":                        5,    // $10 / 1M tokens
-	"gpt-4-turbo-preview":                       5,    // $10 / 1M tokens
-	"gpt-4-vision-preview":                      5,    // $10 / 1M tokens
-	"gpt-4-1106-vision-preview":                 5,    // $10 / 1M tokens
-	"chatgpt-4o-latest":                         2.5,  // $5 / 1M tokens
-	"gpt-4o":                                    1.25, // $2.5 / 1M tokens
-	"gpt-4o-audio-preview":                      1.25, // $2.5 / 1M tokens
-	"gpt-4o-audio-preview-2024-10-01":           1.25, // $2.5 / 1M tokens
-	"gpt-4o-2024-05-13":                         2.5,  // $5 / 1M tokens
-	"gpt-4o-2024-08-06":                         1.25, // $2.5 / 1M tokens
-	"gpt-4o-2024-11-20":                         1.25, // $2.5 / 1M tokens
-	"gpt-4o-realtime-preview":                   2.5,
-	"gpt-4o-realtime-preview-2024-10-01":        2.5,
-	"gpt-4o-realtime-preview-2024-12-17":        2.5,
-	"gpt-4o-mini-realtime-preview":              0.3,
-	"gpt-4o-mini-realtime-preview-2024-12-17":   0.3,
+	"gpt-4-gizmo-*":                           15,
+	"gpt-4o-gizmo-*":                          2.5,
+	"gpt-4-all":                               15,
+	"gpt-4o-all":                              15,
+	"gpt-4":                                   15,
+	"gpt-4-0613":                              15,
+	"gpt-4-32k":                               30,
+	"gpt-4-32k-0613":                          30,
+	"gpt-4-1106-preview":                      5,    // $10 / 1M tokens
+	"gpt-4-0125-preview":                      5,    // $10 / 1M tokens
+	"gpt-4-turbo-preview":                     5,    // $10 / 1M tokens
+	"gpt-4-vision-preview":                    5,    // $10 / 1M tokens
+	"gpt-4-1106-vision-preview":               5,    // $10 / 1M tokens
+	"chatgpt-4o-latest":                       2.5,  // $5 / 1M tokens
+	"gpt-4o":                                  1.25, // $2.5 / 1M tokens
+	"gpt-4o-audio-preview":                    1.25, // $2.5 / 1M tokens
+	"gpt-4o-audio-preview-2024-10-01":         1.25, // $2.5 / 1M tokens
+	"gpt-4o-2024-05-13":                       2.5,  // $5 / 1M tokens
+	"gpt-4o-2024-08-06":                       1.25, // $2.5 / 1M tokens
+	"gpt-4o-2024-11-20":                       1.25, // $2.5 / 1M tokens
+	"gpt-4o-realtime-preview":                 2.5,
+	"gpt-4o-realtime-preview-2024-10-01":      2.5,
+	"gpt-4o-realtime-preview-2024-12-17":      2.5,
+	"gpt-4o-mini-realtime-preview":            0.3,
+	"gpt-4o-mini-realtime-preview-2024-12-17": 0.3,
 	// gpt-realtime series: text input $4/1M → ratio 2.0; mini: $0.60/1M → ratio 0.30
 	"gpt-realtime":                              2.0,
 	"gpt-realtime-2025-08-28":                   2.0,
@@ -335,15 +336,15 @@ var defaultAudioRatio = map[string]float64{
 	"gpt-4o-mini-tts":              25,
 	// gpt-realtime series: audio input $32/1M → audioRatio=8 (vs text input 2.0×$2=$4)
 	// mini: audio input $10/1M → audioRatio=16.67 (vs text input 0.30×$2=$0.60)
-	"gpt-realtime":                  8.0,
-	"gpt-realtime-2025-08-28":       8.0,
-	"gpt-realtime-2":                8.0,
-	"gpt-realtime-2.1":              8.0,
-	"gpt-realtime-1.5":              8.0,
-	"gpt-realtime-mini":             16.67,
-	"gpt-realtime-mini-2025-10-06":  16.67,
-	"gpt-realtime-mini-2025-12-15":  16.67,
-	"gpt-realtime-2.1-mini":         16.67,
+	"gpt-realtime":                 8.0,
+	"gpt-realtime-2025-08-28":      8.0,
+	"gpt-realtime-2":               8.0,
+	"gpt-realtime-2.1":             8.0,
+	"gpt-realtime-1.5":             8.0,
+	"gpt-realtime-mini":            16.67,
+	"gpt-realtime-mini-2025-10-06": 16.67,
+	"gpt-realtime-mini-2025-12-15": 16.67,
+	"gpt-realtime-2.1-mini":        16.67,
 }
 
 var defaultAudioCompletionRatio = map[string]float64{
@@ -355,15 +356,15 @@ var defaultAudioCompletionRatio = map[string]float64{
 	"tts-1-1106":           0,
 	"tts-1-hd-1106":        0,
 	// gpt-realtime series: audio output / audio input = $64/$32=2x (all variants)
-	"gpt-realtime":                  2.0,
-	"gpt-realtime-2025-08-28":       2.0,
-	"gpt-realtime-2":                2.0,
-	"gpt-realtime-2.1":              2.0,
-	"gpt-realtime-1.5":              2.0,
-	"gpt-realtime-mini":             2.0,
-	"gpt-realtime-mini-2025-10-06":  2.0,
-	"gpt-realtime-mini-2025-12-15":  2.0,
-	"gpt-realtime-2.1-mini":         2.0,
+	"gpt-realtime":                 2.0,
+	"gpt-realtime-2025-08-28":      2.0,
+	"gpt-realtime-2":               2.0,
+	"gpt-realtime-2.1":             2.0,
+	"gpt-realtime-1.5":             2.0,
+	"gpt-realtime-mini":            2.0,
+	"gpt-realtime-mini-2025-10-06": 2.0,
+	"gpt-realtime-mini-2025-12-15": 2.0,
+	"gpt-realtime-2.1-mini":        2.0,
 }
 
 var modelPriceMap = types.NewRWMap[string, float64]()
@@ -378,15 +379,15 @@ var defaultCompletionRatio = map[string]float64{
 	"gpt-image-2":    2, // $10 / $5 = 2x (text output)
 	// gpt-realtime series: text output / text input ratio
 	// realtime-2/2.1: $24/$4=6x; realtime-1.5: $16/$4=4x; mini: $2.40/$0.60=4x
-	"gpt-realtime":               6.0,
-	"gpt-realtime-2025-08-28":    6.0,
-	"gpt-realtime-2":             6.0,
-	"gpt-realtime-2.1":           6.0,
-	"gpt-realtime-1.5":           4.0,
-	"gpt-realtime-mini":          4.0,
+	"gpt-realtime":                 6.0,
+	"gpt-realtime-2025-08-28":      6.0,
+	"gpt-realtime-2":               6.0,
+	"gpt-realtime-2.1":             6.0,
+	"gpt-realtime-1.5":             4.0,
+	"gpt-realtime-mini":            4.0,
 	"gpt-realtime-mini-2025-10-06": 4.0,
 	"gpt-realtime-mini-2025-12-15": 4.0,
-	"gpt-realtime-2.1-mini":      4.0,
+	"gpt-realtime-2.1-mini":        4.0,
 }
 
 // InitRatioSettings initializes all model related settings maps with code defaults.
@@ -736,11 +737,11 @@ var defaultImageRatio = map[string]float64{
 	"gpt-image-1": 2,
 	"gpt-image-2": 1.6, // $8 / $5 = 1.6x
 	// gpt-realtime-2/2.1/1.5: image input $5/1M = 1.25 × modelRatio(2.0) × $2
-	"gpt-realtime":                 1.25,
-	"gpt-realtime-2025-08-28":      1.25,
-	"gpt-realtime-2":               1.25,
-	"gpt-realtime-2.1":             1.25,
-	"gpt-realtime-1.5":             1.25,
+	"gpt-realtime":            1.25,
+	"gpt-realtime-2025-08-28": 1.25,
+	"gpt-realtime-2":          1.25,
+	"gpt-realtime-2.1":        1.25,
+	"gpt-realtime-1.5":        1.25,
 	// gpt-realtime-mini/2.1-mini: image input $0.80/1M = 1.333 × modelRatio(0.30) × $2
 	"gpt-realtime-mini":            1.333,
 	"gpt-realtime-mini-2025-10-06": 1.333,
@@ -1476,9 +1477,11 @@ var defaultVideoAudioPricing = map[string]VideoAudioPricing{
 // defaultVideoCompletionRatioAudio seedance 系列的 VideoCompletionRatio 默认值（按音频/视频输入维度）
 // 当 VideoRatio 存在且 == 0 时，此值直接作为 $/M tokens 计费
 var defaultVideoCompletionRatioAudio = map[string]VideoAudioPricing{
-	"seedance-1-5-pro-251215": {NoAudio: 1.2, Audio: 2.4},
-	"seedance-2-0-pro":        {NoVideo: 7.0, Video: 4.3},
-	"seedance-2-0-fast":       {NoVideo: 5.6, Video: 3.3},
+	// Gemini Omni Flash video output: $17.50 / 1M output tokens.
+	"gemini-omni-flash-preview": {NoAudio: 17.5, Audio: 17.5},
+	"seedance-1-5-pro-251215":   {NoAudio: 1.2, Audio: 2.4},
+	"seedance-2-0-pro":          {NoVideo: 7.0, Video: 4.3},
+	"seedance-2-0-fast":         {NoVideo: 5.6, Video: 3.3},
 }
 
 // defaultVideoRatio 视频倍率默认值（VideoRatio=0 表示 VideoCompletionRatio 直接作为 $/M tokens 价格）
