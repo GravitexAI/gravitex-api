@@ -96,6 +96,8 @@ Content-Type: application/json
 
 > `content` 和 `prompt` 至少提供一个。`content[].image_url.url` / `video_url.url` / `audio_url.url` 支持三种值：公网 URL、Base64（`data:image/png;base64,...`）、`asset://<ASSET_ID>` 素材库引用（见[素材库 API](#素材库-api)）。
 
+> **目前可用的 `model` 值**：`seedance-2-0`（标准版）、`seedance-2-0-fast`（快速版，不支持 `1080p`）、`seedance-2-0-NSFW`（放开内容安全限制，允许生成敏感/成人向内容，仅限已获授权的场景使用）。
+
 > 请求体里没有任何字段被平台丢弃或改写——包括官方支持、但平台简化版接口（`/v1/video/generations`）不支持的 `execution_expires_after`/`service_tier`/`safety_identifier` 等字段，都会原样转发给火山。
 
 **curl 示例**：
@@ -300,6 +302,8 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=CreateAssetGroup&Ve
 | `ProjectName` | string | 否 | 默认 `default`，火山项目名 |
 
 > **不支持 Base64/本地文件**：`URL` 必须是公网可访问地址，图片/视频/音频素材只支持 URL 上传。
+
+> **`Moderation.Strategy = "Skip"` 只是跳过大部分非基线审核策略，不是完全关闭审核**：素材仍可能因为基线安全策略被判定失败（`Status` 变成 `Failed`）。如果确认素材本身就是敏感/成人向内容、且跳过审核后依然被拦截，建议改用 `seedance-2-0-NSFW` 模型发起生成任务（见[创建任务](#创建任务)），而不是反复调整 `Moderation` 策略。
 
 素材类型限制见[参数参考](#素材类型限制)。
 
@@ -737,7 +741,17 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=GetVisualValidateRe
 
 ### Q: `model` 字段能不能直接抄官方文档示例里的模型 ID（比如 `dreamina-seedance-2-0-260128`）？
 
-不一定。平台渠道注册的模型名可能跟官方示例不完全一致（渠道用的是 `seedance-2-0`、`doubao-seedance-2-0-260128` 等）。如果传的 `model` 字符串没有被任何渠道注册，会报“无可用渠道”错误。建议先确认平台后台已配置的模型名。
+不一定。平台渠道注册的模型名可能跟官方示例不完全一致。目前平台实际可用的模型只有三个：`seedance-2-0`、`seedance-2-0-fast`、`seedance-2-0-NSFW`（见[创建任务](#创建任务)）。如果传的 `model` 字符串没有被任何渠道注册，会报“无可用渠道”错误。
+
+### Q: `seedance-2-0`、`seedance-2-0-fast`、`seedance-2-0-NSFW` 该怎么选？
+
+- `seedance-2-0`：标准版，功能最全，支持 `1080p`，走完整内容安全审核。
+- `seedance-2-0-fast`：出图/出视频更快，但不支持 `1080p`（`resolution` 传 `1080p` 会被上游拒绝），内容安全审核策略和标准版一致，适合对分辨率要求不高、追求速度的场景。
+- `seedance-2-0-NSFW`：内容安全限制放开，允许生成敏感/成人向内容，仅限已获授权的场景使用，未授权账号调用会被上游拒绝。三个模型的请求/响应结构完全一致，只是 `model` 字段值不同。
+
+### Q: 素材已经用 `Moderation.Strategy = "Skip"` 跳过审核了，为什么生成任务还是报内容安全错误？
+
+`Skip` 只是跳过大部分非基线内容安全审核策略，不是完全关闭审核——素材本身仍可能因为基线安全策略被判定失败，生成任务也会对 `prompt`/素材内容单独做安全检查。如果确认这段内容本来就是敏感/成人向的、且业务场景已获授权，建议直接改用 `seedance-2-0-NSFW` 模型发起生成任务，而不是反复调整 `Moderation` 策略去绕过标准模型的审核。
 
 ### Q: 取消一个 `running` 状态的任务会怎样？
 

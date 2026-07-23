@@ -9,7 +9,6 @@ Seedance 2.0 官方镜像 API 与 BytePlus Ark Seedance 2.0 官方接口 **请�
 ## 目录
 
 - [认证](#认证)
-- [与官方接口的差异](#与官方接口的差异)
 - [视频生成任务 API](#视频生成任务-api)
   - [创建任务](#创建任务)
   - [查询任务](#查询任务)
@@ -38,6 +37,8 @@ Seedance 2.0 官方镜像 API 与 BytePlus Ark Seedance 2.0 官方接口 **请�
 
 ---
 
+
+
 ## 认证
 
 所有接口统一使用 **Bearer Token** 认证。创建令牌后，在请求头中添加：
@@ -54,43 +55,38 @@ Content-Type: application/json
 
 ---
 
-## 与官方接口的差异
 
-除了下面两点，请求体的每个字段、响应体的每个字段都和官方一模一样：
-
-| 项目 | 官方 | 本镜像 |
-| --- | --- | --- |
-| Base URL | `ark.ap-southeast.bytepluses.com` / `ark.ap-southeast-1.byteplusapi.com` | `https://api.gravitex.ai` |
-| 鉴权方式 | 视频生成接口本来就是 Bearer；素材库接口是 **AK/SK + HMAC-SHA256 签名** | 统一改成 `Bearer sk-xxx`（两类接口都用同一套鉴权） |
-
-> 素材库接口统一使用 Bearer Token 鉴权，不需要额外申请 AK/SK 或处理 HMAC-SHA256 签名。
-
----
 
 ## 视频生成任务 API
+
+
 
 ### 创建任务
 
 **POST** `https://api.gravitex.ai/api/v3/contents/generations/tasks`
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-| --- | --- | --- | --- | --- |
-| `model` | string | **是** | — | 模型 ID |
-| `content` | array | 否* | — | 内容数组：`text` / `image_url` / `video_url` / `audio_url`，各元素带 `role`（`first_frame`/`last_frame`/`reference_image`/`reference_video`/`reference_audio`） |
-| `prompt` | string | 否* | — | 简化写法，与 `content` 二选一 |
-| `callback_url` | string | 否 | — | 任务状态变化时的回调地址 |
-| `return_last_frame` | boolean | 否 | `false` | 是否返回最后一帧图片 |
-| `service_tier` | string | 否 | `"default"` | `default` / `flex` |
-| `execution_expires_after` | integer | 否 | `172800` | 任务过期时间（秒），范围 `[3600, 259200]` |
-| `generate_audio` | boolean | 否 | `true` | 是否生成音频 |
-| `safety_identifier` | string | 否 | — | 终端用户唯一标识（建议传用户 ID 的哈希） |
-| `resolution` | string | 否 | `"720p"` | `480p` / `720p` / `1080p`（`seedance-2-0-fast` 不支持 `1080p`） |
-| `ratio` | string | 否 | `"adaptive"` | `16:9` / `4:3` / `1:1` / `3:4` / `9:16` / `21:9` / `adaptive` |
-| `duration` | integer | 否 | `5` | 秒数，`[4,15]` 或 `-1`（自动） |
-| `seed` | integer | 否 | `-1` | 随机种子 |
-| `watermark` | boolean | 否 | `false` | 是否加水印 |
+
+| 参数                        | 类型      | 必填    | 默认值          | 说明                                                                                                                                                  |
+| ------------------------- | ------- | ----- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model`                   | string  | **是** | —            | 模型 ID                                                                                                                                               |
+| `content`                 | array   | 否*    | —            | 内容数组：`text` / `image_url` / `video_url` / `audio_url`，各元素带 `role`（`first_frame`/`last_frame`/`reference_image`/`reference_video`/`reference_audio`） |
+| `prompt`                  | string  | 否*    | —            | 简化写法，与 `content` 二选一                                                                                                                                |
+| `callback_url`            | string  | 否     | —            | 任务状态变化时的回调地址                                                                                                                                        |
+| `return_last_frame`       | boolean | 否     | `false`      | 是否返回最后一帧图片                                                                                                                                          |
+| `service_tier`            | string  | 否     | `"default"`  | `default` / `flex`                                                                                                                                  |
+| `execution_expires_after` | integer | 否     | `172800`     | 任务过期时间（秒），范围 `[3600, 259200]`                                                                                                                       |
+| `generate_audio`          | boolean | 否     | `true`       | 是否生成音频                                                                                                                                              |
+| `safety_identifier`       | string  | 否     | —            | 终端用户唯一标识（建议传用户 ID 的哈希）                                                                                                                              |
+| `resolution`              | string  | 否     | `"720p"`     | `480p` / `720p` / `1080p` / `4K`（`seedance-2-0-fast` 仅支持 `480p`/`720p`）                                                                            |
+| `ratio`                   | string  | 否     | `"adaptive"` | `16:9` / `4:3` / `1:1` / `3:4` / `9:16` / `21:9` / `adaptive`                                                                                       |
+| `duration`                | integer | 否     | `5`          | 秒数，`[4,15]` 或 `-1`（自动）                                                                                                                              |
+| `seed`                    | integer | 否     | `-1`         | 随机种子                                                                                                                                                |
+| `watermark`               | boolean | 否     | `false`      | 是否加水印                                                                                                                                               |
+
 
 > `content` 和 `prompt` 至少提供一个。`content[].image_url.url` / `video_url.url` / `audio_url.url` 支持三种值：公网 URL、Base64（`data:image/png;base64,...`）、`asset://<ASSET_ID>` 素材库引用（见[素材库 API](#素材库-api)）。
+
+> **可选模型**：`seedance-2-0`（标准版，支持 `480p`/`720p`/`1080p`/`4K`，时长 `[4,15]` 秒）、`seedance-2-0-fast`（快速版，仅支持 `480p`/`720p`，时长 `[4,15]` 秒，其余能力与标准版一致）、`seedance-2-0-NSFW`（放开内容安全限制，允许生成敏感/成人向内容，分辨率与时长范围同 `seedance-2-0`，仅限已获授权的场景使用）。
 
 **curl 示例**：
 
@@ -119,6 +115,8 @@ curl -X POST https://api.gravitex.ai/api/v3/contents/generations/tasks \
 ```
 
 ---
+
+
 
 ### 查询任务
 
@@ -151,10 +149,12 @@ curl -X POST https://api.gravitex.ai/api/v3/contents/generations/tasks \
 }
 ```
 
-| 字段 | 说明 |
-| --- | --- |
+
+| 字段       | 说明                                                                      |
+| -------- | ----------------------------------------------------------------------- |
 | `status` | `queued` / `running` / `cancelled` / `succeeded` / `failed` / `expired` |
-| `error` | 失败时非 `null`：`{"code": "...", "message": "..."}` |
+| `error`  | 失败时非 `null`：`{"code": "...", "message": "..."}`                         |
+
 
 **curl 示例**：
 
@@ -165,20 +165,24 @@ curl https://api.gravitex.ai/api/v3/contents/generations/tasks/cgt-2026070809464
 
 ---
 
+
+
 ### 取消/删除任务
 
 **DELETE** `https://api.gravitex.ai/api/v3/contents/generations/tasks/{id}`
 
 `DELETE` 的行为取决于任务当前状态：
 
-| 任务状态 | 能否删除 | 效果 | 删除后状态 |
-| --- | --- | --- | --- |
-| `queued` | 能 | 从队列移除，状态改为 `cancelled` | `cancelled` |
-| `running` | **不能** | 拒绝 | — |
-| `succeeded` | 能 | 任务记录被删除，之后查不到 | — |
-| `failed` | 能 | 同上 | — |
-| `cancelled` | **不能** | 拒绝 | — |
-| `expired` | 能 | 同上 | — |
+
+| 任务状态        | 能否删除   | 效果                     | 删除后状态       |
+| ----------- | ------ | ---------------------- | ----------- |
+| `queued`    | 能      | 从队列移除，状态改为 `cancelled` | `cancelled` |
+| `running`   | **不能** | 拒绝                     | —           |
+| `succeeded` | 能      | 任务记录被删除，之后查不到          | —           |
+| `failed`    | 能      | 同上                     | —           |
+| `cancelled` | **不能** | 拒绝                     | —           |
+| `expired`   | 能      | 同上                     | —           |
+
 
 成功时响应体为空（`{}`），失败时返回相应的错误状态码和错误体。
 
@@ -190,6 +194,8 @@ curl -X DELETE https://api.gravitex.ai/api/v3/contents/generations/tasks/cgt-202
 ```
 
 ---
+
+
 
 ## 素材库 API
 
@@ -220,37 +226,45 @@ Content-Type: application/json
 
 支持的 10 个信封形状 `Action`：`CreateAssetGroup`、`CreateAsset`、`ListAssetGroups`、`ListAssets`、`GetAsset`、`GetAssetGroup`、`UpdateAsset`、`UpdateAssetGroup`、`DeleteAsset`、`DeleteAssetGroup`。另外还有 2 个真人核验专用 Action（`CreateVisualValidateSession`、`GetVisualValidateResult`，见[真人素材库](#真人素材库real-human-portrait-library)）——注意这两个的响应是**扁平结构**，不是上面的信封形状。传其他 Action 值会返回 `400 InvalidAction`。
 
-> **素材组配额限制**：`CreateAssetGroup` 和 `CreateVisualValidateSession`（发起真人核验会话之前，因为核验通过的那一刻就已经创建了真人素材组，不能等到 `GetVisualValidateResult` 才拦截）都会做每用户素材组数量上限检查，超限会返回 `403`，`ResponseMetadata.Error.Code = "QuotaExceeded"`。`GetVisualValidateResult` 也会做同样的检查作为第二道闸（两次调用之间配额可能被占满），但这只是兜底，不是主要防线。具体额度以实际配置为准。
+> **素材组配额限制**：`CreateAssetGroup` 和 `CreateVisualValidateSession`都会做每用户素材组数量上限检查，超限会返回 `403`，`ResponseMetadata.Error.Code = "QuotaExceeded"`。`GetVisualValidateResult` 也会做同样的检查作为第二道闸（两次调用之间配额可能被占满），但这只是兜底，不是主要防线。具体额度以实际配置为准。
+
+
 
 ### 接口总览
 
-| Action | 说明 |
-| --- | --- |
-| `CreateAssetGroup` | 创建素材组（强制为虚拟 `AIGC` 类型，有配额检查） |
-| `CreateAsset` | 创建素材 |
-| `ListAssetGroups` | 查询素材组列表 |
-| `ListAssets` | 查询素材列表 |
-| `GetAsset` | 查询单个素材 |
-| `GetAssetGroup` | 查询单个素材组 |
-| `UpdateAsset` | 更新素材（目前仅支持 `Name`） |
-| `UpdateAssetGroup` | 更新素材组（目前仅支持 `Name`/`Description`） |
-| `DeleteAsset` | 删除素材 |
-| `DeleteAssetGroup` | 删除素材组（级联删除组内所有素材） |
-| `CreateVisualValidateSession` | 真人素材组：发起 H5 真人核验会话（有配额检查） |
-| `GetVisualValidateResult` | 真人素材组：查询核验结果并创建素材组（有配额检查，兜底） |
+
+| Action                        | 说明                                |
+| ----------------------------- | --------------------------------- |
+| `CreateAssetGroup`            | 创建素材组（强制为虚拟 `AIGC` 类型，有配额检查）      |
+| `CreateAsset`                 | 创建素材                              |
+| `ListAssetGroups`             | 查询素材组列表                           |
+| `ListAssets`                  | 查询素材列表                            |
+| `GetAsset`                    | 查询单个素材                            |
+| `GetAssetGroup`               | 查询单个素材组                           |
+| `UpdateAsset`                 | 更新素材（目前仅支持 `Name`）                |
+| `UpdateAssetGroup`            | 更新素材组（目前仅支持 `Name`/`Description`） |
+| `DeleteAsset`                 | 删除素材                              |
+| `DeleteAssetGroup`            | 删除素材组（级联删除组内所有素材）                 |
+| `CreateVisualValidateSession` | 真人素材组：发起 H5 真人核验会话（有配额检查）         |
+| `GetVisualValidateResult`     | 真人素材组：查询核验结果并创建素材组（有配额检查，兜底）      |
+
 
 ---
+
+
 
 ### CreateAssetGroup — 创建素材组
 
 **POST** `https://api.gravitex.ai/api/v3/seedance?Action=CreateAssetGroup&Version=2024-01-01`
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `Name` | string | **是** | 素材组名称 |
-| `Description` | string | 否 | 描述 |
-| `GroupType` | string | 否 | **无论传什么，都会强制改写为 `AIGC`**——真人素材组（`LivenessFace`）只能走专属的真人核验流程（见[真人素材库](#真人素材库real-human-portrait-library)），本接口不支持创建 |
-| `ProjectName` | string | 否 | 默认 `default`，项目名 |
+
+| 字段            | 类型     | 必填    | 说明                                                                                                                |
+| ------------- | ------ | ----- | ----------------------------------------------------------------------------------------------------------------- |
+| `Name`        | string | **是** | 素材组名称                                                                                                             |
+| `Description` | string | 否     | 描述                                                                                                                |
+| `GroupType`   | string | 否     | **无论传什么，都会强制改写为** `AIGC`——真人素材组（`LivenessFace`）只能走专属的真人核验流程（见[真人素材库](#真人素材库real-human-portrait-library)），本接口不支持创建 |
+| `ProjectName` | string | 否     | 默认 `default`，项目名                                                                                                  |
+
 
 > **配额限制**：超出每用户素材组数量上限会返回 `403`，`ResponseMetadata.Error.Code = "QuotaExceeded"`。
 
@@ -272,20 +286,26 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=CreateAssetGroup&Ve
 
 ---
 
+
+
 ### CreateAsset — 创建素材
 
 **POST** `https://api.gravitex.ai/api/v3/seedance?Action=CreateAsset&Version=2024-01-01`
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `GroupId` | string | **是** | 素材组 ID |
-| `URL` | string | **是** | 素材的公网可访问 URL（不支持 Base64/本地文件直传） |
-| `AssetType` | string | **是** | `Image` / `Video` / `Audio` |
-| `Name` | string | 否 | 素材名称，仅用于 `ListAssets` 模糊搜索，**不参与模型推理** |
-| `Moderation` | object | 否 | 内容预审核策略，`{"Strategy": "Default"｜"Skip"}`；`Default`（默认）= 预审核开启，`Skip` = 跳过大部分非基线内容安全审核策略 |
-| `ProjectName` | string | 否 | 默认 `default`，项目名 |
+
+| 字段            | 类型     | 必填    | 说明                                                                                      |
+| ------------- | ------ | ----- | --------------------------------------------------------------------------------------- |
+| `GroupId`     | string | **是** | 素材组 ID                                                                                  |
+| `URL`         | string | **是** | 素材的公网可访问 URL（不支持 Base64/本地文件直传）                                                         |
+| `AssetType`   | string | **是** | `Image` / `Video` / `Audio`                                                             |
+| `Name`        | string | 否     | 素材名称，仅用于 `ListAssets` 模糊搜索，**不参与模型推理**                                                  |
+| `Moderation`  | object | 否     | 内容预审核策略，`{"Strategy": "Default"｜"Skip"}`；`Default`（默认）= 预审核开启，`Skip` = 跳过大部分非基线内容安全审核策略 |
+| `ProjectName` | string | 否     | 默认 `default`，项目名                                                                        |
+
 
 > **不支持 Base64/本地文件**：`URL` 必须是公网可访问地址，图片/视频/音频素材只支持 URL 上传。
+
+> **`Moderation.Strategy = "Skip"` 只是跳过大部分非基线内容安全审核策略，不是完全关闭审核**：素材本身仍可能因为基线安全策略被判定失败，生成任务也会对 `prompt`/素材内容单独做安全检查。如果确认这段内容本来就是敏感/成人向的、且业务场景已获授权，建议直接改用 `seedance-2-0-NSFW` 模型发起生成任务（见[创建任务](#创建任务)），而不是反复调整 `Moderation` 策略去绕过标准模型的审核。
 
 素材类型限制见[参数参考](#素材类型限制)。
 
@@ -314,20 +334,24 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=CreateAsset&Version
 
 ---
 
+
+
 ### ListAssetGroups — 查询素材组列表
 
 **POST** `https://api.gravitex.ai/api/v3/seedance?Action=ListAssetGroups&Version=2024-01-01`
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `Filter.GroupIds` | array | 否 | 按素材组 ID 过滤 |
-| `Filter.GroupType` | string | **是** | `AIGC` / `LivenessFace` |
-| `Filter.Name` | string | 否 | 按名称模糊搜索 |
-| `PageNumber` | integer | 否 | 页码，从 1 开始 |
-| `PageSize` | integer | 否 | 每页数量，最多 100 |
-| `SortBy` | string | 否 | 默认 `CreateTime`：`CreateTime` / `UpdateTime` |
-| `SortOrder` | string | 否 | 默认 `Desc`：`Asc` / `Desc` |
-| `ProjectName` | string | 否 | 默认 `default`，项目名 |
+
+| 字段                 | 类型      | 必填    | 说明                                          |
+| ------------------ | ------- | ----- | ------------------------------------------- |
+| `Filter.GroupIds`  | array   | 否     | 按素材组 ID 过滤                                  |
+| `Filter.GroupType` | string  | **是** | `AIGC` / `LivenessFace`                     |
+| `Filter.Name`      | string  | 否     | 按名称模糊搜索                                     |
+| `PageNumber`       | integer | 否     | 页码，从 1 开始                                   |
+| `PageSize`         | integer | 否     | 每页数量，最多 100                                 |
+| `SortBy`           | string  | 否     | 默认 `CreateTime`：`CreateTime` / `UpdateTime` |
+| `SortOrder`        | string  | 否     | 默认 `Desc`：`Asc` / `Desc`                    |
+| `ProjectName`      | string  | 否     | 默认 `default`，项目名                            |
+
 
 ```bash
 curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssetGroups&Version=2024-01-01" \
@@ -363,21 +387,25 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssetGroups&Ver
 
 ---
 
+
+
 ### ListAssets — 查询素材列表
 
 **POST** `https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=2024-01-01`
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `Filter.GroupIds` | array | 否 | 按素材组 ID 过滤 |
-| `Filter.GroupType` | string | **是** | `AIGC` / `LivenessFace` |
-| `Filter.Statuses` | array | 否 | `Active` / `Processing` / `Failed` |
-| `Filter.Name` | string | 否 | 按名称模糊搜索 |
-| `PageNumber` | integer | **是** | 页码，从 1 开始 |
-| `PageSize` | integer | **是** | 每页数量，最多 100 |
-| `SortBy` | string | 否 | 默认 `CreateTime`：`CreateTime` / `UpdateTime` / `GroupId` |
-| `SortOrder` | string | 否 | 默认 `Desc`：`Asc` / `Desc` |
-| `ProjectName` | string | 否 | 默认 `default`，项目名 |
+
+| 字段                 | 类型      | 必填    | 说明                                                      |
+| ------------------ | ------- | ----- | ------------------------------------------------------- |
+| `Filter.GroupIds`  | array   | 否     | 按素材组 ID 过滤                                              |
+| `Filter.GroupType` | string  | **是** | `AIGC` / `LivenessFace`                                 |
+| `Filter.Statuses`  | array   | 否     | `Active` / `Processing` / `Failed`                      |
+| `Filter.Name`      | string  | 否     | 按名称模糊搜索                                                 |
+| `PageNumber`       | integer | **是** | 页码，从 1 开始                                               |
+| `PageSize`         | integer | **是** | 每页数量，最多 100                                             |
+| `SortBy`           | string  | 否     | 默认 `CreateTime`：`CreateTime` / `UpdateTime` / `GroupId` |
+| `SortOrder`        | string  | 否     | 默认 `Desc`：`Asc` / `Desc`                                |
+| `ProjectName`      | string  | 否     | 默认 `default`，项目名                                        |
+
 
 ```bash
 curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=2024-01-01" \
@@ -421,14 +449,18 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 
 ---
 
+
+
 ### GetAsset — 查询单个素材
 
 **POST** `https://api.gravitex.ai/api/v3/seedance?Action=GetAsset&Version=2024-01-01`
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `Id` | string | **是** | 素材 ID |
-| `ProjectName` | string | 否 | 默认 `default`，项目名 |
+
+| 字段            | 类型     | 必填    | 说明               |
+| ------------- | ------ | ----- | ---------------- |
+| `Id`          | string | **是** | 素材 ID            |
+| `ProjectName` | string | 否     | 默认 `default`，项目名 |
+
 
 响应：
 
@@ -454,14 +486,18 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 
 ---
 
+
+
 ### GetAssetGroup — 查询单个素材组
 
 **POST** `https://api.gravitex.ai/api/v3/seedance?Action=GetAssetGroup&Version=2024-01-01`
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `Id` | string | **是** | 素材组 ID |
-| `ProjectName` | string | 否 | 默认 `default`，项目名 |
+
+| 字段            | 类型     | 必填    | 说明               |
+| ------------- | ------ | ----- | ---------------- |
+| `Id`          | string | **是** | 素材组 ID           |
+| `ProjectName` | string | 否     | 默认 `default`，项目名 |
+
 
 响应：
 
@@ -482,17 +518,21 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 
 ---
 
+
+
 ### UpdateAsset — 更新素材
 
 **POST** `https://api.gravitex.ai/api/v3/seedance?Action=UpdateAsset&Version=2024-01-01`
 
 **目前只支持更新** `Name`**。**
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `Id` | string | **是** | 素材 ID |
-| `Name` | string | 否 | 新名称 |
-| `ProjectName` | string | 否 | 默认 `default`，项目名 |
+
+| 字段            | 类型     | 必填    | 说明               |
+| ------------- | ------ | ----- | ---------------- |
+| `Id`          | string | **是** | 素材 ID            |
+| `Name`        | string | 否     | 新名称              |
+| `ProjectName` | string | 否     | 默认 `default`，项目名 |
+
 
 响应：
 
@@ -505,18 +545,22 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 
 ---
 
+
+
 ### UpdateAssetGroup — 更新素材组
 
 **POST** `https://api.gravitex.ai/api/v3/seedance?Action=UpdateAssetGroup&Version=2024-01-01`
 
 **目前只支持更新** `Name` **和** `Description`**。**
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `Id` | string | **是** | 素材组 ID |
-| `Name` | string | 否 | 新名称 |
-| `Description` | string | 否 | 新描述 |
-| `ProjectName` | string | 否 | 默认 `default`，项目名 |
+
+| 字段            | 类型     | 必填    | 说明               |
+| ------------- | ------ | ----- | ---------------- |
+| `Id`          | string | **是** | 素材组 ID           |
+| `Name`        | string | 否     | 新名称              |
+| `Description` | string | 否     | 新描述              |
+| `ProjectName` | string | 否     | 默认 `default`，项目名 |
+
 
 响应：
 
@@ -529,14 +573,18 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 
 ---
 
+
+
 ### DeleteAsset — 删除素材
 
 **POST** `https://api.gravitex.ai/api/v3/seedance?Action=DeleteAsset&Version=2024-01-01`
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `Id` | string | **是** | 素材 ID |
-| `ProjectName` | string | 否 | 默认 `default`，项目名 |
+
+| 字段            | 类型     | 必填    | 说明               |
+| ------------- | ------ | ----- | ---------------- |
+| `Id`          | string | **是** | 素材 ID            |
+| `ProjectName` | string | 否     | 默认 `default`，项目名 |
+
 
 响应（无业务返回参数）：
 
@@ -549,18 +597,22 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 
 ---
 
+
+
 ### DeleteAssetGroup — 删除素材组
 
 **POST** `https://api.gravitex.ai/api/v3/seedance?Action=DeleteAssetGroup&Version=2024-01-01`
 
 ⚠️ **删除素材组会级联删除组内所有素材，不可撤销。**
 
-⚠️ **真人素材组（`LivenessFace`）额外限制**：只有授权已过期、或授权被拒绝的素材组才能删除；授权仍在有效期内、授权期尚未开始、或已通过审核的素材组无法删除（会被拒绝）。虚拟素材组（`AIGC`）没有这个限制。
+⚠️ **真人素材组（**`LivenessFace`**）额外限制**：只有授权已过期、或授权被拒绝的素材组才能删除；授权仍在有效期内、授权期尚未开始、或已通过审核的素材组无法删除（会被拒绝）。虚拟素材组（`AIGC`）没有这个限制。
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `Id` | string | **是** | 素材组 ID |
-| `ProjectName` | string | 否 | 默认 `default`，项目名 |
+
+| 字段            | 类型     | 必填    | 说明               |
+| ------------- | ------ | ----- | ---------------- |
+| `Id`          | string | **是** | 素材组 ID           |
+| `ProjectName` | string | 否     | 默认 `default`，项目名 |
+
 
 响应（无业务返回参数）：
 
@@ -573,13 +625,17 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 
 ---
 
+
+
 ## 真人素材库（Real-human Portrait Library）
+
+
 
 ### 与虚拟素材库的关系
 
 真人素材库（`GroupType = LivenessFace`）跟前面的虚拟素材库（`GroupType = AIGC`）**共用同一套 Asset/AssetGroup Action**（`CreateAsset`、`ListAssetGroups`、`ListAssets`、`GetAsset`、`GetAssetGroup`、`UpdateAsset`、`UpdateAssetGroup`、`DeleteAsset`、`DeleteAssetGroup`），调用方式、请求体、响应体完全一样，只是 `Filter.GroupType`/查询结果里的 `GroupType` 变成 `LivenessFace`。
 
-**唯一的区别**：真人素材组不能通过 `Action=CreateAssetGroup` 创建——这个 Action 会被**强制改写成 `AIGC`**（见 [CreateAssetGroup](#createassetgroup--创建素材组)），所以真人素材组只能走「真人核验」流程来创建，核验通过后拿到的 `GroupId`，后续增删改查跟虚拟素材组一模一样地使用。
+**唯一的区别**：真人素材组不能通过 `Action=CreateAssetGroup` 创建——这个 Action 会被**强制改写成** `AIGC`（见 [CreateAssetGroup](#createassetgroup--创建素材组)），所以真人素材组只能走「真人核验」流程来创建，核验通过后拿到的 `GroupId`，后续增删改查跟虚拟素材组一模一样地使用。
 
 ### CreateVisualValidateSession — 发起真人核验会话
 
@@ -589,10 +645,12 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 >
 > ⚠️ **配额检查发生在这一步**：真人素材组是在用户完成 H5 核验的那一刻创建的，`GetVisualValidateResult` 只是事后查询。所以配额上限检查放在这里（发起核验会话之前），超限会返回 `403`，`ResponseMetadata.Error.Code = "QuotaExceeded"`，不会生成 H5 核验链接——避免用户核验通过后因为超配额永远查不到 `GroupId`。
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `CallbackURL` | string | 否 | **无论传什么，都会强制改写为固定的回调页地址**——防止跳转到调用方指定的任意地址。`GetVisualValidateResult` 走的是带 Bearer 鉴权的同一个 API，不依赖回调页传递任何上下文，所以强制改写不影响核验换 `GroupId` 的能力 |
-| `ProjectName` | string | 否 | 默认 `default`，项目名 |
+
+| 字段            | 类型     | 必填  | 说明                                                                                                                                   |
+| ------------- | ------ | --- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `CallbackURL` | string | 否   | **无论传什么，都会强制改写为固定的回调页地址**——防止跳转到调用方指定的任意地址。`GetVisualValidateResult` 走的是带 Bearer 鉴权的同一个 API，不依赖回调页传递任何上下文，所以强制改写不影响核验换 `GroupId` 的能力 |
+| `ProjectName` | string | 否   | 默认 `default`，项目名                                                                                                                     |
+
 
 ```bash
 curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=CreateVisualValidateSession&Version=2024-01-01" \
@@ -619,9 +677,11 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=CreateVisualValidat
 
 > ⚠️ 响应同样是**扁平结构**，不是 `{ResponseMetadata, Result}` 信封。
 
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
+
+| 字段           | 类型     | 必填    | 说明                                              |
+| ------------ | ------ | ----- | ----------------------------------------------- |
 | `BytedToken` | string | **是** | `CreateVisualValidateSession` 响应里的 `BytedToken` |
+
 
 ```bash
 curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=GetVisualValidateResult&Version=2024-01-01" \
@@ -651,19 +711,27 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=GetVisualValidateRe
 
 ---
 
+
+
 ## 参数参考
+
+
 
 ### 素材类型限制
 
 `CreateAsset` 的 `AssetType` 对应的文件要求（虚拟 `AIGC` 与真人 `LivenessFace` 两类素材库均一致），超出限制会报错：
 
-| 类型 | 格式 | 时长 | 分辨率/尺寸 | 宽高比 (W/H) | 大小 | 帧率 |
-| --- | --- | --- | --- | --- | --- | --- |
-| `Image` | jpeg / png / webp / bmp / tiff / gif / heic / heif | — | 宽高 300–6000px | 0.4–2.5 | < 30 MB | — |
-| `Video` | mp4 / mov | 2–15 秒 | 480p/720p/1080p，宽高 300–6000px，总像素 (W×H) 409600–2086876 | 0.4–2.5 | ≤ 50 MB | 24–60 fps |
-| `Audio` | wav / mp3 | 2–15 秒 | — | — | ≤ 15 MB | — |
+
+| 类型      | 格式                                                 | 时长     | 分辨率/尺寸                                                 | 宽高比 (W/H) | 大小      | 帧率        |
+| ------- | -------------------------------------------------- | ------ | ------------------------------------------------------ | --------- | ------- | --------- |
+| `Image` | jpeg / png / webp / bmp / tiff / gif / heic / heif | —      | 宽高 300–6000px                                          | 0.4–2.5   | < 30 MB | —         |
+| `Video` | mp4 / mov                                          | 2–15 秒 | 480p/720p/1080p，宽高 300–6000px，总像素 (W×H) 409600–2086876 | 0.4–2.5   | ≤ 50 MB | 24–60 fps |
+| `Audio` | wav / mp3                                          | 2–15 秒 | —                                                      | —         | ≤ 15 MB | —         |
+
 
 ---
+
+
 
 ## 错误处理
 
@@ -680,33 +748,32 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=GetVisualValidateRe
 }
 ```
 
-| 场景 | HTTP 状态码 | `Error.Code` |
-| --- | --- | --- |
-| `Action` 不在支持列表 | `400` | `InvalidAction` |
-| 请求体不是合法 JSON | `400` | `InvalidParameter` |
-| 无可用渠道 | `503` | `NoChannel` |
-| 素材组配额检查失败（服务端异常） | `500` | `QuotaCheckFailed` |
-| 超出素材组数量上限 | `403` | `QuotaExceeded` |
-| 上游调用失败 | `502` | `UpstreamError` |
+
+| 场景               | HTTP 状态码 | `Error.Code`       |
+| ---------------- | -------- | ------------------ |
+| `Action` 不在支持列表  | `400`    | `InvalidAction`    |
+| 请求体不是合法 JSON     | `400`    | `InvalidParameter` |
+| 无可用渠道            | `503`    | `NoChannel`        |
+| 素材组配额检查失败（服务端异常） | `500`    | `QuotaCheckFailed` |
+| 超出素材组数量上限        | `403`    | `QuotaExceeded`    |
+| 上游调用失败           | `502`    | `UpstreamError`    |
+
 
 视频生成任务 API（[创建任务](#创建任务)/[查询任务](#查询任务)/[取消删除任务](#取消删除任务)）的错误响应会返回相应的上游状态码和错误体。
 
 ---
 
+
+
 ## 常见问题
 
-### Q: `model` 字段能不能直接使用示例中的模型 ID？
+### Q: `seedance-2-0`、`seedance-2-0-fast`、`seedance-2-0-NSFW` 该怎么选？
 
-不一定。渠道注册的模型名可能跟示例不完全一致（例如 `seedance-2-0`、`doubao-seedance-2-0-260128` 等）。如果传的 `model` 字符串没有被任何渠道注册，会报“无可用渠道”错误。建议先确认已配置的模型名。
+- `seedance-2-0`：标准版，支持 `480p`/`720p`/`1080p`/`4K`，时长 `[4,15]` 秒。
+- `seedance-2-0-fast`：出图/出视频更快，仅支持 `480p`/`720p`（不支持 `1080p`/`4K`），时长范围与标准版一致，其余能力相同，适合对分辨率要求不高、追求速度的场景。
+- `seedance-2-0-NSFW`：内容安全限制放开，允许生成敏感/成人向内容，分辨率与时长范围与 `seedance-2-0` 一致，仅限已获授权的场景使用，未授权调用会被拒绝。三个模型的请求/响应结构完全一致，只需切换 `model` 字段值。
 
-### Q: 取消一个 `running` 状态的任务会怎样？
+### Q: 素材已经用 `Moderation.Strategy = "Skip"` 跳过审核了，为什么生成任务还是报内容安全错误？
 
-会被拒绝，返回相应的错误状态码和错误体。具体的错误码格式以实际请求为准。
+`Skip` 只是跳过大部分非基线内容安全审核策略，不是完全关闭审核——素材本身仍可能因为基线安全策略被判定失败，生成任务也会对 `prompt`/素材内容单独做安全检查。如果确认这段内容本来就是敏感/成人向的、且业务场景已获授权，建议直接改用 `seedance-2-0-NSFW` 模型发起生成任务，而不是反复调整 `Moderation` 策略去绕过标准模型的审核。
 
-### Q: 素材库的 `SortBy`/`SortOrder` 等边缘字段能用吗？
-
-能。这套接口的请求体会原样转发，不会因为没有用到就被丢弃。
-
-### Q: 真人素材组能不能像虚拟素材组一样直接用 `CreateAssetGroup` 创建？
-
-不能。`CreateAssetGroup` 会强制改写成 `AIGC`（见 [CreateAssetGroup](#createassetgroup--创建素材组)），真人素材组只能走 `CreateVisualValidateSession`/`GetVisualValidateResult` 的专属核验流程创建，创建之后的增删改查复用同一套 Action。
