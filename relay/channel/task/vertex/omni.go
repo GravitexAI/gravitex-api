@@ -13,14 +13,18 @@ import (
 )
 
 const vertexOmniModelName = "gemini-omni-flash-preview"
+const omniTaskIDPrefix = "omni:"
 
 func isVertexOmniModel(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), vertexOmniModelName)
 }
 
-func taskModelFromBody(body map[string]any) string {
-	modelName, _ := body["model"].(string)
-	return modelName
+func markOmniTaskID(interactionID string) string {
+	return omniTaskIDPrefix + interactionID
+}
+
+func unmarkOmniTaskID(taskID string) string {
+	return strings.TrimPrefix(taskID, omniTaskIDPrefix)
 }
 
 func buildVertexOmniURL(baseURL, key string) (string, error) {

@@ -18,6 +18,13 @@ func TestBuildOmniRequestBodyUsesInlineDelivery(t *testing.T) {
 	require.Equal(t, "inline", responseFormat["delivery"])
 }
 
+func TestOmniTaskIDMarkerIsInternalOnly(t *testing.T) {
+	const interactionID = "video-test"
+	marked := markOmniTaskID(interactionID)
+	require.Equal(t, "omni:video-test", marked)
+	require.Equal(t, interactionID, unmarkOmniTaskID(marked))
+}
+
 func TestParseOmniTaskResultExtractsVideoDataAndUsage(t *testing.T) {
 	result, err := ParseOmniTaskResult([]byte(`{
 		"id":"v1_test",

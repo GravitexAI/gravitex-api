@@ -332,7 +332,8 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 			return interaction.ID, responseBody, nil
 		}
 		c.JSON(http.StatusOK, video)
-		return interaction.ID, responseBody, nil
+		taskID = markOmniTaskID(interaction.ID)
+		return taskID, responseBody, nil
 	}
 
 	var s submitResponse
@@ -397,8 +398,8 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	if !ok {
 		return nil, fmt.Errorf("invalid task_id")
 	}
-	if strings.HasPrefix(taskID, "v1_") || isVertexOmniModel(taskModelFromBody(body)) {
-		return fetchVertexOmniTask(baseUrl, key, taskID, proxy)
+	if strings.HasPrefix(taskID, omniTaskIDPrefix) || strings.HasPrefix(taskID, "v1_") {
+		return fetchVertexOmniTask(baseUrl, key, unmarkOmniTaskID(taskID), proxy)
 	}
 	upstreamName, err := decodeLocalTaskID(taskID)
 	if err != nil {

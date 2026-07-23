@@ -10,6 +10,7 @@ import (
 )
 
 const omniModelName = "gemini-omni-flash-preview"
+const omniTaskIDPrefix = "omni:"
 
 type omniContent struct {
 	Type     string `json:"type"`
@@ -46,6 +47,14 @@ type omniInteraction struct {
 
 func isOmniModel(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), omniModelName)
+}
+
+func markOmniTaskID(interactionID string) string {
+	return omniTaskIDPrefix + interactionID
+}
+
+func unmarkOmniTaskID(taskID string) string {
+	return strings.TrimPrefix(taskID, omniTaskIDPrefix)
 }
 
 func buildOmniRequestURL(baseURL string) string {
@@ -196,9 +205,4 @@ func omniInteractionURL(baseURL, id string) string {
 
 func isOmniDataURL(value string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "data:video/")
-}
-
-func taskModelFromBody(body map[string]any) string {
-	modelName, _ := body["model"].(string)
-	return modelName
 }
