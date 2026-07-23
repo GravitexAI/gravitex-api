@@ -65,6 +65,24 @@ func SetVideoRouter(router *gin.Engine) {
 		videoV1Router.GET("/videos/:task_id", controller.RelayTaskFetch)
 	}
 
+	// Google Interactions API compatible routes. They are translated to the
+	// existing video task pipeline and therefore share its billing/polling.
+	nativeInteractionsRouter := router.Group("/v1beta")
+	nativeInteractionsRouter.Use(middleware.RouteTag("relay"))
+	nativeInteractionsRouter.Use(middleware.TokenAuth(), middleware.NativeInteractions(), middleware.AssetResolveChannel(), middleware.Distribute())
+	{
+		nativeInteractionsRouter.POST("/interactions", controller.NativeInteractionsSubmit)
+		nativeInteractionsRouter.GET("/interactions/:interaction_id", controller.NativeInteractionsFetch)
+	}
+	// Vertex AI's resource-shaped Interactions API uses the same adapter.
+	vertexInteractionsRouter := router.Group("/v1beta1/projects/:project/locations/:location/interactions")
+	vertexInteractionsRouter.Use(middleware.RouteTag("relay"))
+	vertexInteractionsRouter.Use(middleware.TokenAuth(), middleware.NativeInteractions(), middleware.AssetResolveChannel(), middleware.Distribute())
+	{
+		vertexInteractionsRouter.POST("", controller.NativeInteractionsSubmit)
+		vertexInteractionsRouter.GET("/:interaction_id", controller.NativeInteractionsFetch)
+	}
+
 	// Seedance 2.0 official-mirror routes — byte-identical request/response to
 	// BytePlus Ark's own API, only the base URL differs. See
 	// docs/byteplus/seedance-2.0-official-api-mirror-design.md.
