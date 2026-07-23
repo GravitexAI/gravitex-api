@@ -64,7 +64,7 @@ func buildVertexOmniBody(req relaycommon.TaskSubmitReq) ([]byte, error) {
 		"generation_config": map[string]interface{}{"video_config": map[string]string{"task": task}},
 		"response_format": map[string]string{
 			"type": "video", "aspect_ratio": vertexSanitizeAspectRatio(metadata),
-			"duration": fmt.Sprintf("%ds", duration), "delivery": "data",
+			"duration": fmt.Sprintf("%ds", duration), "delivery": "inline",
 		},
 		"background": true,
 	}

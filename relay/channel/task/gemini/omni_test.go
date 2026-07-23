@@ -3,8 +3,20 @@ package gemini
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBuildOmniRequestBodyUsesInlineDelivery(t *testing.T) {
+	body, err := buildOmniRequestBody(relaycommon.TaskSubmitReq{Prompt: "test"})
+	require.NoError(t, err)
+	var payload map[string]interface{}
+	require.NoError(t, common.Unmarshal(body, &payload))
+	responseFormat, ok := payload["response_format"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "inline", responseFormat["delivery"])
+}
 
 func TestParseOmniTaskResultExtractsVideoDataAndUsage(t *testing.T) {
 	result, err := ParseOmniTaskResult([]byte(`{

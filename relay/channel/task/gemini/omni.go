@@ -83,7 +83,7 @@ func buildOmniRequestBody(req relaycommon.TaskSubmitReq) ([]byte, error) {
 			"type":         "video",
 			"aspect_ratio": aspect,
 			"duration":     fmt.Sprintf("%ds", duration),
-			"delivery":     "data",
+			"delivery":     "inline",
 		},
 		"background": true,
 	}
