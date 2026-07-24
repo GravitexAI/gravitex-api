@@ -1555,6 +1555,46 @@ func GetImageModelPricePerImageFromOptionMap(name string) (float64, bool) {
 	return getImageModelPricePerImageFromOptionMap(name)
 }
 
+// GetImageModelPriceConfigFromOptionMap 读取结构化按张计费配置。
+// 数字单价仍由 GetImageModelPricePerImage 处理，避免影响已有模型。
+func GetImageModelPriceConfigFromOptionMap(name string) (types.ImagePerImagePricing, bool) {
+	common.OptionMapRWMutex.RLock()
+	priceStr := common.OptionMap["ImageModelPricePerImage"]
+	common.OptionMapRWMutex.RUnlock()
+	if priceStr == "" {
+		return types.ImagePerImagePricing{}, false
+	}
+
+	var rawMap map[string]json.RawMessage
+	if err := common.Unmarshal([]byte(priceStr), &rawMap); err != nil {
+		return types.ImagePerImagePricing{}, false
+	}
+
+	modelKeys := []string{name}
+	if strings.HasPrefix(name, "doubao-") {
+		modelKeys = append(modelKeys, strings.TrimPrefix(name, "doubao-"))
+	} else {
+		modelKeys = append(modelKeys, "doubao-"+name)
+	}
+
+	for _, key := range modelKeys {
+		raw, ok := rawMap[key]
+		if !ok || len(raw) == 0 || raw[0] != '{' {
+			continue
+		}
+		var config types.ImagePerImagePricing
+		if err := common.Unmarshal(raw, &config); err != nil {
+			return types.ImagePerImagePricing{}, false
+		}
+		if config.OutputImage == nil {
+			config.OutputImage = map[string]float64{}
+		}
+		return config, true
+	}
+
+	return types.ImagePerImagePricing{}, false
+}
+
 func getImageModelPricePerImageFromOptionMap(name string) (float64, bool) {
 	common.OptionMapRWMutex.RLock()
 	priceStr := common.OptionMap["ImageModelPricePerImage"]
@@ -1562,19 +1602,30 @@ func getImageModelPricePerImageFromOptionMap(name string) (float64, bool) {
 	if priceStr == "" {
 		return -1, false
 	}
-	var m map[string]float64
+	var m map[string]json.RawMessage
 	if err := common.Unmarshal([]byte(priceStr), &m); err != nil {
 		return -1, false
 	}
-	if p, ok := m[name]; ok && p >= 0 {
+	lookup := func(key string) (float64, bool) {
+		raw, ok := m[key]
+		if !ok || len(raw) == 0 || raw[0] == '{' {
+			return -1, false
+		}
+		var p float64
+		if err := common.Unmarshal(raw, &p); err != nil || p < 0 {
+			return -1, false
+		}
+		return p, true
+	}
+	if p, ok := lookup(name); ok {
 		return p, true
 	}
 	if !strings.HasPrefix(name, "doubao-") {
-		if p, ok := m["doubao-"+name]; ok && p >= 0 {
+		if p, ok := lookup("doubao-" + name); ok {
 			return p, true
 		}
 	} else {
-		if p, ok := m[strings.TrimPrefix(name, "doubao-")]; ok && p >= 0 {
+		if p, ok := lookup(strings.TrimPrefix(name, "doubao-")); ok {
 			return p, true
 		}
 	}
@@ -1590,9 +1641,17 @@ func loadImageModelPricePerImageFromDatabase() {
 	priceStr, exists := common.OptionMap["ImageModelPricePerImage"]
 	common.OptionMapRWMutex.RUnlock()
 	if exists && priceStr != "" {
-		var priceMap map[string]float64
-		if err := common.Unmarshal([]byte(priceStr), &priceMap); err == nil {
-			imageModelPricePerImageMap = priceMap
+		var rawMap map[string]json.RawMessage
+		if err := common.Unmarshal([]byte(priceStr), &rawMap); err == nil {
+			for modelName, raw := range rawMap {
+				if len(raw) == 0 || raw[0] == '{' {
+					continue
+				}
+				var price float64
+				if err := common.Unmarshal(raw, &price); err == nil {
+					imageModelPricePerImageMap[modelName] = price
+				}
+			}
 		}
 	}
 }

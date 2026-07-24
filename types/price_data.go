@@ -2,6 +2,21 @@ package types
 
 import "fmt"
 
+type ImagePerImagePricing struct {
+	InputImageFirst      float64            `json:"inputImageFirst"`
+	InputImageFromThe2nd float64            `json:"inputImageFromThe2nd"`
+	OutputImage          map[string]float64 `json:"outputImage"`
+}
+
+type ImageBillingUsage struct {
+	InputImageCount      int    `json:"input_image_count,omitempty"`
+	SuccessfulImageCount int    `json:"successful_image_count,omitempty"`
+	OutputWidth          int    `json:"output_width,omitempty"`
+	OutputHeight         int    `json:"output_height,omitempty"`
+	OutputPixels         int64  `json:"output_pixels,omitempty"`
+	OutputSizeTier       string `json:"output_size_tier,omitempty"`
+}
+
 type GroupRatioInfo struct {
 	GroupRatio        float64
 	GroupSpecialRatio float64
@@ -29,6 +44,8 @@ type PriceData struct {
 	GroupRatioInfo       GroupRatioInfo
 	PerImageUnitPrice    float64 // 按张计费单价 ($/image)，来自 ImageModelPricePerImage 配置
 	ImagePriceMultiplier float64 // 按张计费倍率（图片数量×尺寸×质量），来自 meta.ImagePriceRatio
+	ImagePerImagePricing *ImagePerImagePricing
+	ImageBillingUsage    *ImageBillingUsage
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {

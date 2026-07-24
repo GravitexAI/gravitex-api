@@ -243,6 +243,10 @@ type Usage struct {
 
 	// 按张计费：上游返回的实际生成图片数量
 	GeneratedImages int `json:"generated_images,omitempty"`
+	// Seedream Pro：上游返回的输入参考图片数量
+	InputImages int `json:"input_images,omitempty"`
+	// Seedream Pro：上游返回的实际输出图片尺寸，供按像素档位计费。
+	OutputImageSizes []string `json:"-"`
 }
 
 type OpenAIVideoResponse struct {

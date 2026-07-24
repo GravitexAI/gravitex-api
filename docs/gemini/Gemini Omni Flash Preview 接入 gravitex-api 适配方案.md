@@ -1,6 +1,6 @@
-# Gemini Omni Flash Preview 接入 gravitex-api 适配方案（设计分析，尚未实现）
+# Gemini Omni Flash Preview 接入 gravitex-api 适配方案（设计分析与实现记录）
 
-> 本文档回答"如何把 `gemini-omni-flash-preview` 接进当前 gravitex-api 网关"，是**架构分析 + 落地方案**，不是代码改动记录——截至本文档编写时，代码库里**尚未**包含任何本文所述改动。
+> 本文档保留最初的架构分析和落地决策，当前接入已经完成。实际对外调用方式请以同目录的 [平台 API 接入文档](Gemini%20Omni%20Flash%20Preview%20平台%20API%20接入文档.md) 为准，代码实现以当前 `relay/channel/task/gemini/omni.go`、`middleware/native_interactions.go` 和 `router/video-router.go` 为准。
 > 模型本身的调用协议（Interactions API 全部请求/响应字段）见同目录 [`Gemini Omni Flash Preview 模型与调用文档.md`](./Gemini%20Omni%20Flash%20Preview%20模型与调用文档.md)，本文只讲"怎么接"。
 
 ---
@@ -192,7 +192,9 @@ Google 官方定价本质上就是 **token 制**：输入（文本/图片/视频
 
 ---
 
-## 6. 建议的开发步骤 Checklist
+## 6. 原设计开发步骤 Checklist
+
+> 本节保留用于回顾设计与实现差异，不代表当前仍有待办项。当前对外 API 的能力边界以平台 API 文档为准。
 
 1. [ ] 与产品确认 §5 中的开放问题（尤其是状态映射与最终售价），避免返工。
 2. [ ] 在 `relay/channel/task/gemini/` 新增 `omni.go`：实现 Omni 专属的 URL/Header/Body 构造与 `ParseTaskResult`。

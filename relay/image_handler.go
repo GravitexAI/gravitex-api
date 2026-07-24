@@ -221,6 +221,17 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return newAPIError
 	}
 
+	if info.PriceData.ImagePerImagePricing != nil {
+		if actualPrice, billingUsage, err := helper.SettleImagePerImageUsage(*info.PriceData.ImagePerImagePricing, request, usage.(*dto.Usage)); err == nil {
+			info.PriceData.ModelPrice = actualPrice
+			info.PriceData.ImageBillingUsage = billingUsage
+			if billingUsage != nil {
+				info.PriceData.PerImageUnitPrice = info.PriceData.ImagePerImagePricing.OutputImage[billingUsage.OutputSizeTier]
+			}
+			info.PriceData.ImagePriceMultiplier = 1
+		}
+	}
+
 	// 按张计费：优先使用上游返回的 usage.generated_images（实际生成数量），
 	// 其次回退到请求入参的 N，兜底为 1。
 	// 解决场景：用户请求 n=4，但上游（如 seedream-5）实际只返回 1 张图，
@@ -236,7 +247,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	// calculation (both price-based and ratio-based paths).
 	// Adaptors may have already set a more accurate count from the
 	// upstream response; only set the default when they haven't.
-	if info.PriceData.UsePrice { // only price model use N ratio
+	if info.PriceData.UsePrice && info.PriceData.ImagePerImagePricing == nil { // structured image pricing already includes actual count and input cost
 		if _, hasN := info.PriceData.OtherRatios["n"]; !hasN {
 			info.PriceData.AddOtherRatio("n", float64(imageN))
 		}
