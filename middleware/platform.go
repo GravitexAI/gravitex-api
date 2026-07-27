@@ -64,11 +64,11 @@ func validatePlatformOrAbort(c *gin.Context, userID int, openAIStyle bool) bool 
 	if err := validateUserPlatform(userID, RequestPlatformID(c)); err != nil {
 		common.SysLog(fmt.Sprintf("platform authorization failed for user %d: %v", userID, err))
 		if openAIStyle {
-			abortWithOpenAiMessage(c, http.StatusForbidden, "user is not allowed to access this platform")
+			abortWithOpenAiMessage(c, http.StatusForbidden, "invalid key or invalid user")
 		} else {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
-				"message": "user is not allowed to access this platform",
+				"message": "invalid key or invalid user",
 			})
 			c.Abort()
 		}
