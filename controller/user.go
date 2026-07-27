@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
@@ -51,7 +52,11 @@ func Login(c *gin.Context) {
 		Username: username,
 		Password: password,
 	}
-	err = user.ValidateAndFill()
+	if middleware.PlatformIsolationEnabled() {
+		err = user.ValidateAndFillWithPlatform(middleware.RequestPlatformID(c))
+	} else {
+		err = user.ValidateAndFill()
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, model.ErrDatabase):

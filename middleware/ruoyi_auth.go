@@ -75,7 +75,12 @@ func tryRuoYiJWTAuth(c *gin.Context) (*model.User, error) {
 		return nil, fmt.Errorf("ruoyi jwt 中 username 非法")
 	}
 
-	user, err := model.GetUserByUsername(username)
+	var user *model.User
+	if PlatformIsolationEnabled() {
+		user, err = model.GetUserByUsernameAndPlatform(username, RequestPlatformID(c))
+	} else {
+		user, err = model.GetUserByUsername(username)
+	}
 	if err != nil {
 		logger.LogError(c, fmt.Sprintf("根据 RuoYi JWT 中的 username(%s) 查询用户失败: %s", username, err.Error()))
 		return nil, err

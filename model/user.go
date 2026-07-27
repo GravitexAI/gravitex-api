@@ -651,6 +651,28 @@ func (user *User) ValidateAndFill() (err error) {
 	return nil
 }
 
+// ValidateAndFillWithPlatform authenticates a local user within the platform
+// recorded by the Java sys_user table.
+func (user *User) ValidateAndFillWithPlatform(platformID int) (err error) {
+	password := user.Password
+	username := strings.TrimSpace(user.Username)
+	if username == "" || password == "" || platformID <= 0 {
+		return ErrUserEmptyCredentials
+	}
+	if err = DB.Where("username = ? OR email = ?", username, username).
+		Where("id IN (SELECT user_id FROM sys_user WHERE platform_id = ?)", platformID).
+		First(user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrInvalidCredentials
+		}
+		return fmt.Errorf("%w: %v", ErrDatabase, err)
+	}
+	if !common.ValidatePasswordAndHash(password, user.Password) || user.Status != common.UserStatusEnabled {
+		return ErrInvalidCredentials
+	}
+	return nil
+}
+
 func (user *User) FillUserById() error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
