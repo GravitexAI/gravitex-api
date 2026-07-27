@@ -11,6 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const nativeOmniModel = "gemini-omni-flash-preview"
+
 // NativeInteractions converts the Google Interactions API request into the
 // gateway's existing video task request. The route is intentionally isolated
 // so existing /v1/video/generations and /v1/videos clients are unchanged.
@@ -35,6 +37,13 @@ func NativeInteractions() gin.HandlerFunc {
 			}
 			c.Set("native_interactions", true)
 			c.Set("native_interactions_model", modelName)
+			background, hasBackground := requestBool(raw, "background")
+			if !hasBackground {
+				background = true // preserve the gateway's existing async default
+			}
+			c.Set("native_interactions_background", background)
+			stream, _ := requestBool(raw, "stream")
+			c.Set("native_interactions_stream", stream && strings.EqualFold(modelName, nativeOmniModel))
 			convertedStorage, err := common.CreateBodyStorage(converted)
 			if err != nil {
 				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "code": "invalid_request"}})
@@ -59,6 +68,15 @@ func NativeInteractions() gin.HandlerFunc {
 	}
 }
 
+func requestBool(raw []byte, key string) (bool, bool) {
+	var request map[string]any
+	if err := common.Unmarshal(raw, &request); err != nil {
+		return false, false
+	}
+	value, ok := request[key].(bool)
+	return value, ok
+}
+
 func convertNativeInteractionRequest(raw []byte) ([]byte, string, error) {
 	var request map[string]any
 	if err := common.Unmarshal(raw, &request); err != nil {
@@ -74,19 +92,49 @@ func convertNativeInteractionRequest(raw []byte) ([]byte, string, error) {
 	}
 
 	metadata := map[string]any{}
-	if image, mimeType := nativeInteractionImage(request["input"]); image != "" {
-		metadata["image"] = "data:" + mimeType + ";base64," + image
+	if nativeInteractionHasAudio(request["input"]) {
+		return nil, "", fmt.Errorf("audio input is not supported for gemini-omni-flash-preview video tasks")
+	}
+	images, videos := nativeInteractionMedia(request["input"])
+	if len(images) == 1 {
+		metadata["image"] = images[0]
+	}
+	if len(images) > 1 {
+		metadata["images"] = images
+	}
+	if len(videos) > 0 {
+		metadata["video"] = videos[0]
 	}
 	if generationConfig, ok := request["generation_config"].(map[string]any); ok {
 		if videoConfig, ok := generationConfig["video_config"].(map[string]any); ok {
-			for _, key := range []string{"resolution", "aspect_ratio", "durationSeconds", "duration_seconds"} {
+			for _, key := range []string{"task", "resolution", "aspect_ratio", "durationSeconds", "duration_seconds"} {
 				if value, exists := videoConfig[key]; exists {
 					metadata[key] = value
 				}
 			}
 		}
 	}
-	if responseFormat, ok := request["response_format"].(map[string]any); ok {
+	if background, exists := request["background"]; exists {
+		metadata["background"] = background
+	}
+	stream, _ := request["stream"].(bool)
+	if stream && strings.EqualFold(modelName, nativeOmniModel) {
+		metadata["stream"] = true
+	}
+	for _, key := range []string{"previous_interaction_id"} {
+		if value, exists := request[key]; exists {
+			metadata[key] = value
+		}
+	}
+	// Native synchronous requests use the existing background task path. Native
+	// SSE is different: the Omni adaptor sends the request directly to the
+	// upstream stream and completes the task from the final GET response.
+	if stream && strings.EqualFold(modelName, nativeOmniModel) {
+		metadata["background"] = false
+	} else if background, ok := request["background"].(bool); !ok || !background {
+		metadata["background"] = true
+	}
+	if responseFormat := nativeInteractionResponseFormat(request["response_format"]); responseFormat != nil {
 		if aspect, ok := responseFormat["aspect_ratio"].(string); ok {
 			metadata["aspectRatio"] = aspect
 		}
@@ -95,11 +143,35 @@ func convertNativeInteractionRequest(raw []byte) ([]byte, string, error) {
 				metadata["durationSeconds"] = seconds
 			}
 		}
+		if delivery, ok := responseFormat["delivery"].(string); ok && (delivery == "inline" || delivery == "uri") {
+			metadata["delivery"] = delivery
+		}
+		if gcsURI, ok := responseFormat["gcs_uri"].(string); ok && strings.TrimSpace(gcsURI) != "" {
+			metadata["gcs_uri"] = strings.TrimSpace(gcsURI)
+		}
 	}
 
 	converted := map[string]any{"model": modelName, "prompt": prompt, "metadata": metadata}
 	data, err := common.Marshal(converted)
 	return data, modelName, err
+}
+
+func nativeInteractionResponseFormat(value any) map[string]any {
+	switch format := value.(type) {
+	case map[string]any:
+		return format
+	case []any:
+		for _, item := range format {
+			candidate, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if contentType, _ := candidate["type"].(string); contentType == "video" {
+				return candidate
+			}
+		}
+	}
+	return nil
 }
 
 func nativeInteractionPrompt(input any) string {
@@ -123,24 +195,62 @@ func nativeInteractionPrompt(input any) string {
 	return strings.Join(parts, "\n")
 }
 
-func nativeInteractionImage(input any) (string, string) {
+func nativeInteractionMedia(input any) ([]string, []string) {
 	items, ok := input.([]any)
 	if !ok {
-		return "", ""
+		return nil, nil
+	}
+	var images, videos []string
+	for _, item := range items {
+		content, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		kind, _ := content["type"].(string)
+		value, _ := content["data"].(string)
+		if value == "" {
+			value, _ = content["uri"].(string)
+		}
+		if value == "" {
+			continue
+		}
+		if kind == "image" {
+			mimeType, _ := content["mime_type"].(string)
+			if !strings.HasPrefix(value, "data:") && !strings.Contains(value, "://") {
+				if mimeType == "" {
+					mimeType = "image/png"
+				}
+				value = "data:" + mimeType + ";base64," + value
+			}
+			images = append(images, value)
+		} else if kind == "video" {
+			mimeType, _ := content["mime_type"].(string)
+			if !strings.HasPrefix(value, "data:") && !strings.Contains(value, "://") {
+				if mimeType == "" {
+					mimeType = "video/mp4"
+				}
+				value = "data:" + mimeType + ";base64," + value
+			}
+			videos = append(videos, value)
+		}
+	}
+	return images, videos
+}
+
+func nativeInteractionHasAudio(input any) bool {
+	items, ok := input.([]any)
+	if !ok {
+		return false
 	}
 	for _, item := range items {
 		content, ok := item.(map[string]any)
-		if !ok || content["type"] != "image" {
+		if !ok {
 			continue
 		}
-		data, _ := content["data"].(string)
-		mimeType, _ := content["mime_type"].(string)
-		if data != "" {
-			if mimeType == "" {
-				mimeType = "image/png"
-			}
-			return data, mimeType
+		kind, _ := content["type"].(string)
+		if strings.EqualFold(kind, "audio") {
+			return true
 		}
 	}
-	return "", ""
+	return false
 }

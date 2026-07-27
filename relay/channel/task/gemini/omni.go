@@ -25,16 +25,21 @@ type omniUsageModality struct {
 	Tokens   int    `json:"tokens"`
 }
 
+type omniInteractionStep struct {
+	Type    string        `json:"type"`
+	Content []omniContent `json:"content"`
+	Error   *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
 type omniInteraction struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
 	Error  struct {
 		Message string `json:"message"`
 	} `json:"error"`
-	Steps []struct {
-		Type    string        `json:"type"`
-		Content []omniContent `json:"content"`
-	} `json:"steps"`
+	Steps []omniInteractionStep `json:"steps"`
 	Usage struct {
 		TotalInputTokens   int                 `json:"total_input_tokens"`
 		TotalOutputTokens  int                 `json:"total_output_tokens"`
@@ -66,12 +71,22 @@ func buildOmniRequestBody(req relaycommon.TaskSubmitReq) ([]byte, error) {
 	if metadata == nil {
 		metadata = map[string]interface{}{}
 	}
-	task := "text_to_video"
-	if image, ok := metadata["image"].(string); ok && strings.TrimSpace(image) != "" {
-		task = "image_to_video"
+	videoInput := metadataString(metadata, "video")
+	if videoInput == "" {
+		videoInput = strings.TrimSpace(req.InputReference)
 	}
+	task := omniTaskFromMetadata(metadata, req.Images, videoInput)
 	content := []omniContent{{Type: "text", Text: req.Prompt}}
-	if image, ok := metadata["image"].(string); ok && strings.TrimSpace(image) != "" {
+	images := req.Images
+	if len(images) == 0 {
+		images = omniStringSlice(metadata["images"])
+	}
+	if len(images) == 0 {
+		if image := metadataString(metadata, "image"); image != "" {
+			images = []string{image}
+		}
+	}
+	for _, image := range images {
 		parsed, err := ParseImageInput(image)
 		if err != nil {
 			return nil, fmt.Errorf("image conversion failed: %w", err)
@@ -80,23 +95,149 @@ func buildOmniRequestBody(req relaycommon.TaskSubmitReq) ([]byte, error) {
 			content = append(content, omniContent{Type: "image", Data: parsed.BytesBase64Encoded, MimeType: parsed.MimeType})
 		}
 	}
+	if videoInput != "" {
+		parsed, err := parseOmniVideoInput(videoInput)
+		if err != nil {
+			return nil, fmt.Errorf("video conversion failed: %w", err)
+		}
+		if parsed != nil {
+			content = append(content, *parsed)
+		}
+	}
 	duration := sanitizeDurationSecondsFromMetadata(metadata)
 	aspect := sanitizeAspectRatioFromMetadata(metadata)
+	background := true
+	if value, ok := metadata["background"]; ok {
+		if parsed, ok := value.(bool); ok {
+			background = parsed
+		}
+	}
+	stream := false
+	if value, ok := metadata["stream"]; ok {
+		if parsed, ok := value.(bool); ok {
+			stream = parsed
+		}
+	}
+	if stream {
+		// The gateway translates upstream task snapshots to SSE. Keep the
+		// upstream call asynchronous so the client receives progress events
+		// while the normal task poller performs completion billing.
+		background = true
+	}
 	body := map[string]interface{}{
 		"model": omniModelName,
 		"input": content,
 		"generation_config": map[string]interface{}{
 			"video_config": map[string]string{"task": task},
 		},
-		"response_format": map[string]string{
-			"type":         "video",
-			"aspect_ratio": aspect,
-			"duration":     fmt.Sprintf("%ds", duration),
-			"delivery":     "inline",
-		},
-		"background": true,
+		"background": background,
+	}
+	if stream {
+		// Native Interactions SSE is a foreground upstream request. The gateway
+		// still persists the completed interaction as a normal video task after
+		// the stream ends so existing billing remains unchanged.
+		body["stream"] = true
+		body["background"] = false
+	}
+	responseFormat := map[string]string{
+		"type":     "video",
+		"duration": fmt.Sprintf("%ds", duration),
+		"delivery": "inline",
+	}
+	if delivery := strings.ToLower(metadataString(metadata, "delivery")); delivery == "uri" {
+		responseFormat["delivery"] = "uri"
+		if gcsURI := metadataString(metadata, "gcs_uri"); gcsURI != "" {
+			responseFormat["gcs_uri"] = gcsURI
+		}
+	}
+	// Omni edit tasks reject response_format.aspect_ratio. Keep the
+	// requested ratio for text/image/reference generation only.
+	if task != "edit" {
+		responseFormat["aspect_ratio"] = aspect
+	}
+	// The Interactions API defines response_format as an array. Keep inline
+	// delivery so the gateway does not require an OSS/GCS output location.
+	body["response_format"] = []map[string]string{responseFormat}
+	if previousID := metadataString(metadata, "previous_interaction_id"); previousID != "" {
+		body["previous_interaction_id"] = previousID
 	}
 	return common.Marshal(body)
+}
+
+// BuildOmniRequestBody is shared by the Gemini Developer API and Vertex
+// channel adapters because both expose the same Interactions payload.
+func BuildOmniRequestBody(req relaycommon.TaskSubmitReq) ([]byte, error) {
+	return buildOmniRequestBody(req)
+}
+
+func omniTaskFromMetadata(metadata map[string]interface{}, images []string, video string) string {
+	if task := strings.ToLower(strings.TrimSpace(metadataString(metadata, "task"))); task != "" {
+		switch task {
+		case "text_to_video", "image_to_video", "reference_to_video", "edit":
+			return task
+		}
+	}
+	if video != "" {
+		return "edit"
+	}
+	if len(images) > 1 || len(omniStringSlice(metadata["images"])) > 1 {
+		return "reference_to_video"
+	}
+	if len(images) == 1 || metadataString(metadata, "image") != "" {
+		return "image_to_video"
+	}
+	return "text_to_video"
+}
+
+func metadataString(metadata map[string]interface{}, key string) string {
+	if value, ok := metadata[key].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func omniStringSlice(value interface{}) []string {
+	var values []string
+	switch items := value.(type) {
+	case []string:
+		values = items
+	case []interface{}:
+		for _, item := range items {
+			if value, ok := item.(string); ok && strings.TrimSpace(value) != "" {
+				values = append(values, strings.TrimSpace(value))
+			}
+		}
+	}
+	return values
+}
+
+func parseOmniVideoInput(value string) (*omniContent, error) {
+	return parseOmniMediaInput(value, "video", "video/mp4")
+}
+
+func parseOmniMediaInput(value, contentType, defaultMimeType string) (*omniContent, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	if strings.HasPrefix(value, "data:") {
+		parsed := parseDataURI(value)
+		if parsed == nil {
+			return nil, fmt.Errorf("invalid %s data URI", contentType)
+		}
+		return &omniContent{Type: contentType, Data: parsed.BytesBase64Encoded, MimeType: defaultOmniMimeTypeWithFallback(parsed.MimeType, defaultMimeType)}, nil
+	}
+	if strings.Contains(value, "://") {
+		return &omniContent{Type: contentType, URI: value, MimeType: defaultMimeType}, nil
+	}
+	return &omniContent{Type: contentType, Data: value, MimeType: defaultMimeType}, nil
+}
+
+func defaultOmniMimeTypeWithFallback(mime, fallback string) string {
+	if strings.TrimSpace(mime) == "" {
+		return fallback
+	}
+	return mime
 }
 
 func ParseOmniTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
@@ -114,6 +255,14 @@ func ParseOmniTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
 		ti.Progress = "100%"
 		ti.Reason = interaction.Error.Message
 		if ti.Reason == "" {
+			for _, step := range interaction.Steps {
+				if step.Error != nil && step.Error.Message != "" {
+					ti.Reason = step.Error.Message
+					break
+				}
+			}
+		}
+		if ti.Reason == "" {
 			ti.Reason = "Omni interaction failed with status: " + interaction.Status
 		}
 	default:
@@ -121,12 +270,28 @@ func ParseOmniTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
 		ti.Progress = "50%"
 	}
 	for _, modality := range interaction.Usage.InputByModality {
-		if strings.EqualFold(modality.Modality, "text") || strings.EqualFold(modality.Modality, "image") || strings.EqualFold(modality.Modality, "video") || strings.EqualFold(modality.Modality, "audio") {
-			ti.InputTokens += modality.Tokens
+		switch strings.ToLower(modality.Modality) {
+		case "text":
+			ti.TextInputTokens += modality.Tokens
+		case "image":
+			ti.ImageInputTokens += modality.Tokens
+		case "video":
+			ti.VideoInputTokens += modality.Tokens
+		case "audio":
+			// Omni currently does not support audio input. Keep it in the
+			// aggregate only if an upstream response ever reports it.
+		default:
+			continue
 		}
+		ti.InputTokens += modality.Tokens
 	}
 	if ti.InputTokens == 0 {
 		ti.InputTokens = interaction.Usage.TotalInputTokens
+	}
+	if ti.TextInputTokens == 0 && ti.InputTokens > ti.ImageInputTokens+ti.VideoInputTokens {
+		// Preserve compatibility with responses that only return total input
+		// tokens while still retaining the explicit image/video dimensions.
+		ti.TextInputTokens = ti.InputTokens - ti.ImageInputTokens - ti.VideoInputTokens
 	}
 	for _, modality := range interaction.Usage.OutputByModality {
 		switch strings.ToLower(modality.Modality) {

@@ -1,8 +1,10 @@
 package gemini
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -177,6 +179,9 @@ func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, erro
 func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info *relaycommon.RelayInfo) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	if c.GetBool("native_interactions_stream") && isOmniModel(info.OriginModelName) {
+		req.Header.Set("Accept", "text/event-stream")
+	}
 	req.Header.Set("x-goog-api-key", a.apiKey)
 	return nil
 }
@@ -266,7 +271,19 @@ func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, req
 
 // DoResponse handles upstream response, returns taskID etc.
 func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, taskErr *dto.TaskError) {
-	responseBody, err := io.ReadAll(resp.Body)
+	if resp == nil {
+		return "", nil, service.TaskErrorWrapper(errors.New("upstream response is nil"), "invalid_response", http.StatusBadGateway)
+	}
+	if resp.Body == nil {
+		return "", nil, service.TaskErrorWrapper(errors.New("upstream response body is nil"), "invalid_response", http.StatusBadGateway)
+	}
+	var responseBody []byte
+	var err error
+	if isOmniModel(info.OriginModelName) && c.GetBool("native_interactions_stream") {
+		responseBody, err = a.readOmniStream(c, resp, info)
+	} else {
+		responseBody, err = io.ReadAll(resp.Body)
+	}
 	if err != nil {
 		return "", nil, service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)
 	}
@@ -319,6 +336,110 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	}
 	c.JSON(http.StatusOK, ov)
 	return taskID, responseBody, nil
+}
+
+// readOmniStream forwards the upstream SSE blocks unchanged, records the
+// interaction ID, and retrieves the completed interaction once the stream
+// terminates. The retrieved JSON is returned to the normal task/billing path.
+func (a *TaskAdaptor) readOmniStream(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) ([]byte, error) {
+	var emit func([]byte)
+	if value, ok := c.Get("native_interactions_sse_writer"); ok {
+		emit, _ = value.(func([]byte))
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	var event bytes.Buffer
+	interactionID := ""
+	completed := false
+	flushEvent := func() {
+		if event.Len() == 0 {
+			return
+		}
+		rawEvent := append([]byte(nil), event.Bytes()...)
+		if emit != nil {
+			emit(rawEvent)
+		}
+		for _, line := range strings.Split(string(rawEvent), "\n") {
+			line = strings.TrimSuffix(line, "\r")
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			var payload map[string]any
+			if common.Unmarshal([]byte(data), &payload) != nil {
+				continue
+			}
+			if id, ok := payload["interaction_id"].(string); ok && id != "" {
+				interactionID = id
+			}
+			if interaction, ok := payload["interaction"].(map[string]any); ok {
+				if id, ok := interaction["id"].(string); ok && id != "" {
+					interactionID = id
+				}
+				if status, ok := interaction["status"].(string); ok && isOmniTerminalStatus(status) {
+					completed = true
+				}
+			}
+			if eventType, ok := payload["event_type"].(string); ok && eventType == "interaction.completed" {
+				completed = true
+			}
+			if id, ok := payload["id"].(string); ok && id != "" {
+				interactionID = id
+			}
+			if status, ok := payload["status"].(string); ok && isOmniTerminalStatus(status) {
+				completed = true
+			}
+		}
+		event.Reset()
+	}
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(bytes.TrimSpace(line)) == 0 {
+			flushEvent()
+			continue
+		}
+		if event.Len() > 0 {
+			event.WriteByte('\n')
+		}
+		_, _ = event.Write(line)
+	}
+	flushEvent()
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if interactionID == "" {
+		return nil, errors.New("upstream SSE did not contain interaction id")
+	}
+	if !completed {
+		return nil, errors.New("upstream SSE ended before interaction.completed")
+	}
+
+	finalResp, err := a.FetchTask(a.baseURL, a.apiKey, map[string]any{
+		"task_id": markOmniTaskID(interactionID),
+	}, info.ChannelSetting.Proxy)
+	if err != nil {
+		return nil, fmt.Errorf("fetch completed interaction: %w", err)
+	}
+	if finalResp == nil || finalResp.Body == nil {
+		return nil, errors.New("completed interaction response body is nil")
+	}
+	defer finalResp.Body.Close()
+	if finalResp.StatusCode < 200 || finalResp.StatusCode >= 300 {
+		body, _ := io.ReadAll(finalResp.Body)
+		return nil, fmt.Errorf("fetch completed interaction returned HTTP %d: %s", finalResp.StatusCode, string(body))
+	}
+	return io.ReadAll(finalResp.Body)
+}
+
+func isOmniTerminalStatus(status string) bool {
+	switch strings.ToLower(status) {
+	case "completed", "failed", "cancelled", "incomplete":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *TaskAdaptor) GetModelList() []string {
@@ -478,7 +599,8 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 		}
 	}
 	if resultURL != "" {
-		if strings.HasPrefix(resultURL, "http") || strings.HasPrefix(resultURL, "data:") {
+		if strings.HasPrefix(resultURL, "http") || strings.HasPrefix(resultURL, "data:") ||
+			(isOmniModel(modelName) && strings.HasPrefix(resultURL, "gs://")) {
 			video.URL = resultURL
 			video.VideoURL = resultURL
 			video.SetMetadata("url", resultURL)

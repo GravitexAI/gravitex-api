@@ -1794,7 +1794,10 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	}
 
 	vr, hasVR := ratio_setting.GetVideoRatio(modelName)
-	ratioMode := hasVR && vr != 0
+	// Gemini Omni has separate input/text-output/video-output prices. Its
+	// videoRatio config describes the input modality price and must not route
+	// it into the generic video multiplier billing branch.
+	ratioMode := hasVR && vr != 0 && !isGeminiOmniVideoModel(modelName)
 
 	actualQuota := 0
 	logPromptTokens := 0
@@ -1836,6 +1839,9 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		logPromptTokens = inputTokens
 		logCompletionTokens = videoTokens + textTokens
 		otherMap["input_tokens"] = inputTokens
+		otherMap["input_text_tokens"] = taskResult.TextInputTokens
+		otherMap["input_image_tokens"] = taskResult.ImageInputTokens
+		otherMap["input_video_tokens"] = taskResult.VideoInputTokens
 		otherMap["text_output_tokens"] = textTokens
 		otherMap["video_output_tokens"] = videoTokens
 		otherMap["input_price_per_million_tokens"] = 1.5

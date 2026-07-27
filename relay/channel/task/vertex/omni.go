@@ -43,36 +43,7 @@ func buildVertexOmniURL(baseURL, key string) (string, error) {
 }
 
 func buildVertexOmniBody(req relaycommon.TaskSubmitReq) ([]byte, error) {
-	metadata := req.Metadata
-	if metadata == nil {
-		metadata = map[string]interface{}{}
-	}
-	task := "text_to_video"
-	contents := []map[string]interface{}{{"type": "text", "text": req.Prompt}}
-	if image, ok := metadata["image"].(string); ok && strings.TrimSpace(image) != "" {
-		task = "image_to_video"
-		parsed, err := taskgemini.ParseImageInput(image)
-		if err != nil {
-			return nil, fmt.Errorf("image conversion failed: %w", err)
-		}
-		if parsed != nil {
-			contents = append(contents, map[string]interface{}{
-				"type": "image", "data": parsed.BytesBase64Encoded, "mime_type": parsed.MimeType,
-			})
-		}
-	}
-	duration := vertexSanitizeDurationSeconds(metadata)
-	body := map[string]interface{}{
-		"model":             vertexOmniModelName,
-		"input":             contents,
-		"generation_config": map[string]interface{}{"video_config": map[string]string{"task": task}},
-		"response_format": map[string]string{
-			"type": "video", "aspect_ratio": vertexSanitizeAspectRatio(metadata),
-			"duration": fmt.Sprintf("%ds", duration), "delivery": "inline",
-		},
-		"background": true,
-	}
-	return common.Marshal(body)
+	return taskgemini.BuildOmniRequestBody(req)
 }
 
 func parseVertexOmniTaskResult(body []byte) (*relaycommon.TaskInfo, error) {
