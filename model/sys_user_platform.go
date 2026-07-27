@@ -7,6 +7,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const defaultSysUserPlatformID = 1
+
 // GetSysUserPlatformID returns the platform ownership recorded by the Java
 // backend. Go users.id and Java sys_user.user_id are the shared identity.
 func GetSysUserPlatformID(userID int) (int, error) {
@@ -26,7 +28,10 @@ func GetSysUserPlatformID(userID int) (int, error) {
 		return 0, result.Error
 	}
 	if row.PlatformID == nil {
-		return 0, fmt.Errorf("sys_user %d has no platform_id", userID)
+		return defaultSysUserPlatformID, nil
+	}
+	if *row.PlatformID <= 0 {
+		return defaultSysUserPlatformID, nil
 	}
 	return *row.PlatformID, nil
 }
