@@ -20,7 +20,7 @@ func GetSysUserPlatformID(userID int) (int, error) {
 		PlatformID *int `gorm:"column:platform_id"`
 	}
 	result := DB.Table("sys_user").Select("platform_id").
-		Where("user_id = ?", userID).First(&row)
+		Where("user_id = ? AND del_flag = ?", userID, "0").First(&row)
 	if result.Error != nil {
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return 0, fmt.Errorf("sys_user %d not found: %w", userID, result.Error)
@@ -48,7 +48,7 @@ func GetUserByUsernameAndPlatform(username string, platformID int) (*User, error
 		UserID int `gorm:"column:user_id"`
 	}
 	result := DB.Table("sys_user").Select("user_id").
-		Where("user_name = ? AND platform_id = ?", username, platformID).
+		Where("user_name = ? AND platform_id = ? AND del_flag = ?", username, platformID, "0").
 		First(&row)
 	if result.Error != nil {
 		return nil, result.Error
