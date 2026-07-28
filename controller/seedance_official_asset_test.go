@@ -353,6 +353,51 @@ func TestSeedanceOfficialAssetDispatch_CreateVisualValidateSession_ForcesChinese
 	assert.Contains(t, h5Link, "lng=zh", "H5Link must have Simplified Chinese lng param")
 }
 
+func TestSeedanceOfficialAssetDispatch_CreateVisualValidateSession_ForcesChineseH5Link_ResultEnvelope(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		return map[string]interface{}{
+			"ResponseMetadata": map[string]interface{}{"Action": action},
+			"Result": map[string]interface{}{
+				"BytedToken":  "tok-1",
+				"CallbackURL": body["CallbackURL"],
+				"H5Link":      "https://byteplus.example/verify?foo=bar",
+			},
+		}, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 42)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=CreateVisualValidateSession&Version=2024-01-01",
+		strings.NewReader(`{}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]interface{}
+	require.NoError(t, common.Unmarshal(w.Body.Bytes(), &resp))
+
+	_, hasTopLevelH5Link := resp["H5Link"]
+	assert.False(t, hasTopLevelH5Link, "H5Link must not be duplicated at top level when upstream nests it in Result")
+
+	result, ok := resp["Result"].(map[string]interface{})
+	require.True(t, ok, "Result envelope must be preserved")
+
+	h5Link, ok := result["H5Link"].(string)
+	require.True(t, ok, "Result.H5Link must be present")
+	assert.Contains(t, h5Link, "lang=zh-CN", "Result.H5Link must have Simplified Chinese lang param")
+	assert.Contains(t, h5Link, "lng=zh", "Result.H5Link must have Simplified Chinese lng param")
+
+	assert.Equal(t, "tok-1", result["BytedToken"], "Result.BytedToken must remain reachable alongside the rewritten H5Link")
+}
+
 func TestSeedanceOfficialAssetDispatch_CreateVisualValidateSession_QuotaExceeded_Returns403WithoutCallingUpstream(t *testing.T) {
 	setupSeedanceAssetTestDB(t)
 	newSeedanceAssetChannel(t, 1)

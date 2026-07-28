@@ -161,8 +161,13 @@ func SeedanceOfficialAssetDispatch(c *gin.Context) {
 	if action == "CreateVisualValidateSession" {
 		// ByteplusRawAction bypasses service.ByteplusCreateVisualValidateSession, so the
 		// Simplified Chinese lang/lng rewrite it normally applies never runs here — do it
-		// ourselves so the H5 verification page doesn't default to English.
-		if h5Link := seedanceExtractStringField(resp, "H5Link"); h5Link != "" {
+		// ourselves. BytePlus places H5Link inside Result; rewrite it there so the
+		// frontend's Result-envelope extraction path still finds BytedToken alongside it.
+		if result, ok := resp["Result"].(map[string]interface{}); ok {
+			if h5Link, ok := result["H5Link"].(string); ok && h5Link != "" {
+				result["H5Link"] = service.ForceH5LinkChinese(h5Link)
+			}
+		} else if h5Link, ok := resp["H5Link"].(string); ok && h5Link != "" {
 			resp["H5Link"] = service.ForceH5LinkChinese(h5Link)
 		}
 	}
