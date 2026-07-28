@@ -123,6 +123,34 @@ func SeedanceOfficialAssetDispatch(c *gin.Context) {
 			return
 		}
 	}
+	if action == "ListAssetGroups" || action == "ListAssets" {
+		// BytePlus returns all groups/assets for the channel AK/SK — we must
+		// restrict to the current user's own groups by injecting GroupIds.
+		userGroups, err := model.GetUserAssetGroupsByUserIdAndChannelIds(userId, []int{ch.Id})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, seedanceAssetErrorEnvelope(action, "InternalError", "failed to query user asset groups"))
+			return
+		}
+		if len(userGroups) == 0 {
+			c.JSON(http.StatusOK, map[string]interface{}{
+				"ResponseMetadata": map[string]interface{}{
+					"Action": action, "Version": "2024-01-01", "Service": "ark",
+				},
+				"Result": map[string]interface{}{"Items": []interface{}{}, "TotalCount": 0},
+			})
+			return
+		}
+		groupIds := make([]string, len(userGroups))
+		for i, g := range userGroups {
+			groupIds[i] = g.GroupId
+		}
+		filter, _ := body["Filter"].(map[string]interface{})
+		if filter == nil {
+			filter = map[string]interface{}{}
+		}
+		filter["GroupIds"] = groupIds
+		body["Filter"] = filter
+	}
 
 	resp, err := seedanceAssetRawAction(cfg, action, body)
 	if err != nil {

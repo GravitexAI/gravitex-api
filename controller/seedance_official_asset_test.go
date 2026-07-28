@@ -83,6 +83,9 @@ func TestSeedanceOfficialAssetDispatch_UnsupportedAction_Returns400(t *testing.T
 func TestSeedanceOfficialAssetDispatch_ListAssets_ForwardsBodyAndReturnsRawResponse(t *testing.T) {
 	setupSeedanceAssetTestDB(t)
 	newSeedanceAssetChannel(t, 1)
+	require.NoError(t, model.InsertUserAssetGroup(&model.UserAssetGroup{
+		UserId: 1, ChannelId: 1, GroupId: "group-1", GroupType: model.GroupTypeAIGC,
+	}))
 
 	var capturedAction string
 	var capturedBody map[string]interface{}
@@ -101,7 +104,7 @@ func TestSeedanceOfficialAssetDispatch_ListAssets_ForwardsBodyAndReturnsRawRespo
 	c, _ := gin.CreateTestContext(w)
 	c.Set("id", 1)
 	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
-	reqBody := `{"Filter":{"GroupIds":["group-1"],"SortBy":"CreateTime","SortOrder":"Desc"},"PageNumber":1,"PageSize":10}`
+	reqBody := `{"Filter":{"SortBy":"CreateTime","SortOrder":"Desc"},"PageNumber":1,"PageSize":10}`
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=ListAssets&Version=2024-01-01", strings.NewReader(reqBody))
 	c.Request.Header.Set("Content-Type", "application/json")
 
@@ -111,6 +114,33 @@ func TestSeedanceOfficialAssetDispatch_ListAssets_ForwardsBodyAndReturnsRawRespo
 	assert.Equal(t, "ListAssets", capturedAction)
 	filter := capturedBody["Filter"].(map[string]interface{})
 	assert.Equal(t, "CreateTime", filter["SortBy"], "SortBy must be forwarded verbatim, not dropped")
+	assert.Equal(t, []string{"group-1"}, filter["GroupIds"], "GroupIds must be restricted to the user's own groups")
+	assert.Contains(t, w.Body.String(), `"TotalCount":0`)
+}
+
+func TestSeedanceOfficialAssetDispatch_ListAssetGroups_NoLocalGroups_ReturnsEmptyWithoutCallingUpstream(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+
+	called := false
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		called = true
+		return nil, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 1)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=ListAssetGroups&Version=2024-01-01", strings.NewReader(`{}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.False(t, called, "must not call upstream when the user owns no asset groups")
 	assert.Contains(t, w.Body.String(), `"TotalCount":0`)
 }
 
