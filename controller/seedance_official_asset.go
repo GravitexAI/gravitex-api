@@ -158,6 +158,15 @@ func SeedanceOfficialAssetDispatch(c *gin.Context) {
 		return
 	}
 
+	if action == "CreateVisualValidateSession" {
+		// ByteplusRawAction bypasses service.ByteplusCreateVisualValidateSession, so the
+		// Simplified Chinese lang/lng rewrite it normally applies never runs here — do it
+		// ourselves so the H5 verification page doesn't default to English.
+		if h5Link := seedanceExtractStringField(resp, "H5Link"); h5Link != "" {
+			resp["H5Link"] = service.ForceH5LinkChinese(h5Link)
+		}
+	}
+
 	if syncErr := syncSeedanceAssetLocalState(userId, ch.Id, action, body, resp); syncErr != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("[SeedanceAssetMirror] local sync failed action=%s err=%v", action, syncErr))
 	}

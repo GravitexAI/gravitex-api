@@ -324,6 +324,35 @@ func TestSeedanceOfficialAssetDispatch_CreateVisualValidateSession_ForcesCallbac
 	assert.Contains(t, w.Body.String(), "BytedToken")
 }
 
+func TestSeedanceOfficialAssetDispatch_CreateVisualValidateSession_ForcesChineseH5Link(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		return map[string]interface{}{"BytedToken": "tok-1", "H5Link": "https://byteplus.example/verify?foo=bar"}, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 42)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=CreateVisualValidateSession&Version=2024-01-01",
+		strings.NewReader(`{}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]interface{}
+	require.NoError(t, common.Unmarshal(w.Body.Bytes(), &resp))
+	h5Link, ok := resp["H5Link"].(string)
+	require.True(t, ok, "H5Link must be present in response")
+	assert.Contains(t, h5Link, "lang=zh-CN", "H5Link must have Simplified Chinese lang param")
+	assert.Contains(t, h5Link, "lng=zh", "H5Link must have Simplified Chinese lng param")
+}
+
 func TestSeedanceOfficialAssetDispatch_CreateVisualValidateSession_QuotaExceeded_Returns403WithoutCallingUpstream(t *testing.T) {
 	setupSeedanceAssetTestDB(t)
 	newSeedanceAssetChannel(t, 1)
