@@ -649,21 +649,14 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 
 			notifyData := dto.NewNotify(dto.NotifyTypeQuotaExceed, prompt, content, values)
 			if notifyType == dto.NotifyTypeWebhook {
-				webhookURL := userSetting.WebhookUrl
-				if webhookURL == "" {
-					webhookURL = DefaultQuotaWarningWebhookURL()
-				}
-				err := SendQuotaWarningWebhookNotify(
-					webhookURL,
-					userSetting.WebhookSecret,
-					notifyData,
-					int64(relayInfo.UserId),
+				err := SendQuotaWarningNotifyToAPIEnd(
+					relayInfo.UserId,
 					notifyType,
 					int64(relayInfo.UserQuota-consumeQuota),
 					int64(threshold),
 				)
 				if err != nil {
-					common.SysError(fmt.Sprintf("failed to send quota notify to user %d: %s", relayInfo.UserId, err.Error()))
+					common.SysError(fmt.Sprintf("failed to send webhook quota notify to Java for user %d: %s", relayInfo.UserId, err.Error()))
 				}
 				return
 			}
@@ -732,21 +725,14 @@ func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
 
 		notifyData := dto.NewNotify(dto.NotifyTypeQuotaExceed, prompt, content, values)
 		if notifyType == dto.NotifyTypeWebhook {
-			webhookURL := userSetting.WebhookUrl
-			if webhookURL == "" {
-				webhookURL = DefaultQuotaWarningWebhookURL()
-			}
-			err := SendQuotaWarningWebhookNotify(
-				webhookURL,
-				userSetting.WebhookSecret,
-				notifyData,
-				int64(relayInfo.UserId),
+			err := SendQuotaWarningNotifyToAPIEnd(
+				relayInfo.UserId,
 				notifyType,
 				remaining,
 				int64(threshold),
 			)
 			if err != nil {
-				common.SysError(fmt.Sprintf("failed to send subscription quota notify to user %d: %s", relayInfo.UserId, err.Error()))
+				common.SysError(fmt.Sprintf("failed to send webhook subscription quota notify to Java for user %d: %s", relayInfo.UserId, err.Error()))
 			}
 			return
 		}

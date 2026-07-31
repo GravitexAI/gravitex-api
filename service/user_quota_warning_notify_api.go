@@ -27,7 +27,7 @@ type quotaWarningNotifyResponse struct {
 
 const quotaWarningNotifyRedisKeyPrefix = "quota:warning:threshold:"
 
-// SendQuotaWarningNotifyToAPIEnd delegates email quota alerts to Java, which owns SMTP.
+// SendQuotaWarningNotifyToAPIEnd delegates all quota alerts to Java, which owns notification delivery.
 func SendQuotaWarningNotifyToAPIEnd(userID int, notifyType string, remainingQuota int64, quotaWarningThreshold int64) error {
 	redisKey := getQuotaWarningNotifyRedisKey(userID)
 	locked, err := acquireQuotaWarningNotifyLock(redisKey)
