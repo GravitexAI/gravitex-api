@@ -927,19 +927,12 @@ func redactVideoResponseBody(body []byte) []byte {
 	if err := common.Unmarshal(body, &m); err != nil {
 		return body
 	}
-	// Vertex AI: remove embedded base64 video bytes
+	// Keep Vertex AI embedded video bytes in task.Data so the content proxy and
+	// later task reads can reconstruct the generated video.
 	resp, _ := m["response"].(map[string]any)
 	if resp != nil {
-		delete(resp, "bytesBase64Encoded")
 		if v, ok := resp["video"].(string); ok {
 			resp["video"] = truncateBase64(v)
-		}
-		if vs, ok := resp["videos"].([]any); ok {
-			for i := range vs {
-				if vm, ok := vs[i].(map[string]any); ok {
-					delete(vm, "bytesBase64Encoded")
-				}
-			}
 		}
 	}
 	// Azure Video: if we injected a base64 data URI into "url", strip the data to keep DB small.
