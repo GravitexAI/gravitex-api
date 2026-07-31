@@ -125,13 +125,40 @@ func SeedanceOfficialAssetDispatch(c *gin.Context) {
 	}
 	if action == "ListAssetGroups" || action == "ListAssets" {
 		// BytePlus returns all groups/assets for the channel AK/SK — we must
-		// restrict to the current user's own groups by injecting GroupIds.
+		// restrict to the current user's own groups. When the client also
+		// requests specific GroupIds, intersect with the user's owned groups
+		// instead of overwriting the request outright, so callers can still
+		// filter down to a subset of their own groups.
 		userGroups, err := model.GetUserAssetGroupsByUserIdAndChannelIds(userId, []int{ch.Id})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, seedanceAssetErrorEnvelope(action, "InternalError", "failed to query user asset groups"))
 			return
 		}
-		if len(userGroups) == 0 {
+		userGroupIds := make(map[string]bool, len(userGroups))
+		for _, g := range userGroups {
+			userGroupIds[g.GroupId] = true
+		}
+
+		filter, _ := body["Filter"].(map[string]interface{})
+		if filter == nil {
+			filter = map[string]interface{}{}
+		}
+
+		var groupIds []string
+		if requested, ok := filter["GroupIds"].([]interface{}); ok && len(requested) > 0 {
+			for _, gid := range requested {
+				if s, ok := gid.(string); ok && userGroupIds[s] {
+					groupIds = append(groupIds, s)
+				}
+			}
+		} else {
+			groupIds = make([]string, 0, len(userGroups))
+			for _, g := range userGroups {
+				groupIds = append(groupIds, g.GroupId)
+			}
+		}
+
+		if len(groupIds) == 0 {
 			c.JSON(http.StatusOK, map[string]interface{}{
 				"ResponseMetadata": map[string]interface{}{
 					"Action": action, "Version": "2024-01-01", "Service": "ark",
@@ -140,14 +167,7 @@ func SeedanceOfficialAssetDispatch(c *gin.Context) {
 			})
 			return
 		}
-		groupIds := make([]string, len(userGroups))
-		for i, g := range userGroups {
-			groupIds[i] = g.GroupId
-		}
-		filter, _ := body["Filter"].(map[string]interface{})
-		if filter == nil {
-			filter = map[string]interface{}{}
-		}
+
 		filter["GroupIds"] = groupIds
 		body["Filter"] = filter
 	}

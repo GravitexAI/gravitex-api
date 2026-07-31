@@ -118,6 +118,74 @@ func TestSeedanceOfficialAssetDispatch_ListAssets_ForwardsBodyAndReturnsRawRespo
 	assert.Contains(t, w.Body.String(), `"TotalCount":0`)
 }
 
+func TestSeedanceOfficialAssetDispatch_ListAssets_ClientGroupIds_IntersectsWithOwnedGroups(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+	require.NoError(t, model.InsertUserAssetGroup(&model.UserAssetGroup{
+		UserId: 1, ChannelId: 1, GroupId: "group-1", GroupType: model.GroupTypeAIGC,
+	}))
+	require.NoError(t, model.InsertUserAssetGroup(&model.UserAssetGroup{
+		UserId: 1, ChannelId: 1, GroupId: "group-2", GroupType: model.GroupTypeAIGC,
+	}))
+
+	var capturedBody map[string]interface{}
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		capturedBody = body
+		return map[string]interface{}{
+			"ResponseMetadata": map[string]interface{}{"Action": "ListAssets"},
+			"Result":           map[string]interface{}{"Items": []interface{}{}, "TotalCount": 0},
+		}, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 1)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	// Client asks for a single owned group plus one it doesn't own — the
+	// unowned id must be dropped, not silently widened to all owned groups.
+	reqBody := `{"Filter":{"GroupIds":["group-2","group-not-owned"]},"PageNumber":1,"PageSize":10}`
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=ListAssets&Version=2024-01-01", strings.NewReader(reqBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	filter := capturedBody["Filter"].(map[string]interface{})
+	assert.Equal(t, []string{"group-2"}, filter["GroupIds"], "GroupIds must intersect the client's request with the user's owned groups")
+}
+
+func TestSeedanceOfficialAssetDispatch_ListAssets_ClientGroupIds_NoneOwned_ReturnsEmptyWithoutCallingUpstream(t *testing.T) {
+	setupSeedanceAssetTestDB(t)
+	newSeedanceAssetChannel(t, 1)
+	require.NoError(t, model.InsertUserAssetGroup(&model.UserAssetGroup{
+		UserId: 1, ChannelId: 1, GroupId: "group-1", GroupType: model.GroupTypeAIGC,
+	}))
+
+	called := false
+	original := seedanceAssetRawAction
+	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+		called = true
+		return nil, nil
+	}
+	t.Cleanup(func() { seedanceAssetRawAction = original })
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("id", 1)
+	c.Set(string(constant.ContextKeyUsingGroup), seedanceAssetTestGroup)
+	reqBody := `{"Filter":{"GroupIds":["group-not-owned"]},"PageNumber":1,"PageSize":10}`
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v3/seedance?Action=ListAssets&Version=2024-01-01", strings.NewReader(reqBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	SeedanceOfficialAssetDispatch(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.False(t, called, "upstream must not be called when the client's requested GroupIds don't intersect owned groups")
+	assert.Contains(t, w.Body.String(), `"TotalCount":0`)
+}
+
 func TestSeedanceOfficialAssetDispatch_ListAssetGroups_NoLocalGroups_ReturnsEmptyWithoutCallingUpstream(t *testing.T) {
 	setupSeedanceAssetTestDB(t)
 	newSeedanceAssetChannel(t, 1)
