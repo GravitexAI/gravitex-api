@@ -179,9 +179,6 @@ func authHelper(c *gin.Context, minRole int) {
 		c.Abort()
 		return
 	}
-	if !validatePlatformOrAbort(c, id.(int), false) {
-		return
-	}
 	// 防止不同newapi版本冲突，导致数据不通用
 	c.Header("Auth-Version", "864b7076dbcd0a3c01b5520316720ebf")
 	c.Set("username", username)
@@ -293,6 +290,11 @@ func authTokenHelper(c *gin.Context, minRole int) {
 			return
 		}
 	}
+	// access_token 访问 /api/token 也需按平台隔离：令牌属主平台必须等于请求平台。
+	// 仅对 access_token 生效：session 为内部登录、RuoYi JWT 已在解析时按平台锁定。
+	if useAccessToken && !validatePlatformOrAbort(c, id.(int), false) {
+		return
+	}
 	if status.(int) == common.UserStatusDisabled {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -315,9 +317,6 @@ func authTokenHelper(c *gin.Context, minRole int) {
 			"message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid),
 		})
 		c.Abort()
-		return
-	}
-	if !validatePlatformOrAbort(c, id.(int), false) {
 		return
 	}
 	// 防止不同newapi版本冲突，导致数据不通用
@@ -389,10 +388,6 @@ func TokenOrUserAuth() func(c *gin.Context) {
 		session := sessions.Default(c)
 		if id := session.Get("id"); id != nil {
 			if status, ok := session.Get("status").(int); ok && status == common.UserStatusEnabled {
-				userID, ok := id.(int)
-				if !ok || !validatePlatformOrAbort(c, userID, false) {
-					return
-				}
 				c.Set("id", id)
 				c.Next()
 				return
