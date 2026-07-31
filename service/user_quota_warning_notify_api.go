@@ -1,8 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -22,82 +27,68 @@ type quotaWarningNotifyResponse struct {
 
 const quotaWarningNotifyRedisKeyPrefix = "quota:warning:threshold:"
 
-//func SendQuotaWarningNotifyToAPIEnd(userID int, notifyType string, remainingQuota int64, quotaWarningThreshold int64) error {
-//	api := strings.TrimRight(strings.TrimSpace(os.Getenv("GRAVITEX_API_END")), "/")
-//	if api == "" {
-//		return fmt.Errorf("GRAVITEX_API_END not set")
-//	}
-//	redisKey := getQuotaWarningNotifyRedisKey(userID)
-//	locked, err := acquireQuotaWarningNotifyLock(redisKey)
-//	if err != nil {
-//		return err
-//	}
-//	if !locked {
-//		return nil
-//	}
-//
-//	reqBody := quotaWarningNotifyRequest{
-//		UserID:                userID,
-//		NotifyType:            notifyType,
-//		RemainingQuota:        remainingQuota,
-//		QuotaWarningThreshold: quotaWarningThreshold,
-//	}
-//
-//	jsonData, err := common.Marshal(reqBody)
-//	if err != nil {
-//		return fmt.Errorf("marshal quota warning notify request: %w", err)
-//	}
-//
-//	req, err := http.NewRequest(http.MethodPost, api+"/api/user/quota-warning-notify/send", bytes.NewBuffer(jsonData))
-//	if err != nil {
-//		return fmt.Errorf("create quota warning notify request: %w", err)
-//	}
-//	req.Header.Set("Content-Type", "application/json")
-//	if token, err := buildRuoYiBearerToken(userID); err != nil {
-//		return err
-//	} else if token != "" {
-//		req.Header.Set("Authorization", "Bearer "+token)
-//	}
-//
-//	client := GetHttpClient()
-//	if client.Timeout == 0 {
-//		client = &http.Client{Timeout: 30 * time.Second}
-//	}
-//
-//	resp, err := client.Do(req)
-//	if err != nil {
-//		releaseQuotaWarningNotifyLock(redisKey)
-//		return fmt.Errorf("call quota warning notify api: %w", err)
-//	}
-//	defer resp.Body.Close()
-//
-//	body, err := io.ReadAll(resp.Body)
-//	if err != nil {
-//		releaseQuotaWarningNotifyLock(redisKey)
-//		return fmt.Errorf("read quota warning notify response: %w", err)
-//	}
-//
-//	if resp.StatusCode != http.StatusOK {
-//		releaseQuotaWarningNotifyLock(redisKey)
-//		return fmt.Errorf("quota warning notify http %d: %s", resp.StatusCode, string(body))
-//	}
-//
-//	if len(body) == 0 {
-//		return nil
-//	}
-//
-//	var result quotaWarningNotifyResponse
-//	if err := common.Unmarshal(body, &result); err != nil {
-//		releaseQuotaWarningNotifyLock(redisKey)
-//		return fmt.Errorf("parse quota warning notify response: %w", err)
-//	}
-//	if result.Code != 200 {
-//		releaseQuotaWarningNotifyLock(redisKey)
-//		return fmt.Errorf("quota warning notify failed: %s", result.Msg)
-//	}
-//
-//	return nil
-//}
+// SendQuotaWarningNotifyToAPIEnd delegates email quota alerts to Java, which owns SMTP.
+func SendQuotaWarningNotifyToAPIEnd(userID int, notifyType string, remainingQuota int64, quotaWarningThreshold int64) error {
+	redisKey := getQuotaWarningNotifyRedisKey(userID)
+	locked, err := acquireQuotaWarningNotifyLock(redisKey)
+	if err != nil {
+		return err
+	}
+	if !locked {
+		return nil
+	}
+
+	api := strings.TrimRight(strings.TrimSpace(os.Getenv("GRAVITEX_API_END")), "/")
+	if api == "" {
+		api = strings.TrimRight(defaultQuotaWarningAPIEndFallback, "/")
+	}
+	reqBody := quotaWarningNotifyRequest{
+		UserID:                userID,
+		NotifyType:            notifyType,
+		RemainingQuota:        remainingQuota,
+		QuotaWarningThreshold: quotaWarningThreshold,
+	}
+	jsonData, err := common.Marshal(reqBody)
+	if err != nil {
+		releaseQuotaWarningNotifyLock(redisKey)
+		return fmt.Errorf("marshal quota warning notify request: %w", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, api+"/api/user/quota-warning-notify/send", bytes.NewReader(jsonData))
+	if err != nil {
+		releaseQuotaWarningNotifyLock(redisKey)
+		return fmt.Errorf("create quota warning notify request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := GetHttpClient()
+	if client.Timeout == 0 {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		releaseQuotaWarningNotifyLock(redisKey)
+		return fmt.Errorf("call quota warning notify api: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		releaseQuotaWarningNotifyLock(redisKey)
+		return fmt.Errorf("read quota warning notify response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		releaseQuotaWarningNotifyLock(redisKey)
+		return fmt.Errorf("quota warning notify http %d: %s", resp.StatusCode, string(body))
+	}
+	var result quotaWarningNotifyResponse
+	if err := common.Unmarshal(body, &result); err != nil {
+		releaseQuotaWarningNotifyLock(redisKey)
+		return fmt.Errorf("parse quota warning notify response: %w", err)
+	}
+	if result.Code != 200 {
+		releaseQuotaWarningNotifyLock(redisKey)
+		return fmt.Errorf("quota warning notify failed: %s", result.Msg)
+	}
+	return nil
+}
 
 func getQuotaWarningNotifyRedisKey(userID int) string {
 	return fmt.Sprintf("%s%d", quotaWarningNotifyRedisKeyPrefix, userID)

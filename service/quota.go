@@ -667,6 +667,18 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 				}
 				return
 			}
+			if notifyType == dto.NotifyTypeEmail {
+				err := SendQuotaWarningNotifyToAPIEnd(
+					relayInfo.UserId,
+					notifyType,
+					int64(relayInfo.UserQuota-consumeQuota),
+					int64(threshold),
+				)
+				if err != nil {
+					common.SysError(fmt.Sprintf("failed to send email quota notify to Java for user %d: %s", relayInfo.UserId, err.Error()))
+				}
+				return
+			}
 
 			err := NotifyUser(relayInfo.UserId, relayInfo.UserEmail, relayInfo.UserSetting, notifyData)
 			if err != nil {
@@ -735,6 +747,18 @@ func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
 			)
 			if err != nil {
 				common.SysError(fmt.Sprintf("failed to send subscription quota notify to user %d: %s", relayInfo.UserId, err.Error()))
+			}
+			return
+		}
+		if notifyType == dto.NotifyTypeEmail {
+			err := SendQuotaWarningNotifyToAPIEnd(
+				relayInfo.UserId,
+				notifyType,
+				remaining,
+				int64(threshold),
+			)
+			if err != nil {
+				common.SysError(fmt.Sprintf("failed to send subscription email quota notify to Java for user %d: %s", relayInfo.UserId, err.Error()))
 			}
 			return
 		}
