@@ -579,6 +579,14 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 
 	// 失败时把上游错误（如 Google RAI）写入 error 和 fail_reason，便于前端轮询展示
 	failReason := strings.TrimSpace(task.FailReason)
+	// Older completed tasks may have the embedded video bytes in task.Data but no
+	// URL in FailReason. Rebuild the data URL from the persisted upstream response
+	// so task fetches still return a playable result.
+	if task.Status == model.TaskStatusSuccess && failReason == "" && len(task.Data) > 0 {
+		if parsed, err := a.ParseTaskResult(task.Data); err == nil && parsed != nil {
+			failReason = strings.TrimSpace(parsed.Url)
+		}
+	}
 	if isVertexOmniModel(modelName) && failReason == "" {
 		failReason = taskgemini.OmniVideoURLFromTaskData(task.Data)
 	}
@@ -596,6 +604,8 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	if failReason != "" {
 		if strings.HasPrefix(failReason, "http") || strings.HasPrefix(failReason, "data:") {
 			extra.Url = failReason
+			v.URL = failReason
+			v.VideoURL = failReason
 		} else {
 			extra.FailReason = failReason
 		}
