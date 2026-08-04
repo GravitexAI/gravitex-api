@@ -396,7 +396,7 @@
 ### 渠道 / 协议
 | 功能 | 位置 | 说明 |
 |---|---|---|
-| 腾讯云 TokenHub 渠道 | `constant/channel.go` 的 `ChannelTypeTencentTokenHub = 61`、`APITypeTencentTokenHub` | 支持 OpenAI + Claude 双协议原生透传 |
+| 腾讯云 TokenHub 渠道 | `constant/channel.go` 的 `ChannelTypeTencentTokenHub = 61`、`APITypeTencentTokenHub`、`relay/channel/tokenhub/` 包 | 支持 OpenAI + Claude 双协议原生透传（`/v1/messages` + `x-api-key` + `anthropic-version`）、embeddings、completions。**⚠️ Base URL 必须是 `https://tokenhub.tencentcloudmaas.com`**（已确认正确）；官方 `relay/channel/tencent/dispatch.go` 用的是 `tokenhub.tencentmaas.com`，**不要让官方覆盖我们的域名**。官方那套是"腾讯渠道按 key 格式分流"，与我们的独立渠道并存不冲突 |
 | SeedanceGateway（川益网关）渠道 | `ChannelTypeSeedanceGateway = 62`、`relay/channel/task/seedancegateway/` | 网关模型适配 |
 | 渠道请求头支持用户传 + 配置默认 | `model/channel.go` 的 `HeaderOverride` / `GetHeaderOverride()` | 客户端可传自定义 header，渠道侧可配默认值 |
 | `anthropic_beta_target` override | `dto/channel_settings.go`、`relay/channel/claude/adaptor.go` 的 `ResolveBetaTarget` | Anthropic 类型渠道但上游实际是 Bedrock/Vertex 时，显式指定按哪个白名单过滤（可选值 `''`/`bedrock`/`bedrock-converse`/`vertex`/`direct`） |
@@ -478,6 +478,8 @@
 - [ ] AllowNegativeBalance（第 7.8 节）：`dto/user_settings.go` 字段在，`service/negative_balance.go` 在，**6 处扣费预检查放行判断都在**
 - [ ] Seedance 官方镜像（第 7.9 节）：`middleware/seedance_official_mirror.go`、`controller/seedance_official_{video,asset}.go` 在，`router/video-router.go` 里 `/api/v3/contents/generations` + `/api/v3/seedance` 路由挂载
 - [ ] 渠道类型常量未被覆盖：`ChannelTypeTencentTokenHub = 61`、`ChannelTypeSeedanceGateway = 62`（官方若新增渠道类型可能撞号，需重新编号）
+- [ ] TokenHub Base URL 仍为 `https://tokenhub.tencentcloudmaas.com`（`constant/channel.go` 第 129 行附近），**没被官方的 `tokenhub.tencentmaas.com` 覆盖**
+- [ ] `relay/channel/tokenhub/` 包还在（Claude 双协议支持，官方只有 OpenAI 兼容）
 - [ ] `AnthropicBetaTarget` / `AzureModelResponsesVersions` 在 `dto/channel_settings.go`，且消费方（`relay/channel/claude/adaptor.go`、`relay/channel/openai/adaptor.go`）还在
 - [ ] `service/relayconvert/responses_to_chat.go` 的 `UsageFromResponsesUsage` 里 `CacheWriteTokens` 透传还在（GPT-5.6 缓存写入计费）
 - [ ] `relay/channel/claude/media_source.go` 在（Claude 媒体 URL 转 base64）
