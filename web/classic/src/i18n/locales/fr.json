@@ -3685,6 +3685,11 @@
     "固定过期（命中后不刷新 TTL）": "Expiration fixe (ne pas renouveler le TTL en cas de correspondance)",
     "开启后，命中同一亲和渠道不会续期 TTL，缓存从首次写入起自然到期，到期后重新负载均衡；关闭时每次成功请求都会续期（滑动过期），只要持续有请求就会一直粘在同一渠道。": "Si activé, le fait d'utiliser le même canal d'affinité ne renouvelle pas le TTL. Le cache expire naturellement depuis la première écriture, ce qui permet un rééquilibrage périodique entre les canaux de même priorité. Si désactivé, chaque requête réussie renouvelle le TTL (expiration glissante), maintenant l'affinité tant que des requêtes continuent d'arriver.",
     "固定过期": "Expiration fixe",
-    "滑动过期": "Expiration glissante"
+    "滑动过期": "Expiration glissante",
+    "你正在使用旧版前端，该版本即将停止维护，部分功能可能无法使用。建议切换到新版前端以获得完整体验。": "Vous utilisez le frontend classique. Cette version ne sera bientôt plus maintenue et certaines fonctionnalités peuvent être indisponibles. Passez au nouveau frontend pour profiter de l’expérience complète.",
+    "你正在使用旧版前端，该版本即将停止维护，部分功能可能无法使用。请联系管理员切换到新版前端。": "Vous utilisez le frontend classique. Cette version ne sera bientôt plus maintenue et certaines fonctionnalités peuvent être indisponibles. Contactez un administrateur pour passer au nouveau frontend.",
+    "提示：如果切换后页面无法正常渲染，请清空浏览器缓存后重试。": "Conseil : si la page ne s’affiche pas correctement après le changement, videz le cache du navigateur puis réessayez.",
+    "旧版前端即将停止维护": "Le frontend classique ne sera bientôt plus maintenu",
+    "该条历史记录缺少审计字段。当前版本已支持记录服务器 IP、回调 IP、支付方式与系统版本等审计信息；这些字段仅会写入后续新产生的记录，历史记录无法自动补齐。": "Cet enregistrement historique date d'avant le suivi des informations d'audit et ne peut pas être complété rétroactivement. La version actuelle enregistre déjà l'IP du serveur, l'IP de rappel, le mode de paiement et la version du système pour les nouveaux paiements à venir."
   }
 }

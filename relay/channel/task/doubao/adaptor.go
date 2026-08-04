@@ -54,13 +54,18 @@ type requestPayload struct {
 	ExecutionExpiresAfter dto.IntValue   `json:"execution_expires_after,omitempty"`
 	GenerateAudio         *dto.BoolValue `json:"generate_audio,omitempty"`
 	Draft                 *dto.BoolValue `json:"draft,omitempty"`
-	Resolution            string         `json:"resolution,omitempty"`
-	Ratio                 string         `json:"ratio,omitempty"`
-	Duration              dto.IntValue   `json:"duration,omitempty"`
-	Frames                dto.IntValue   `json:"frames,omitempty"`
-	Seed                  dto.IntValue   `json:"seed,omitempty"`
-	CameraFixed           *dto.BoolValue `json:"camera_fixed,omitempty"`
-	Watermark             *dto.BoolValue `json:"watermark,omitempty"`
+	Tools                 []struct {
+		Type string `json:"type,omitempty"`
+	} `json:"tools,omitempty"`
+	SafetyIdentifier string         `json:"safety_identifier,omitempty"`
+	Priority         *dto.IntValue  `json:"priority,omitempty"`
+	Resolution       string         `json:"resolution,omitempty"`
+	Ratio            string         `json:"ratio,omitempty"`
+	Duration         *dto.IntValue  `json:"duration,omitempty"`
+	Frames           *dto.IntValue  `json:"frames,omitempty"`
+	Seed             *dto.IntValue  `json:"seed,omitempty"`
+	CameraFixed      *dto.BoolValue `json:"camera_fixed,omitempty"`
+	Watermark        *dto.BoolValue `json:"watermark,omitempty"`
 }
 
 type responsePayload struct {
@@ -128,18 +133,19 @@ func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info
 	return nil
 }
 
-// EstimateBilling 检测请求 metadata 中是否包含视频输入，返回视频折扣 OtherRatio。
+// EstimateBilling 根据请求 metadata 中的输出分辨率与是否包含视频输入，返回相对基准价的计费 OtherRatio。
 func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInfo) map[string]float64 {
 	req, err := relaycommon.GetTaskRequest(c)
 	if err != nil {
 		return nil
 	}
-	if hasVideoInMetadata(req.Metadata) {
-		if ratio, ok := GetVideoInputRatio(info.OriginModelName); ok {
-			return map[string]float64{"video_input": ratio}
-		}
+	hasVideo := hasVideoInMetadata(req.Metadata)
+	resolution, _ := req.Metadata["resolution"].(string)
+	ratio, ok := GetVideoInputRatio(info.OriginModelName, resolution, hasVideo)
+	if !ok || ratio == 1.0 {
+		return nil
 	}
-	return nil
+	return map[string]float64{"video_input": ratio}
 }
 
 // hasVideoInMetadata 直接检查 metadata 的 content 数组是否包含 video_url 条目，
@@ -527,7 +533,8 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 		r.Ratio = req.Ratio
 	}
 	if req.Duration > 0 {
-		r.Duration = dto.IntValue(req.Duration)
+		d := dto.IntValue(req.Duration)
+		r.Duration = &d
 	}
 	if req.GenerateAudio != nil {
 		b := dto.BoolValue(*req.GenerateAudio)
@@ -542,7 +549,8 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 		r.Watermark = &b
 	}
 	if req.Seed != nil {
-		r.Seed = dto.IntValue(*req.Seed)
+		s := dto.IntValue(*req.Seed)
+		r.Seed = &s
 	}
 	if req.ReturnLastFrame != nil {
 		b := dto.BoolValue(*req.ReturnLastFrame)

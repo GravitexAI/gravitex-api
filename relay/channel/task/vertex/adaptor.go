@@ -281,10 +281,11 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	includeAudio := vertexSanitizeGenerateAudio(metadata, req.GenerateAudio)
 	body.Parameters["generateAudio"] = includeAudio
 
-	info.PriceData.OtherRatios = map[string]float64{
+	// otherRatios 已被官方私有化，改用访问器写入
+	info.PriceData.ReplaceOtherRatios(map[string]float64{
 		"sampleCount":     float64(sampleCount),
 		"durationSeconds": float64(durationSeconds),
-	}
+	})
 
 	data, err := common.Marshal(body)
 	if err != nil {

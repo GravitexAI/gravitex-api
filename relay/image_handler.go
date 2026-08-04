@@ -247,8 +247,10 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	// calculation (both price-based and ratio-based paths).
 	// Adaptors may have already set a more accurate count from the
 	// upstream response; only set the default when they haven't.
-	if info.PriceData.UsePrice && info.PriceData.ImagePerImagePricing == nil { // structured image pricing already includes actual count and input cost
-		if _, hasN := info.PriceData.OtherRatios["n"]; !hasN {
+	// 保留 main-alpha 的 ImagePerImagePricing 判断（按张计费已含实际张数与输入成本），
+	// 同时用官方新的 HasOtherRatio 访问器（otherRatios 已私有化）。
+	if info.PriceData.UsePrice && info.PriceData.ImagePerImagePricing == nil {
+		if !info.PriceData.HasOtherRatio("n") {
 			info.PriceData.AddOtherRatio("n", float64(imageN))
 		}
 	}
