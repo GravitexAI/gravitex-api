@@ -305,6 +305,141 @@
 
 ---
 
+## 七点六、platform_id 多平台数据隔离
+
+**用途**：同一套 Go 服务同时服务多个平台（gravitex.ai / tennda.ai / gravitex.cn 等），用 `platform_id` 把用户/token/日志数据互相隔离，A 平台的客户看不到 B 平台的数据。
+
+- **开关**：环境变量 `PLATFORM_ISOLATION_ENABLED`（默认跟随 `RUOYI_AUTH_ENABLED`）
+- **文件**：`middleware/platform.go` + `middleware/platform_test.go`
+- **context key**：`platform_id`
+- **隔离范围（重要）**：只对**客户流量**生效 —— API key / access_token 访问 `/api/token` / RuoYi JWT。**内部登录和 session 放行**，否则管理端会看不到数据
+- **配套**：`sys_user` 软删过滤（Java 端删除的用户不能再通过 platform 查询漏出来）
+- **合并时注意**：官方没有这个概念，`middleware/platform.go` 是纯新增文件不会冲突；但 `common/init.go` 里的 `PlatformIsolationEnabled = GetEnvOrDefaultBool(...)` 那行容易在冲突时被丢
+
+---
+
+## 七点七、企业账号体系（主账号 / 子账号）
+
+**用途**：企业客户有一个主账号 + 多个子账号，主账号不能自己建 apikey（必须由 Java 管理端下发），子账号的模型范围受企业 `allowedModels` 收敛。
+
+### 数据表（Java 端写入，Go 端只读 + AutoMigrate 建表）
+- `t_enterprise_user` — `model/enterprise.go` 的 `EnterpriseUser`
+- `t_enterprise_info` — `model/enterprise.go` 的 `EnterpriseInfo`
+
+### 关键函数
+- `model.IsEnterpriseApikeyRestrictedOwner(userId)` — 判断是否是"受限的企业主账号"
+- `model.GetEnterpriseInfoByUserId(userId)` — 取企业信息
+- `controller.capTokenLimitsForEnterpriseSubAccount(...)` — 按企业 allowedModels 收敛子账号 token 的模型/厂商范围
+
+### 行为约束
+- **拦截**：企业主账号创建/修改 apikey 直接拒绝
+- **fail-open**：守卫查询出错时**放行不阻断**（`037fe0901`），避免 DB 抖动导致企业客户全线不可用
+- **告警**：子账号敏感操作回调 Java 告警（`service/sensitive_op_notify.go` 的 `postEnterpriseAlert`）
+  - apikey 未设 IP 白名单事件告警
+  - apikey 日消费阈值告警
+
+**合并时注意**：`model/task_cas_test.go` 的 AutoMigrate 列表和 truncateTables 里必须包含 `EnterpriseUser` / `EnterpriseInfo` / `t_enterprise_user` / `t_enterprise_info`，否则企业相关测试全挂
+
+---
+
+## 七点八、允许用户欠费继续使用（AllowNegativeBalance）
+
+**用途**：管理员给特定用户开白名单，钱包额度 <= 0 时不拦截请求（先用后付 / 大客户信用额度场景）。
+
+- **字段**：`dto.UserSetting.AllowNegativeBalance`（`dto/user_settings.go`）
+- **helper**：`service.IsNegativeBalanceAllowed(c)`（`service/negative_balance.go`）
+- **放行点**：**6 处**钱包扣费预检查都要判断这个开关（改动扣费链路时别漏）
+- **保护**：`UpdateUserSetting` 显式保留 `AllowNegativeBalance`，防止用户自己调接口清掉授权
+- **管理入口**：`UpdateUser` 支持 admin 修改（白名单字段）；classic 前端 `EditUserModal.jsx` 有"允许透支使用"开关
+- **设计文档**：见 commit `c6fab6838` 引入的设计文档
+
+**合并时注意**：官方合并如果重写了扣费预检查逻辑，6 处放行判断很容易被漏掉 → 表现是白名单用户欠费后被拦
+
+---
+
+## 七点九、Seedance 2.0 官方镜像（BytePlus 原生 API 兼容层）
+
+**用途**：让客户可以用**火山/BytePlus 官方 SDK 的原始请求格式**直接打到我们的网关，请求/响应体字节级一致，客户端零改造迁移。
+
+### 路由（`router/video-router.go`）
+| 路径 | 说明 |
+|---|---|
+| `POST /api/v3/contents/generations/tasks` | 提交视频生成任务 |
+| `GET /api/v3/contents/generations/tasks/:id` | 查询任务 |
+| `DELETE /api/v3/contents/generations/tasks/:id`（cancel router） | 取消任务 |
+| `POST /api/v3/seedance` | 素材库 Action 分发入口 |
+
+中间件链：`SeedanceOfficialMirror()` → `TokenAuth()` → `AssetResolveChannel()` → `Distribute()`
+
+### 文件
+- `middleware/seedance_official_mirror.go` — 请求改写中间件（把官方格式转成内部格式）
+- `controller/seedance_official_video.go` — 视频生成镜像处理器（含取消端点、错误响应体原样透传、查询响应体原样透传）
+- `controller/seedance_official_asset.go` — 素材库 Action 分发（创建/更新/删除同步写本地表）
+- 对应 `_test.go` 文件都要保留
+
+### 关键行为
+- **响应体原样透传**：错误和查询响应都不做包装，保持和官方字节一致
+- **model_mapping 重定向**：官方镜像路径也要应用渠道的 model_mapping（`830af253c`）
+- **素材库用户隔离**：`ListAssets` / `ListAssetGroups` 的 `GroupIds` 过滤条件与**用户名下分组取交集**，不是直接覆盖（`b7bc636f7`）—— 否则 A 用户能看到 B 用户的素材
+- **CreateVisualValidateSession**：H5 链接强制中文，且中文改写迁移到 `Result` 内嵌 `H5Link`（不能破坏前端 Result 信封解析）
+- **素材库配额时序**：见 `bad39dff3`
+
+### doubao 适配器配套
+`relay/channel/task/doubao/` 里新增了：原始请求体透传分支、原始响应体透传分支、取消任务上游调用
+
+**合并时注意**：这一整套是 main-alpha 独有的大功能（20+ commit），官方完全没有。所有 `seedance_official_*` 文件和 `/api/v3/*` 路由都不能丢
+
+---
+
+## 七点十、本轮（2026-07 前后）其它 main-alpha 独有改动
+
+### 渠道 / 协议
+| 功能 | 位置 | 说明 |
+|---|---|---|
+| 腾讯云 TokenHub 渠道 | `constant/channel.go` 的 `ChannelTypeTencentTokenHub = 61`、`APITypeTencentTokenHub` | 支持 OpenAI + Claude 双协议原生透传 |
+| SeedanceGateway（川益网关）渠道 | `ChannelTypeSeedanceGateway = 62`、`relay/channel/task/seedancegateway/` | 网关模型适配 |
+| 渠道请求头支持用户传 + 配置默认 | `model/channel.go` 的 `HeaderOverride` / `GetHeaderOverride()` | 客户端可传自定义 header，渠道侧可配默认值 |
+| `anthropic_beta_target` override | `dto/channel_settings.go`、`relay/channel/claude/adaptor.go` 的 `ResolveBetaTarget` | Anthropic 类型渠道但上游实际是 Bedrock/Vertex 时，显式指定按哪个白名单过滤（可选值 `''`/`bedrock`/`bedrock-converse`/`vertex`/`direct`） |
+| Azure 模型特定 Responses API 版本 | `dto/channel_settings.go` 的 `AzureModelResponsesVersions`、`relay/channel/openai/adaptor.go:143` | 和普通 API 版本 `AzureModelApiVersions` 独立配置 |
+| 腾讯云 / TokenHub 加入 stream_options 白名单 | `streamSupportedChannels` | |
+| AWS Bedrock InvokeModel 对 Claude 4.5+ 放行 structured outputs | `relay/channel/aws/` | |
+| Claude 媒体 URL 输入支持 | `relay/channel/claude/media_source.go` | image/document URL 自动转 base64；Vertex 与 Anthropic 兼容渠道都要补；下载失败**降级透传**不报错；下载请求带浏览器 UA/Accept 头 |
+| 渠道亲和性滑动 TTL 修复 | `middleware/distributor.go` 的 `MarkChannelAffinityUsed` | 修复同优先级渠道无法负载均衡 |
+| 上游连接中断 body 回退重试 | `common/body_storage.go`、`relay/channel/api_request.go` | `do request failed` 日志显示真实原因且不暴露 URL |
+
+### 计费
+| 功能 | 位置 | 说明 |
+|---|---|---|
+| GPT-5.6 显式 prompt cache + cache_write_tokens | `dto/openai_response.go`、`service/text_quota.go`、`service/tiered_settle.go`、`service/relayconvert/responses_to_chat.go` | **`UsageFromResponsesUsage` 里必须透传 `CacheWriteTokens`**，流式和非流式都走这个函数 |
+| Gemini Omni 视频输入模态计费 + token 持久化 | `relay/channel/gemini/`、`controller/task_video.go`、`service/task_billing.go` | `has_video_input` 字段 |
+| realtime WSS 计费完善 | `relay/channel/openai/relay_realtime.go` | 记录缓存文本/音频 token，补全音频/图片缓存倍率，日志记录**会话总用量**，修复 `CachedTokensDetails` 跨轮累积 |
+| dola-seedream-5-0-pro-260628 图片计费 | `relay/helper/image_billing.go` | |
+| veo 4k 分辨率解析修复 | `relay/channel/task/gemini/adaptor.go:797`、`billing.go` | 原来 `4k` 被解析成 `4kp` 导致误按 720p 计价 |
+| veo-3.1-generate-001 配置 | | |
+| web 搜索工具计费展示口径 | | 改为**折后美元** |
+| gpt-image 参数校验交上游 | | 支持 `quality=auto` 等合法值；生图空 prompt 由 500 改 400；Gemini 无图时响应带模型文字说明 |
+
+### 模型管理
+| 功能 | 位置 | 说明 |
+|---|---|---|
+| 模型厂商（Vendor）管理 | `model/vendor_meta.go` 的 `Vendor`、`model/pricing.go` | 新增/编辑模型时保存厂商；返回模型时带厂商；按厂商限制模型可见范围 |
+| token 支持 vendor 限制 | `model/token.go` 的 vendor limits | 与企业子账号收敛联动 |
+
+### 通知 / 告警
+| 功能 | 位置 | 说明 |
+|---|---|---|
+| 额度预警 webhook 默认指向 Java | `service/quota.go` 的 `DefaultQuotaWarningWebhookURL` | 地址可用环境变量覆盖 |
+| 邮件通知文案改造（含日限额） | `common/email.go` / notify 相关 | wpr 多次迭代 |
+| 子账号敏感操作回调 Java 告警 | `service/sensitive_op_notify.go` | |
+
+### 运维
+| 功能 | 位置 | 说明 |
+|---|---|---|
+| 请求追踪响应头 `X-Api-Request-Id` | `middleware/request-id.go` | |
+| readiness / liveness probe initial delay 增大 | k8s 部署配置 | |
+
+---
+
 ## 八、依赖包
 
 | 依赖 | 版本 | 用途 |
@@ -338,6 +473,17 @@
   - `controller/oper_log.go` 还在，路由 `/api/oper-log/` 挂载
   - classic 前端 `components/oper-log/OperLogConfirmModal.jsx` 还在，且 4 处触发点（模型倍率/分组倍率/工具定价/渠道日志按钮）都能触发确认对话框
   - `FIELD_LABELS` 里的 23 个字段没被删（若官方新增倍率字段，同步补进 FIELD_LABELS）
+- [ ] platform_id 隔离（第 7.6 节）：`middleware/platform.go` 在，`common/init.go` 里 `PlatformIsolationEnabled` 读取还在
+- [ ] 企业账号体系（第 7.7 节）：`model/enterprise.go` 在，`model/task_cas_test.go` 的 AutoMigrate/truncate 含 Enterprise 表
+- [ ] AllowNegativeBalance（第 7.8 节）：`dto/user_settings.go` 字段在，`service/negative_balance.go` 在，**6 处扣费预检查放行判断都在**
+- [ ] Seedance 官方镜像（第 7.9 节）：`middleware/seedance_official_mirror.go`、`controller/seedance_official_{video,asset}.go` 在，`router/video-router.go` 里 `/api/v3/contents/generations` + `/api/v3/seedance` 路由挂载
+- [ ] 渠道类型常量未被覆盖：`ChannelTypeTencentTokenHub = 61`、`ChannelTypeSeedanceGateway = 62`（官方若新增渠道类型可能撞号，需重新编号）
+- [ ] `AnthropicBetaTarget` / `AzureModelResponsesVersions` 在 `dto/channel_settings.go`，且消费方（`relay/channel/claude/adaptor.go`、`relay/channel/openai/adaptor.go`）还在
+- [ ] `service/relayconvert/responses_to_chat.go` 的 `UsageFromResponsesUsage` 里 `CacheWriteTokens` 透传还在（GPT-5.6 缓存写入计费）
+- [ ] `relay/channel/claude/media_source.go` 在（Claude 媒体 URL 转 base64）
+- [ ] `common/body_storage.go` 在（上游中断 body 回退重试）
+- [ ] `model/vendor_meta.go` 在（模型厂商管理）
+- [ ] 全仓库无残留旧 DB API：`grep -rn "common.UsingSQLite\|common.UsingMySQL\|common.UsingPostgreSQL\|common.UsingClickHouse\|common.LogSqlType" --include="*.go" .` 应为空
 - [ ] Go build 通过
 - [ ] `go test ./model/... ./relay/channel/claude/...` 关键回归通过：
   - `TestSumUsedQuotaDoesNotResetQuotaByRpmTpmScan`
