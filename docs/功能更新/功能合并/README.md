@@ -156,3 +156,8 @@ touch web/classic/dist/index.html web/default/dist/index.html
 | 2026-04-28 → 2026-06-17 | 202 | 双前端架构 / 模型性能看板 / 安全审计 / Waffo Pancake | [20260617/](20260617/) |
 | 2026-06-17 → 2026-06-22 | (少量) | (见文档) | [20260622/](20260622/) |
 | 2026-06-22 → 2026-07-02 | 48 | authz+SystemTaskRunner / relayconvert 重构 / channel 路由抽离 / advanced custom editor | [20260702/](20260702/) |
+| 2026-07-02 → 2026-08-04 | 78（合到安全点 `df01273b9`） | 计费溢出加固 / SSRF 防护 / PriceData 封装 / GPT-5.6 倍率 / 渠道列宽 / 订阅额度重置。同轮还合了 main-alpha 145 个 commit | [20260804/](20260804/) |
+
+### ⚠️ 官方合并未完成 —— 见 [官方合并待办追踪.md](官方合并待办追踪.md)
+
+官方 main 还有 **110 个 commit 待合**，因为官方做了 3 次破坏性重构（删 `controller/task_video.go`、删整个 `web/classic/`、`dto/` → `relaykit/dto/`）。已按阶段拆好计划，同时列出了 web/classic → 官方新 `web/` 前端的迁移清单。**每次继续合并前先读那份文档。**
