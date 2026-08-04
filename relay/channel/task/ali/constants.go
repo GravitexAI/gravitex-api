@@ -18,6 +18,9 @@ var ModelList = []string{
 	"happyhorse-1.0-t2v", // HappyHorse 1.0 文生视频
 	"happyhorse-1.0-i2v", // HappyHorse 1.0 图生视频
 	"happyhorse-1.0-r2v", // HappyHorse 1.0 参考生视频
+	"happyhorse-1.1-t2v", // HappyHorse 1.1 文生视频
+	"happyhorse-1.1-i2v", // HappyHorse 1.1 图生视频
+	"happyhorse-1.1-r2v", // HappyHorse 1.1 参考生视频
 	// wan2.1 系列
 	"wan2-1-14b-i2v-250225", // 万相 2.1 14B 图生视频
 	// wan2.2 系列
