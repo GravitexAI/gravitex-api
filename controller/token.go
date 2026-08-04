@@ -3,16 +3,24 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
+
+// isAllowIpsBlank 判断出口 IP 白名单是否为空（nil、空串或仅含空白字符）。
+func isAllowIpsBlank(allowIps *string) bool {
+	return allowIps == nil || strings.TrimSpace(*allowIps) == ""
+}
 
 func buildMaskedTokenResponse(token *model.Token) *model.Token {
 	if token == nil {
@@ -159,9 +167,52 @@ func GetTokenUsage(c *gin.Context) {
 			"unlimited_quota":      token.UnlimitedQuota,
 			"model_limits":         token.GetModelLimitsMap(),
 			"model_limits_enabled": token.ModelLimitsEnabled,
+			"vendor_limits":        token.GetVendorLimitsMap(),
 			"expires_at":           expiredAt,
 		},
 	})
+}
+
+// capTokenLimitsForEnterpriseSubAccount keeps the existing enterprise default
+// for tokens without an explicit restriction. Explicit model/vendor limits are
+// persisted as submitted and take precedence for that token.
+func capTokenLimitsForEnterpriseSubAccount(userId int, submittedEnabled bool, submittedModelLimits string, submittedVendorLimits string) (bool, string, string) {
+	allowed, restricted, err := model.GetSubAccountAllowedModelSet(userId)
+	if err != nil {
+		common.SysError("check enterprise allowed models failed: " + err.Error())
+		return submittedEnabled, submittedModelLimits, submittedVendorLimits
+	}
+	if !restricted {
+		return submittedEnabled, submittedModelLimits, submittedVendorLimits
+	}
+	if strings.TrimSpace(submittedModelLimits) != "" || strings.TrimSpace(submittedVendorLimits) != "" {
+		return submittedEnabled, submittedModelLimits, submittedVendorLimits
+	}
+
+	effectiveSet := make(map[string]bool)
+	hasSubmitted := false
+	for _, m := range strings.Split(submittedModelLimits, ",") {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
+		}
+		hasSubmitted = true
+		if allowed[m] {
+			effectiveSet[m] = true
+		}
+	}
+
+	if !hasSubmitted {
+		for m := range allowed {
+			effectiveSet[m] = true
+		}
+	}
+	effective := make([]string, 0, len(effectiveSet))
+	for modelName := range effectiveSet {
+		effective = append(effective, modelName)
+	}
+	slices.Sort(effective)
+	return true, strings.Join(effective, ","), submittedVendorLimits
 }
 
 func AddToken(c *gin.Context) {
@@ -169,6 +220,16 @@ func AddToken(c *gin.Context) {
 	err := c.ShouldBindJSON(&token)
 	if err != nil {
 		common.ApiError(c, err)
+		return
+	}
+	// 企业主账号（已开启限制）无权创建 API 密钥。
+	// 判定依赖 Java 维护的企业表；查询出错时按"不受限"处理并记录日志，
+	// 避免因企业表异常波及全体（含非企业）用户创建密钥。
+	restricted, rerr := model.IsEnterpriseApikeyRestrictedOwner(c.GetInt("id"))
+	if rerr != nil {
+		common.SysError("check enterprise apikey restriction failed (AddToken): " + rerr.Error())
+	} else if restricted {
+		common.ApiErrorI18n(c, i18n.MsgEnterpriseOwnerApikeyForbidden)
 		return
 	}
 	if len(token.Name) > 50 {
@@ -207,25 +268,40 @@ func AddToken(c *gin.Context) {
 		common.SysLog("failed to generate token key: " + err.Error())
 		return
 	}
+	cappedEnabled, cappedModelLimits, cappedVendorLimits := capTokenLimitsForEnterpriseSubAccount(c.GetInt("id"), token.ModelLimitsEnabled, token.ModelLimits, token.VendorLimits)
 	cleanToken := model.Token{
-		UserId:             c.GetInt("id"),
-		Name:               token.Name,
-		Key:                key,
-		CreatedTime:        common.GetTimestamp(),
-		AccessedTime:       common.GetTimestamp(),
-		ExpiredTime:        token.ExpiredTime,
-		RemainQuota:        token.RemainQuota,
-		UnlimitedQuota:     token.UnlimitedQuota,
-		ModelLimitsEnabled: token.ModelLimitsEnabled,
-		ModelLimits:        token.ModelLimits,
-		AllowIps:           token.AllowIps,
-		Group:              token.Group,
-		CrossGroupRetry:    token.CrossGroupRetry,
+		UserId:              c.GetInt("id"),
+		Name:                token.Name,
+		Key:                 key,
+		CreatedTime:         common.GetTimestamp(),
+		AccessedTime:        common.GetTimestamp(),
+		ExpiredTime:         token.ExpiredTime,
+		RemainQuota:         token.RemainQuota,
+		UnlimitedQuota:      token.UnlimitedQuota,
+		ModelLimitsEnabled:  cappedEnabled,
+		ModelLimits:         cappedModelLimits,
+		VendorLimits:        cappedVendorLimits,
+		AllowIps:            token.AllowIps,
+		Group:               token.Group,
+		CrossGroupRetry:     token.CrossGroupRetry,
+		DailySpendThreshold: token.DailySpendThreshold,
 	}
 	err = cleanToken.Insert()
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	// 企业子账号敏感操作告警：新增 API 密钥。best-effort，绝不影响本次响应。
+	userId := c.GetInt("id")
+	// 企业子账号风险预警：新增的 API 密钥未设置出口 IP 白名单。best-effort，绝不影响本次响应。
+	if isAllowIpsBlank(token.AllowIps) {
+		gopool.Go(func() {
+			service.NotifyRiskWarning(userId, cleanToken.Id, "create", "ip_whitelist_missing")
+		})
+	} else {
+		gopool.Go(func() {
+			service.NotifySensitiveOp(userId, cleanToken.Id, "create", "apikey_created")
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -242,6 +318,10 @@ func DeleteToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// 删除后仍传入当前 token ID，由 Java 侧按 token_id 生成邮件内容。
+	gopool.Go(func() {
+		service.NotifySensitiveOp(userId, id, "delete", "apikey_deleted")
+	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -252,17 +332,19 @@ func UpdateToken(c *gin.Context) {
 	userId := c.GetInt("id")
 	statusOnly := c.Query("status_only")
 	type updateTokenRequest struct {
-		Id                 common.Int64Flexible `json:"id"`
-		Status             int                  `json:"status"`
-		Name               string               `json:"name"`
-		ExpiredTime        int64                `json:"expired_time"`
-		RemainQuota        int                  `json:"remain_quota"`
-		UnlimitedQuota     bool                 `json:"unlimited_quota"`
-		ModelLimitsEnabled bool                 `json:"model_limits_enabled"`
-		ModelLimits        string               `json:"model_limits"`
-		AllowIps           *string              `json:"allow_ips"`
-		Group              string               `json:"group"`
-		CrossGroupRetry    bool                 `json:"cross_group_retry"`
+		Id                  common.Int64Flexible `json:"id"`
+		Status              int                  `json:"status"`
+		Name                string               `json:"name"`
+		ExpiredTime         int64                `json:"expired_time"`
+		RemainQuota         int                  `json:"remain_quota"`
+		UnlimitedQuota      bool                 `json:"unlimited_quota"`
+		ModelLimitsEnabled  bool                 `json:"model_limits_enabled"`
+		ModelLimits         string               `json:"model_limits"`
+		VendorLimits        string               `json:"vendor_limits"`
+		AllowIps            *string              `json:"allow_ips"`
+		Group               string               `json:"group"`
+		CrossGroupRetry     bool                 `json:"cross_group_retry"`
+		DailySpendThreshold int                  `json:"daily_spend_threshold"`
 	}
 
 	var req updateTokenRequest
@@ -271,19 +353,32 @@ func UpdateToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	// 企业主账号（已开启限制）无权修改 API 密钥；仅启用/禁用（status_only）不拦截
+	if statusOnly != "true" {
+		restricted, rerr := model.IsEnterpriseApikeyRestrictedOwner(userId)
+		if rerr != nil {
+			common.SysError("check enterprise apikey restriction failed (UpdateToken): " + rerr.Error())
+		} else if restricted {
+			common.ApiErrorI18n(c, i18n.MsgEnterpriseOwnerApikeyForbidden)
+			return
+		}
+	}
 
+	cappedEnabled, cappedModelLimits, cappedVendorLimits := capTokenLimitsForEnterpriseSubAccount(userId, req.ModelLimitsEnabled, req.ModelLimits, req.VendorLimits)
 	token := model.Token{
-		Id:                 req.Id.Int(),
-		Status:             req.Status,
-		Name:               req.Name,
-		ExpiredTime:        req.ExpiredTime,
-		RemainQuota:        req.RemainQuota,
-		UnlimitedQuota:     req.UnlimitedQuota,
-		ModelLimitsEnabled: req.ModelLimitsEnabled,
-		ModelLimits:        req.ModelLimits,
-		AllowIps:           req.AllowIps,
-		Group:              req.Group,
-		CrossGroupRetry:    req.CrossGroupRetry,
+		Id:                  req.Id.Int(),
+		Status:              req.Status,
+		Name:                req.Name,
+		ExpiredTime:         req.ExpiredTime,
+		RemainQuota:         req.RemainQuota,
+		UnlimitedQuota:      req.UnlimitedQuota,
+		ModelLimitsEnabled:  cappedEnabled,
+		ModelLimits:         cappedModelLimits,
+		VendorLimits:        cappedVendorLimits,
+		AllowIps:            req.AllowIps,
+		Group:               req.Group,
+		CrossGroupRetry:     req.CrossGroupRetry,
+		DailySpendThreshold: req.DailySpendThreshold,
 	}
 
 	if token.Id == 0 {
@@ -330,14 +425,30 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.UnlimitedQuota = token.UnlimitedQuota
 		cleanToken.ModelLimitsEnabled = token.ModelLimitsEnabled
 		cleanToken.ModelLimits = token.ModelLimits
+		cleanToken.VendorLimits = token.VendorLimits
 		cleanToken.AllowIps = token.AllowIps
 		cleanToken.Group = token.Group
 		cleanToken.CrossGroupRetry = token.CrossGroupRetry
+		cleanToken.DailySpendThreshold = token.DailySpendThreshold
 	}
 	err = cleanToken.Update()
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	// 企业子账号敏感操作告警：更新出口 IP 白名单。仅当本次请求非纯状态更新且
+	// 携带了 allow_ips 字段时触发；不区分"是否真的发生变化"，best-effort，绝不影响本次响应。
+	if statusOnly != "true" && req.AllowIps != nil {
+		// 企业子账号风险预警：更新后的 API 密钥未设置出口 IP 白名单。best-effort，绝不影响本次响应。
+		if isAllowIpsBlank(req.AllowIps) {
+			gopool.Go(func() {
+				service.NotifyRiskWarning(userId, cleanToken.Id, "update", "ip_whitelist_missing")
+			})
+		} else {
+			gopool.Go(func() {
+				service.NotifySensitiveOp(userId, cleanToken.Id, "update", "apikey_updated")
+			})
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

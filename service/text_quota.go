@@ -31,6 +31,7 @@ type textQuotaSummary struct {
 	CacheCreationTokens1h    int
 	ImageTokens              int
 	AudioTokens              int
+	VideoTokens              int
 	ModelName                string
 	TokenName                string
 	UseTimeSeconds           int64
@@ -38,6 +39,7 @@ type textQuotaSummary struct {
 	CacheRatio               float64
 	ImageRatio               float64
 	ImageCompletionRatio     float64
+	VideoRatio               float64
 	ModelRatio               float64
 	GroupRatio               float64
 	ModelPrice               float64
@@ -193,11 +195,15 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.CompletionTokens = outputTokensForModel(usage, summary.ModelName)
 	summary.TotalTokens = summary.PromptTokens + summary.CompletionTokens
 	summary.CacheTokens = usage.PromptTokensDetails.CachedTokens
-	summary.CacheCreationTokens = usage.PromptTokensDetails.CachedCreationTokens
+	// gpt-5.6+ 显式/隐式缓存写入（cache_write_tokens）与 CachedCreationTokens 共用同一档
+	// CacheCreationRatio 计价（写入统一按未缓存输入价的 1.25x 计费）
+	summary.CacheCreationTokens = usage.PromptTokensDetails.CachedCreationTokens + usage.PromptTokensDetails.CacheWriteTokens
 	summary.CacheCreationTokens5m = usage.ClaudeCacheCreation5mTokens
 	summary.CacheCreationTokens1h = usage.ClaudeCacheCreation1hTokens
 	summary.ImageTokens = usage.PromptTokensDetails.ImageTokens
 	summary.AudioTokens = usage.PromptTokensDetails.AudioTokens
+	summary.VideoTokens = usage.PromptTokensDetails.VideoTokens
+	summary.VideoRatio = relayInfo.PriceData.VideoRatio
 	summary.ReasoningTokens = usage.CompletionTokenDetails.ReasoningTokens
 	// Gemini image/text output split: prefer context values, fallback to usage details
 	summary.GeminiImageOutputTokens = ctx.GetInt("gemini_image_output_tokens")
@@ -238,6 +244,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	dCacheTokens := decimal.NewFromInt(int64(summary.CacheTokens))
 	dImageTokens := decimal.NewFromInt(int64(summary.ImageTokens))
 	dAudioTokens := decimal.NewFromInt(int64(summary.AudioTokens))
+	dVideoTokens := decimal.NewFromInt(int64(summary.VideoTokens))
 	dCompletionTokens := decimal.NewFromInt(int64(summary.CompletionTokens))
 	dCachedCreationTokens := decimal.NewFromInt(int64(summary.CacheCreationTokens))
 	dCompletionRatio := decimal.NewFromFloat(summary.CompletionRatio)
@@ -289,6 +296,12 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 			imageTokensWithRatio = dImageTokens.Mul(dImageRatio)
 		}
 
+		var videoTokensWithRatio decimal.Decimal
+		if !dVideoTokens.IsZero() && summary.VideoRatio > 0 {
+			baseTokens = baseTokens.Sub(dVideoTokens)
+			videoTokensWithRatio = dVideoTokens.Mul(decimal.NewFromFloat(summary.VideoRatio))
+		}
+
 		if !dAudioTokens.IsZero() {
 			summary.AudioInputPrice = operation_setting.GetGeminiInputAudioPricePerMillionTokens(summary.ModelName)
 			if summary.AudioInputPrice > 0 {
@@ -298,7 +311,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 			}
 		}
 
-		promptQuota := baseTokens.Add(cachedTokensWithRatio).Add(imageTokensWithRatio).Add(cachedCreationTokensWithRatio)
+		promptQuota := baseTokens.Add(cachedTokensWithRatio).Add(imageTokensWithRatio).Add(videoTokensWithRatio).Add(cachedCreationTokensWithRatio)
 		var completionQuota decimal.Decimal
 		if summary.GeminiImageOutputTokens > 0 && summary.EffectiveImageOutputRatio > 0 {
 			// Gemini image/text output split billing
@@ -388,13 +401,13 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	if summary.WebSearchCallCount > 0 {
-		extraContent = append(extraContent, fmt.Sprintf("Web Search 调用 %d 次，调用花费 %s", summary.WebSearchCallCount, decimal.NewFromFloat(summary.WebSearchPrice).Mul(decimal.NewFromInt(int64(summary.WebSearchCallCount))).Div(decimal.NewFromInt(1000)).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).String()))
+		extraContent = append(extraContent, fmt.Sprintf("Web Search 调用 %d 次，调用花费 $%s", summary.WebSearchCallCount, decimal.NewFromFloat(summary.WebSearchPrice).Mul(decimal.NewFromInt(int64(summary.WebSearchCallCount))).Div(decimal.NewFromInt(1000)).Mul(decimal.NewFromFloat(summary.GroupRatio)).String()))
 	}
 	if summary.ClaudeWebSearchCallCount > 0 {
-		extraContent = append(extraContent, fmt.Sprintf("Claude Web Search 调用 %d 次，调用花费 %s", summary.ClaudeWebSearchCallCount, decimal.NewFromFloat(summary.ClaudeWebSearchPrice).Div(decimal.NewFromInt(1000)).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).Mul(decimal.NewFromInt(int64(summary.ClaudeWebSearchCallCount))).String()))
+		extraContent = append(extraContent, fmt.Sprintf("Claude Web Search 调用 %d 次，调用花费 $%s", summary.ClaudeWebSearchCallCount, decimal.NewFromFloat(summary.ClaudeWebSearchPrice).Div(decimal.NewFromInt(1000)).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromInt(int64(summary.ClaudeWebSearchCallCount))).String()))
 	}
 	if summary.FileSearchCallCount > 0 {
-		extraContent = append(extraContent, fmt.Sprintf("File Search 调用 %d 次，调用花费 %s", summary.FileSearchCallCount, decimal.NewFromFloat(summary.FileSearchPrice).Mul(decimal.NewFromInt(int64(summary.FileSearchCallCount))).Div(decimal.NewFromInt(1000)).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).String()))
+		extraContent = append(extraContent, fmt.Sprintf("File Search 调用 %d 次，调用花费 $%s", summary.FileSearchCallCount, decimal.NewFromFloat(summary.FileSearchPrice).Mul(decimal.NewFromInt(int64(summary.FileSearchCallCount))).Div(decimal.NewFromInt(1000)).Mul(decimal.NewFromFloat(summary.GroupRatio)).String()))
 	}
 	if summary.AudioInputPrice > 0 && summary.AudioTokens > 0 {
 		extraContent = append(extraContent, fmt.Sprintf("Audio Input 花费 %s", decimal.NewFromFloat(summary.AudioInputPrice).Div(decimal.NewFromInt(1000000)).Mul(decimal.NewFromInt(int64(summary.AudioTokens))).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).String()))
@@ -514,6 +527,21 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["audio_input"] = summary.AudioTokens
 		other["audio_tokens"] = summary.AudioTokens
 	}
+	if summary.VideoTokens > 0 {
+		other["video_input_tokens"] = summary.VideoTokens
+		if summary.VideoRatio > 0 {
+			other["video_input_ratio"] = summary.VideoRatio
+			other["video_input_price"] = summary.ModelRatio * 2.0 * summary.VideoRatio
+			other["video_input_price_source"] = "VideoRatio"
+			videoInputQuota := decimal.NewFromInt(int64(summary.VideoTokens)).
+				Mul(decimal.NewFromFloat(summary.VideoRatio)).
+				Mul(decimal.NewFromFloat(summary.ModelRatio)).
+				Mul(decimal.NewFromFloat(summary.GroupRatio))
+			other["video_input_quota"] = videoInputQuota.IntPart()
+		} else {
+			other["video_input_price_source"] = "ModelRatio"
+		}
+	}
 	if summary.ImageGenerationCallPrice > 0 {
 		other["image_generation_call"] = true
 		other["image_generation_call_price"] = summary.ImageGenerationCallPrice
@@ -528,7 +556,31 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		if n, ok := relayInfo.PriceData.OtherRatios["n"]; ok && n > 0 {
 			imageCount = n
 		}
-		other["per_call_price"] = relayInfo.PriceData.ModelPrice
+		if relayInfo.PriceData.ImagePerImagePricing != nil && relayInfo.PriceData.ImageBillingUsage != nil {
+			billingUsage := relayInfo.PriceData.ImageBillingUsage
+			other["image_input_count"] = billingUsage.InputImageCount
+			other["image_output_count"] = billingUsage.SuccessfulImageCount
+			other["image_output_size"] = fmt.Sprintf("%dx%d", billingUsage.OutputWidth, billingUsage.OutputHeight)
+			other["image_output_pixels"] = billingUsage.OutputPixels
+			other["image_output_tier"] = billingUsage.OutputSizeTier
+			other["image_input_price"] = relayInfo.PriceData.ImagePerImagePricing.InputImageFirst
+			other["image_input_first_price"] = relayInfo.PriceData.ImagePerImagePricing.InputImageFirst
+			other["image_input_from_second_price"] = relayInfo.PriceData.ImagePerImagePricing.InputImageFromThe2nd
+			if billingUsage.InputImageCount > 0 && relayInfo.PriceData.ImagePerImagePricing.InputImageFirst == 0 {
+				other["image_input_free_count"] = 1
+			} else {
+				other["image_input_free_count"] = 0
+			}
+			if billingUsage.InputImageCount > 1 {
+				other["image_input_price"] = relayInfo.PriceData.ImagePerImagePricing.InputImageFirst +
+					float64(billingUsage.InputImageCount-1)*relayInfo.PriceData.ImagePerImagePricing.InputImageFromThe2nd
+			}
+			other["image_output_price"] = float64(billingUsage.SuccessfulImageCount) * relayInfo.PriceData.PerImageUnitPrice
+			other["image_total_price"] = relayInfo.PriceData.ModelPrice
+			other["per_call_price"] = relayInfo.PriceData.PerImageUnitPrice
+		} else {
+			other["per_call_price"] = relayInfo.PriceData.ModelPrice
+		}
 		other["per_call_image_multiplier"] = imageCount
 	}
 	if summary.CacheCreationTokens > 0 {

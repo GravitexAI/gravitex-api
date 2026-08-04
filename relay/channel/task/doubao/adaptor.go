@@ -173,6 +173,10 @@ func hasVideoInMetadata(metadata map[string]interface{}) bool {
 
 // BuildRequestBody converts request into Doubao specific format.
 func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
+	if c.GetBool(common.KeySeedanceRawMirror) {
+		return a.buildRawMirrorRequestBody(c, info)
+	}
+
 	req, err := relaycommon.GetTaskRequest(c)
 	if err != nil {
 		return nil, err
@@ -230,6 +234,61 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	return bytes.NewReader(data), nil
 }
 
+// buildRawMirrorRequestBody forwards the client's original request bytes
+// verbatim to the upstream Seedance/Ark endpoint, preserving fields
+// (execution_expires_after, service_tier, safety_identifier, frames, ...)
+// that TaskSubmitReq would silently drop. Only reached via the
+// official-mirror routes (see middleware.SeedanceOfficialMirror) — the
+// normal /v1/video/generations path never sets common.KeySeedanceRawMirror
+// and is unaffected.
+func (a *TaskAdaptor) buildRawMirrorRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return nil, errors.Wrap(err, "get body storage failed")
+	}
+	raw, err := storage.Bytes()
+	if err != nil {
+		return nil, errors.Wrap(err, "read raw request body failed")
+	}
+	if _, err := storage.Seek(0, io.SeekStart); err != nil {
+		return nil, errors.Wrap(err, "seek body storage failed")
+	}
+
+	// 渠道 model_mapping：与非镜像分支（第 187 行）同一条规则——统一以
+	// RelayInfo.UpstreamModelName 为准（若未映射则保持原样）。镜像路径转发
+	// 客户端原始字节，若不在这里改写 "model" 字段，渠道配置的模型重定向会被
+	// 静默跳过，客户端传的原始 model 字符串会原样透传给上游。
+	if info != nil && info.UpstreamModelName != "" {
+		rewritten, err := applyUpstreamModelName(raw, info.UpstreamModelName)
+		if err != nil {
+			return nil, errors.Wrap(err, "apply upstream model mapping failed")
+		}
+		raw = rewritten
+	}
+
+	hasVideoInput, resolution, err := probeRawMirrorBillingFields(raw)
+	if err != nil {
+		return nil, errors.Wrap(err, "probe billing fields failed")
+	}
+	c.Set("has_video_input", hasVideoInput)
+	if resolution != "" {
+		c.Set("video_resolution", resolution)
+	}
+
+	if assetIds := extractAssetVirtualIdsFromRaw(raw); len(assetIds) > 0 {
+		userId := c.GetInt("id")
+		notOwned, checkErr := model.CheckUserOwnsAssets(userId, assetIds)
+		if checkErr != nil {
+			return nil, errors.Wrap(checkErr, "validate asset ownership failed")
+		}
+		if len(notOwned) > 0 {
+			return nil, fmt.Errorf("asset not found or access denied: %s", strings.Join(notOwned, ", "))
+		}
+	}
+
+	return bytes.NewReader(raw), nil
+}
+
 // DoRequest delegates to common helper.
 func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	return channel.DoTaskApiRequest(a, c, info, requestBody)
@@ -258,6 +317,15 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 
 	// 使用上游真实 ID 作为公开 ID（避免依赖 private_data.upstream_task_id）
 	info.PublicTaskID = dResp.ID
+
+	// Raw-mirror routes: return the upstream response verbatim instead of the
+	// platform's normalized OpenAIVideo shape. Local task persistence below
+	// this function (in the shared relay dispatch flow) still uses the
+	// returned taskData (= responseBody), unchanged.
+	if c.GetBool(common.KeySeedanceRawMirror) {
+		c.Data(http.StatusOK, "application/json", responseBody)
+		return dResp.ID, responseBody, nil
+	}
 
 	ov := dto.NewOpenAIVideo()
 	ov.ID = info.PublicTaskID
@@ -294,6 +362,28 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+
+	client, err := service.GetHttpClientWithProxy(proxy)
+	if err != nil {
+		return nil, fmt.Errorf("new proxy http client failed: %w", err)
+	}
+	return client.Do(req)
+}
+
+// CancelTask cancels a queued task or deletes a terminal task's record via
+// DELETE /api/v3/contents/generations/tasks/{id}, mirroring FetchTask's
+// existing request-building pattern. Implements controller.TaskCancelAdaptor
+// (an interface defined at the consumer side, not on the shared TaskAdaptor
+// interface — see docs/byteplus/seedance-2.0-official-api-mirror-design.md §3.4).
+func (a *TaskAdaptor) CancelTask(baseUrl, key, taskID, proxy string) (*http.Response, error) {
+	uri := fmt.Sprintf("%s/api/v3/contents/generations/tasks/%s", baseUrl, taskID)
+
+	req, err := http.NewRequest(http.MethodDelete, uri, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+key)
 
 	client, err := service.GetHttpClientWithProxy(proxy)
@@ -579,6 +669,95 @@ func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, taskResult *rela
 
 func (a *TaskAdaptor) AdjustBillingOnSubmit(info *relaycommon.RelayInfo, taskData []byte) map[string]float64 {
 	return nil
+}
+
+// probeRawMirrorBillingFields does a lightweight, non-strict scan of the raw
+// client JSON body for the two fields the billing pipeline reads via gin
+// context ("has_video_input", "video_resolution") — without decoding into
+// requestPayload, so unknown official fields (execution_expires_after,
+// service_tier, safety_identifier, ...) are never lost by this probe (they
+// are forwarded verbatim by buildRawMirrorRequestBody regardless).
+func probeRawMirrorBillingFields(raw []byte) (hasVideoInput bool, resolution string, err error) {
+	var probe struct {
+		Resolution string `json:"resolution"`
+		Content    []struct {
+			Type     string `json:"type"`
+			VideoURL *struct {
+				URL string `json:"url"`
+			} `json:"video_url"`
+		} `json:"content"`
+	}
+	if err := common.Unmarshal(raw, &probe); err != nil {
+		return false, "", err
+	}
+	for _, item := range probe.Content {
+		if item.Type == "video_url" && item.VideoURL != nil && item.VideoURL.URL != "" {
+			hasVideoInput = true
+			break
+		}
+	}
+	return hasVideoInput, probe.Resolution, nil
+}
+
+// applyUpstreamModelName rewrites the top-level "model" field of a raw
+// mirror request body to upstreamModelName, leaving every other field's raw
+// bytes untouched (each value round-trips through json.RawMessage, so
+// numbers/strings/nested objects are not reformatted). Used to apply a
+// channel's configured model_mapping redirect on the raw-mirror path, which
+// otherwise forwards the client's original "model" string unchanged.
+func applyUpstreamModelName(raw []byte, upstreamModelName string) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	modelJSON, err := common.Marshal(upstreamModelName)
+	if err != nil {
+		return nil, err
+	}
+	fields["model"] = modelJSON
+	return common.Marshal(fields)
+}
+
+// extractAssetVirtualIdsFromRaw mirrors extractAssetVirtualIds but scans a
+// raw, unstructured JSON body (used by the raw-mirror path, which never
+// builds []ContentItem).
+func extractAssetVirtualIdsFromRaw(raw []byte) []string {
+	var probe struct {
+		Content []struct {
+			ImageURL *struct {
+				URL string `json:"url"`
+			} `json:"image_url"`
+			VideoURL *struct {
+				URL string `json:"url"`
+			} `json:"video_url"`
+			AudioURL *struct {
+				URL string `json:"url"`
+			} `json:"audio_url"`
+		} `json:"content"`
+	}
+	if err := common.Unmarshal(raw, &probe); err != nil {
+		return nil
+	}
+	var ids []string
+	extract := func(url string) {
+		if strings.HasPrefix(url, "asset://") {
+			if vid := strings.TrimPrefix(url, "asset://"); vid != "" {
+				ids = append(ids, vid)
+			}
+		}
+	}
+	for _, item := range probe.Content {
+		if item.ImageURL != nil {
+			extract(item.ImageURL.URL)
+		}
+		if item.VideoURL != nil {
+			extract(item.VideoURL.URL)
+		}
+		if item.AudioURL != nil {
+			extract(item.AudioURL.URL)
+		}
+	}
+	return ids
 }
 
 // extractAssetVirtualIds scans content items for asset:// URLs and returns their virtual IDs.

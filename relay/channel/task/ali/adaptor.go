@@ -201,6 +201,9 @@ func BillingResolutionKeyFromParams(p *AliVideoParameters) string {
 	res := strings.TrimSpace(p.Resolution)
 	if res != "" {
 		res = strings.ToLower(res)
+		if res == "4k" || res == "2160p" || strings.Contains(res, "2160") {
+			return "4k"
+		}
 		if !strings.HasSuffix(res, "p") {
 			res = res + "p"
 		}

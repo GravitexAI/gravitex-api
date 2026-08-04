@@ -184,6 +184,8 @@ type ImageData struct {
 	Url           string `json:"url"`
 	B64Json       string `json:"b64_json"`
 	RevisedPrompt string `json:"revised_prompt"`
+	Size          string `json:"size,omitempty"`
+	OutputFormat  string `json:"output_format,omitempty"`
 }
 
 // ImageUsage 与 OpenAI gpt-image-1 `/v1/images/generations` 响应的 usage 字段对齐：
@@ -201,4 +203,6 @@ type ImageUsage struct {
 	OutputTokens        int                 `json:"output_tokens"`
 	InputTokensDetails  *InputTokenDetails  `json:"input_tokens_details,omitempty"`
 	OutputTokensDetails *OutputTokenDetails `json:"output_tokens_details,omitempty"`
+	GeneratedImages     int                 `json:"generated_images,omitempty"`
+	InputImages         int                 `json:"input_images,omitempty"`
 }

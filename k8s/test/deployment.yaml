@@ -38,7 +38,7 @@ spec:
           sysctl -w net.ipv4.tcp_keepalive_probes=3
       containers:
       - name: api-gateway-test
-        image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway-test:1.0.19
+        image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway-test:1.0.42
         ports:
         - containerPort: 3000
         env:

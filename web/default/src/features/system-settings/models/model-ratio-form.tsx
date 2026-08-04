@@ -51,6 +51,7 @@ type ModelFormValues = {
   ImageRatio: string
   AudioRatio: string
   AudioCompletionRatio: string
+  VideoRatio: string
   ExposeRatioEnabled: boolean
   BillingMode: string
   BillingExpr: string
@@ -74,6 +75,7 @@ type ModelJsonFieldName =
   | 'ImageRatio'
   | 'AudioRatio'
   | 'AudioCompletionRatio'
+  | 'VideoRatio'
 
 const modelJsonFields: Array<{
   name: ModelJsonFieldName
@@ -123,6 +125,11 @@ const modelJsonFields: Array<{
     name: 'AudioCompletionRatio',
     labelKey: 'Audio completion ratio',
     descriptionKey: 'Ratio applied to audio completions for streaming models.',
+  },
+  {
+    name: 'VideoRatio',
+    labelKey: 'Video ratio',
+    descriptionKey: 'Ratio applied to video inputs for video billing.',
   },
 ]
 
@@ -242,6 +249,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               savedImageRatio={savedValues.ImageRatio}
               savedAudioRatio={savedValues.AudioRatio}
               savedAudioCompletionRatio={savedValues.AudioCompletionRatio}
+              savedVideoRatio={savedValues.VideoRatio}
               savedBillingMode={savedValues.BillingMode}
               savedBillingExpr={savedValues.BillingExpr}
               modelPrice={form.watch('ModelPrice')}
@@ -252,6 +260,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               imageRatio={form.watch('ImageRatio')}
               audioRatio={form.watch('AudioRatio')}
               audioCompletionRatio={form.watch('AudioCompletionRatio')}
+              videoRatio={form.watch('VideoRatio')}
               billingMode={form.watch('BillingMode')}
               billingExpr={form.watch('BillingExpr')}
               onSave={handleSave}

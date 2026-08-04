@@ -38,6 +38,7 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	if oaiError := usageResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	applyImageResponseMetadata(responseBody, &usageResp.Usage)
 	if service.ValidUsage(&usageResp.Usage) {
 		info.SetUpstreamResponsesField("usage", usageResp.Usage)
 	}
@@ -48,6 +49,24 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	normalizeOpenAIUsage(&usageResp.Usage)
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
 	return &usageResp.Usage, nil
+}
+
+func applyImageResponseMetadata(responseBody []byte, usage *dto.Usage) {
+	if usage == nil {
+		return
+	}
+	var imageResp dto.ImageResponse
+	if err := common.Unmarshal(responseBody, &imageResp); err != nil {
+		return
+	}
+	if usage.GeneratedImages == 0 && len(imageResp.Data) > 0 {
+		usage.GeneratedImages = len(imageResp.Data)
+	}
+	for _, image := range imageResp.Data {
+		if image.Size != "" {
+			usage.OutputImageSizes = append(usage.OutputImageSizes, image.Size)
+		}
+	}
 }
 
 // normalizeOpenAIUsage maps the OpenAI Images usage shape (input_tokens /
@@ -71,6 +90,7 @@ func normalizeOpenAIUsage(usage *dto.Usage) {
 	if usage.InputTokensDetails != nil {
 		usage.PromptTokensDetails.CachedTokens = usage.InputTokensDetails.CachedTokens
 		usage.PromptTokensDetails.CachedCreationTokens = usage.InputTokensDetails.CachedCreationTokens
+		usage.PromptTokensDetails.CacheWriteTokens = usage.InputTokensDetails.CacheWriteTokens
 		usage.PromptTokensDetails.ImageTokens = usage.InputTokensDetails.ImageTokens
 		usage.PromptTokensDetails.TextTokens = usage.InputTokensDetails.TextTokens
 		usage.PromptTokensDetails.AudioTokens = usage.InputTokensDetails.AudioTokens
@@ -220,6 +240,7 @@ func OpenaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 	if oaiError := usageResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	applyImageResponseMetadata(responseBody, &usageResp.Usage)
 	normalizeOpenAIUsage(&usageResp.Usage)
 	if service.ValidUsage(&usageResp.Usage) {
 		info.SetUpstreamResponsesField("usage", usageResp.Usage)

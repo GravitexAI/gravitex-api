@@ -2,6 +2,7 @@
 .vscode
 .zed
 .env
+.superpowers
 .history
 upload
 *.exe

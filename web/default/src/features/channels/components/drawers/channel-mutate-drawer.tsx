@@ -4340,6 +4340,99 @@ export function ChannelMutateDrawer({
                                         </FormItem>
                                       )}
                                     />
+
+                                    <FormField
+                                      control={form.control}
+                                      name='anthropic_beta_target'
+                                      render={({ field }) => (
+                                        <FormItem className='px-4 py-3'>
+                                          <FormLabel className='text-sm'>
+                                            {t('anthropic-beta filter target')}
+                                          </FormLabel>
+                                          <Select
+                                            items={[
+                                              {
+                                                value: '',
+                                                label: t(
+                                                  'Follow channel type (default)'
+                                                ),
+                                              },
+                                              {
+                                                value: 'bedrock',
+                                                label: t(
+                                                  'Filter by Bedrock whitelist'
+                                                ),
+                                              },
+                                              {
+                                                value: 'bedrock-converse',
+                                                label: t(
+                                                  'Filter by Bedrock Converse whitelist'
+                                                ),
+                                              },
+                                              {
+                                                value: 'vertex',
+                                                label: t(
+                                                  'Filter by Vertex whitelist'
+                                                ),
+                                              },
+                                              {
+                                                value: 'direct',
+                                                label: t(
+                                                  'Passthrough (no filter)'
+                                                ),
+                                              },
+                                            ]}
+                                            onValueChange={field.onChange}
+                                            value={field.value ?? ''}
+                                          >
+                                            <FormControl>
+                                              <SelectTrigger>
+                                                <SelectValue
+                                                  placeholder={t(
+                                                    'Follow channel type (default)'
+                                                  )}
+                                                />
+                                              </SelectTrigger>
+                                            </FormControl>
+                                            <SelectContent
+                                              alignItemWithTrigger={false}
+                                            >
+                                              <SelectGroup>
+                                                <SelectItem value=''>
+                                                  {t(
+                                                    'Follow channel type (default)'
+                                                  )}
+                                                </SelectItem>
+                                                <SelectItem value='bedrock'>
+                                                  {t(
+                                                    'Filter by Bedrock whitelist'
+                                                  )}
+                                                </SelectItem>
+                                                <SelectItem value='bedrock-converse'>
+                                                  {t(
+                                                    'Filter by Bedrock Converse whitelist'
+                                                  )}
+                                                </SelectItem>
+                                                <SelectItem value='vertex'>
+                                                  {t(
+                                                    'Filter by Vertex whitelist'
+                                                  )}
+                                                </SelectItem>
+                                                <SelectItem value='direct'>
+                                                  {t('Passthrough (no filter)')}
+                                                </SelectItem>
+                                              </SelectGroup>
+                                            </SelectContent>
+                                          </Select>
+                                          <FormDescription>
+                                            {t(
+                                              'When the Anthropic channel is actually a Bedrock/Vertex relay, pick the corresponding whitelist to avoid upstream "Unexpected value(s) for the anthropic-beta header" errors.'
+                                            )}
+                                          </FormDescription>
+                                          <FormMessage />
+                                        </FormItem>
+                                      )}
+                                    />
                                   </>
                                 )}
                               </div>

@@ -3,9 +3,13 @@ package service
 import (
 	"fmt"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
+
+	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 )
 
@@ -67,13 +71,38 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 				checkAndSendQuotaNotify(relayInfo, actualQuota-preConsumed, preConsumed)
 			}
 		}
+		triggerTokenDailySpendAlert(relayInfo, actualQuota)
 		return nil
 	}
 
 	// 回退：无 BillingSession 时使用旧路径
 	quotaDelta := actualQuota - relayInfo.FinalPreConsumedQuota
 	if quotaDelta != 0 {
-		return PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
+		if err := PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true); err != nil {
+			return err
+		}
 	}
+	triggerTokenDailySpendAlert(relayInfo, actualQuota)
 	return nil
+}
+
+// triggerTokenDailySpendAlert 在计费结算完成后，异步检查该 token 今日消费是否超过其
+// 日消费告警阈值。best-effort：加载 token 失败或 threshold<=0 均直接跳过，绝不影响计费主流程。
+func triggerTokenDailySpendAlert(relayInfo *relaycommon.RelayInfo, actualQuota int) {
+	if actualQuota == 0 || relayInfo.TokenId <= 0 {
+		return
+	}
+	tokenId := relayInfo.TokenId
+	userId := relayInfo.UserId
+	gopool.Go(func() {
+		token, err := model.GetTokenById(tokenId)
+		if err != nil {
+			common.SysError(fmt.Sprintf("load token for daily spend alert failed, tokenId=%d: %s", tokenId, err.Error()))
+			return
+		}
+		if token.DailySpendThreshold <= 0 {
+			return
+		}
+		CheckAndAlertDailySpend(tokenId, userId, token.Name, token.DailySpendThreshold)
+	})
 }

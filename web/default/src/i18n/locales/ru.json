@@ -4252,6 +4252,7 @@
     "Templates": "Шаблоны",
     "Templates appended": "Шаблоны добавлены",
     "Tencent": "Tencent",
+    "Tencent TokenHub": "Tencent TokenHub",
     "Termination requested": "Запрошено завершение",
     "Test": "Проверить",
     "Test {{count}} matching models": "Проверить совпадающие модели: {{count}}",
@@ -4977,6 +4978,14 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Fixed expiration (do not refresh TTL on hit)": "Фиксированное истечение (не обновлять TTL при совпадении)",
+    "When enabled, hitting the same affinity channel does not renew the TTL. The cache expires naturally from first write, allowing periodic rebalancing across channels of equal priority. When disabled, every successful request renews the TTL (sliding expiration), keeping the affinity sticky as long as requests keep coming.": "Если включено, попадание в тот же канал сходства не продлевает TTL. Кэш естественным образом истекает с момента первой записи, что позволяет периодически перебалансировать каналы с одинаковым приоритетом. Если отключено, каждый успешный запрос продлевает TTL (скользящее истечение), сохраняя привязку, пока продолжают поступать запросы.",
+    "Fixed": "Фиксированный",
+    "Video input price": "Цена ввода видео",
+    "Token price for video input.": "Цена токенов для ввода видео.",
+    "Video ratio": "Видео-коэффициент",
+    "Ratio applied to video inputs for video billing.": "Коэффициент для тарификации входных видео.",
+    "Sliding": "Скользящий"
   }
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
+	taskgemini "github.com/QuantumNous/new-api/relay/channel/task/gemini"
 	vertexcore "github.com/QuantumNous/new-api/relay/channel/vertex"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
@@ -138,6 +139,9 @@ func isAPIKey(key string) bool {
 
 // BuildRequestURL constructs the upstream URL.
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
+	if isVertexOmniModel(info.OriginModelName) {
+		return buildVertexOmniURL(a.baseURL, a.apiKey)
+	}
 	modelName := info.OriginModelName
 	if modelName == "" {
 		modelName = "veo-3.0-generate-001"
@@ -218,6 +222,13 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 		return nil, fmt.Errorf("request not found in context")
 	}
 	req := v.(relaycommon.TaskSubmitReq)
+	if isVertexOmniModel(info.OriginModelName) {
+		data, err := buildVertexOmniBody(req)
+		if err != nil {
+			return nil, err
+		}
+		return bytes.NewReader(data), nil
+	}
 
 	instance := map[string]any{"prompt": req.Prompt}
 	metadata := req.Metadata
@@ -300,6 +311,30 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return "", nil, service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)
 	}
 	_ = resp.Body.Close()
+	if isVertexOmniModel(info.OriginModelName) {
+		var interaction struct {
+			ID string `json:"id"`
+		}
+		if err := common.Unmarshal(responseBody, &interaction); err != nil || strings.TrimSpace(interaction.ID) == "" {
+			if err == nil {
+				err = fmt.Errorf("missing interaction id")
+			}
+			return "", nil, service.TaskErrorWrapper(err, "invalid_response", http.StatusInternalServerError)
+		}
+		info.PublicTaskID = interaction.ID
+		video := dto.NewOpenAIVideo()
+		video.ID, video.TaskID, video.Model = interaction.ID, interaction.ID, info.OriginModelName
+		video.CreatedAt = time.Now().Unix()
+		if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
+			if body, err := common.Marshal(video); err == nil {
+				c.Set(relaycommon.TaskSubmitResponseBody, body)
+			}
+			return interaction.ID, responseBody, nil
+		}
+		c.JSON(http.StatusOK, video)
+		taskID = markOmniTaskID(interaction.ID)
+		return taskID, responseBody, nil
+	}
 
 	var s submitResponse
 	if err := json.Unmarshal(responseBody, &s); err != nil {
@@ -336,7 +371,9 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	return localID, responseBody, nil
 }
 
-func (a *TaskAdaptor) GetModelList() []string { return []string{"veo-3.0-generate-001"} }
+func (a *TaskAdaptor) GetModelList() []string {
+	return []string{"veo-3.0-generate-001", vertexOmniModelName}
+}
 func (a *TaskAdaptor) GetChannelName() string { return "vertex" }
 
 func buildFetchOperationURL(baseURL, upstreamName string) (string, error) {
@@ -360,6 +397,9 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	taskID, ok := body["task_id"].(string)
 	if !ok {
 		return nil, fmt.Errorf("invalid task_id")
+	}
+	if strings.HasPrefix(taskID, omniTaskIDPrefix) || strings.HasPrefix(taskID, "v1_") {
+		return fetchVertexOmniTask(baseUrl, key, unmarkOmniTaskID(taskID), proxy)
 	}
 	upstreamName, err := decodeLocalTaskID(taskID)
 	if err != nil {
@@ -436,6 +476,12 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 }
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
+	var probe struct {
+		Status string `json:"status"`
+	}
+	if common.Unmarshal(respBody, &probe) == nil && probe.Status != "" {
+		return parseVertexOmniTaskResult(respBody)
+	}
 	var op operationResponse
 	if err := json.Unmarshal(respBody, &op); err != nil {
 		return nil, fmt.Errorf("unmarshal operation response failed: %w", err)
@@ -517,6 +563,9 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 		upstreamName = ""
 	}
 	modelName := extractModelFromOperationName(upstreamName)
+	if isVertexOmniModel(task.Properties.OriginModelName) {
+		modelName = task.Properties.OriginModelName
+	}
 	if strings.TrimSpace(modelName) == "" {
 		modelName = "veo-3.0-generate-001"
 	}
@@ -530,6 +579,17 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 
 	// 失败时把上游错误（如 Google RAI）写入 error 和 fail_reason，便于前端轮询展示
 	failReason := strings.TrimSpace(task.FailReason)
+	// Older completed tasks may have the embedded video bytes in task.Data but no
+	// URL in FailReason. Rebuild the data URL from the persisted upstream response
+	// so task fetches still return a playable result.
+	if task.Status == model.TaskStatusSuccess && failReason == "" && len(task.Data) > 0 {
+		if parsed, err := a.ParseTaskResult(task.Data); err == nil && parsed != nil {
+			failReason = strings.TrimSpace(parsed.Url)
+		}
+	}
+	if isVertexOmniModel(modelName) && failReason == "" {
+		failReason = taskgemini.OmniVideoURLFromTaskData(task.Data)
+	}
 	if task.Status == model.TaskStatusFailure && failReason != "" {
 		v.Error = &dto.OpenAIVideoError{Message: failReason, Code: "upstream_error"}
 	}
@@ -544,6 +604,8 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	if failReason != "" {
 		if strings.HasPrefix(failReason, "http") || strings.HasPrefix(failReason, "data:") {
 			extra.Url = failReason
+			v.URL = failReason
+			v.VideoURL = failReason
 		} else {
 			extra.FailReason = failReason
 		}

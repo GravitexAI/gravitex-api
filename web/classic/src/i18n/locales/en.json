@@ -3608,6 +3608,7 @@
     "音频补全倍率（仅部分模型支持该计费）": "Audio completion ratio (only supported by some models for this billing)",
     "音频输入：{{tokens}} / 1M * 模型倍率 {{modelRatio}} * 音频倍率 {{audioRatio}} * {{ratioType}} {{ratio}} = {{amount}}": "Audio input: {{tokens}} / 1M * model ratio {{modelRatio}} * audio ratio {{audioRatio}} * {{ratioType}} {{ratio}} = {{amount}}",
     "音频输入价格": "Audio Input Price",
+    "视频输入价格": "Video Input Price",
     "音频输入价格：{{symbol}}{{price}} / 1M tokens": "Audio input price: {{symbol}}{{price}} / 1M tokens",
     "音频输入倍率": "",
     "音频输入相关的倍率设置，键为模型名称，值为倍率": "Audio input related ratio settings, key is model name, value is ratio",
@@ -3837,6 +3838,10 @@
     "并确认自行承担部署": "confirm that I bear legal responsibility arising from deployment",
     "运营和收费行为产生的法律责任": "operation and charging behavior",
     "，": ", ",
-    "、": ", "
+    "、": ", ",
+    "固定过期（命中后不刷新 TTL）": "Fixed expiration (do not refresh TTL on hit)",
+    "开启后，命中同一亲和渠道不会续期 TTL，缓存从首次写入起自然到期，到期后重新负载均衡；关闭时每次成功请求都会续期（滑动过期），只要持续有请求就会一直粘在同一渠道。": "When enabled, hitting the same affinity channel does not renew the TTL. The cache expires naturally from first write, allowing periodic rebalancing across channels of equal priority. When disabled, every successful request renews the TTL (sliding expiration), keeping the affinity sticky as long as requests keep coming.",
+    "固定过期": "Fixed expiration",
+    "滑动过期": "Sliding expiration"
   }
 }

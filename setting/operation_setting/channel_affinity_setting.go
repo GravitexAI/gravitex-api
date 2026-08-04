@@ -18,6 +18,11 @@ type ChannelAffinityRule struct {
 	ValueRegex string `json:"value_regex"`
 	TTLSeconds int    `json:"ttl_seconds"`
 
+	// FixedTTL 为 true 时使用「固定过期」：命中已有亲和渠道后不再刷新 TTL，
+	// 让缓存从首次写入起自然到期，到期后重新走负载均衡（多个同优先级渠道趋于均衡）。
+	// 为 false（默认）时保持原有的「滑动过期」：每次成功请求都续期 TTL，会话始终粘同一渠道。
+	FixedTTL bool `json:"fixed_ttl,omitempty"`
+
 	ParamOverrideTemplate map[string]interface{} `json:"param_override_template,omitempty"`
 
 	SkipRetryOnFailure bool `json:"skip_retry_on_failure"`
@@ -105,6 +110,7 @@ var channelAffinitySetting = ChannelAffinitySetting{
 			},
 			ValueRegex:            "",
 			TTLSeconds:            0,
+			FixedTTL:              true,
 			ParamOverrideTemplate: buildPassHeaderTemplate(claudeCliPassThroughHeaders),
 			SkipRetryOnFailure:    true,
 			IncludeUsingGroup:     true,

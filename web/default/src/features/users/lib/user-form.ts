@@ -67,12 +67,15 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
 /**
  * Transform form data to API payload
  */
+// userId 是 number | string：用户 ID 来自 Java 端的 Snowflake（19 位），
+// 超过 JS Number.MAX_SAFE_INTEGER，后端以字符串下发。这里只做 undefined 判断和原样透传，
+// 绝不能 Number() 转换，否则精度丢失导致更新打到错误的用户上。
 export function transformFormDataToPayload(
   data: UserFormValues,
-  userId?: number,
+  userId?: number | string,
   catalog?: PermissionCatalog
-): UserFormData & { id?: number } {
-  const payload: UserFormData & { id?: number } = {
+): UserFormData & { id?: number | string } {
+  const payload: UserFormData & { id?: number | string } = {
     username: data.username,
     display_name: data.display_name || data.username,
     password: data.password || undefined,

@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -32,6 +33,23 @@ func TargetFromChannelType(channelType int) FilterTarget {
 	default:
 		return TargetAnthropicDirect
 	}
+}
+
+// ResolveBetaTarget 解析目标：override 非空且识别时优先使用，否则 fallback 到按 ChannelType。
+// 用于 Anthropic 类型渠道但实际上游是 Bedrock/Vertex 转发的场景：admin 在渠道配置里
+// 显式指定 anthropic_beta_target，即可让白名单过滤按真实底层执行，避免脏 flag 上打 400。
+func ResolveBetaTarget(channelType int, override string) FilterTarget {
+	switch strings.ToLower(strings.TrimSpace(override)) {
+	case "bedrock":
+		return TargetBedrock
+	case "bedrock-converse":
+		return TargetBedrockConverse
+	case "vertex":
+		return TargetVertex
+	case "direct", "anthropic":
+		return TargetAnthropicDirect
+	}
+	return TargetFromChannelType(channelType)
 }
 
 // Bedrock InvokeModel / InvokeModelWithResponseStream 支持的 beta flag 白名单。
@@ -229,4 +247,54 @@ func targetName(t FilterTarget) string {
 	default:
 		return "anthropic"
 	}
+}
+
+// KeptBetaSet 把 FilterBetaFlags 返回的最终 flag 列表转换成 set，方便 O(1) 判断某个
+// beta 是否被保留。供 body 顶级字段裁剪（见下方 Strip* 函数）复用。
+func KeptBetaSet(keptBetas []string) map[string]bool {
+	kept := make(map[string]bool, len(keptBetas))
+	for _, b := range keptBetas {
+		kept[b] = true
+	}
+	return kept
+}
+
+// StripContextManagementForDroppedBetas 清理 context_management 顶级字段：该字段依赖
+// context-management-2025-06-27 beta（仅 Bedrock Converse / Vertex 支持）。beta 被过滤
+// 目标剔除后仍把字段发上去，Bedrock/Vertex 会返回 "Extra inputs are not permitted"。
+func StripContextManagementForDroppedBetas(raw json.RawMessage, kept map[string]bool) json.RawMessage {
+	if len(raw) == 0 || kept["context-management-2025-06-27"] {
+		return raw
+	}
+	return nil
+}
+
+// StripOutputConfigForDroppedBetas 清理 output_config 中依赖具体 beta 的子字段：
+//   - effort 依赖 effort-2025-11-24
+//   - format 依赖 structured-outputs-2025-11-13（该字段在官方 Anthropic API 已 GA，
+//     客户端可能不再携带对应 beta；但 Bedrock/Vertex 等兼容层仍按白名单判断是否支持）
+//
+// 只裁剪失效的子字段、保留其余合法字段，避免同时携带 effort 和 format 时被整体清空误伤。
+func StripOutputConfigForDroppedBetas(raw json.RawMessage, kept map[string]bool) json.RawMessage {
+	if len(raw) == 0 || (kept["effort-2025-11-24"] && kept["structured-outputs-2025-11-13"]) {
+		return raw
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return raw
+	}
+	if !kept["effort-2025-11-24"] {
+		delete(m, "effort")
+	}
+	if !kept["structured-outputs-2025-11-13"] {
+		delete(m, "format")
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return raw
+	}
+	return out
 }

@@ -1,6 +1,8 @@
 package channel
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,6 +11,57 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+// setRewindableBody must wire req.GetBody for a seekable upstream body
+// (ReaderOnly(BodyStorage)) so net/http can rewind and retry the request after a
+// dropped keep-alive connection, instead of failing with
+// "net/http: cannot rewind body after connection loss". GetBody must yield the
+// full original body even after the primary body was already consumed.
+func TestSetRewindableBody_RewindsSeekableBody(t *testing.T) {
+	t.Parallel()
+
+	jsonData := []byte(`{"model":"claude-3","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = closer.Close() })
+	require.Equal(t, int64(len(jsonData)), size)
+
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/messages", body)
+	require.NoError(t, err)
+	// A type-erased seekable body is not one of the in-memory types http.NewRequest
+	// auto-detects, so GetBody starts nil — this is exactly the gap being fixed.
+	require.Nil(t, req.GetBody)
+
+	setRewindableBody(req, body)
+	require.NotNil(t, req.GetBody, "GetBody must be set so net/http can retry after connection loss")
+
+	// Consume the primary body, as the transport does on the first attempt.
+	first, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	require.Equal(t, jsonData, first)
+
+	// GetBody must rewind and yield the full body again for the retry.
+	rewound, err := req.GetBody()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rewound.Close() })
+	second, err := io.ReadAll(rewound)
+	require.NoError(t, err)
+	require.Equal(t, jsonData, second)
+}
+
+// A non-seekable body cannot be rewound, so setRewindableBody must leave GetBody
+// nil rather than wiring a closure that would replay a truncated body.
+func TestSetRewindableBody_NonSeekableLeavesGetBodyNil(t *testing.T) {
+	t.Parallel()
+
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/messages", nil)
+	require.NoError(t, err)
+	req.GetBody = nil
+
+	// *bytes.Buffer is a Reader but not a Seeker.
+	setRewindableBody(req, bytes.NewBufferString("not seekable"))
+	require.Nil(t, req.GetBody, "non-seekable body must leave GetBody nil")
+}
 
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 	t.Parallel()
@@ -78,6 +131,51 @@ func TestProcessHeaderOverride_NonTestKeepsClientHeaderPlaceholder(t *testing.T)
 	headers, err := processHeaderOverride(info, ctx)
 	require.NoError(t, err)
 	require.Equal(t, "trace-123", headers["x-upstream-trace"])
+}
+
+func TestProcessHeaderOverride_ClientHeaderPlaceholderUsesDefaultWhenAbsent(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	info := &relaycommon.RelayInfo{
+		IsChannelTest: false,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"X-Ark-Max-Wait-Timeout-Ms": "{client_header:X-Ark-Max-Wait-Timeout-Ms|600000}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	require.Equal(t, "600000", headers["x-ark-max-wait-timeout-ms"])
+}
+
+func TestProcessHeaderOverride_ClientHeaderPlaceholderPrefersClientValueOverDefault(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Request.Header.Set("X-Ark-Max-Wait-Timeout-Ms", "180000")
+
+	info := &relaycommon.RelayInfo{
+		IsChannelTest: false,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"X-Ark-Max-Wait-Timeout-Ms": "{client_header:X-Ark-Max-Wait-Timeout-Ms|600000}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	require.Equal(t, "180000", headers["x-ark-max-wait-timeout-ms"])
 }
 
 func TestProcessHeaderOverride_RuntimeOverrideIsFinalHeaderMap(t *testing.T) {
@@ -216,7 +314,7 @@ func TestApplyHeaderOverrideToRequest_SkipsAnthropicBetaToProtectFilter(t *testi
 
 	// 模拟 header_override 试图把脏值覆盖回去（典型场景：{client_header:anthropic-beta} 解析后）
 	headerOverride := map[string]string{
-		"anthropic-beta": "advisor-tool-2026-03-01,prompt-caching-scope-2026-01-05",
+		"anthropic-beta":  "advisor-tool-2026-03-01,prompt-caching-scope-2026-01-05",
 		"x-custom-header": "custom-value",
 	}
 

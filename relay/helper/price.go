@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -65,6 +66,35 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 }
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
+	if imagePricing, ok := ratio_setting.GetImageModelPriceConfigFromOptionMap(info.OriginModelName); ok {
+		groupRatioInfo := HandleGroupRatio(c, info)
+		request, _ := info.Request.(*dto.ImageRequest)
+		estimatedPrice, estimatedUsage := EstimateImagePerImageCost(imagePricing, request)
+		imageUnitPrice := 0.0
+		if estimatedUsage != nil {
+			imageUnitPrice = imagePricing.OutputImage[estimatedUsage.OutputSizeTier]
+		}
+		preConsumedQuota := int(estimatedPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		priceData := types.PriceData{
+			UsePrice:             true,
+			ModelPrice:           estimatedPrice,
+			PerImageUnitPrice:    imageUnitPrice,
+			ImagePriceMultiplier: 1,
+			ImagePerImagePricing: &imagePricing,
+			ImageBillingUsage:    estimatedUsage,
+			CompletionRatio:      ratio_setting.GetCompletionRatio(info.OriginModelName),
+			ImageCompletionRatio: ratio_setting.GetImageCompletionRatio(info.OriginModelName),
+			GroupRatioInfo:       groupRatioInfo,
+			QuotaToPreConsume:    preConsumedQuota,
+		}
+		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && groupRatioInfo.GroupRatio == 0 {
+			priceData.FreeModel = true
+			priceData.QuotaToPreConsume = 0
+		}
+		info.PriceData = priceData
+		return priceData, nil
+	}
+
 	// 与 nebula 一致：优先按张计费（ImageModelPricePerImage），在 GetModelPrice 之前检查
 	imageModelPrice, hasImageModelPrice := ratio_setting.GetImageModelPricePerImage(info.OriginModelName)
 	if hasImageModelPrice && imageModelPrice > 0 {
@@ -119,6 +149,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	var cacheCreationRatio1h float64
 	var audioRatio float64
 	var audioCompletionRatio float64
+	var videoRatio float64
 	var freeModel bool
 	if !usePrice {
 		preConsumedTokens := common.Max(promptTokens, common.PreConsumedQuota)
@@ -147,6 +178,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		imageRatio, _ = ratio_setting.GetImageRatio(info.OriginModelName)
 		audioRatio = ratio_setting.GetAudioRatio(info.OriginModelName)
 		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(info.OriginModelName)
+		videoRatio, _ = ratio_setting.GetVideoRatio(info.OriginModelName)
 		ratio := modelRatio * groupRatioInfo.GroupRatio
 		preConsumedQuota = int(float64(preConsumedTokens) * ratio)
 	} else {
@@ -189,6 +221,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		ImageRatio:           imageRatio,
 		AudioRatio:           audioRatio,
 		AudioCompletionRatio: audioCompletionRatio,
+		VideoRatio:           videoRatio,
 		CacheCreationRatio:   cacheCreationRatio,
 		CacheCreation5mRatio: cacheCreationRatio5m,
 		CacheCreation1hRatio: cacheCreationRatio1h,

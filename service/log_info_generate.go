@@ -224,6 +224,21 @@ func GenerateWssOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	info["text_output"] = usage.OutputTokenDetails.TextTokens
 	info["audio_ratio"] = audioRatio
 	info["audio_completion_ratio"] = audioCompletionRatio
+	if usage.InputTokenDetails.CachedTokens > 0 {
+		cachedAudio := cachedAudioTokensEstimate(usage)
+		cachedText := usage.InputTokenDetails.CachedTokens - cachedAudio
+		// cache_tokens 沿用"缓存读取Token"语义（文字缓存），与文本/Claude 路径一致
+		info["cache_tokens"] = cachedText
+		// cache_audio_tokens：realtime 独有的音频缓存，单独列出
+		if cachedAudio > 0 {
+			info["cache_audio_tokens"] = cachedAudio
+		}
+		if usage.InputTokenDetails.CachedTokensDetails != nil {
+			info["cache_tokens_source"] = "upstream"
+		} else {
+			info["cache_tokens_source"] = "estimated"
+		}
+	}
 	return info
 }
 

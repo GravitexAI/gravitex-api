@@ -4252,6 +4252,7 @@
     "Templates": "テンプレート",
     "Templates appended": "テンプレートが追加されました",
     "Tencent": "テンセント",
+    "Tencent TokenHub": "テンセント TokenHub",
     "Termination requested": "終了リクエスト済み",
     "Test": "テスト",
     "Test {{count}} matching models": "{{count}} 件の一致モデルをテスト",
@@ -4977,6 +4978,14 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Fixed expiration (do not refresh TTL on hit)": "固定有効期限（ヒット時にTTLを更新しない）",
+    "When enabled, hitting the same affinity channel does not renew the TTL. The cache expires naturally from first write, allowing periodic rebalancing across channels of equal priority. When disabled, every successful request renews the TTL (sliding expiration), keeping the affinity sticky as long as requests keep coming.": "有効にすると、同じアフィニティチャネルにヒットしてもTTLは更新されません。キャッシュは最初の書き込みから自然に期限切れとなり、同じ優先度のチャネル間で定期的に再バランスされます。無効にすると、成功したリクエストのたびにTTLが更新され（スライディング有効期限）、リクエストが続く限りアフィニティが固定されたままになります。",
+    "Fixed": "固定",
+    "Video input price": "動画入力価格",
+    "Token price for video input.": "動画入力のトークン価格。",
+    "Video ratio": "動画倍率",
+    "Ratio applied to video inputs for video billing.": "動画入力の課金に適用する倍率。",
+    "Sliding": "スライド"
   }
 }

@@ -31,7 +31,25 @@ type AwsClaudeRequest struct {
 	//Metadata         json.RawMessage     `json:"metadata,omitempty"`
 }
 
-func formatRequest(requestBody io.Reader, requestHeader http.Header, requestID string) (*AwsClaudeRequest, error) {
+// bedrockStructuredOutputGaModels 是 AWS Bedrock InvokeModel API 于 2026-02-04 GA
+// structured outputs（output_config.format）时覆盖的 Claude 4.5+ 模型集合（AWS 资源
+// ID，取自 awsModelIDMap 的 value）。GA 后 AWS 官方 InvokeModel 请求示例已不再携带
+// anthropic_beta: structured-outputs-2025-11-13，说明该字段在这些模型上已不依赖 beta
+// 声明生效，因此这些模型不走 bedrockInvokeBetaWhitelist 的常规裁剪判断。
+// 来源：https://aws.amazon.com/about-aws/whats-new/2026/02/structured-outputs-available-amazon-bedrock/
+var bedrockStructuredOutputGaModels = map[string]bool{
+	"anthropic.claude-sonnet-4-5-20250929-v1:0": true,
+	"anthropic.claude-sonnet-4-6":               true,
+	"anthropic.claude-haiku-4-5-20251001-v1:0":  true,
+	"anthropic.claude-opus-4-5-20251101-v1:0":   true,
+	"anthropic.claude-opus-4-6-v1":              true,
+	"anthropic.claude-opus-4-7":                 true,
+	"anthropic.claude-opus-4-8":                 true,
+	"anthropic.claude-opus-4-9":                 true,
+	"anthropic.claude-opus-4-10":                true,
+}
+
+func formatRequest(requestBody io.Reader, requestHeader http.Header, requestID string, requestModel string) (*AwsClaudeRequest, error) {
 	var awsClaudeRequest AwsClaudeRequest
 	err := common.DecodeJson(requestBody, &awsClaudeRequest)
 	if err != nil {
@@ -53,27 +71,20 @@ func formatRequest(requestBody io.Reader, requestHeader http.Header, requestID s
 
 	// beta flag 与 body 顶级字段是绑定关系：beta 被过滤掉，对应 body 字段也必须清理，
 	// 否则 Bedrock 会返回 "Extra inputs are not permitted"。
-	awsClaudeRequest.stripBodyFieldsForDroppedBetas(filtered)
+	awsClaudeRequest.stripBodyFieldsForDroppedBetas(filtered, requestModel)
 
 	logger.LogJson(context.Background(), "json", awsClaudeRequest)
 	return &awsClaudeRequest, nil
 }
 
 // stripBodyFieldsForDroppedBetas 清理那些"对应 beta 未被保留"的顶级 body 字段。
-// 后续发现新的 beta ↔ body 绑定关系时，在此追加映射即可。
-func (r *AwsClaudeRequest) stripBodyFieldsForDroppedBetas(keptBetas []string) {
-	kept := make(map[string]bool, len(keptBetas))
-	for _, b := range keptBetas {
-		kept[b] = true
+func (r *AwsClaudeRequest) stripBodyFieldsForDroppedBetas(keptBetas []string, requestModel string) {
+	kept := claude.KeptBetaSet(keptBetas)
+	if bedrockStructuredOutputGaModels[getAwsModelID(requestModel)] {
+		kept["structured-outputs-2025-11-13"] = true
 	}
-	// context_management 顶级字段依赖 context-management-2025-06-27 beta（仅 Converse 支持）
-	if !kept["context-management-2025-06-27"] {
-		r.ContextManagement = nil
-	}
-	// output_config: { effort } 依赖 effort-2025-11-24 beta
-	if !kept["effort-2025-11-24"] {
-		r.OutputConfig = nil
-	}
+	r.ContextManagement = claude.StripContextManagementForDroppedBetas(r.ContextManagement, kept)
+	r.OutputConfig = claude.StripOutputConfigForDroppedBetas(r.OutputConfig, kept)
 }
 
 // NovaMessage Nova模型使用messages-v1格式

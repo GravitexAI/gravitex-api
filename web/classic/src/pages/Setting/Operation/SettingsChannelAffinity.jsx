@@ -213,6 +213,7 @@ const buildChannelAffinityRulePayload = ({
   key_sources: keySources,
   value_regex: (values?.value_regex || '').trim(),
   ttl_seconds: Number(values?.ttl_seconds || 0),
+  fixed_ttl: !!values?.fixed_ttl,
   include_using_group: !!values?.include_using_group,
   include_model_name: !!values?.include_model_name,
   include_rule_name: !!values?.include_rule_name,
@@ -279,6 +280,7 @@ export default function SettingsChannelAffinity(props) {
       user_agent_include_text: (r.user_agent_include || []).join('\n'),
       value_regex: r.value_regex || '',
       ttl_seconds: Number(r.ttl_seconds || 0),
+      fixed_ttl: !!r.fixed_ttl,
       skip_retry_on_failure: !!r.skip_retry_on_failure,
       include_using_group: r.include_using_group ?? true,
       include_model_name: !!r.include_model_name,
@@ -571,7 +573,14 @@ export default function SettingsChannelAffinity(props) {
     {
       title: t('TTL（秒）'),
       dataIndex: 'ttl_seconds',
-      render: (v) => <Text>{Number(v || 0) || '-'}</Text>,
+      render: (v, record) => (
+        <Space>
+          <Text>{Number(v || 0) || '-'}</Text>
+          <Tag color={record?.fixed_ttl ? 'blue' : 'grey'}>
+            {record?.fixed_ttl ? t('固定过期') : t('滑动过期')}
+          </Tag>
+        </Space>
+      ),
     },
     {
       title: t('失败后是否重试'),
@@ -1230,6 +1239,20 @@ export default function SettingsChannelAffinity(props) {
                       </Text>
                     }
                   />
+                </Col>
+              </Row>
+
+              <Row gutter={16}>
+                <Col xs={24}>
+                  <Form.Switch
+                    field='fixed_ttl'
+                    label={t('固定过期（命中后不刷新 TTL）')}
+                  />
+                  <Text type='tertiary' size='small'>
+                    {t(
+                      '开启后，命中同一亲和渠道不会续期 TTL，缓存从首次写入起自然到期，到期后重新负载均衡；关闭时每次成功请求都会续期（滑动过期），只要持续有请求就会一直粘在同一渠道。',
+                    )}
+                  </Text>
                 </Col>
               </Row>
 

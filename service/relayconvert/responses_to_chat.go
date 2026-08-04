@@ -150,6 +150,8 @@ func UsageFromResponsesUsage(src *dto.Usage) *dto.Usage {
 	}
 	if src.InputTokensDetails != nil {
 		usage.PromptTokensDetails.CachedTokens = src.InputTokensDetails.CachedTokens
+		// GPT-5.6 起上游会返回 cache_write_tokens，需透传以正确计算缓存创建费用。
+		usage.PromptTokensDetails.CacheWriteTokens = src.InputTokensDetails.CacheWriteTokens
 		usage.PromptTokensDetails.ImageTokens = src.InputTokensDetails.ImageTokens
 		usage.PromptTokensDetails.AudioTokens = src.InputTokensDetails.AudioTokens
 	}

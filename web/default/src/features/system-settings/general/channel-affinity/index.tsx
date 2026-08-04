@@ -573,7 +573,16 @@ export function ChannelAffinitySection(props: Props) {
               {
                 id: 'ttl',
                 header: t('TTL'),
-                cell: (rule) => rule.ttl_seconds || '-',
+                cell: (rule) => (
+                  <div className='flex items-center gap-1.5'>
+                    <span>{rule.ttl_seconds || '-'}</span>
+                    <StatusBadge
+                      label={rule.fixed_ttl ? t('Fixed') : t('Sliding')}
+                      variant={rule.fixed_ttl ? 'info' : 'neutral'}
+                      copyable={false}
+                    />
+                  </div>
+                ),
               },
               {
                 id: 'retry',

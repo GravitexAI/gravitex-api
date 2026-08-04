@@ -69,6 +69,7 @@ type UpstreamRatioSyncProps = {
     ImageRatio: string
     AudioRatio: string
     AudioCompletionRatio: string
+    VideoRatio?: string
     'billing_setting.billing_mode': string
     'billing_setting.billing_expr': string
   }
@@ -343,6 +344,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
       AudioCompletionRatio: parseJsonRecord<number>(
         modelRatios.AudioCompletionRatio
       ),
+      VideoRatio: parseJsonRecord<number>(modelRatios.VideoRatio),
       ModelPrice: parseJsonRecord<number>(modelRatios.ModelPrice),
       'billing_setting.billing_mode': parseJsonRecord<string>(
         modelRatios['billing_setting.billing_mode']
@@ -368,6 +370,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
       currentRatios.ImageRatio[model] !== undefined ||
       currentRatios.AudioRatio[model] !== undefined ||
       currentRatios.AudioCompletionRatio[model] !== undefined
+      || currentRatios.VideoRatio[model] !== undefined
     )
       return 'ratio'
     return null
@@ -383,6 +386,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         ImageRatio: { ...currentRatios.ImageRatio },
         AudioRatio: { ...currentRatios.AudioRatio },
         AudioCompletionRatio: { ...currentRatios.AudioCompletionRatio },
+        VideoRatio: { ...currentRatios.VideoRatio },
         ModelPrice: { ...currentRatios.ModelPrice },
         'billing_setting.billing_mode': {
           ...currentRatios['billing_setting.billing_mode'],
@@ -407,6 +411,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
           delete finalRatios.ImageRatio[model]
           delete finalRatios.AudioRatio[model]
           delete finalRatios.AudioCompletionRatio[model]
+          delete finalRatios.VideoRatio[model]
         }
         if (hasRatio) {
           delete finalRatios.ModelPrice[model]

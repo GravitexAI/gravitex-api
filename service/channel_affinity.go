@@ -25,6 +25,7 @@ const (
 	ginKeyChannelAffinityMeta       = "channel_affinity_meta"
 	ginKeyChannelAffinityLogInfo    = "channel_affinity_log_info"
 	ginKeyChannelAffinitySkipRetry  = "channel_affinity_skip_retry_on_failure"
+	ginKeyChannelAffinityHitChannel = "channel_affinity_hit_channel_id"
 
 	channelAffinityCacheNamespace           = "new-api:channel_affinity:v1"
 	channelAffinityUsageCacheStatsNamespace = "new-api:channel_affinity_usage_cache_stats:v1"
@@ -45,6 +46,7 @@ type channelAffinityMeta struct {
 	TTLSeconds     int
 	RuleName       string
 	SkipRetry      bool
+	FixedTTL       bool
 	ParamTemplate  map[string]interface{}
 	KeySourceType  string
 	KeySourceKey   string
@@ -598,6 +600,7 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 			TTLSeconds:     ttlSeconds,
 			RuleName:       rule.Name,
 			SkipRetry:      rule.SkipRetryOnFailure,
+			FixedTTL:       rule.FixedTTL,
 			ParamTemplate:  cloneStringAnyMap(rule.ParamOverrideTemplate),
 			KeySourceType:  strings.TrimSpace(usedSource.Type),
 			KeySourceKey:   strings.TrimSpace(usedSource.Key),
@@ -616,6 +619,7 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 			return 0, false
 		}
 		if found {
+			c.Set(ginKeyChannelAffinityHitChannel, channelID)
 			return channelID, true
 		}
 		return 0, false
@@ -727,6 +731,17 @@ func RecordChannelAffinity(c *gin.Context, channelID int) {
 	if !ok {
 		return
 	}
+	// 固定过期模式下，若本次沿用了已命中的同一渠道，则不刷新 TTL，
+	// 让缓存自然到期后重新负载均衡；首次分配或渠道切换时仍需写入并续期。
+	if meta, ok := getChannelAffinityMeta(c); ok && meta.FixedTTL {
+		hitChannelID := 0
+		if c != nil {
+			hitChannelID = c.GetInt(ginKeyChannelAffinityHitChannel)
+		}
+		if !affinityShouldRefreshTTL(meta.FixedTTL, hitChannelID, channelID) {
+			return
+		}
+	}
 	if ttlSeconds <= 0 {
 		ttlSeconds = setting.DefaultTTLSeconds
 	}
@@ -737,6 +752,20 @@ func RecordChannelAffinity(c *gin.Context, channelID int) {
 	if err := cache.SetWithTTL(cacheKey, channelID, time.Duration(ttlSeconds)*time.Second); err != nil {
 		common.SysError(fmt.Sprintf("channel affinity cache set failed: key=%s, err=%v", cacheKey, err))
 	}
+}
+
+// affinityShouldRefreshTTL 决定成功请求后是否刷新（续期）亲和缓存的 TTL。
+// 固定过期（fixedTTL=true）下，若本次沿用的正是已命中的同一渠道，则返回 false 不续期，
+// 使 TTL 从首次写入起自然到期，到期后重新负载均衡；
+// 非固定过期、首次分配（未命中）、或渠道发生切换时均返回 true，需写入并续期。
+func affinityShouldRefreshTTL(fixedTTL bool, hitChannelID, finalChannelID int) bool {
+	if !fixedTTL {
+		return true
+	}
+	if hitChannelID > 0 && hitChannelID == finalChannelID {
+		return false
+	}
+	return true
 }
 
 type ChannelAffinityUsageCacheStats struct {

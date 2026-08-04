@@ -241,7 +241,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 				fmt.Errorf("查询用户额度失败: %v", err),
 				"query_quota_failed", http.StatusInternalServerError)
 		}
-		if userQuota <= 0 {
+		if userQuota <= 0 && !service.IsNegativeBalanceAllowed(c) {
 			return nil, service.TaskErrorWrapperLocal(
 				fmt.Errorf("用户额度不足, 剩余额度: %s", logger.FormatQuota(userQuota)),
 				"insufficient_user_quota", http.StatusForbidden)
@@ -270,7 +270,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 	if resp != nil && resp.StatusCode != http.StatusOK {
 		responseBody, _ := io.ReadAll(resp.Body)
-		return nil, service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
+		taskErr := service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
+		if c.GetBool(common.KeySeedanceRawMirror) {
+			taskErr.RawBody = responseBody
+		}
+		return nil, taskErr
 	}
 
 	// 10. 返回 OtherRatios 给下游（header 必须在 DoResponse 写 body 之前设置）
@@ -347,7 +351,7 @@ var fetchRespBuilders = map[int]func(c *gin.Context) (respBody []byte, taskResp 
 func RelayTaskFetch(c *gin.Context, relayMode int) (taskResp *dto.TaskError) {
 	respBuilder, ok := fetchRespBuilders[relayMode]
 	if !ok {
-		taskResp = service.TaskErrorWrapperLocal(errors.New("invalid_relay_mode"), "invalid_relay_mode", http.StatusBadRequest)
+		return service.TaskErrorWrapperLocal(errors.New("invalid_relay_mode"), "invalid_relay_mode", http.StatusBadRequest)
 	}
 
 	respBody, taskErr := respBuilder(c)
@@ -439,7 +443,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	isOpenAIVideoAPI := strings.HasPrefix(c.Request.RequestURI, "/v1/videos/")
 
 	// Gemini/Vertex 支持实时查询：用户 fetch 时直接从上游拉取最新状态
-	if realtimeResp := tryRealtimeFetch(originTask, isOpenAIVideoAPI); len(realtimeResp) > 0 {
+	if realtimeResp := tryRealtimeFetch(originTask, isOpenAIVideoAPI, c.GetBool(common.KeySeedanceRawMirror)); len(realtimeResp) > 0 {
 		respBody = realtimeResp
 		return
 	}
@@ -448,6 +452,10 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	adaptor := GetTaskAdaptor(originTask.Platform)
 	if adaptor != nil {
 		if converter, ok := adaptor.(channel.OpenAIVideoConverter); ok {
+			if c.GetBool(common.KeySeedanceRawMirror) {
+				respBody = originTask.Data
+				return
+			}
 			if originTask.Status == model.TaskStatusSuccess && !model.IsQuotaDataStreamEnabled() {
 				if err := model.SyncQuotaDataFromConsumeLogsByRequestId(originTask.TaskID); err != nil {
 					common.SysLog(fmt.Sprintf("[QuotaData] sync from logs failed task=%s err=%v", originTask.TaskID, err))
@@ -497,7 +505,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 
 // tryRealtimeFetch 尝试从上游实时拉取视频任务状态。
 // 当非 OpenAI Video API 时，还会构建自定义格式的响应体。
-func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
+func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool, rawMirror bool) []byte {
 	if task.Status == model.TaskStatusFailure || (task.Status == model.TaskStatusSuccess && isVideoTaskBillingProcessed(task)) {
 		return nil
 	}
@@ -551,6 +559,9 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 		}
 		if isOpenAIVideoAPI {
 			return nil
+		}
+		if rawMirror {
+			return body
 		}
 		if _, ok := adaptor.(channel.OpenAIVideoConverter); ok {
 			return nil
@@ -609,6 +620,9 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) []byte {
 	// ali / azurevideo / sora / uptoken 等所有现役视频渠道）回到外层 ConvertToOpenAIVideo 路径，
 	// 输出标准 OpenAIVideo 结构（status=in_progress、metadata 含上游字段）。
 	// 兜底的简化响应分支仅留给未实现 converter 的 legacy 渠道。
+	if rawMirror {
+		return body
+	}
 	if _, ok := adaptor.(channel.OpenAIVideoConverter); ok {
 		return nil
 	}

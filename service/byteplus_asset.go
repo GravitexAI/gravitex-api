@@ -61,6 +61,25 @@ func byteplusCall(cfg ByteplusAssetConfig, action string, body map[string]interf
 	return resp, nil
 }
 
+// ByteplusRawAction transparently forwards an arbitrary Action + request body
+// to BytePlus Ark and returns the unprocessed raw response map (including the
+// genuine ResponseMetadata BytePlus returns), for callers that need the
+// official response shape verbatim — e.g. the Seedance asset-library
+// official-mirror endpoint. Unlike the ByteplusXxx wrapper functions in this
+// file, it does not narrow the request to named parameters, so
+// SortBy/SortOrder/per-call ProjectName and any other officially-supported
+// field are preserved.
+func ByteplusRawAction(cfg ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
+	resp, err := byteplusCall(cfg, action, body)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("byteplus %s: nil response", action)
+	}
+	return *resp, nil
+}
+
 // parseResponse converts the SDK response map to a typed struct via JSON round-trip.
 // If the response contains a "Result" key (BytePlus SDK envelope), it unwraps that level first.
 func parseResponse(resp *map[string]interface{}, target interface{}) error {
@@ -413,16 +432,18 @@ func ByteplusCreateVisualValidateSession(cfg ByteplusAssetConfig, callbackURL st
 	// (per their public docs) or `lng` (seen in some links they hand back); we
 	// set both to be robust to upstream changes. We also intentionally *override*
 	// any pre-existing lang/lng so users always see zh-CN on first paint.
-	h5Link = forceH5LinkChinese(h5Link)
+	h5Link = ForceH5LinkChinese(h5Link)
 	return h5Link, bytedToken, nil
 }
 
-// forceH5LinkChinese rewrites the BytePlus liveness H5 link so the verification
+// ForceH5LinkChinese rewrites the BytePlus liveness H5 link so the verification
 // page defaults to Simplified Chinese instead of inheriting the browser locale
 // (which has been observed to land on English even though the docs claim `zh`
 // is the default). On parse failure we fall back to a string append so the
-// caller still gets a usable link.
-func forceH5LinkChinese(h5Link string) string {
+// caller still gets a usable link. Exported so the Seedance official-mirror
+// endpoint (which calls ByteplusRawAction, bypassing ByteplusCreateVisualValidateSession)
+// can apply the same rewrite to its raw H5Link.
+func ForceH5LinkChinese(h5Link string) string {
 	u, err := url.Parse(h5Link)
 	if err != nil {
 		// Best-effort fallback: append params raw.

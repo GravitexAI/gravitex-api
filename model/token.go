@@ -3,7 +3,9 @@ package model
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -12,23 +14,25 @@ import (
 )
 
 type Token struct {
-	Id                 int            `json:"id"`
-	UserId             int            `json:"user_id" gorm:"index"`
-	Key                string         `json:"key" gorm:"type:varchar(128);uniqueIndex"`
-	Status             int            `json:"status" gorm:"default:1"`
-	Name               string         `json:"name" gorm:"index" `
-	CreatedTime        int64          `json:"created_time" gorm:"bigint"`
-	AccessedTime       int64          `json:"accessed_time" gorm:"bigint"`
-	ExpiredTime        int64          `json:"expired_time" gorm:"bigint;default:-1"` // -1 means never expired
-	RemainQuota        int            `json:"remain_quota" gorm:"default:0"`
-	UnlimitedQuota     bool           `json:"unlimited_quota"`
-	ModelLimitsEnabled bool           `json:"model_limits_enabled"`
-	ModelLimits        string         `json:"model_limits" gorm:"type:text"`
-	AllowIps           *string        `json:"allow_ips" gorm:"default:''"`
-	UsedQuota          int            `json:"used_quota" gorm:"default:0"` // used quota
-	Group              string         `json:"group" gorm:"default:''"`
-	CrossGroupRetry    bool           `json:"cross_group_retry"` // 跨分组重试，仅auto分组有效
-	DeletedAt          gorm.DeletedAt `gorm:"index"`
+	Id                  int            `json:"id"`
+	UserId              int            `json:"user_id" gorm:"index"`
+	Key                 string         `json:"key" gorm:"type:varchar(128);uniqueIndex"`
+	Status              int            `json:"status" gorm:"default:1"`
+	Name                string         `json:"name" gorm:"index" `
+	CreatedTime         int64          `json:"created_time" gorm:"bigint"`
+	AccessedTime        int64          `json:"accessed_time" gorm:"bigint"`
+	ExpiredTime         int64          `json:"expired_time" gorm:"bigint;default:-1"` // -1 means never expired
+	RemainQuota         int            `json:"remain_quota" gorm:"default:0"`
+	UnlimitedQuota      bool           `json:"unlimited_quota"`
+	ModelLimitsEnabled  bool           `json:"model_limits_enabled"`
+	ModelLimits         string         `json:"model_limits" gorm:"type:text"`
+	VendorLimits        string         `json:"vendor_limits" gorm:"type:text"`
+	AllowIps            *string        `json:"allow_ips" gorm:"default:''"`
+	UsedQuota           int            `json:"used_quota" gorm:"default:0"` // used quota
+	Group               string         `json:"group" gorm:"default:''"`
+	CrossGroupRetry     bool           `json:"cross_group_retry"`                      // 跨分组重试，仅auto分组有效
+	DailySpendThreshold int            `json:"daily_spend_threshold" gorm:"default:0"` // 日消费告警阈值（quota单位，500000=1美元，0=不告警）
+	DeletedAt           gorm.DeletedAt `gorm:"index"`
 }
 
 func (token *Token) Clean() {
@@ -302,7 +306,7 @@ func (token *Token) Update() (err error) {
 		}
 	}()
 	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry").Updates(token).Error
+		"model_limits_enabled", "model_limits", "vendor_limits", "allow_ips", "group", "cross_group_retry", "daily_spend_threshold").Updates(token).Error
 	return err
 }
 
@@ -352,6 +356,17 @@ func (token *Token) GetModelLimitsMap() map[string]bool {
 	limitsMap := make(map[string]bool)
 	for _, limit := range limits {
 		limitsMap[limit] = true
+	}
+	return limitsMap
+}
+
+func (token *Token) GetVendorLimitsMap() map[int]bool {
+	limitsMap := make(map[int]bool)
+	for _, limit := range strings.Split(token.VendorLimits, ",") {
+		vendorId, err := strconv.Atoi(strings.TrimSpace(limit))
+		if err == nil && vendorId > 0 {
+			limitsMap[vendorId] = true
+		}
 	}
 	return limitsMap
 }
@@ -515,4 +530,22 @@ func InvalidateUserTokensCache(userId int) error {
 		}
 	}
 	return firstErr
+}
+
+// GetTokenDailySpend 统计指定 token 今天（本地时区，自当天 0 点起）的消费日志（type=消费）quota 总和，
+// 用于 token 维度的"日消费告警阈值"判断。
+func GetTokenDailySpend(tokenId int) (int64, error) {
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+	var quotaSum int64
+	err := LOG_DB.Table("logs").
+		Select("COALESCE(sum(quota),0)").
+		Where("token_id = ?", tokenId).
+		Where("type = ?", LogTypeConsume).
+		Where("created_at >= ?", todayStart).
+		Row().Scan(&quotaSum)
+	if err != nil {
+		return 0, err
+	}
+	return quotaSum, nil
 }

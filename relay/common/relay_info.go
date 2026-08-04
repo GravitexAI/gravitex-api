@@ -328,25 +328,27 @@ func (info *RelayInfo) ToString() string {
 
 // 定义支持流式选项的通道类型
 var streamSupportedChannels = map[int]bool{
-	constant.ChannelTypeOpenAI:         true,
-	constant.ChannelTypeAnthropic:      true,
-	constant.ChannelTypeAws:            true,
-	constant.ChannelTypeGemini:         true,
-	constant.ChannelCloudflare:         true,
-	constant.ChannelTypeAzure:          true,
-	constant.ChannelTypeVolcEngine:     true,
-	constant.ChannelTypeOllama:         true,
-	constant.ChannelTypeXai:            true,
-	constant.ChannelTypeDeepSeek:       true,
-	constant.ChannelTypeBaiduV2:        true,
-	constant.ChannelTypeZhipu_v4:       true,
-	constant.ChannelTypeAli:            true,
-	constant.ChannelTypeSubmodel:       true,
-	constant.ChannelTypeCodex:          true,
-	constant.ChannelTypeMoonshot:       true,
-	constant.ChannelTypeMiniMax:        true,
-	constant.ChannelTypeSiliconFlow:    true,
-	constant.ChannelTypeAdvancedCustom: true,
+	constant.ChannelTypeOpenAI:          true,
+	constant.ChannelTypeAnthropic:       true,
+	constant.ChannelTypeAws:             true,
+	constant.ChannelTypeGemini:          true,
+	constant.ChannelCloudflare:          true,
+	constant.ChannelTypeAzure:           true,
+	constant.ChannelTypeVolcEngine:      true,
+	constant.ChannelTypeOllama:          true,
+	constant.ChannelTypeXai:             true,
+	constant.ChannelTypeDeepSeek:        true,
+	constant.ChannelTypeBaiduV2:         true,
+	constant.ChannelTypeZhipu_v4:        true,
+	constant.ChannelTypeAli:             true,
+	constant.ChannelTypeSubmodel:        true,
+	constant.ChannelTypeCodex:           true,
+	constant.ChannelTypeMoonshot:        true,
+	constant.ChannelTypeMiniMax:         true,
+	constant.ChannelTypeSiliconFlow:     true,
+	constant.ChannelTypeAdvancedCustom:  true,
+	constant.ChannelTypeTencent:         true,
+	constant.ChannelTypeTencentTokenHub: true,
 }
 
 func GenRelayInfoWs(c *gin.Context, ws *websocket.Conn) *RelayInfo {
@@ -965,6 +967,13 @@ type TaskInfo struct {
 	Progress         string `json:"progress,omitempty"`
 	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
 	TotalTokens      int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
+	InputTokens      int    `json:"input_tokens,omitempty"`
+	// Input modality breakdown is populated by providers that return it (currently Gemini Omni).
+	TextInputTokens   int `json:"text_input_tokens,omitempty"`
+	ImageInputTokens  int `json:"image_input_tokens,omitempty"`
+	VideoInputTokens  int `json:"video_input_tokens,omitempty"`
+	VideoOutputTokens int `json:"video_output_tokens,omitempty"`
+	TextOutputTokens  int `json:"text_output_tokens,omitempty"`
 	// 实际使用量（由上游 usage 字段提供，优先用于计费）
 	ActualSize     string `json:"actual_size,omitempty"`     // 实际分辨率，如 "1280*720"（阿里 wan2.6）
 	ActualSR       int    `json:"actual_sr,omitempty"`       // 实际 SR（分辨率数值，如 720）

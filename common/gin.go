@@ -20,6 +20,14 @@ import (
 const KeyRequestBody = "key_request_body"
 const KeyBodyStorage = "key_body_storage"
 
+// KeySeedanceRawMirror flags a request as arriving through one of the Seedance
+// official-mirror routes (see middleware.SeedanceOfficialMirror). When true,
+// doubao.TaskAdaptor and relay/relay_task.go forward request/response bytes
+// verbatim instead of going through the platform's normalized
+// TaskSubmitReq/OpenAIVideo shapes. See
+// docs/byteplus/seedance-2.0-official-api-mirror-design.md.
+const KeySeedanceRawMirror = "seedance_raw_mirror"
+
 var ErrRequestBodyTooLarge = errors.New("request body too large")
 
 func IsRequestBodyTooLargeError(err error) bool {

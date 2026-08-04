@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/require"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -32,10 +33,11 @@ type tokenPageResponse struct {
 }
 
 type tokenResponseItem struct {
-	ID     int    `json:"id"`
-	Name   string `json:"name"`
-	Key    string `json:"key"`
-	Status int    `json:"status"`
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	Key          string `json:"key"`
+	Status       int    `json:"status"`
+	VendorLimits string `json:"vendor_limits"`
 }
 
 type tokenKeyResponse struct {
@@ -479,8 +481,9 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 		"expired_time":         -1,
 		"remain_quota":         100,
 		"unlimited_quota":      true,
-		"model_limits_enabled": false,
-		"model_limits":         "",
+		"model_limits_enabled": true,
+		"model_limits":         "model-a,model-b",
+		"vendor_limits":        "1,2",
 		"group":                "default",
 		"cross_group_retry":    false,
 	}
@@ -500,9 +503,42 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 	if detail.Key != token.GetMaskedKey() {
 		t.Fatalf("expected masked update key %q, got %q", token.GetMaskedKey(), detail.Key)
 	}
+	require.Equal(t, "1,2", detail.VendorLimits)
+	var updated model.Token
+	require.NoError(t, db.First(&updated, token.Id).Error)
+	require.True(t, updated.ModelLimitsEnabled)
+	require.Equal(t, "model-a,model-b", updated.ModelLimits)
+	require.Equal(t, "1,2", updated.VendorLimits)
 	if strings.Contains(recorder.Body.String(), token.Key) {
 		t.Fatalf("update response leaked raw token key: %s", recorder.Body.String())
 	}
+}
+
+func TestAddTokenPersistsVendorLimits(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	body := map[string]any{
+		"name":                  "vendor-limited-token",
+		"expired_time":          -1,
+		"remain_quota":          100,
+		"unlimited_quota":       true,
+		"model_limits_enabled":  true,
+		"model_limits":          "model-a,model-b",
+		"vendor_limits":         "3,5",
+		"group":                 "default",
+		"cross_group_retry":     false,
+		"daily_spend_threshold": 0,
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", body, 1)
+	AddToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	var token model.Token
+	require.NoError(t, db.Where("user_id = ? AND name = ?", 1, "vendor-limited-token").First(&token).Error)
+	require.True(t, token.ModelLimitsEnabled)
+	require.Equal(t, "model-a,model-b", token.ModelLimits)
+	require.Equal(t, "3,5", token.VendorLimits)
 }
 
 func TestGetTokenKeyRequiresOwnershipAndReturnsFullKey(t *testing.T) {

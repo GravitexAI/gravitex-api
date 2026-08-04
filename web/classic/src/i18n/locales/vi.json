@@ -4108,6 +4108,7 @@
     "音频补全倍率（仅部分模型支持该计费）": "Tỷ lệ hoàn thành âm thanh (chỉ được hỗ trợ bởi một số mô hình để tính phí)",
     "音频输入：{{tokens}} / 1M * 模型倍率 {{modelRatio}} * 音频倍率 {{audioRatio}} * {{ratioType}} {{ratio}} = {{amount}}": "Đầu vào âm thanh: {{tokens}} / 1M * hệ số mô hình {{modelRatio}} * hệ số âm thanh {{audioRatio}} * {{ratioType}} {{ratio}} = {{amount}}",
     "音频输入价格": "Giá đầu vào âm thanh",
+    "视频输入价格": "Giá đầu vào video",
     "音频输入价格：{{symbol}}{{price}} / 1M tokens": "Giá đầu vào âm thanh: {{symbol}}{{price}} / 1M tokens",
     "音频输入倍率": "",
     "音频输入相关的倍率设置，键为模型名称，值为倍率": "Cài đặt tỷ lệ liên quan đến đầu vào âm thanh, khóa là tên mô hình, giá trị là tỷ lệ",
@@ -4214,6 +4215,10 @@
     "并确认自行承担部署": "confirm that I bear legal responsibility arising from deployment",
     "运营和收费行为产生的法律责任": "operation and charging behavior",
     "，": ", ",
-    "、": ", "
+    "、": ", ",
+    "固定过期（命中后不刷新 TTL）": "Hết hạn cố định (không làm mới TTL khi trùng khớp)",
+    "开启后，命中同一亲和渠道不会续期 TTL，缓存从首次写入起自然到期，到期后重新负载均衡；关闭时每次成功请求都会续期（滑动过期），只要持续有请求就会一直粘在同一渠道。": "Khi bật, việc trùng khớp cùng một kênh liên kết sẽ không làm mới TTL. Bộ nhớ đệm sẽ tự hết hạn kể từ lần ghi đầu tiên, cho phép cân bằng lại định kỳ giữa các kênh có cùng mức ưu tiên. Khi tắt, mỗi yêu cầu thành công sẽ làm mới TTL (hết hạn trượt), giữ liên kết miễn là các yêu cầu vẫn tiếp tục đến.",
+    "固定过期": "Hết hạn cố định",
+    "滑动过期": "Hết hạn trượt"
   }
 }

@@ -4252,6 +4252,7 @@
     "Templates": "Templates",
     "Templates appended": "Templates appended",
     "Tencent": "Tencent",
+    "Tencent TokenHub": "Tencent TokenHub",
     "Termination requested": "Termination requested",
     "Test": "Test",
     "Test {{count}} matching models": "Test {{count}} matching models",
@@ -4977,6 +4978,14 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Fixed expiration (do not refresh TTL on hit)": "Fixed expiration (do not refresh TTL on hit)",
+    "When enabled, hitting the same affinity channel does not renew the TTL. The cache expires naturally from first write, allowing periodic rebalancing across channels of equal priority. When disabled, every successful request renews the TTL (sliding expiration), keeping the affinity sticky as long as requests keep coming.": "When enabled, hitting the same affinity channel does not renew the TTL. The cache expires naturally from first write, allowing periodic rebalancing across channels of equal priority. When disabled, every successful request renews the TTL (sliding expiration), keeping the affinity sticky as long as requests keep coming.",
+    "Fixed": "Fixed",
+    "Video input price": "Video input price",
+    "Token price for video input.": "Token price for video input.",
+    "Video ratio": "Video ratio",
+    "Ratio applied to video inputs for video billing.": "Ratio applied to video inputs for video billing.",
+    "Sliding": "Sliding"
   }
 }

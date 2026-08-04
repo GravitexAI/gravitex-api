@@ -100,10 +100,17 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	// 不转换 thinking.type、不降级 tool_choice。这些兼容性处理只在 OpenAI→Claude
 	// 路径执行；直连 Vertex /v1/messages 的调用方应遵循 Anthropic 协议规范，
 	// 不符合时由上游统一返回 400。
+	//
+	// 例外：image/document 的 URL source。Vertex AI 硬性不支持 URL source（仅
+	// base64），这不是协议宽松度问题，不转换的话所有带 URL 媒体的请求都会被上游
+	// 拒绝，因此这里始终做转换。
 	if v, ok := claudeModelMap[info.UpstreamModelName]; ok {
 		c.Set("request_model", v)
 	} else {
 		c.Set("request_model", request.Model)
+	}
+	if err := claude.ConvertURLSourcesToBase64(c, request); err != nil {
+		return nil, err
 	}
 	vertexClaudeReq := copyRequest(request, anthropicVersion)
 	return vertexClaudeReq, nil
@@ -256,7 +263,12 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			}
 		}
 		if prompt == "" {
-			return nil, errors.New("prompt is required for image generation")
+			return nil, types.NewErrorWithStatusCode(
+				errors.New("prompt is required for image generation"),
+				types.ErrorCodeInvalidRequest,
+				http.StatusBadRequest,
+				types.ErrOptionWithSkipRetry(),
+			)
 		}
 
 		imgReq := dto.ImageRequest{

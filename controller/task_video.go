@@ -483,11 +483,12 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task_success: task=%s model=%s channel=%d billingRoute=%s preQuota=%d",
 			taskId, taskModelName, channel.Id, billingRoute, task.Quota))
 
-		// 对于 Veo 模型，跳过 OSS 上传逻辑（使用前缀匹配避免误匹配其他含 "veo" 的模型名）
-		if strings.HasPrefix(strings.ToLower(taskModelName), "veo-") {
+		// Veo 和 Gemini Omni 的结果由上游直接提供，不上传 OSS。
+		// Omni 的 inline data 保存在 task.Data，由 ConvertToOpenAIVideo 读取，避免把大 Base64 写入 fail_reason。
+		if strings.HasPrefix(strings.ToLower(taskModelName), "veo-") || isGeminiOmniVideoModel(taskModelName) {
 			if taskResult.RemoteUrl != "" {
 				task.FailReason = taskResult.RemoteUrl
-			} else if taskResult.Url != "" {
+			} else if taskResult.Url != "" && !isGeminiOmniDataURL(taskResult.Url) {
 				task.FailReason = taskResult.Url
 			}
 		} else {
@@ -926,19 +927,12 @@ func redactVideoResponseBody(body []byte) []byte {
 	if err := common.Unmarshal(body, &m); err != nil {
 		return body
 	}
-	// Vertex AI: remove embedded base64 video bytes
+	// Keep Vertex AI embedded video bytes in task.Data so the content proxy and
+	// later task reads can reconstruct the generated video.
 	resp, _ := m["response"].(map[string]any)
 	if resp != nil {
-		delete(resp, "bytesBase64Encoded")
 		if v, ok := resp["video"].(string); ok {
 			resp["video"] = truncateBase64(v)
-		}
-		if vs, ok := resp["videos"].([]any); ok {
-			for i := range vs {
-				if vm, ok := vs[i].(map[string]any); ok {
-					delete(vm, "bytesBase64Encoded")
-				}
-			}
 		}
 	}
 	// Azure Video: if we injected a base64 data URI into "url", strip the data to keep DB small.
@@ -989,6 +983,14 @@ func isVideoTokenRatioModel(name string) bool {
 		return true
 	}
 	return false
+}
+
+func isGeminiOmniVideoModel(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), "gemini-omni-flash-preview")
+}
+
+func isGeminiOmniDataURL(value string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "data:video/")
 }
 
 // MergeVideoTaskDataWithUpstreamResponse 将上游响应合并进 task.Data，保留计费字段；供轮询与 GET 终态分支共用。
@@ -1065,10 +1067,10 @@ func CompleteVideoTaskOnUpstreamSuccess(ctx context.Context, task *model.Task, c
 		if taskModelName == "" {
 			taskModelName = task.Properties.UpstreamModelName
 		}
-		if strings.HasPrefix(strings.ToLower(taskModelName), "veo-") {
+		if strings.HasPrefix(strings.ToLower(taskModelName), "veo-") || isGeminiOmniVideoModel(taskModelName) {
 			if taskResult.RemoteUrl != "" {
 				task.FailReason = taskResult.RemoteUrl
-			} else if taskResult.Url != "" {
+			} else if taskResult.Url != "" && !isGeminiOmniDataURL(taskResult.Url) {
 				task.FailReason = taskResult.Url
 			}
 		} else {
@@ -1638,10 +1640,30 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 
 	// tokens：优先 completion_tokens，其次 total_tokens
 	tokens := 0
-	if taskResult.CompletionTokens > 0 {
+	if isGeminiOmniVideoModel(modelName) {
+		tokens = taskResult.VideoOutputTokens
+	} else if taskResult.CompletionTokens > 0 {
 		tokens = taskResult.CompletionTokens
 	} else if taskResult.TotalTokens > 0 {
 		tokens = taskResult.TotalTokens
+	}
+	if tokens <= 0 {
+		if isGeminiOmniVideoModel(modelName) {
+			// Preview responses may omit usage. Keep billing deterministic with
+			// Google's documented 5,792 video tokens per second fallback.
+			seconds := task.Properties.RequestedSeconds
+			if seconds <= 0 {
+				if value, ok := taskData["requested_seconds"].(float64); ok {
+					seconds = int(value)
+				}
+			}
+			if seconds <= 0 {
+				seconds = 4
+			}
+			tokens = seconds * 5792
+			taskResult.VideoOutputTokens = tokens
+			logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] Omni usage missing, fallback to %d video tokens (%ds)", tokens, seconds))
+		}
 	}
 	if tokens <= 0 {
 		tokens = extractVideoUsageTokensFromTaskData(taskData)
@@ -1765,9 +1787,14 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	}
 
 	vr, hasVR := ratio_setting.GetVideoRatio(modelName)
-	ratioMode := hasVR && vr != 0
+	// Gemini Omni has separate input/text-output/video-output prices. Its
+	// videoRatio config describes the input modality price and must not route
+	// it into the generic video multiplier billing branch.
+	ratioMode := hasVR && vr != 0 && !isGeminiOmniVideoModel(modelName)
 
 	actualQuota := 0
+	logPromptTokens := 0
+	logCompletionTokens := tokens
 	otherMap := map[string]interface{}{
 		"billing_type":               "video_token_ratio",
 		"tokens":                     tokens,
@@ -1788,6 +1815,31 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		actualQuotaFloat := float64(tokens) * cfgVal * groupRatio
 		actualQuota = int(actualQuotaFloat)
 		otherMap["effective_video_ratio"] = cfgVal
+	} else if isGeminiOmniVideoModel(modelName) {
+		// Omni uses one input price and separate text/video output prices.
+		// Do not collapse all modalities into the video price: the Interaction
+		// usage object reports them independently.
+		inputTokens := taskResult.InputTokens
+		videoTokens := taskResult.VideoOutputTokens
+		if videoTokens <= 0 {
+			videoTokens = tokens
+		}
+		textTokens := taskResult.TextOutputTokens
+		actualCost := float64(inputTokens)*1.5 + float64(textTokens)*9.0 + float64(videoTokens)*17.5
+		actualQuota = int(actualCost / 1000000.0 * common.QuotaPerUnit * groupRatio)
+		// The legacy log columns are generic: map Omni text input to prompt
+		// tokens and include thought/text output with video output in completion.
+		logPromptTokens = inputTokens
+		logCompletionTokens = videoTokens + textTokens
+		otherMap["input_tokens"] = inputTokens
+		otherMap["input_text_tokens"] = taskResult.TextInputTokens
+		otherMap["input_image_tokens"] = taskResult.ImageInputTokens
+		otherMap["input_video_tokens"] = taskResult.VideoInputTokens
+		otherMap["text_output_tokens"] = textTokens
+		otherMap["video_output_tokens"] = videoTokens
+		otherMap["input_price_per_million_tokens"] = 1.5
+		otherMap["text_output_price_per_million_tokens"] = 9.0
+		otherMap["video_output_price_per_million_tokens"] = 17.5
 	} else {
 		// 走价格体系：cfgVal 为 $/M tokens
 		pricePerMillion := cfgVal
@@ -1866,7 +1918,8 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		ChannelId:        task.ChannelId,
 		ModelName:        modelName,
 		Quota:            actualQuota,
-		CompletionTokens: tokens,
+		PromptTokens:     logPromptTokens,
+		CompletionTokens: logCompletionTokens,
 		TokenName:        tokenName,
 		TokenId:          tokenId,
 		UseTime:          useTime,

@@ -29,6 +29,7 @@ export type ModelPricingSnapshotInput = {
   imageRatio: string
   audioRatio: string
   audioCompletionRatio: string
+  videoRatio: string
   billingMode: string
   billingExpr: string
 }
@@ -43,6 +44,7 @@ export type ModelPricingSnapshot = {
   imageRatio?: string
   audioRatio?: string
   audioCompletionRatio?: string
+  videoRatio?: string
   billingMode?: string
   billingExpr?: string
   requestRuleExpr?: string
@@ -119,6 +121,7 @@ export const getPriceSummary = (
     row.imageRatio,
     row.audioRatio,
     row.audioCompletionRatio,
+    row.videoRatio,
   ].filter(hasPricingValue).length
 
   return extraCount > 0
@@ -149,6 +152,8 @@ export const getPriceDetail = (
       `${t('Cache')} $${ratioToPrice(row.cacheRatio, inputPrice)}`,
     row.createCacheRatio &&
       `${t('Cache write')} $${ratioToPrice(row.createCacheRatio, inputPrice)}`,
+    row.videoRatio &&
+      `${t('Video input')} $${ratioToPrice(row.videoRatio, inputPrice)}`,
   ]
     .filter(Boolean)
     .slice(0, 2)
@@ -165,6 +170,7 @@ export const buildModelSnapshots = ({
   imageRatio,
   audioRatio,
   audioCompletionRatio,
+  videoRatio,
   billingMode,
   billingExpr,
 }: ModelPricingSnapshotInput): ModelPricingSnapshot[] => {
@@ -200,6 +206,10 @@ export const buildModelSnapshots = ({
     audioCompletionRatio,
     { fallback: {}, context: 'audio completion ratios' }
   )
+  const videoMap = safeJsonParse<Record<string, number>>(videoRatio, {
+    fallback: {},
+    context: 'video ratios',
+  })
   const billingModeMap = safeJsonParse<Record<string, string>>(billingMode, {
     fallback: {},
     context: 'billing mode',
@@ -218,6 +228,7 @@ export const buildModelSnapshots = ({
     ...Object.keys(imageMap),
     ...Object.keys(audioMap),
     ...Object.keys(audioCompletionMap),
+    ...Object.keys(videoMap),
     ...Object.keys(billingModeMap),
     ...Object.keys(billingExprMap),
   ])
@@ -231,6 +242,7 @@ export const buildModelSnapshots = ({
     const image = imageMap[name]?.toString() || ''
     const audio = audioMap[name]?.toString() || ''
     const audioCompletion = audioCompletionMap[name]?.toString() || ''
+    const video = videoMap[name]?.toString() || ''
 
     const modeForModel = billingModeMap[name]
     if (modeForModel === 'tiered_expr') {
@@ -250,6 +262,7 @@ export const buildModelSnapshots = ({
         imageRatio: image,
         audioRatio: audio,
         audioCompletionRatio: audioCompletion,
+        videoRatio: video,
         hasConflict: false,
       }
     }
@@ -264,6 +277,7 @@ export const buildModelSnapshots = ({
       imageRatio: image,
       audioRatio: audio,
       audioCompletionRatio: audioCompletion,
+      videoRatio: video,
       billingMode: price !== '' ? 'per-request' : 'per-token',
       hasConflict:
         price !== '' &&
@@ -273,7 +287,8 @@ export const buildModelSnapshots = ({
           createCache !== '' ||
           image !== '' ||
           audio !== '' ||
-          audioCompletion !== ''),
+          audioCompletion !== '' ||
+          video !== ''),
     }
   })
 }
@@ -289,6 +304,7 @@ export const getSnapshotSignature = (snapshot?: ModelPricingSnapshot) => {
     imageRatio: snapshot.imageRatio || '',
     audioRatio: snapshot.audioRatio || '',
     audioCompletionRatio: snapshot.audioCompletionRatio || '',
+    videoRatio: snapshot.videoRatio || '',
     billingMode: snapshot.billingMode || 'per-token',
     billingExpr: snapshot.billingExpr || '',
     requestRuleExpr: snapshot.requestRuleExpr || '',

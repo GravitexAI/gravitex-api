@@ -44,7 +44,7 @@ spec:
           sysctl -w net.ipv4.tcp_keepalive_probes=3
       containers:
       - name: api-gateway
-        image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway:1.0.27
+        image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway:1.0.40
         ports:
         - containerPort: 3000
         env:
@@ -64,13 +64,13 @@ spec:
         readinessProbe:
           tcpSocket:
             port: 3000
-          initialDelaySeconds: 5
+          initialDelaySeconds: 60
           periodSeconds: 5
           failureThreshold: 2
         livenessProbe:
           tcpSocket:
             port: 3000
-          initialDelaySeconds: 15
+          initialDelaySeconds: 60
           periodSeconds: 10
           failureThreshold: 3
         resources:

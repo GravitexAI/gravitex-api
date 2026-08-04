@@ -433,6 +433,7 @@ export default function UpstreamRatioSync(props) {
       AudioCompletionRatio: JSON.parse(
         props.options.AudioCompletionRatio || '{}',
       ),
+      VideoRatio: JSON.parse(props.options.VideoRatio || '{}'),
       ModelPrice: JSON.parse(props.options.ModelPrice || '{}'),
       'billing_setting.billing_mode': JSON.parse(
         props.options['billing_setting.billing_mode'] || '{}',
@@ -453,7 +454,8 @@ export default function UpstreamRatioSync(props) {
         currentRatios.CreateCacheRatio[model] !== undefined ||
         currentRatios.ImageRatio[model] !== undefined ||
         currentRatios.AudioRatio[model] !== undefined ||
-        currentRatios.AudioCompletionRatio[model] !== undefined
+        currentRatios.AudioCompletionRatio[model] !== undefined ||
+        currentRatios.VideoRatio[model] !== undefined
       )
         return 'ratio';
       return null;
@@ -525,6 +527,7 @@ export default function UpstreamRatioSync(props) {
         ImageRatio: { ...currentRatios.ImageRatio },
         AudioRatio: { ...currentRatios.AudioRatio },
         AudioCompletionRatio: { ...currentRatios.AudioCompletionRatio },
+        VideoRatio: { ...currentRatios.VideoRatio },
         ModelPrice: { ...currentRatios.ModelPrice },
         'billing_setting.billing_mode': {
           ...currentRatios['billing_setting.billing_mode'],
@@ -549,6 +552,7 @@ export default function UpstreamRatioSync(props) {
           delete finalRatios.ImageRatio[model];
           delete finalRatios.AudioRatio[model];
           delete finalRatios.AudioCompletionRatio[model];
+          delete finalRatios.VideoRatio[model];
         }
         if (hasRatio) {
           delete finalRatios.ModelPrice[model];
@@ -1094,6 +1098,7 @@ export default function UpstreamRatioSync(props) {
             AudioCompletionRatio: JSON.parse(
               props.options.AudioCompletionRatio || '{}',
             ),
+            VideoRatio: JSON.parse(props.options.VideoRatio || '{}'),
             ModelPrice: JSON.parse(props.options.ModelPrice || '{}'),
             'billing_setting.billing_mode': JSON.parse(
               props.options['billing_setting.billing_mode'] || '{}',

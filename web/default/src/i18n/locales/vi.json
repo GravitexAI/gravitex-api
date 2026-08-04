@@ -4252,6 +4252,7 @@
     "Templates": "Mẫu",
     "Templates appended": "Đã thêm mẫu",
     "Tencent": "Tencent",
+    "Tencent TokenHub": "Tencent TokenHub",
     "Termination requested": "Yêu cầu chấm dứt",
     "Test": "Kiểm tra",
     "Test {{count}} matching models": "Kiểm thử {{count}} mô hình phù hợp",
@@ -4977,6 +4978,14 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Fixed expiration (do not refresh TTL on hit)": "Hết hạn cố định (không làm mới TTL khi trùng khớp)",
+    "When enabled, hitting the same affinity channel does not renew the TTL. The cache expires naturally from first write, allowing periodic rebalancing across channels of equal priority. When disabled, every successful request renews the TTL (sliding expiration), keeping the affinity sticky as long as requests keep coming.": "Khi bật, việc trùng khớp cùng một kênh liên kết sẽ không làm mới TTL. Bộ nhớ đệm sẽ tự hết hạn kể từ lần ghi đầu tiên, cho phép cân bằng lại định kỳ giữa các kênh có cùng mức ưu tiên. Khi tắt, mỗi yêu cầu thành công sẽ làm mới TTL (hết hạn trượt), giữ liên kết miễn là các yêu cầu vẫn tiếp tục đến.",
+    "Fixed": "Cố định",
+    "Video input price": "Giá đầu vào video",
+    "Token price for video input.": "Giá token cho đầu vào video.",
+    "Video ratio": "Tỷ lệ video",
+    "Ratio applied to video inputs for video billing.": "Tỷ lệ áp dụng cho đầu vào video khi tính phí video.",
+    "Sliding": "Trượt"
   }
 }

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -89,16 +90,106 @@ func GetModelMeta(c *gin.Context) {
 	common.ApiSuccess(c, &m)
 }
 
+func readModelMetaPayload(c *gin.Context) (model.Model, map[string]json.RawMessage, error) {
+	var m model.Model
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return m, nil, err
+	}
+	payload := make(map[string]json.RawMessage)
+	if err := common.Unmarshal(body, &payload); err != nil {
+		return m, nil, err
+	}
+	if err := common.Unmarshal(body, &m); err != nil {
+		return m, nil, err
+	}
+	return m, payload, nil
+}
+
+func buildModelMetaUpdates(m model.Model, payload map[string]json.RawMessage) map[string]any {
+	updates := make(map[string]any, len(payload)+1)
+	if _, ok := payload["model_name"]; ok {
+		updates["model_name"] = m.ModelName
+	}
+	if _, ok := payload["description"]; ok {
+		updates["description"] = m.Description
+	}
+	if _, ok := payload["description_en"]; ok {
+		updates["description_en"] = m.DescriptionEn
+	}
+	if _, ok := payload["description_id"]; ok {
+		updates["description_id"] = m.DescriptionId
+	}
+	if _, ok := payload["icon"]; ok {
+		updates["icon"] = m.Icon
+	}
+	if _, ok := payload["icon_url"]; ok {
+		updates["icon_url"] = m.IconURL
+	}
+	if _, ok := payload["tags"]; ok {
+		updates["tags"] = m.Tags
+	}
+	if _, ok := payload["tags_en"]; ok {
+		updates["tags_en"] = m.TagsEn
+	}
+	if _, ok := payload["tags_id"]; ok {
+		updates["tags_id"] = m.TagsId
+	}
+	if _, ok := payload["show_tab"]; ok {
+		updates["show_tab"] = m.ShowTab
+	}
+	if _, ok := payload["flag"]; ok {
+		updates["flag"] = m.Flag
+	}
+	if _, ok := payload["sort_order"]; ok {
+		updates["sort_order"] = m.SortOrder
+	}
+	if _, ok := payload["is_featured"]; ok {
+		updates["is_featured"] = m.IsFeatured
+	}
+	if _, ok := payload["vendor_id"]; ok {
+		updates["vendor_id"] = m.VendorID
+	}
+	if _, ok := payload["endpoints"]; ok {
+		updates["endpoints"] = m.Endpoints
+	}
+	if _, ok := payload["model_limit"]; ok {
+		updates["model_limit"] = m.ModelLimit
+	}
+	if _, ok := payload["status"]; ok {
+		updates["status"] = m.Status
+	}
+	if _, ok := payload["sync_official"]; ok {
+		updates["sync_official"] = m.SyncOfficial
+	}
+	if _, ok := payload["name_rule"]; ok {
+		updates["name_rule"] = m.NameRule
+	}
+	if _, ok := payload["model_nick_name"]; ok {
+		updates["model_nick_name"] = m.ModelNickName
+	}
+	if _, ok := payload["created_time"]; ok {
+		updates["created_time"] = m.CreatedTime
+	}
+	return updates
+}
+
 // CreateModelMeta 新建模型
 func CreateModelMeta(c *gin.Context) {
-	var m model.Model
-	if err := c.ShouldBindJSON(&m); err != nil {
+	m, payload, err := readModelMetaPayload(c)
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	if m.ModelName == "" {
 		common.ApiErrorMsg(c, "模型名称不能为空")
 		return
+	}
+	if _, ok := payload["status"]; !ok {
+		m.Status = 1
+	}
+	if _, ok := payload["sync_official"]; !ok {
+		m.SyncOfficial = 1
 	}
 	// 名称冲突检查
 	if dup, err := model.IsModelNameDuplicated(0, m.ModelName); err != nil {
@@ -121,8 +212,8 @@ func CreateModelMeta(c *gin.Context) {
 func UpdateModelMeta(c *gin.Context) {
 	statusOnly := c.Query("status_only") == "true"
 
-	var m model.Model
-	if err := c.ShouldBindJSON(&m); err != nil {
+	m, payload, err := readModelMetaPayload(c)
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -132,14 +223,35 @@ func UpdateModelMeta(c *gin.Context) {
 	}
 
 	if statusOnly {
-		// 只更新状态，防止误清空其他字段
-		if err := model.DB.Model(&model.Model{}).Where("id = ?", m.Id).Update("status", m.Status).Error; err != nil {
+		if _, ok := payload["status"]; !ok {
+			common.ApiErrorMsg(c, "缺少状态字段")
+			return
+		}
+		if err := model.UpdateModelFields(m.Id, map[string]any{
+			"status":       m.Status,
+			"updated_time": common.GetTimestamp(),
+		}); err != nil {
 			common.ApiError(c, err)
 			return
 		}
 	} else {
+		var current model.Model
+		if err := model.DB.First(&current, m.Id).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
+
+		modelName := current.ModelName
+		if _, ok := payload["model_name"]; ok {
+			modelName = m.ModelName
+		}
+		if modelName == "" {
+			common.ApiErrorMsg(c, "模型名称不能为空")
+			return
+		}
+
 		// 名称冲突检查
-		if dup, err := model.IsModelNameDuplicated(m.Id, m.ModelName); err != nil {
+		if dup, err := model.IsModelNameDuplicated(m.Id, modelName); err != nil {
 			common.ApiError(c, err)
 			return
 		} else if dup {
@@ -147,10 +259,17 @@ func UpdateModelMeta(c *gin.Context) {
 			return
 		}
 
-		if err := m.Update(); err != nil {
+		updates := buildModelMetaUpdates(m, payload)
+		updates["updated_time"] = common.GetTimestamp()
+		if err := model.UpdateModelFields(m.Id, updates); err != nil {
 			common.ApiError(c, err)
 			return
 		}
+	}
+
+	if err := model.DB.First(&m, m.Id).Error; err != nil {
+		common.ApiError(c, err)
+		return
 	}
 	model.RefreshPricing()
 	common.ApiSuccess(c, &m)
@@ -204,7 +323,7 @@ func enrichModels(models []*model.Model) {
 			mm := models[idx]
 			if mm.Endpoints == "" {
 				eps := model.GetModelSupportEndpointTypes(mm.ModelName)
-				if b, err := json.Marshal(eps); err == nil {
+				if b, err := common.Marshal(eps); err == nil {
 					mm.Endpoints = string(b)
 				}
 			}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -39,6 +40,29 @@ func applyUpstreamContentLength(req *http.Request, info *common.RelayInfo) {
 	}
 	if info.UpstreamRequestBodySize > 0 && req.ContentLength <= 0 {
 		req.ContentLength = info.UpstreamRequestBodySize
+	}
+}
+
+// setRewindableBody wires req.GetBody so that net/http can rewind the upstream
+// request body and transparently retry the request on a fresh connection when a
+// reused keep-alive connection is dropped mid-flight. Without GetBody the
+// transport fails with "net/http: cannot rewind body after connection loss".
+//
+// http.NewRequest only auto-populates GetBody for known in-memory types
+// (*bytes.Reader/*bytes.Buffer/*strings.Reader). The upstream body is a
+// type-erased ReaderOnly(BodyStorage) (see relay/common/outbound_body.go), so it
+// is wired here whenever the body is seekable. Non-seekable bodies are left
+// untouched (GetBody stays nil, same as before).
+func setRewindableBody(req *http.Request, requestBody io.Reader) {
+	seeker, ok := requestBody.(io.Seeker)
+	if !ok {
+		return
+	}
+	req.GetBody = func() (io.ReadCloser, error) {
+		if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+		return io.NopCloser(requestBody), nil
 	}
 }
 
@@ -162,7 +186,16 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 			return "", false, fmt.Errorf("client_header placeholder must be the full value: %q", template)
 		}
 
-		name := strings.TrimSpace(afterPrefix[:end])
+		body := afterPrefix[:end]
+		name := body
+		hasDefault := false
+		defaultValue := ""
+		if idx := strings.Index(body, "|"); idx >= 0 {
+			name = body[:idx]
+			defaultValue = body[idx+1:]
+			hasDefault = true
+		}
+		name = strings.TrimSpace(name)
 		if name == "" {
 			return "", false, fmt.Errorf("client_header placeholder name is empty: %q", template)
 		}
@@ -171,6 +204,9 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 		}
 		clientHeaderValue := c.Request.Header.Get(name)
 		if strings.TrimSpace(clientHeaderValue) == "" {
+			if hasDefault {
+				return defaultValue, true, nil
+			}
 			return "", false, nil
 		}
 		// Do not interpolate {api_key} inside client-supplied content.
@@ -190,6 +226,8 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 // Supported placeholders:
 //   - {api_key}: resolved to the channel API key
 //   - {client_header:<name>}: resolved to the incoming request header value
+//   - {client_header:<name>|<default>}: same as above, falling back to <default>
+//     when the incoming request does not carry <name> (or it is blank)
 //
 // Header passthrough rules (keys only; values are ignored):
 //   - "*": passthrough all incoming headers by name (excluding unsafe headers)
@@ -335,6 +373,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
 	applyUpstreamContentLength(req, info)
+	setRewindableBody(req, requestBody)
 	headers := req.Header
 	err = a.SetupRequestHeader(c, &headers, info)
 	if err != nil {
@@ -365,6 +404,7 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
 	applyUpstreamContentLength(req, info)
+	setRewindableBody(req, requestBody)
 	// set form data
 	req.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	headers := req.Header
@@ -505,6 +545,15 @@ func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	return doRequest(c, req, info)
 }
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
+	if c == nil || c.Request == nil {
+		return nil, errors.New("request context is nil")
+	}
+	if req == nil {
+		return nil, errors.New("upstream request is nil")
+	}
+	if info == nil {
+		return nil, errors.New("relay info is nil")
+	}
 	var client *http.Client
 	var err error
 	if info.ChannelSetting.Proxy != "" {
@@ -514,6 +563,9 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	} else {
 		client = service.GetHttpClient()
+	}
+	if client == nil {
+		return nil, errors.New("http client is not initialized")
 	}
 
 	var stopPinger context.CancelFunc
@@ -537,7 +589,14 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	resp, err := client.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
-		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
+		// 遮罩文案保留底层失败原因（如 "net/http: cannot rewind body after connection loss"），
+		// 但剥掉 *url.Error 外层携带的上游 URL，避免泄露上游地址
+		reason := err.Error()
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) && urlErr.Err != nil {
+			reason = urlErr.Err.Error()
+		}
+		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: "+reason))
 	}
 	if resp == nil {
 		return nil, errors.New("resp is nil")
@@ -547,12 +606,19 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		c.Set(common2.UpstreamRequestIdKey, upID)
 	}
 
-	_ = req.Body.Close()
-	_ = c.Request.Body.Close()
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
+	if c.Request.Body != nil {
+		_ = c.Request.Body.Close()
+	}
 	return resp, nil
 }
 
 func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
+	if info == nil {
+		return nil, errors.New("relay info is nil")
+	}
 	fullRequestURL, err := a.BuildRequestURL(info)
 	if err != nil {
 		return nil, err

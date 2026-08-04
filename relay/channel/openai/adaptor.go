@@ -139,8 +139,18 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 				subUrl = "/openai/responses"
 			}
 
-			// 若配置了默认 Responses 版本且当前模型未在 per-model 中，使用默认 Responses 版本
-			if info.ChannelOtherSettings.AzureResponsesVersion != "" {
+			// 优先级：模型特定 responses 版本 > 渠道默认 responses 版本（仅对未配置 per-model 普通版本的模型） > apiVersion
+			if len(info.ChannelOtherSettings.AzureModelResponsesVersions) > 0 {
+				if v, ok := info.ChannelOtherSettings.AzureModelResponsesVersions[info.UpstreamModelName]; ok && v != "" {
+					responsesApiVersion = v
+				} else if info.ChannelOtherSettings.AzureResponsesVersion != "" {
+					if len(info.ChannelOtherSettings.AzureModelApiVersions) == 0 {
+						responsesApiVersion = info.ChannelOtherSettings.AzureResponsesVersion
+					} else if _, exists := info.ChannelOtherSettings.AzureModelApiVersions[info.UpstreamModelName]; !exists {
+						responsesApiVersion = info.ChannelOtherSettings.AzureResponsesVersion
+					}
+				}
+			} else if info.ChannelOtherSettings.AzureResponsesVersion != "" {
 				if len(info.ChannelOtherSettings.AzureModelApiVersions) == 0 {
 					responsesApiVersion = info.ChannelOtherSettings.AzureResponsesVersion
 				} else if _, exists := info.ChannelOtherSettings.AzureModelApiVersions[info.UpstreamModelName]; !exists {
@@ -165,7 +175,13 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		// https://github.com/songquanpeng/one-api/issues/67
 		requestURL = fmt.Sprintf("/openai/deployments/%s/%s", model_, task)
 		if info.RelayMode == relayconstant.RelayModeRealtime {
-			requestURL = fmt.Sprintf("/openai/realtime?deployment=%s&api-version=%s", model_, apiVersion)
+			// GA API（api-version 不含 preview）使用 /openai/v1/realtime?model=
+			// Preview API 使用 /openai/realtime?deployment=&api-version=
+			if strings.Contains(apiVersion, "preview") {
+				requestURL = fmt.Sprintf("/openai/realtime?deployment=%s&api-version=%s", model_, apiVersion)
+			} else {
+				requestURL = fmt.Sprintf("/openai/v1/realtime?model=%s", model_)
+			}
 		}
 		return relaycommon.GetFullRequestURL(info.ChannelBaseUrl, requestURL, info.ChannelType), nil
 	//case constant.ChannelTypeMiniMax:

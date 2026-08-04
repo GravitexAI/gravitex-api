@@ -170,11 +170,12 @@ export function UsersMutateDrawer({
     try {
       const payload = transformFormDataToPayload(
         data,
+        // 不做 Number() 转换：id 是 Java 端 Snowflake（19 位），转换会精度丢失
         currentRow?.id,
         permissionCatalog
       )
       const result = isUpdate
-        ? await updateUser(payload as typeof payload & { id: number })
+        ? await updateUser(payload as typeof payload & { id: number | string })
         : await createUser(payload)
 
       if (result.success) {
@@ -582,7 +583,7 @@ export function UsersMutateDrawer({
         <UserQuotaDialog
           open={quotaDialogOpen}
           onOpenChange={setQuotaDialogOpen}
-          userId={currentRow.id}
+          userId={Number(currentRow.id)}
           currentQuota={parseQuotaFromDollars(currentQuotaRaw || 0)}
           onSuccess={refreshUserData}
         />

@@ -24,18 +24,21 @@ type BoundChannel struct {
 type Model struct {
 	Id            int            `json:"id"`
 	ModelName     string         `json:"model_name" gorm:"size:128;not null;uniqueIndex:uk_model_name_delete_at,priority:1"`
-	Description   string         `json:"description,omitempty" gorm:"type:text"`
-	DescriptionEn string         `json:"description_en,omitempty" gorm:"type:text"`
-	DescriptionId string         `json:"description_id,omitempty" gorm:"type:text"`
-	Icon          string         `json:"icon,omitempty" gorm:"type:varchar(128)"`
-	Tags          string         `json:"tags,omitempty" gorm:"type:varchar(255)"`
-	TagsEn        string         `json:"tags_en,omitempty" gorm:"type:varchar(255)"`
-	TagsId        string         `json:"tags_id,omitempty" gorm:"type:varchar(255)"`
-	ShowTab       int            `json:"show_tab,omitempty" gorm:"default:0"`
-	Flag          int            `json:"flag,omitempty" gorm:"type:int;default:0"` // 1-新发布 2-最先进 3-火爆
-	SortOrder     int            `json:"sort_order" gorm:"type:int;default:0"`     // 越小优先级越高
-	VendorID      int            `json:"vendor_id,omitempty" gorm:"index"`
-	Endpoints     string         `json:"endpoints,omitempty" gorm:"type:text"`
+	Description   string         `json:"description" gorm:"type:text"`
+	DescriptionEn string         `json:"description_en" gorm:"type:text"`
+	DescriptionId string         `json:"description_id" gorm:"type:text"`
+	Icon          string         `json:"icon" gorm:"type:varchar(128)"`
+	IconURL       string         `json:"icon_url" gorm:"column:icon_url;type:varchar(128)"`
+	Tags          string         `json:"tags" gorm:"type:varchar(255)"`
+	TagsEn        string         `json:"tags_en" gorm:"type:varchar(255)"`
+	TagsId        string         `json:"tags_id" gorm:"type:varchar(255)"`
+	ShowTab       int            `json:"show_tab" gorm:"default:0"`
+	Flag          int            `json:"flag" gorm:"type:int;default:0"`       // 1-新发布 2-最先进 3-火爆
+	SortOrder     int            `json:"sort_order" gorm:"type:int;default:0"` // 越小优先级越高
+	IsFeatured    int            `json:"is_featured" gorm:"column:is_featured;type:int;default:0"`
+	VendorID      int            `json:"vendor_id" gorm:"index"`
+	Endpoints     string         `json:"endpoints" gorm:"type:text"`
+	ModelLimit    string         `json:"model_limit" gorm:"type:text"`
 	Status        int            `json:"status" gorm:"default:1"`
 	SyncOfficial  int            `json:"sync_official" gorm:"default:1"`
 	CreatedTime   int64          `json:"created_time" gorm:"bigint"`
@@ -46,7 +49,7 @@ type Model struct {
 	EnableGroups  []string       `json:"enable_groups,omitempty" gorm:"-"`
 	QuotaTypes    []int          `json:"quota_types,omitempty" gorm:"-"`
 	NameRule      int            `json:"name_rule" gorm:"default:0"`
-	ModelNickName string         `json:"model_nick_name,omitempty" gorm:"->"`
+	ModelNickName string         `json:"model_nick_name" gorm:"type:longtext"`
 	MatchedModels []string       `json:"matched_models,omitempty" gorm:"-"`
 	MatchedCount  int            `json:"matched_count,omitempty" gorm:"-"`
 }
@@ -85,8 +88,12 @@ func (mi *Model) Update() error {
 	mi.UpdatedTime = common.GetTimestamp()
 	// 使用 Select 强制更新所有字段，包括零值
 	return DB.Model(&Model{}).Where("id = ?", mi.Id).
-		Select("model_name", "description", "description_en", "description_id", "icon", "tags", "tags_en", "tags_id", "show_tab", "flag", "sort_order", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
+		Select("model_name", "description", "description_en", "description_id", "icon", "icon_url", "tags", "tags_en", "tags_id", "show_tab", "flag", "sort_order", "is_featured", "vendor_id", "endpoints", "model_limit", "status", "sync_official", "name_rule", "model_nick_name", "updated_time").
 		Updates(mi).Error
+}
+
+func UpdateModelFields(id int, updates map[string]any) error {
+	return DB.Model(&Model{}).Where("id = ?", id).Updates(updates).Error
 }
 
 func (mi *Model) Delete() error {
@@ -255,4 +262,19 @@ func GetVendorIdFromModel(modelName string) *int64 {
 	}
 	id := int64(m.VendorID)
 	return &id
+}
+
+// GetEnabledVendorIdFromModel returns the vendor ID only when both the model
+// and its vendor are enabled. Vendor-level token access must not revive models
+// hidden by model or vendor metadata.
+func GetEnabledVendorIdFromModel(modelName string) (int, bool) {
+	var result struct {
+		VendorID int
+	}
+	err := DB.Model(&Model{}).
+		Select("models.vendor_id").
+		Joins("JOIN vendors ON vendors.id = models.vendor_id").
+		Where("models.model_name = ? AND models.status = ? AND vendors.status = ? AND vendors.deleted_at IS NULL", modelName, 1, 1).
+		Take(&result).Error
+	return result.VendorID, err == nil && result.VendorID > 0
 }

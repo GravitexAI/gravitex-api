@@ -65,6 +65,52 @@ func SetVideoRouter(router *gin.Engine) {
 		videoV1Router.GET("/videos/:task_id", controller.RelayTaskFetch)
 	}
 
+	// Google Interactions API compatible routes. They are translated to the
+	// existing video task pipeline and therefore share its billing/polling.
+	nativeInteractionsRouter := router.Group("/v1beta")
+	nativeInteractionsRouter.Use(middleware.RouteTag("relay"))
+	nativeInteractionsRouter.Use(middleware.TokenAuth(), middleware.NativeInteractions(), middleware.AssetResolveChannel(), middleware.Distribute())
+	{
+		nativeInteractionsRouter.POST("/interactions", controller.NativeInteractionsSubmit)
+		nativeInteractionsRouter.GET("/interactions/:interaction_id", controller.NativeInteractionsFetch)
+	}
+	// Vertex AI's resource-shaped Interactions API uses the same adapter.
+	vertexInteractionsRouter := router.Group("/v1beta1/projects/:project/locations/:location/interactions")
+	vertexInteractionsRouter.Use(middleware.RouteTag("relay"))
+	vertexInteractionsRouter.Use(middleware.TokenAuth(), middleware.NativeInteractions(), middleware.AssetResolveChannel(), middleware.Distribute())
+	{
+		vertexInteractionsRouter.POST("", controller.NativeInteractionsSubmit)
+		vertexInteractionsRouter.GET("/:interaction_id", controller.NativeInteractionsFetch)
+	}
+
+	// Seedance 2.0 official-mirror routes — byte-identical request/response to
+	// BytePlus Ark's own API, only the base URL differs. See
+	// docs/byteplus/seedance-2.0-official-api-mirror-design.md.
+	seedanceOfficialRouter := router.Group("/api/v3/contents/generations")
+	seedanceOfficialRouter.Use(middleware.RouteTag("relay"))
+	seedanceOfficialRouter.Use(middleware.SeedanceOfficialMirror(), middleware.TokenAuth(), middleware.AssetResolveChannel(), middleware.Distribute())
+	{
+		seedanceOfficialRouter.POST("/tasks", controller.RelayTask)
+		seedanceOfficialRouter.GET("/tasks/:id", controller.RelayTaskFetch)
+	}
+
+	seedanceOfficialCancelRouter := router.Group("/api/v3/contents/generations")
+	seedanceOfficialCancelRouter.Use(middleware.RouteTag("relay"))
+	seedanceOfficialCancelRouter.Use(middleware.SeedanceOfficialMirror(), middleware.TokenAuth())
+	{
+		seedanceOfficialCancelRouter.DELETE("/tasks/:id", controller.RelayTaskCancel)
+	}
+
+	// Seedance asset-library official-mirror route — single endpoint, Action
+	// query param dispatch, same shape as the existing jimeng channel's
+	// convention. See docs/byteplus/seedance-2.0-official-api-mirror-design.md §4.
+	assetOfficialRouter := router.Group("/api/v3/seedance")
+	assetOfficialRouter.Use(middleware.RouteTag("relay"))
+	assetOfficialRouter.Use(middleware.TokenAuth())
+	{
+		assetOfficialRouter.POST("", controller.SeedanceOfficialAssetDispatch)
+	}
+
 	klingV1Router := router.Group("/kling/v1")
 	klingV1Router.Use(middleware.RouteTag("relay"))
 	klingV1Router.Use(middleware.KlingRequestConvert(), middleware.TokenAuth(), middleware.Distribute())

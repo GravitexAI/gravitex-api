@@ -624,6 +624,71 @@ func GetUserModels(c *gin.Context) {
 	return
 }
 
+func GetUserModelsAccount(c *gin.Context) {
+	id64, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		id64 = int64(c.GetInt("id"))
+	}
+	_, err = model.GetUserCache(int(id64))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	type accountModel struct {
+		Id        int    `json:"id"`
+		ModelName string `json:"model_name"`
+	}
+	type accountVendor struct {
+		VendorID   int            `json:"vendor_id"`
+		VendorName string         `json:"vendor_name"`
+		Models     []accountModel `json:"models"`
+	}
+
+	modelRows := make([]model.Model, 0)
+	if err := model.DB.Where("status = ?", 1).Order("id ASC").Find(&modelRows).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	vendorIDs := make([]int, 0)
+	seenVendorIDs := make(map[int]bool)
+	for _, row := range modelRows {
+		if !seenVendorIDs[row.VendorID] {
+			vendorIDs = append(vendorIDs, row.VendorID)
+			seenVendorIDs[row.VendorID] = true
+		}
+	}
+	vendors := make([]model.Vendor, 0, len(vendorIDs))
+	if len(vendorIDs) > 0 {
+		if err := model.DB.Where("id IN ? AND status = ?", vendorIDs, 1).Find(&vendors).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+	vendorByID := make(map[int]string, len(vendors))
+	for _, vendor := range vendors {
+		vendorByID[vendor.Id] = vendor.Name
+	}
+
+	result := make([]accountVendor, 0, len(vendorIDs))
+	resultIndex := make(map[int]int, len(vendorIDs))
+	for _, row := range modelRows {
+		vendorName, vendorExists := vendorByID[row.VendorID]
+		if !vendorExists {
+			continue
+		}
+		index, exists := resultIndex[row.VendorID]
+		if !exists {
+			index = len(result)
+			resultIndex[row.VendorID] = index
+			result = append(result, accountVendor{VendorID: row.VendorID, VendorName: vendorName})
+		}
+		result[index].Models = append(result[index].Models, accountModel{Id: row.Id, ModelName: row.ModelName})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": result})
+}
+
 func UpdateUser(c *gin.Context) {
 	type updateUserRequest struct {
 		Id          common.Int64Flexible `json:"id"`
@@ -637,6 +702,7 @@ func UpdateUser(c *gin.Context) {
 		Status      int                  `json:"status"`
 		Type        *int                 `json:"type,omitempty"`
 		Operation   *int                 `json:"operation,omitempty"`
+		Setting     *dto.UserSetting     `json:"setting,omitempty"`
 	}
 
 	var req updateUserRequest
@@ -706,6 +772,23 @@ func UpdateUser(c *gin.Context) {
 	}); err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	// Merge admin-editable setting fields (currently only AllowNegativeBalance).
+	// Explicitly whitelist per-field to avoid admin accidentally overwriting
+	// user-managed notify/webhook preferences.
+	if req.Setting != nil {
+		current := originUser.GetSetting()
+		if current.AllowNegativeBalance != req.Setting.AllowNegativeBalance {
+			current.AllowNegativeBalance = req.Setting.AllowNegativeBalance
+			originUser.SetSetting(current)
+			if err := model.DB.Model(&model.User{}).
+				Where("id = ?", originUser.Id).
+				Update("setting", originUser.Setting).Error; err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			_ = model.InvalidateUserCache(originUser.Id)
+		}
 	}
 	if req.Quota != nil && quotaChanged {
 		if err := model.SetUserQuota(updatedUser.Id, newQuota); err != nil {
@@ -1554,6 +1637,7 @@ func UpdateUserSetting(c *gin.Context) {
 	if user.Role >= common.RoleAdminUser && req.UpstreamModelUpdateNotifyEnabled != nil {
 		upstreamModelUpdateNotifyEnabled = *req.UpstreamModelUpdateNotifyEnabled
 	}
+	allowNegativeBalance := existingSettings.AllowNegativeBalance // ← NEW: preserve admin-granted flag
 
 	// 构建设置
 	settings := dto.UserSetting{
@@ -1562,6 +1646,7 @@ func UpdateUserSetting(c *gin.Context) {
 		UpstreamModelUpdateNotifyEnabled: upstreamModelUpdateNotifyEnabled,
 		AcceptUnsetRatioModel:            req.AcceptUnsetModelRatioModel,
 		RecordIpLog:                      req.RecordIpLog,
+		AllowNegativeBalance:             allowNegativeBalance, // ← NEW: preserve admin-granted flag
 	}
 
 	// 如果是webhook类型,添加webhook相关设置

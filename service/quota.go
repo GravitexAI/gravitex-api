@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"time"
 
@@ -25,8 +26,11 @@ import (
 )
 
 type TokenDetails struct {
-	TextTokens  int
-	AudioTokens int
+	TextTokens        int
+	AudioTokens       int
+	ImageTokens       int
+	CachedTokens      int
+	CachedAudioTokens int // subset of CachedTokens that are audio; rest assumed text
 }
 
 type QuotaInfo struct {
@@ -39,12 +43,45 @@ type QuotaInfo struct {
 	GroupRatio    float64
 }
 
+// realtimeCacheRatioMap 硬编码 realtime 各模型的缓存折扣比例（相对 textRatio）。
+// 上游 cached_tokens 不区分文本/音频，统一用此比例折扣。
+// gpt-realtime-2/1.5：文本缓存 $0.40 = 音频缓存 $0.40，两者均等于 0.1 × textRatio（精确）。
+// gpt-realtime-mini：文本缓存 $0.06 = 0.1 × $0.60（精确）；音频缓存 $0.30 用相同比例（近似）。
+var realtimeCacheRatioMap = map[string]float64{
+	"gpt-realtime":                 0.1,
+	"gpt-realtime-2025-08-28":      0.1,
+	"gpt-realtime-2":               0.1,
+	"gpt-realtime-2.1":             0.1,
+	"gpt-realtime-1.5":             0.1,
+	"gpt-realtime-mini":            0.1,
+	"gpt-realtime-mini-2025-10-06": 0.1,
+	"gpt-realtime-mini-2025-12-15": 0.1,
+	"gpt-realtime-2.1-mini":        0.1,
+}
+
 func hasCustomModelRatio(modelName string, currentRatio float64) bool {
 	defaultRatio, exists := ratio_setting.GetDefaultModelRatioMap()[modelName]
 	if !exists {
 		return true
 	}
 	return currentRatio != defaultRatio
+}
+
+// cachedAudioTokensEstimate returns the number of cached tokens that are audio.
+// Uses cached_tokens_details when available (OpenAI native); otherwise estimates
+// proportionally from the audio share of total input tokens (Azure GA fallback).
+func cachedAudioTokensEstimate(usage *dto.RealtimeUsage) int {
+	if usage == nil || usage.InputTokenDetails.CachedTokens == 0 {
+		return 0
+	}
+	if d := usage.InputTokenDetails.CachedTokensDetails; d != nil {
+		return d.AudioTokens
+	}
+	total := usage.InputTokenDetails.TextTokens + usage.InputTokenDetails.AudioTokens
+	if total == 0 || usage.InputTokenDetails.AudioTokens == 0 {
+		return 0
+	}
+	return int(float64(usage.InputTokenDetails.CachedTokens) * float64(usage.InputTokenDetails.AudioTokens) / float64(total))
 }
 
 func calculateAudioQuota(info QuotaInfo) int {
@@ -79,6 +116,7 @@ func calculateAudioQuota(info QuotaInfo) int {
 	outputTextTokens := decimal.NewFromInt(int64(info.OutputDetails.TextTokens))
 	inputAudioTokens := decimal.NewFromInt(int64(info.InputDetails.AudioTokens))
 	outputAudioTokens := decimal.NewFromInt(int64(info.OutputDetails.AudioTokens))
+	inputImageTokens := decimal.NewFromInt(int64(info.InputDetails.ImageTokens))
 
 	quota := decimal.Zero
 	// 文本部分：使用 modelRatio 作为基础倍率
@@ -91,6 +129,35 @@ func calculateAudioQuota(info QuotaInfo) int {
 	// 音频部分：输入用 audioRatio × modelRatio；输出用 audioRatio × audioCompletionRatio × modelRatio
 	quota = quota.Add(inputAudioTokens.Mul(audioRatio).Mul(textRatio))
 	quota = quota.Add(outputAudioTokens.Mul(dEffectiveAudioOutputRatio).Mul(textRatio))
+
+	// 图片部分：输入图片用 imageRatio × modelRatio
+	if info.InputDetails.ImageTokens > 0 {
+		if imageRatioF, ok := ratio_setting.GetImageRatio(info.ModelName); ok {
+			imageRatio := decimal.NewFromFloat(imageRatioF)
+			quota = quota.Add(inputImageTokens.Mul(imageRatio).Mul(textRatio))
+		}
+	}
+
+	// 缓存折扣：cached_tokens 是输入 token 的子集，已按全价计入上方，此处补扣折扣差额。
+	// 目标：所有缓存 token 最终均按 cacheRatio × textRatio 计费。
+	// 文字缓存：原按 textRatio 收，退差 = cached_text × (cacheRatio-1) × textRatio
+	// 音频缓存：原按 audioRatio × textRatio 收，退差 = cached_audio × (cacheRatio-audioRatio) × textRatio
+	// 若上游未返回 cached_tokens_details（如 Azure GA），按文字/音频比例估算。
+	if info.InputDetails.CachedTokens > 0 {
+		if cacheRatio, ok := realtimeCacheRatioMap[info.ModelName]; ok {
+			cachedAudio := info.InputDetails.CachedAudioTokens
+			cachedText := info.InputDetails.CachedTokens - cachedAudio
+			if cachedText > 0 {
+				adj := decimal.NewFromInt(int64(cachedText)).Mul(decimal.NewFromFloat(cacheRatio - 1)).Mul(textRatio)
+				quota = quota.Add(adj)
+			}
+			if cachedAudio > 0 {
+				// 音频缓存目标价 = cacheRatio × textRatio；原已按 audioRatio × textRatio 计费
+				adj := decimal.NewFromInt(int64(cachedAudio)).Mul(decimal.NewFromFloat(cacheRatio - audioRatioF)).Mul(textRatio)
+				quota = quota.Add(adj)
+			}
+		}
+	}
 
 	// If quota is less than or equal to zero, set quota to 1
 	if quota.LessThanOrEqual(decimal.Zero) {
@@ -135,10 +202,14 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		actualGroupRatio = userGroupRatio
 	}
 
+	cachedAudioTokens := cachedAudioTokensEstimate(usage)
 	quotaInfo := QuotaInfo{
 		InputDetails: TokenDetails{
-			TextTokens:  textInputTokens,
-			AudioTokens: audioInputTokens,
+			TextTokens:        textInputTokens,
+			AudioTokens:       audioInputTokens,
+			ImageTokens:       usage.InputTokenDetails.ImageTokens,
+			CachedTokens:      usage.InputTokenDetails.CachedTokens,
+			CachedAudioTokens: cachedAudioTokens,
 		},
 		OutputDetails: TokenDetails{
 			TextTokens:  textOutTokens,
@@ -152,7 +223,7 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 
 	quota := calculateAudioQuota(quotaInfo)
 
-	if userQuota < quota {
+	if userQuota < quota && !IsNegativeBalanceAllowed(ctx) {
 		return fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(quota))
 	}
 
@@ -208,8 +279,11 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 
 	quotaInfo := QuotaInfo{
 		InputDetails: TokenDetails{
-			TextTokens:  textInputTokens,
-			AudioTokens: audioInputTokens,
+			TextTokens:        textInputTokens,
+			AudioTokens:       audioInputTokens,
+			ImageTokens:       usage.InputTokenDetails.ImageTokens,
+			CachedTokens:      usage.InputTokenDetails.CachedTokens,
+			CachedAudioTokens: cachedAudioTokensEstimate(usage),
 		},
 		OutputDetails: TokenDetails{
 			TextTokens:  textOutTokens,
@@ -518,6 +592,21 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 	return nil
 }
 
+// defaultQuotaWarningAPIEndFallback 是未配置 GRAVITEX_API_END 环境变量时的默认 Java 后端地址（生产环境）。
+const defaultQuotaWarningAPIEndFallback = "https://maas.gravitex.ai/prod-api"
+
+// DefaultQuotaWarningWebhookURL 返回额度预警默认回调地址（Java 后端统一通知入口）。
+// 基址取自环境变量 GRAVITEX_API_END（去掉尾部斜杠），未配置时回落到生产环境地址，
+// 再拼接固定路径 /api/user/quota-warning-notify/send。
+// 用户未在个人设置中自定义 webhook 地址时，默认回调到此接口。
+func DefaultQuotaWarningWebhookURL() string {
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv("GRAVITEX_API_END")), "/")
+	if base == "" {
+		base = defaultQuotaWarningAPIEndFallback
+	}
+	return base + "/api/user/quota-warning-notify/send"
+}
+
 func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int) {
 	gopool.Go(func() {
 		userSetting := relayInfo.UserSetting
@@ -560,17 +649,26 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 
 			notifyData := dto.NewNotify(dto.NotifyTypeQuotaExceed, prompt, content, values)
 			if notifyType == dto.NotifyTypeWebhook {
-				err := SendQuotaWarningWebhookNotify(
-					userSetting.WebhookUrl,
-					userSetting.WebhookSecret,
-					notifyData,
-					int64(relayInfo.UserId),
+				err := SendQuotaWarningNotifyToAPIEnd(
+					relayInfo.UserId,
 					notifyType,
 					int64(relayInfo.UserQuota-consumeQuota),
 					int64(threshold),
 				)
 				if err != nil {
-					common.SysError(fmt.Sprintf("failed to send quota notify to user %d: %s", relayInfo.UserId, err.Error()))
+					common.SysError(fmt.Sprintf("failed to send webhook quota notify to Java for user %d: %s", relayInfo.UserId, err.Error()))
+				}
+				return
+			}
+			if notifyType == dto.NotifyTypeEmail {
+				err := SendQuotaWarningNotifyToAPIEnd(
+					relayInfo.UserId,
+					notifyType,
+					int64(relayInfo.UserQuota-consumeQuota),
+					int64(threshold),
+				)
+				if err != nil {
+					common.SysError(fmt.Sprintf("failed to send email quota notify to Java for user %d: %s", relayInfo.UserId, err.Error()))
 				}
 				return
 			}
@@ -627,17 +725,26 @@ func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
 
 		notifyData := dto.NewNotify(dto.NotifyTypeQuotaExceed, prompt, content, values)
 		if notifyType == dto.NotifyTypeWebhook {
-			err := SendQuotaWarningWebhookNotify(
-				userSetting.WebhookUrl,
-				userSetting.WebhookSecret,
-				notifyData,
-				int64(relayInfo.UserId),
+			err := SendQuotaWarningNotifyToAPIEnd(
+				relayInfo.UserId,
 				notifyType,
 				remaining,
 				int64(threshold),
 			)
 			if err != nil {
-				common.SysError(fmt.Sprintf("failed to send subscription quota notify to user %d: %s", relayInfo.UserId, err.Error()))
+				common.SysError(fmt.Sprintf("failed to send webhook subscription quota notify to Java for user %d: %s", relayInfo.UserId, err.Error()))
+			}
+			return
+		}
+		if notifyType == dto.NotifyTypeEmail {
+			err := SendQuotaWarningNotifyToAPIEnd(
+				relayInfo.UserId,
+				notifyType,
+				remaining,
+				int64(threshold),
+			)
+			if err != nil {
+				common.SysError(fmt.Sprintf("failed to send subscription email quota notify to Java for user %d: %s", relayInfo.UserId, err.Error()))
 			}
 			return
 		}

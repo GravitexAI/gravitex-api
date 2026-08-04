@@ -235,14 +235,18 @@ type Usage struct {
 	InputTokensDetails     *InputTokenDetails `json:"input_tokens_details"`
 
 	// claude cache 1h
-	ClaudeCacheCreation5mTokens int `json:"claude_cache_creation_5_m_tokens"`
-	ClaudeCacheCreation1hTokens int `json:"claude_cache_creation_1_h_tokens"`
+	ClaudeCacheCreation5mTokens int `json:"claude_cache_creation_5_m_tokens,omitempty"`
+	ClaudeCacheCreation1hTokens int `json:"claude_cache_creation_1_h_tokens,omitempty"`
 
 	// OpenRouter Params
 	Cost any `json:"cost,omitempty"`
 
 	// 按张计费：上游返回的实际生成图片数量
 	GeneratedImages int `json:"generated_images,omitempty"`
+	// Seedream Pro：上游返回的输入参考图片数量
+	InputImages int `json:"input_images,omitempty"`
+	// Seedream Pro：上游返回的实际输出图片尺寸，供按像素档位计费。
+	OutputImageSizes []string `json:"-"`
 }
 
 type OpenAIVideoResponse struct {
@@ -255,12 +259,22 @@ type OpenAIVideoResponse struct {
 	Purpose   string `json:"purpose" example:"fine-tune"`
 }
 
+type CachedTokensDetails struct {
+	TextTokens  int `json:"text_tokens"`
+	AudioTokens int `json:"audio_tokens"`
+	ImageTokens int `json:"image_tokens"`
+}
+
 type InputTokenDetails struct {
 	CachedTokens         int `json:"cached_tokens"`
 	CachedCreationTokens int `json:"cached_creation_tokens,omitempty"`
-	TextTokens           int `json:"text_tokens"`
-	AudioTokens          int `json:"audio_tokens"`
-	ImageTokens          int `json:"image_tokens"`
+	// gpt-5.6+: tokens newly written to the prompt cache this request, billed at the cache-write rate
+	CacheWriteTokens    int                  `json:"cache_write_tokens,omitempty"`
+	CachedTokensDetails *CachedTokensDetails `json:"cached_tokens_details,omitempty"`
+	TextTokens          int                  `json:"text_tokens"`
+	AudioTokens         int                  `json:"audio_tokens"`
+	ImageTokens         int                  `json:"image_tokens"`
+	VideoTokens         int                  `json:"video_tokens,omitempty"`
 }
 
 type OutputTokenDetails struct {

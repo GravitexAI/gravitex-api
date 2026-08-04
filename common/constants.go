@@ -132,8 +132,9 @@ var TurnstileCheckEnabled = false
 var RegisterEnabled = true
 
 // RuoYi Auth integration
-var RuoYiAuthEnabled = false // 是否启用 RuoYi JWT 鉴权模式
-var RuoYiJWTSecret = ""      // RuoYi sa-token.jwt-secret-key
+var RuoYiAuthEnabled = false         // 是否启用 RuoYi JWT 鉴权模式
+var RuoYiJWTSecret = ""              // RuoYi sa-token.jwt-secret-key
+var PlatformIsolationEnabled = false // 是否按 Java sys_user.platform_id 隔离请求
 
 var EmailDomainRestrictionEnabled = false // 是否启用邮箱域名限制
 var EmailAliasRestrictionEnabled = false  // 是否启用邮箱别名限制
@@ -237,7 +238,7 @@ var GeminiSafetySetting string
 var CohereSafetySetting string
 
 const (
-	RequestIdKey         = "X-Oneapi-Request-Id"
+	RequestIdKey         = "X-Api-Request-Id"
 	UpstreamRequestIdKey = "X-Upstream-Request-Id"
 )
 

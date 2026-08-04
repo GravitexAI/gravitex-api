@@ -41,6 +41,7 @@ const EMPTY_MODEL = {
   imagePrice: '',
   audioInputPrice: '',
   audioOutputPrice: '',
+  videoInputPrice: '',
   billingExpr: '',
   requestRuleExpr: '',
   rawRatios: {
@@ -51,6 +52,7 @@ const EMPTY_MODEL = {
     imageRatio: '',
     audioRatio: '',
     audioCompletionRatio: '',
+    videoRatio: '',
   },
   hasConflict: false,
 };
@@ -90,11 +92,14 @@ const toNormalizedNumber = (value) => {
 };
 
 const parseOptionJSON = (rawValue) => {
-  if (!rawValue || rawValue.trim() === '') {
+  if (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue)) {
+    return rawValue;
+  }
+  if (rawValue === null || rawValue === undefined || rawValue === '') {
     return {};
   }
   try {
-    const parsed = JSON.parse(rawValue);
+    const parsed = JSON.parse(String(rawValue));
     return parsed && typeof parsed === 'object' ? parsed : {};
   } catch (error) {
     console.error('JSON解析错误:', error);
@@ -151,12 +156,17 @@ const buildModelState = (name, sourceMaps) => {
   const audioCompletionRatio = toNumericString(
     sourceMaps.AudioCompletionRatio[name],
   );
+  const videoRatio = toNumericString(sourceMaps.VideoRatio[name]);
   const fixedPrice = toNumericString(sourceMaps.ModelPrice[name]);
   const inputPrice = ratioToBasePrice(modelRatio);
   const inputPriceNumber = toNumberOrNull(inputPrice);
   const audioInputPrice =
     inputPriceNumber !== null && hasValue(audioRatio)
       ? formatNumber(inputPriceNumber * Number(audioRatio))
+      : '';
+  const videoInputPrice =
+    inputPriceNumber !== null && hasValue(videoRatio)
+      ? formatNumber(inputPriceNumber * Number(videoRatio))
       : '';
 
   return {
@@ -196,6 +206,7 @@ const buildModelState = (name, sourceMaps) => {
         ? formatNumber(inputPriceNumber * Number(imageRatio))
         : '',
     audioInputPrice,
+    videoInputPrice,
     audioOutputPrice:
       toNumberOrNull(audioInputPrice) !== null && hasValue(audioCompletionRatio)
         ? formatNumber(Number(audioInputPrice) * Number(audioCompletionRatio))
@@ -209,6 +220,7 @@ const buildModelState = (name, sourceMaps) => {
       imageRatio,
       audioRatio,
       audioCompletionRatio,
+      videoRatio,
     },
     hasConflict:
       hasValue(fixedPrice) &&
@@ -226,7 +238,8 @@ const buildModelState = (name, sourceMaps) => {
 
 export const isBasePricingUnset = (model) =>
   model.billingMode !== 'tiered_expr' &&
-  !hasValue(model.fixedPrice) && !hasValue(model.inputPrice);
+  !hasValue(model.fixedPrice) &&
+  !hasValue(model.inputPrice);
 
 export const getModelWarnings = (model, t) => {
   if (!model) {
@@ -244,6 +257,7 @@ export const getModelWarnings = (model, t) => {
     model.imagePrice,
     model.audioInputPrice,
     model.audioOutputPrice,
+    model.videoInputPrice,
   ].some(hasValue);
 
   if (model.hasConflict) {
@@ -261,6 +275,7 @@ export const getModelWarnings = (model, t) => {
       model.rawRatios.imageRatio,
       model.rawRatios.audioRatio,
       model.rawRatios.audioCompletionRatio,
+      model.rawRatios.videoRatio,
     ].some(hasValue)
   ) {
     warnings.push(
@@ -292,8 +307,8 @@ export const getModelWarnings = (model, t) => {
 export const buildSummaryText = (model, t) => {
   const requestRuleSuffix =
     model.billingMode === 'tiered_expr' && model.requestRuleExpr
-    ? `，${t('请求规则')}`
-    : '';
+      ? `，${t('请求规则')}`
+      : '';
   if (model.billingMode === 'tiered_expr') {
     const expr = model.billingExpr;
     if (!expr) return `${t('表达式计费')}${requestRuleSuffix}`;
@@ -316,6 +331,7 @@ export const buildSummaryText = (model, t) => {
       model.imagePrice,
       model.audioInputPrice,
       model.audioOutputPrice,
+      model.videoInputPrice,
     ].filter(hasValue).length;
     const extraLabel =
       extraCount > 0 ? `，${t('额外价格项')} ${extraCount}` : '';
@@ -333,6 +349,7 @@ export const buildOptionalFieldToggles = (model) => ({
   imagePrice: hasValue(model.imagePrice),
   audioInputPrice: hasValue(model.audioInputPrice),
   audioOutputPrice: hasValue(model.audioOutputPrice),
+  videoInputPrice: hasValue(model.videoInputPrice),
 });
 
 const serializeModel = (model, t) => {
@@ -345,6 +362,7 @@ const serializeModel = (model, t) => {
     ImageRatio: null,
     AudioRatio: null,
     AudioCompletionRatio: null,
+    VideoRatio: null,
   };
 
   if (model.billingMode === 'per-request') {
@@ -361,6 +379,7 @@ const serializeModel = (model, t) => {
   const imagePrice = toNumberOrNull(model.imagePrice);
   const audioInputPrice = toNumberOrNull(model.audioInputPrice);
   const audioOutputPrice = toNumberOrNull(model.audioOutputPrice);
+  const videoInputPrice = toNumberOrNull(model.videoInputPrice);
 
   const hasDependentPrice = [
     completionPrice,
@@ -369,6 +388,7 @@ const serializeModel = (model, t) => {
     imagePrice,
     audioInputPrice,
     audioOutputPrice,
+    videoInputPrice,
   ].some((value) => value !== null);
 
   if (inputPrice === null) {
@@ -410,6 +430,9 @@ const serializeModel = (model, t) => {
         model.rawRatios.audioCompletionRatio,
       );
     }
+    if (hasValue(model.rawRatios.videoRatio)) {
+      result.VideoRatio = toNormalizedNumber(model.rawRatios.videoRatio);
+    }
     return result;
   }
 
@@ -448,6 +471,9 @@ const serializeModel = (model, t) => {
     result.AudioCompletionRatio = toNormalizedNumber(
       audioOutputPrice / audioInputPrice,
     );
+  }
+  if (videoInputPrice !== null) {
+    result.VideoRatio = toNormalizedNumber(videoInputPrice / inputPrice);
   }
 
   return result;
@@ -551,6 +577,13 @@ export const buildPreviewRows = (model, t) => {
           ? model.rawRatios.audioCompletionRatio
           : t('空'),
       },
+      {
+        key: 'VideoRatio',
+        label: 'VideoRatio',
+        value: hasValue(model.rawRatios.videoRatio)
+          ? model.rawRatios.videoRatio
+          : t('空'),
+      },
     ];
     return rows;
   }
@@ -561,6 +594,7 @@ export const buildPreviewRows = (model, t) => {
   const imagePrice = toNumberOrNull(model.imagePrice);
   const audioInputPrice = toNumberOrNull(model.audioInputPrice);
   const audioOutputPrice = toNumberOrNull(model.audioOutputPrice);
+  const videoInputPrice = toNumberOrNull(model.videoInputPrice);
 
   const rows = [
     {
@@ -615,12 +649,20 @@ export const buildPreviewRows = (model, t) => {
           ? formatNumber(audioOutputPrice / audioInputPrice)
           : t('空'),
     },
+    {
+      key: 'VideoRatio',
+      label: 'VideoRatio',
+      value:
+        videoInputPrice !== null
+          ? formatNumber(videoInputPrice / inputPrice)
+          : t('空'),
+    },
   ];
   return rows;
 };
 
 export function useModelPricingEditorState({
-  options,
+  options = {},
   refresh,
   t,
   candidateModelNames = EMPTY_CANDIDATE_MODEL_NAMES,
@@ -653,8 +695,13 @@ export function useModelPricingEditorState({
       ImageRatio: parseOptionJSON(options.ImageRatio),
       AudioRatio: parseOptionJSON(options.AudioRatio),
       AudioCompletionRatio: parseOptionJSON(options.AudioCompletionRatio),
-      ModelBillingMode: parseOptionJSON(options['billing_setting.billing_mode']),
-      ModelBillingExpr: parseOptionJSON(options['billing_setting.billing_expr']),
+      VideoRatio: parseOptionJSON(options.VideoRatio),
+      ModelBillingMode: parseOptionJSON(
+        options['billing_setting.billing_mode'],
+      ),
+      ModelBillingExpr: parseOptionJSON(
+        options['billing_setting.billing_expr'],
+      ),
     };
 
     const names = new Set([
@@ -668,6 +715,7 @@ export function useModelPricingEditorState({
       ...Object.keys(sourceMaps.ImageRatio),
       ...Object.keys(sourceMaps.AudioRatio),
       ...Object.keys(sourceMaps.AudioCompletionRatio),
+      ...Object.keys(sourceMaps.VideoRatio),
       ...Object.keys(sourceMaps.ModelBillingMode),
       ...Object.keys(sourceMaps.ModelBillingExpr),
     ]);
@@ -850,6 +898,10 @@ export function useModelPricingEditorState({
         !hasValue(model.audioInputPrice) && hasValue(model.rawRatios.audioRatio)
           ? formatNumber(baseNumber * Number(model.rawRatios.audioRatio))
           : model.audioInputPrice,
+      videoInputPrice:
+        !hasValue(model.videoInputPrice) && hasValue(model.rawRatios.videoRatio)
+          ? formatNumber(baseNumber * Number(model.rawRatios.videoRatio))
+          : model.videoInputPrice,
       audioOutputPrice:
         !hasValue(model.audioOutputPrice) &&
         hasValue(model.rawRatios.audioRatio) &&
@@ -978,6 +1030,7 @@ export function useModelPricingEditorState({
           imagePrice: selectedModel.imagePrice,
           audioInputPrice: selectedModel.audioInputPrice,
           audioOutputPrice: selectedModel.audioOutputPrice,
+          videoInputPrice: selectedModel.videoInputPrice,
           billingExpr: selectedModel.billingExpr || '',
           requestRuleExpr: selectedModel.requestRuleExpr || '',
         };
@@ -1013,6 +1066,7 @@ export function useModelPricingEditorState({
           audioOutputPrice:
             Boolean(sourceToggles.audioInputPrice) &&
             Boolean(sourceToggles.audioOutputPrice),
+          videoInputPrice: Boolean(sourceToggles.videoInputPrice),
         };
       });
       return next;
@@ -1037,6 +1091,7 @@ export function useModelPricingEditorState({
       ImageRatio: {},
       AudioRatio: {},
       AudioCompletionRatio: {},
+      VideoRatio: {},
     };
 
     const tieredOutput = {
@@ -1051,8 +1106,10 @@ export function useModelPricingEditorState({
           model.requestRuleExpr,
         );
         if (finalBillingExpr) {
-          tieredOutput['billing_setting.billing_mode'][model.name] = 'tiered_expr';
-          tieredOutput['billing_setting.billing_expr'][model.name] = finalBillingExpr;
+          tieredOutput['billing_setting.billing_mode'][model.name] =
+            'tiered_expr';
+          tieredOutput['billing_setting.billing_expr'][model.name] =
+            finalBillingExpr;
         }
       }
 

@@ -67,6 +67,19 @@ func TestGeminiChatHandlerCompletionTokensExcludeToolUsePromptTokens(t *testing.
 	require.Equal(t, 1120, usage.CompletionTokenDetails.ReasoningTokens)
 }
 
+func TestBuildUsageFromGeminiMetadataPreservesVideoPromptTokens(t *testing.T) {
+	usage := buildUsageFromGeminiMetadata(dto.GeminiUsageMetadata{
+		PromptTokenCount: 213,
+		PromptTokensDetails: []dto.GeminiPromptTokensDetails{
+			{Modality: "TEXT", TokenCount: 3},
+			{Modality: "VIDEO", TokenCount: 210},
+		},
+	}, 0)
+
+	require.Equal(t, 3, usage.PromptTokensDetails.TextTokens)
+	require.Equal(t, 210, usage.PromptTokensDetails.VideoTokens)
+}
+
 func TestGeminiStreamHandlerCompletionTokensExcludeToolUsePromptTokens(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())

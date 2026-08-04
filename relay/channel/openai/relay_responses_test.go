@@ -26,6 +26,7 @@ func TestOaiResponsesHandlerMapsInputTokenDetails(t *testing.T) {
 			"total_tokens": 1227,
 			"input_tokens_details": {
 				"cached_tokens": 3,
+				"cache_write_tokens": 7,
 				"text_tokens": 63,
 				"audio_tokens": 96,
 				"image_tokens": 0
@@ -51,6 +52,7 @@ func TestOaiResponsesHandlerMapsInputTokenDetails(t *testing.T) {
 	assert.Equal(t, 1065, usage.CompletionTokens)
 	assert.Equal(t, 1227, usage.TotalTokens)
 	assert.Equal(t, 3, usage.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, 7, usage.PromptTokensDetails.CacheWriteTokens)
 	assert.Equal(t, 63, usage.PromptTokensDetails.TextTokens)
 	assert.Equal(t, 96, usage.PromptTokensDetails.AudioTokens)
 	assert.Equal(t, 0, usage.PromptTokensDetails.ImageTokens)

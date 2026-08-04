@@ -80,6 +80,7 @@ export const CHANNEL_AFFINITY_RULE_TEMPLATES = {
     param_override_template: CLAUDE_CLI_HEADER_PASSTHROUGH_TEMPLATE,
     value_regex: '',
     ttl_seconds: 0,
+    fixed_ttl: true,
     skip_retry_on_failure: true,
     include_using_group: true,
     include_rule_name: true,

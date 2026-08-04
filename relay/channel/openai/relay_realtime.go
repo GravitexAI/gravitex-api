@@ -133,6 +133,13 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						usage.InputTokenDetails.TextTokens += realtimeUsage.InputTokenDetails.TextTokens
 						usage.OutputTokenDetails.AudioTokens += realtimeUsage.OutputTokenDetails.AudioTokens
 						usage.OutputTokenDetails.TextTokens += realtimeUsage.OutputTokenDetails.TextTokens
+						if d := realtimeUsage.InputTokenDetails.CachedTokensDetails; d != nil {
+							if usage.InputTokenDetails.CachedTokensDetails == nil {
+								usage.InputTokenDetails.CachedTokensDetails = &dto.CachedTokensDetails{}
+							}
+							usage.InputTokenDetails.CachedTokensDetails.TextTokens += d.TextTokens
+							usage.InputTokenDetails.CachedTokensDetails.AudioTokens += d.AudioTokens
+						}
 						err := preConsumeUsage(c, info, usage, sumUsage)
 						if err != nil {
 							errChan <- fmt.Errorf("error consume usage: %v", err)
@@ -218,7 +225,9 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 		_ = preConsumeUsage(c, info, localUsage, sumUsage)
 	}
 
-	// check usage total tokens, if 0, use local usage
+	if sumUsage.TotalTokens > 0 {
+		info.SetUpstreamResponsesField("usage", sumUsage)
+	}
 
 	return nil, sumUsage
 }
@@ -236,6 +245,14 @@ func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.R
 	totalUsage.InputTokenDetails.AudioTokens += usage.InputTokenDetails.AudioTokens
 	totalUsage.OutputTokenDetails.TextTokens += usage.OutputTokenDetails.TextTokens
 	totalUsage.OutputTokenDetails.AudioTokens += usage.OutputTokenDetails.AudioTokens
+	// 累积 CachedTokensDetails（上游按 response.done 粒度下发，需跨轮汇总才能正确拆分文本/音频缓存）
+	if d := usage.InputTokenDetails.CachedTokensDetails; d != nil {
+		if totalUsage.InputTokenDetails.CachedTokensDetails == nil {
+			totalUsage.InputTokenDetails.CachedTokensDetails = &dto.CachedTokensDetails{}
+		}
+		totalUsage.InputTokenDetails.CachedTokensDetails.TextTokens += d.TextTokens
+		totalUsage.InputTokenDetails.CachedTokensDetails.AudioTokens += d.AudioTokens
+	}
 	// clear usage
 	err := service.PreWssConsumeQuota(ctx, info, usage)
 	return err
