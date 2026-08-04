@@ -133,6 +133,51 @@ func TestProcessHeaderOverride_NonTestKeepsClientHeaderPlaceholder(t *testing.T)
 	require.Equal(t, "trace-123", headers["x-upstream-trace"])
 }
 
+func TestProcessHeaderOverride_ClientHeaderPlaceholderUsesDefaultWhenAbsent(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	info := &relaycommon.RelayInfo{
+		IsChannelTest: false,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"X-Ark-Max-Wait-Timeout-Ms": "{client_header:X-Ark-Max-Wait-Timeout-Ms|600000}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	require.Equal(t, "600000", headers["x-ark-max-wait-timeout-ms"])
+}
+
+func TestProcessHeaderOverride_ClientHeaderPlaceholderPrefersClientValueOverDefault(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Request.Header.Set("X-Ark-Max-Wait-Timeout-Ms", "180000")
+
+	info := &relaycommon.RelayInfo{
+		IsChannelTest: false,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"X-Ark-Max-Wait-Timeout-Ms": "{client_header:X-Ark-Max-Wait-Timeout-Ms|600000}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	require.Equal(t, "180000", headers["x-ark-max-wait-timeout-ms"])
+}
+
 func TestProcessHeaderOverride_RuntimeOverrideIsFinalHeaderMap(t *testing.T) {
 	t.Parallel()
 
@@ -269,7 +314,7 @@ func TestApplyHeaderOverrideToRequest_SkipsAnthropicBetaToProtectFilter(t *testi
 
 	// 模拟 header_override 试图把脏值覆盖回去（典型场景：{client_header:anthropic-beta} 解析后）
 	headerOverride := map[string]string{
-		"anthropic-beta": "advisor-tool-2026-03-01,prompt-caching-scope-2026-01-05",
+		"anthropic-beta":  "advisor-tool-2026-03-01,prompt-caching-scope-2026-01-05",
 		"x-custom-header": "custom-value",
 	}
 

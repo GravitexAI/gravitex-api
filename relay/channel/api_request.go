@@ -186,7 +186,16 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 			return "", false, fmt.Errorf("client_header placeholder must be the full value: %q", template)
 		}
 
-		name := strings.TrimSpace(afterPrefix[:end])
+		body := afterPrefix[:end]
+		name := body
+		hasDefault := false
+		defaultValue := ""
+		if idx := strings.Index(body, "|"); idx >= 0 {
+			name = body[:idx]
+			defaultValue = body[idx+1:]
+			hasDefault = true
+		}
+		name = strings.TrimSpace(name)
 		if name == "" {
 			return "", false, fmt.Errorf("client_header placeholder name is empty: %q", template)
 		}
@@ -195,6 +204,9 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 		}
 		clientHeaderValue := c.Request.Header.Get(name)
 		if strings.TrimSpace(clientHeaderValue) == "" {
+			if hasDefault {
+				return defaultValue, true, nil
+			}
 			return "", false, nil
 		}
 		// Do not interpolate {api_key} inside client-supplied content.
@@ -214,6 +226,8 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 // Supported placeholders:
 //   - {api_key}: resolved to the channel API key
 //   - {client_header:<name>}: resolved to the incoming request header value
+//   - {client_header:<name>|<default>}: same as above, falling back to <default>
+//     when the incoming request does not carry <name> (or it is blank)
 //
 // Header passthrough rules (keys only; values are ignored):
 //   - "*": passthrough all incoming headers by name (excluding unsafe headers)

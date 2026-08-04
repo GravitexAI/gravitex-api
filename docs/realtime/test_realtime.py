@@ -27,7 +27,7 @@ import websockets
 # 配置区 — 按需修改
 # ============================================================
 BASE_URL = "wss://api.gravitex.ai/v1/realtime"
-API_KEY  = "sk-uzK3kA0iYAN9g5SHcTwUNDu8rsYVhKkGkJCF4r0ptHDlHMgZ"
+API_KEY  = "sk-uzK3kA0iYAN9g5xxxxxxxxxx"
 # MODEL    = "gpt-realtime-2"
 MODEL    = "gpt-realtime-1.5"
 
