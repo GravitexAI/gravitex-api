@@ -60,7 +60,12 @@ const (
 	ChannelTypeAdvancedCustom  = 60
 	ChannelTypeTencentTokenHub = 61
 	ChannelTypeSeedanceGateway = 62
-	ChannelTypeDummy           // this one is only for count, do not add any channel after this
+	// 官方在 59/60 定义了 Sub2API/NewAPI，但 main-alpha 早已占用 59(Uptoken)/60(AdvancedCustom)，
+	// 且这些号存在生产 channels.type 列里不可变更，故官方新渠道顺延到 63/64。
+	// ⚠️ 以后吸收官方新渠道类型一律往 63+ 顺延，不要跟官方号段。
+	ChannelTypeSub2API = 63
+	ChannelTypeNewAPI  = 64
+	ChannelTypeDummy   // this one is only for count, do not add any channel after this
 
 )
 
@@ -128,6 +133,8 @@ var ChannelBaseURLs = []string{
 	"",                                          //60
 	"https://tokenhub.tencentcloudmaas.com",     //61 Tencent TokenHub
 	"",                                          //62 Seedance Gateway
+	"",                                          //63 Sub2API
+	"",                                          //64 New API
 }
 
 var ChannelTypeNames = map[int]string{
@@ -190,6 +197,8 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeAdvancedCustom:  "Advanced Custom",
 	ChannelTypeTencentTokenHub: "Tencent TokenHub",
 	ChannelTypeSeedanceGateway: "SeedanceGateway",
+	ChannelTypeSub2API:         "Sub2API",
+	ChannelTypeNewAPI:          "New API",
 }
 
 func GetChannelTypeName(channelType int) string {

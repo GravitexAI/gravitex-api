@@ -20,6 +20,7 @@ web/admin_api.zip-ssr
 gravitex_llm.zip
 gravitex_llm.zip-ssr
 gravitex_llm
+.env
 one-api
 new-api
 .vite
@@ -36,7 +37,7 @@ plans
 
 electron/node_modules
 electron/dist
-data/
+/data/
 .gomodcache/
 .gocache-temp
 .gopath
