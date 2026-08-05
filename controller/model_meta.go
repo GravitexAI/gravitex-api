@@ -18,26 +18,18 @@ import (
 func GetAllModelsMeta(c *gin.Context) {
 
 	pageInfo := common.GetPageQuery(c)
-	statusFilter := -1
-	if s := c.Query("status"); s != "" {
-		statusFilter, _ = strconv.Atoi(s)
-	}
-	modelsMeta, err := model.GetAllModels(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), statusFilter)
+	status := c.Query("status")
+	syncOfficial := c.Query("sync_official")
+	modelsMeta, total, err := model.SearchModels("", "", status, syncOfficial, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	// 批量填充附加字段，提升列表接口性能
 	enrichModels(modelsMeta)
-	var total int64
-	db := model.DB.Model(&model.Model{})
-	if statusFilter >= 0 {
-		db = db.Where("status = ?", statusFilter)
-	}
-	db.Count(&total)
 
 	// 统计供应商计数（全部数据，不受分页影响）
-	vendorCounts, _ := model.GetVendorModelCounts(statusFilter)
+	vendorCounts, _ := model.GetVendorModelCounts(status)
 
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(modelsMeta)
@@ -55,22 +47,27 @@ func SearchModelsMeta(c *gin.Context) {
 
 	keyword := c.Query("keyword")
 	vendor := c.Query("vendor")
-	statusFilter := -1
-	if s := c.Query("status"); s != "" {
-		statusFilter, _ = strconv.Atoi(s)
-	}
+	status := c.Query("status")
+	syncOfficial := c.Query("sync_official")
 	pageInfo := common.GetPageQuery(c)
 
-	modelsMeta, total, err := model.SearchModels(keyword, vendor, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), statusFilter)
+	modelsMeta, total, err := model.SearchModels(keyword, vendor, status, syncOfficial, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	// 批量填充附加字段，提升列表接口性能
 	enrichModels(modelsMeta)
+	vendorCounts, _ := model.GetVendorModelCounts(status)
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(modelsMeta)
-	common.ApiSuccess(c, pageInfo)
+	common.ApiSuccess(c, gin.H{
+		"items":         modelsMeta,
+		"total":         total,
+		"page":          pageInfo.GetPage(),
+		"page_size":     pageInfo.GetPageSize(),
+		"vendor_counts": vendorCounts,
+	})
 }
 
 // GetModelMeta 根据 ID 获取单条模型信息

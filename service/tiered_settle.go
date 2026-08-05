@@ -63,8 +63,10 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	p := float64(usage.PromptTokens)
 	c := float64(completionTokens)
 	cr := float64(usage.PromptTokensDetails.CachedTokens)
-	// gpt-5.6+ 缓存写入 token 并入 cc（通用缓存创建变量），复用同一计价系数
-	cc5m := float64(usage.PromptTokensDetails.CachedCreationTokens + usage.PromptTokensDetails.CacheWriteTokens)
+	// gpt-5.6+ 缓存写入 token 并入 cc（通用缓存创建变量），复用同一计价系数。
+	// 用 CacheCreationTokensTotal() 取 max(CachedCreationTokens, CacheWriteTokens)，
+	// 不能相加——上游两个字段都上报时相加会重复计费。
+	cc5m := float64(usage.PromptTokensDetails.CacheCreationTokensTotal())
 	cc1h := float64(0)
 
 	if usage.UsageSemantic == "anthropic" {
@@ -109,6 +111,8 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		}
 	}
 
+	// OpenAI cache-write usage reports unadjusted prefix counts, so cr + cc can
+	// exceed the prompt and drive the remainder negative. Clamp at zero.
 	if p < 0 {
 		p = 0
 	}

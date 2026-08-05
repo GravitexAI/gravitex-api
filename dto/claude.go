@@ -236,7 +236,7 @@ type ClaudeRequest struct {
 	// request reaches the upstream (Anthropic rejects a top-level effort field).
 	Effort     string          `json:"effort,omitempty"`
 	McpServers json.RawMessage `json:"mcp_servers,omitempty"`
-	Metadata          json.RawMessage `json:"metadata,omitempty"`
+	Metadata   json.RawMessage `json:"metadata,omitempty"`
 	// Speed specifies the Claude inference speed mode.
 	// This field is filtered by default and can be enabled via channel setting allow_speed.
 	Speed json.RawMessage `json:"speed,omitempty"`
@@ -576,6 +576,7 @@ type ClaudeUsage struct {
 	// OutputTokensDetails 携带上游对 output_tokens 的拆分，其中 thinking_tokens 用于
 	// 映射到 OpenAI 协议的 completion_tokens_details.reasoning_tokens。
 	OutputTokensDetails *ClaudeOutputTokensDetails `json:"output_tokens_details,omitempty"`
+	BillingUsage        *BillingUsage              `json:"billing_usage,omitempty"`
 }
 
 type ClaudeOutputTokensDetails struct {
