@@ -718,9 +718,10 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 		return true
 	}
 	if taskErr.StatusCode/100 == 5 {
-		// 超时不重试
-		if operation_setting.IsAlwaysSkipRetryStatusCode(taskErr.StatusCode) {
-			return false
+		// 504/524 等状态码是否重试由 AutomaticRetryStatusCodes 配置决定；
+		// 其他 5xx 保持任务链路原有的默认重试行为。
+		if taskErr.StatusCode == http.StatusGatewayTimeout || taskErr.StatusCode == 524 {
+			return operation_setting.ShouldRetryByStatusCode(taskErr.StatusCode)
 		}
 		return true
 	}
