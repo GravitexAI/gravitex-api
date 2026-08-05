@@ -14,25 +14,51 @@ import (
 )
 
 type Token struct {
-	Id                  int            `json:"id"`
-	UserId              int            `json:"user_id" gorm:"index"`
-	Key                 string         `json:"key" gorm:"type:varchar(128);uniqueIndex"`
-	Status              int            `json:"status" gorm:"default:1"`
-	Name                string         `json:"name" gorm:"index" `
-	CreatedTime         int64          `json:"created_time" gorm:"bigint"`
-	AccessedTime        int64          `json:"accessed_time" gorm:"bigint"`
-	ExpiredTime         int64          `json:"expired_time" gorm:"bigint;default:-1"` // -1 means never expired
-	RemainQuota         int            `json:"remain_quota" gorm:"default:0"`
-	UnlimitedQuota      bool           `json:"unlimited_quota"`
-	ModelLimitsEnabled  bool           `json:"model_limits_enabled"`
-	ModelLimits         string         `json:"model_limits" gorm:"type:text"`
-	VendorLimits        string         `json:"vendor_limits" gorm:"type:text"`
-	AllowIps            *string        `json:"allow_ips" gorm:"default:''"`
-	UsedQuota           int            `json:"used_quota" gorm:"default:0"` // used quota
-	Group               string         `json:"group" gorm:"default:''"`
-	CrossGroupRetry     bool           `json:"cross_group_retry"`                      // 跨分组重试，仅auto分组有效
-	DailySpendThreshold int            `json:"daily_spend_threshold" gorm:"default:0"` // 日消费告警阈值（quota单位，500000=1美元，0=不告警）
-	DeletedAt           gorm.DeletedAt `gorm:"index"`
+	Id                  int     `json:"id"`
+	UserId              int     `json:"user_id" gorm:"index"`
+	Key                 string  `json:"key" gorm:"type:varchar(128);uniqueIndex"`
+	Status              int     `json:"status" gorm:"default:1"`
+	Name                string  `json:"name" gorm:"index" `
+	CreatedTime         int64   `json:"created_time" gorm:"bigint"`
+	AccessedTime        int64   `json:"accessed_time" gorm:"bigint"`
+	ExpiredTime         int64   `json:"expired_time" gorm:"bigint;default:-1"` // -1 means never expired
+	RemainQuota         int     `json:"remain_quota" gorm:"default:0"`
+	UnlimitedQuota      bool    `json:"unlimited_quota"`
+	ModelLimitsEnabled  bool    `json:"model_limits_enabled"`
+	ModelLimits         string  `json:"model_limits" gorm:"type:text"`
+	VendorLimits        string  `json:"vendor_limits" gorm:"type:text"`
+	AllowIps            *string `json:"allow_ips" gorm:"default:''"`
+	UsedQuota           int     `json:"used_quota" gorm:"default:0"` // used quota
+	Group               string  `json:"group" gorm:"default:''"`
+	CrossGroupRetry     bool    `json:"cross_group_retry"`                      // 跨分组重试，仅auto分组有效
+	DailySpendThreshold int     `json:"daily_spend_threshold" gorm:"default:0"` // 日消费告警阈值（quota单位，500000=1美元，0=不告警）
+	// AutoGroups 官方自动分组功能：auto 分组下可指定候选分组列表（JSON 数组存 text 列）
+	AutoGroups string         `json:"-" gorm:"type:text"`
+	DeletedAt  gorm.DeletedAt `gorm:"index"`
+}
+
+func (token *Token) GetAutoGroups() ([]string, error) {
+	if token.AutoGroups == "" {
+		return nil, nil
+	}
+	var groups []string
+	if err := common.UnmarshalJsonStr(token.AutoGroups, &groups); err != nil {
+		return nil, err
+	}
+	return groups, nil
+}
+
+func (token *Token) SetAutoGroups(groups []string) error {
+	if len(groups) == 0 {
+		token.AutoGroups = ""
+		return nil
+	}
+	data, err := common.Marshal(groups)
+	if err != nil {
+		return err
+	}
+	token.AutoGroups = string(data)
+	return nil
 }
 
 func (token *Token) Clean() {
@@ -295,16 +321,6 @@ func (token *Token) Insert() error {
 
 // Update Make sure your token's fields is completed, because this will update non-zero values
 func (token *Token) Update() (err error) {
-	defer func() {
-		if shouldUpdateRedis(true, err) {
-			gopool.Go(func() {
-				err := cacheSetToken(*token)
-				if err != nil {
-					common.SysLog("failed to update token cache: " + err.Error())
-				}
-			})
-		}
-	}()
 	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
 		"model_limits_enabled", "model_limits", "vendor_limits", "allow_ips", "group", "cross_group_retry", "daily_spend_threshold").Updates(token).Error
 	return err
