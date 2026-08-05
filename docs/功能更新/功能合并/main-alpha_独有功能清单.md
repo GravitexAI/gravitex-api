@@ -440,6 +440,113 @@
 
 ---
 
+## 七点十一、与官方共存的"混合体"文件（阶段2 后新增，最易被后续合并破坏）
+
+这些文件里 main-alpha 的改动和官方的重构**交织在一起**，不是简单的"保留 ours"或"取 theirs"。后续合并时必须逐项核对，否则会静默丢功能或引入计费错误。
+
+### 7.11.1 `types/price_data.go` —— 官方封装 + main-alpha 字段
+
+- 官方把 `OtherRatios` 公开字段改成私有 `otherRatios` + 一套访问器（带 NaN/Inf 过滤）
+- **main-alpha 必须保留的**：`VideoRatio float64` 字段（视频倍率）
+- **调用点写法**（官方私有化后唯一正确的用法）：
+
+| 需求 | 写法 |
+|---|---|
+| 读全部 | `pd.OtherRatios()` （方法，返回副本） |
+| 读单值 | `pd.OtherRatios()["n"]` |
+| 判存在 | `pd.HasOtherRatio("n")` |
+| 整体赋值 | `pd.ReplaceOtherRatios(map[string]float64{...})` |
+| 单键写入 | `pd.AddOtherRatio(k, v)` |
+| 连乘应用 | `pd.ApplyOtherRatiosToFloat(v)` / `ApplyOtherRatiosToDecimal(v)` |
+| 反向除掉 | `pd.RemoveOtherRatiosFromFloat(v)` |
+
+⚠️ `model.TaskBillingContext.OtherRatios` 是**另一个结构体**的公开字段，不受影响，别误改。
+
+调用点分布：`service/text_quota.go`、`relay/image_handler.go`、`relay/relay_task.go`、`relay/channel/task/ali/adaptor.go`、`relay/channel/task/vertex/adaptor.go`
+
+### 7.11.2 `dto/openai_response.go` —— 三方字段并集
+
+`InputTokenDetails` 里同时有：
+- 官方的 `CacheWriteTokens` + `CacheCreationTokensTotal()` 方法
+- **main-alpha 独有**：`CachedTokensDetails *CachedTokensDetails`（realtime WSS 计费用）、`VideoTokens int`（视频输入计费用）
+
+⚠️ **绝对不能把 `CachedCreationTokens` 和 `CacheWriteTokens` 相加** —— 必须用 `CacheCreationTokensTotal()` 取 max。main-alpha 曾经用加法，上游两个字段都上报时会**重复收费**，阶段2 已修（`service/tiered_settle.go:67`、`service/text_quota.go:223`）。
+
+### 7.11.3 `dto/gemini.go` —— 官方 UnmarshalJSON 的 aux 陷阱
+
+官方给 `GeminiChatResponse` 加了 `HasUsageMetadata bool` + 自定义 `UnmarshalJSON`，用一个 **aux struct 影子结构**来区分"上游没返回 usageMetadata"和"返回了但全 0"。
+
+⚠️ **aux 会 shadow 整个 `GeminiChatResponse`**：给 `GeminiChatResponse` 加任何字段，**必须同步加进 aux 并在下面 copy**，否则 unmarshal 时该字段被静默丢弃。
+
+main-alpha 的 `ResponseId string` 已按此规则加进 aux（阶段2 处理）。检查方法：`grep -c ResponseId dto/gemini.go` 应 ≥ 3（struct 定义 + aux 定义 + copy 赋值）。
+
+### 7.11.4 `relay/channel/task/ali/adaptor.go` —— 整体保留 main-alpha
+
+- **13 个 wan 模型**（wan2.7 t2v/i2v/r2v + wan2.6 全系 5 个 + wan2.5 + wan2.2 + wan2-1），官方只 5 个
+- **计费引擎**：`AdjustBillingOnSubmit` / `AdjustBillingOnComplete` / `BillingResolutionKeyFromParams` / `ParseBillingResolutionFromSize` / `ParseBillingResolutionKeyFromUpstreamJSON`，官方完全没有
+- 官方的 `normalizeWan27I2VInput` / `firstTaskImage` / `secondTaskImage` / `firstNonEmpty` 是同功能的另一套实现，**混用会破坏计费**
+- 处理方式：`git checkout --ours relay/channel/task/ali/adaptor.go`（连 `adaptor_test.go` 一起）
+
+### 7.11.5 `relay/channel/task/kling/adaptor.go` —— 整体保留 main-alpha
+
+官方新增的 `FinalUnitDeduction` 计费依赖它独有的响应结构字段；main-alpha 有自己的 `AdjustBillingOnComplete` 计费路径。处理方式同上。
+
+### 7.11.6 `relay/channel/openai/relay_responses{,_compact}.go` —— 保留分项计费
+
+官方只保留 `CachedTokens` / `CacheWriteTokens`，**main-alpha 需要的 `TextTokens` / `AudioTokens` / `ImageTokens` 分项和 `info.SetUpstreamResponsesField("usage", ...)` 都要保留** —— 这是分项计费和账单回写的数据来源。
+
+### 7.11.7 `relay/image_handler.go` —— `n` 倍率兜底
+
+官方把 `n` 倍率设置挪到各 adaptor 自己做（`relay/channel/ali/image.go` 等）。main-alpha 在 `image_handler.go` 保留了一个**兜底**：
+
+```go
+if info.PriceData.UsePrice && info.PriceData.ImagePerImagePricing == nil {
+    if !info.PriceData.HasOtherRatio("n") {   // adaptor 没设才兜底
+        info.PriceData.AddOtherRatio("n", float64(imageN))
+    }
+}
+```
+
+条件是 `!HasOtherRatio("n")`，adaptor 设了就不覆盖，纯安全网。**删掉会导致没有自设 n 的 adaptor 少收多图费用**。
+`ImagePerImagePricing == nil` 判断也是 main-alpha 独有（按张计费已含实际张数和输入成本，不该再乘 n）。
+
+### 7.11.8 `service/download.go` —— SSRF 防护 + 浏览器 UA 必须共存
+
+```go
+req, _ := http.NewRequest(http.MethodGet, originUrl, nil)
+setBrowserLikeHeaders(req)                    // main-alpha：很多站点拒绝 Go 默认 UA 返回 403
+return GetSSRFProtectedHTTPClient().Do(req)   // 官方：防内网探测
+```
+
+⚠️ 官方版是 `GetSSRFProtectedHTTPClient().Get(originUrl)`（没有 UA），**直接取官方会让 Claude 媒体 URL 下载大面积 403**。
+
+### 7.11.9 `model/log.go` —— gopool 异步配额回退
+
+`RecordConsumeLog` 里 `common.DataExportEnabled` 分支必须用 `gopool.Go(func(){ LogQuotaData(...) })` **异步**。官方改成了同步调用，会阻塞请求。
+
+⚠️ 保留异步时记得 import `"github.com/bytedance/gopkg/util/gopool"` —— 官方改同步时把这个 import 删了。
+
+### 7.11.10 `model/channel_cache.go` / `model/model_meta.go` —— 函数并存
+
+| main-alpha 独有 | 官方新增 | 关系 |
+|---|---|---|
+| `GetChannelsByGroupAndModelPrefix` / `getChannelsByGroupAndModelPrefixFromDB` | `filterChannelsByRequestPathAndModel`（原 `...ByRequestPath` 升级为按模型过滤） | 并存 |
+| `GetVendorNameFromModel` / `GetVendorIdFromModel` / `GetEnabledVendorIdFromModel` | `parseModelStatusFilter` / `parseModelSyncFilter` / `SearchModels(keyword, vendor, status, syncOfficial string, offset, limit)` | 并存；`GetVendorModelCounts` 已改为收 `status string` 复用 `parseModelStatusFilter`，保证列表与计数过滤语义一致 |
+
+### 7.11.11 `relay/channel/claude/relay-claude.go` + `relay/channel/gemini/relay-gemini.go` —— 暂时整体保留
+
+官方已把这两个文件改成 `relayconvert` 的薄包装（9 行 / 11 行），是 relaykit 重构（断崖③）的前奏。main-alpha 分别有 987 行 / 1130 行定制：
+
+- claude：prompt cache 自动注入、媒体 URL 转 base64、anthropic-beta 过滤、thinking、`FormatClaudeResponseInfo` 带 `info *relaycommon.RelayInfo` 首参
+- gemini：`CHZ-PATCH(gemini-usage-fix)` 图文分离计费、Omni 视频计费、`SetUpstreamResponsesField("usageMetadata", ...)`、`hasImagePart` 追踪
+
+**连带文件**（依赖 main-alpha 的 `buildUsageFromGeminiMetadata(metadata 值类型, ...)` 签名，也要一起保留）：
+`relay/channel/gemini/relay-gemini-native.go`、`relay/channel/gemini/relay_responses.go`
+
+⚠️ 官方的 `buildUsageFromGeminiResponse` 依赖一整条新辅助链（`geminiResponseUsageText` / `patchGeminiZeroCompletionUsage` / `geminiResponseInlineImageCount` / `attachEstimatedGeminiBillingUsage` / `dto.NewEstimatedGeminiChatBillingUsage`），且它的 `buildUsageFromGeminiMetadata` 收**指针**而 main-alpha 收**值**。要迁移就得整条链一起迁 —— 计划在阶段4 随 relaykit 一并处理。
+
+---
+
 ## 八、依赖包
 
 | 依赖 | 版本 | 用途 |
