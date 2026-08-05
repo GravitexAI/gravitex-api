@@ -33,6 +33,29 @@
 - **字段**：`Thinking`、`OutputConfig`、`context_management`
 - **合并时**：如果 body 字段过滤只清 anthropic-beta 不清这些绑定字段，Bedrock 会报错
 
+### 1.4b 🔴 渠道类型号段分叉（与官方永久不一致，2026-08-05 定）
+
+main-alpha 比官方早占用了 58/59/60 三个号，导致 `ChannelTypeAdvancedCustom` 两边号不同。**这些号存在生产 `channels.type` 列里，不可变更**（改号会让已有渠道全部失效）。
+
+| 号 | main-alpha | 官方 |
+|---|---|---|
+| 58 | `ChannelTypeAzureVideo` | `ChannelTypeAdvancedCustom` |
+| 59 | `ChannelTypeUptoken` | `ChannelTypeSub2API` |
+| 60 | `ChannelTypeAdvancedCustom` | `ChannelTypeNewAPI` |
+| 61 | `ChannelTypeTencentTokenHub` | — |
+| 62 | `ChannelTypeSeedanceGateway` | — |
+| 63 | `ChannelTypeSub2API`（官方的 59 顺延） | — |
+| 64 | `ChannelTypeNewAPI`（官方的 60 顺延） | — |
+
+**永久约定**：
+- main-alpha 的 58~62 **永不变更**
+- 吸收官方新渠道类型时，**一律从 65 往后顺延**，不跟官方号段
+- `constant/channel.go` 里已加注释说明这个约定
+- 三处要同步改：常量定义、`ChannelBaseURLs` 数组（按 index 对齐）、`ChannelTypeNames` map
+- 还要检查 `constant/api_type.go`（`APIType*`）、`common/api_type.go`（channelType → apiType 映射）、`relay/relay_adaptor.go`（apiType → Adaptor）、`relay/common/relay_info.go`（渠道白名单）
+
+**合并时验证**：`grep -E "ChannelTypeAzureVideo|ChannelTypeUptoken|ChannelTypeAdvancedCustom|ChannelTypeTencentTokenHub|ChannelTypeSeedanceGateway" constant/channel.go | grep "="` 应输出 58/59/60/61/62。
+
 ### 1.5 允许透传的 Claude 请求字段（channel-level 开关）
 - **位置**：`dto/channel_settings.go`
 - **字段**：`AllowInferenceGeo`（数据驻留）、`AllowSpeed`（推理速度模式）、`AllowSafetyIdentifier`、`DisableStore`、`AllowIncludeObfuscation`
