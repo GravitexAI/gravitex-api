@@ -4,6 +4,14 @@
 
 ---
 
+## 零、合并前必读（3 条铁律）
+
+1. **🔴 RuoYi JWT SSO 不能碰** —— `middleware/auth.go` + `middleware/ruoyi_auth.go` 一律取 ours。官方 `31d70fca3` 会删掉整段 RuoYi 鉴权，删了就 Java 跳转全线 401。详见[防丢清单 5.3](main-alpha_独有功能清单.md)
+2. **🔴 双前端结构不能摊平** —— `web/` 是 workspace 根（`default/` + `classic/`）。官方要把 `web/default/*` 挪到 `web/` 并删 classic，一律拒绝。`main.go` 4 处 embed、`Dockerfile` 两个 builder stage、`router/web-router.go` 主题切换、`setting/system_setting/theme.go` 全部取 ours。详见[防丢清单 4.5](main-alpha_独有功能清单.md)
+3. **🔴 合并中途绝不 `git stash` / `git commit --amend`** —— 两者都会破坏 merge 状态（丢 MERGE_HEAD / 丢第二 parent），导致 ancestor tracking 失效、同一批 commit 下次重复出现。已踩两次，见第四节 4.1
+
+---
+
 ## 一、合并原则
 
 1. **main-alpha 优先**：main-alpha 是生产分支，合并冲突时以 main-alpha 的业务逻辑为准，除非官方修复了 main-alpha 也存在的 bug。

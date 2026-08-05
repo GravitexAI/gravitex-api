@@ -137,6 +137,73 @@
 
 ---
 
+## 四点五、web/ 双前端 workspace 结构（🔴 拒绝官方摊平，主人 2026-08-05 定）
+
+### 4.5.1 main-alpha 的结构 vs 官方
+
+官方在 `31d70fca3` 里**删掉了 `web/classic/`，并把 `web/default/*` 摊平到 `web/` 根**。main-alpha **两套前端都要保留**，所以结构上与官方长期分叉。
+
+```
+main-alpha（保持不变）                     官方 31d70fca3 之后
+web/                                      web/
+├── package.json   ← workspace 根          ├── package.json   ← app 根（不是 workspace）
+│   workspaces: [default, classic]        ├── index.html
+│   + catalog（统一 React/rsbuild 等版本） ├── src/
+├── bun.lock                              ├── public/
+├── default/       ← 跟随官方演进          ├── rsbuild.config.ts
+│   ├── package.json                      ├── .oxlintrc.json
+│   ├── index.html                        ├── knip.config.ts
+│   ├── src/                              └── （无 classic）
+│   └── rsbuild.config.ts
+└── classic/       ← main-alpha 独家维护
+    ├── package.json
+    └── src/
+```
+
+### 4.5.2 为什么不接受官方摊平（评估结论）
+
+如果照官方那样把 `web/default/*` 挪到 `web/`，会踩 4 个坑：
+
+| # | 坑 | 后果 |
+|---|---|---|
+| 1 | `web/package.json` 被官方的 app package.json 覆盖，`workspaces` + `catalog` 消失 | `web/classic` 不再是 workspace 成员，`bun install --filter ./classic` 失败（Dockerfile line 18） |
+| 2 | 官方工具链配置在 `web/` 根（`.oxlintrc.json` / `knip.config.ts` / `tsconfig`），默认 glob 会扫 `web/classic/**` | classic 是 React 18 + Semi Design + 不同规范，报一堆 lint/type 错 |
+| 3 | `web/node_modules` 装 React 19（官方 default），classic 需要 React 18 | 共用一棵 node_modules 树，classic 可能拿到 19 直接崩 |
+| 4 | `main.go` 的 4 处 `//go:embed`、Dockerfile 两段构建、`.gitignore` 都要改 | 构建链路全动，镜像打包风险 |
+
+**决策**：保持 main-alpha 的 workspace 结构，用**路径映射**方式吸收官方前端改动（见 [官方合并待办追踪.md](官方合并待办追踪.md) 第三节的合并 SOP）。
+
+### 4.5.3 必须保留的构建链路（合并时逐项核对）
+
+| 位置 | 内容 | 官方会怎么改 |
+|---|---|---|
+| `web/package.json` | `"workspaces": ["default", "classic"]` + `catalog` 统一版本 | 官方会整体替换成 app package.json → **必须取 ours** |
+| `main.go` | 4 处 embed：`web/default/dist`、`web/default/dist/index.html`、`web/classic/dist`、`web/classic/dist/index.html` | 官方改成 `web/dist` 且删 classic 两行 → **必须取 ours** |
+| `router/web-router.go` | `ThemeAssets` 结构 + `SetWebRouter(router, assets)` + `common.NewThemeAwareFS(defaultFS, classicFS)` + `common.GetTheme() == "classic"` 分支 | 官方删掉 classic 分支和整个主题切换 → **必须取 ours** |
+| `common` 的 `NewThemeAwareFS` / `GetTheme` | 双前端切换的核心 | 官方 `setting/system_setting/theme.go` 被删（-32 行）→ **必须取 ours** |
+| `Dockerfile` | 两个 builder stage：`builder`（default，`bun install --frozen-lockfile` + `cd default && bun run build`）、`builder-classic`（`bun install --filter ./classic` + `cd classic && bun run build`）；最后 `COPY --from=builder /build/web/default/dist ./web/default/dist` + `COPY --from=builder-classic /build/web/classic/dist ./web/classic/dist` | 官方简化成单 stage 构建 `web/` → **必须取 ours** |
+| `.gitignore` | `web/default/dist`、`web/classic/dist` | 官方改成 `web/dist` → 取 ours 或做并集 |
+
+### 4.5.4 前端切换功能本身
+
+- **设置项**：系统设置里的主题/前端选择（`classic` / 默认）
+- **后端**：`router/web-router.go` 的 `common.GetTheme() == "classic"` 分支决定服务哪套 dist
+- **打包**：镜像里同时包含 `web/default/dist` 和 `web/classic/dist`，运行时按设置切换
+- ⚠️ 官方已彻底移除主题切换（`setting/system_setting/theme.go` 删除、`router/retired_frontend_routes_test.go` 新增测试断言旧前端路由已下线）。这些**都不接受**
+
+### 4.5.5 未来可选：改造成官方摊平结构（暂不做）
+
+如果哪天想彻底对齐官方以减少长期合并成本，需要先解决 4.5.2 的 4 个坑：
+- [ ] `web/package.json` 保留 `workspaces` + `catalog`，但同时承载官方 app 的字段（或把官方 app 配置挪到 `web/app-package.json` 之类）
+- [ ] 给 `web/.oxlintrc.json` / `knip.config.ts` / `tsconfig.json` 加 `web/classic/**` 的 ignore
+- [ ] 给 classic 配独立 node_modules（`bun install --cwd web/classic` 或 nohoist）
+- [ ] 改 `main.go` embed + Dockerfile + `.gitignore`
+- [ ] 主人构建镜像验证两套前端都能正常切换
+
+**做这个改造前必须先在测试环境完整验证镜像构建 + 前端切换。**
+
+---
+
 ## 五、中间件 / 环境变量 / 路由
 
 ### 5.1 RestrictAPIDomains 中间件
@@ -151,10 +218,62 @@
 - **路径**：`/api/asset-admin/groups`、`/api/asset-admin/assets`、`/api/asset-admin/byteplus/*`
 - **合并时注意**：官方合并把 channel 路由抽成了 `registerChannelRoutes(apiRouter)`；`assetAdminRoute` 是 main-alpha 独有，必须**独立保留**，紧跟 `registerChannelRoutes/registerAuthzRoutes` 之后
 
-### 5.3 RuoYi JWT 认证
-- **环境变量**：`RUOYI_AUTH_ENABLED`、`RUOYI_JWT_SECRET`
-- **位置**：`common/init.go` 读取环境变量，`middleware/auth.go` 中验证 JWT
-- **用途**：接受 Java 后端（RuoYi-Plus）发的 JWT token，实现 Java ↔ Go 双向 SSO
+### 5.3 RuoYi JWT 认证（🔴 最高优先级 —— 生产 SSO 关键链路，任何合并都不得破坏）
+
+**用途**：接受 Java 管理后端（Gravitex-API-End，RuoYi-Plus + sa-token）签发的 JWT，实现 **Java ↔ Go 双向 SSO**。管理员从 Java 管理端点进 Go 界面时，靠这条链路免登录。**删掉/绕过就是全线 401**（历史事故：会话开头的"go 登录之后直接报错 401"）。
+
+#### 文件与位置
+
+| 位置 | 内容 |
+|---|---|
+| `middleware/ruoyi_auth.go` | **整个文件都是 main-alpha 独有**，核心函数 `tryRuoYiJWTAuth(c) (*model.User, error)` + 哨兵错误 `errNoRuoYiJWT` |
+| `middleware/auth.go` | **2 处**调用 `tryRuoYiJWTAuth`（约 line 49 用户鉴权链、line 216 管理员鉴权链）+ `fromRuoYi` 标志位 |
+| `common/init.go` | `RuoYiAuthEnabled = GetEnvOrDefaultBool("RUOYI_AUTH_ENABLED", false)`、`RuoYiJWTSecret = GetEnvOrDefaultString("RUOYI_JWT_SECRET", "")` |
+| `common/constants.go` | 两个变量的声明 |
+
+#### 环境变量
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `RUOYI_AUTH_ENABLED` | `false` | 总开关。生产必须为 `true` |
+| `RUOYI_JWT_SECRET` | `""` | 与 Java 端 sa-token 的 JWT 密钥**必须一致**。为空时会打 `SysError` 并拒绝该路径 |
+
+#### 鉴权流程（合并时必须完整保留的行为）
+
+1. **触发时机**：`middleware/auth.go` 里 session 取不到 `username` 时，**优先**尝试 RuoYi JWT（在其它 fallback 之前）
+2. **取 token**：从 `Authorization` header 取，同时支持 `Bearer xxx` 前缀和裸 JWT
+3. **快速判别**：`strings.Count(tokenString, ".") != 2` 就返回 `errNoRuoYiJWT`（不是 JWT，让后面的鉴权方式接手）
+4. **验签**：HMAC 算法（拒绝其它 signing method），密钥用 `common.RuoYiJWTSecret`
+5. **取用户名**：claims 里先找 `userName`（sa-token 默认 key），兼容 fallback 到 `username`
+6. **查用户**：
+   - `PlatformIsolationEnabled()` 为真 → `model.GetUserByUsernameAndPlatform(username, RequestPlatformID(c))`（**与 platform_id 隔离联动，见第 7.6 节**）
+   - 否则 → `model.GetUserByUsername(username)`
+7. **成功后**：设置 `fromRuoYi = true`，并从 user 取 `username/role/id/status/group` 灌进 context
+
+#### ⚠️ 三个极易被合并破坏的关键点
+
+1. **`errNoRuoYiJWT` 是"这不是 RuoYi 请求"的哨兵，不是错误**
+   调用处必须写成 `else if err != nil && err != errNoRuoYiJWT { 拒绝 }`。如果把 `errNoRuoYiJWT` 也当错误直接 401，**所有非 RuoYi 的正常登录都会挂**。
+
+2. **`fromRuoYi` 标志位控制 `New-Api-User` 头的强制校验**
+   `middleware/auth.go` 约 line 128 有 `if !fromRuoYi { ...要求 New-Api-User 头... }`。RuoYi JWT 模式下**不强制**这个头，因为 Java 端跳转不会带。删掉这个判断 → Java 跳转全部 400/401。
+
+3. **platform_id 锁定语义**
+   `middleware/auth.go` 约 line 295 的注释说明：「仅对 access_token 生效：session 为内部登录、RuoYi JWT 已在解析时按平台锁定」。也就是说 RuoYi 路径的平台隔离**在 `tryRuoYiJWTAuth` 内部就做完了**，外层不要重复施加，否则会误伤。
+
+#### 合并 origin/main 时的处理原则
+
+官方在 `31d70fca3 refactor(auth): replace dashboard sessions with stateless tokens (#6329)` 里**整段重写了 `middleware/auth.go`，把 RuoYi JWT 分支全部删除**（把 `gin-contrib/sessions` 换成无状态 token + `user_sessions` 表）。
+
+**处理方式：`middleware/auth.go` 与 `middleware/ruoyi_auth.go` 一律取 main-alpha 版（`--ours`）。**
+
+如果将来要吸收官方的会话管理能力（`model/user_session.go` / `service/auth_session.go` / `service/auth_token.go` 等），必须**单独立项**并满足：
+- [ ] 在官方新 auth 链路里重新插入 `tryRuoYiJWTAuth` 分支（保持"优先尝试"的位置）
+- [ ] 保留 `errNoRuoYiJWT` 哨兵语义
+- [ ] 保留 `fromRuoYi` 对 `New-Api-User` 头的豁免
+- [ ] 保留 platform_id 在 RuoYi 路径内部锁定
+- [ ] **真机验证**：从 Java 管理端跳转进 Go 界面免登录成功
+- [ ] **真机验证**：普通用户密码登录、API key 调用、access_token 调用都不受影响
 
 ### 5.4 MYSQL_PREPARE_STMT 环境变量
 - **位置**：`model/main.go chooseDB`
@@ -567,12 +686,27 @@ return GetSSRFProtectedHTTPClient().Do(req)   // 官方：防内网探测
 - [ ] `main.go` 里 `relay.CompleteVideoTaskOnUpstreamSuccessFn`、`relay.MergeVideoTaskDataWithUpstreamResponseFn` 注入还在
 - [ ] `router/api-router.go` 里 `assetAdminRoute` 还在
 - [ ] `middleware/restrict_api_domain.go` 还在，且 `main.go` server.Use 里挂载
-- [ ] `common/init.go` 里 `RuoYiAuthEnabled`、`RuoYiJWTSecret`、`QUOTA_DATA_STREAM_*` 环境变量读取还在
+- [ ] 🔴 **RuoYi JWT SSO 完整性（第 5.3 节，最高优先级）**：
+  - `middleware/ruoyi_auth.go` 文件还在，`tryRuoYiJWTAuth` + `errNoRuoYiJWT` 都在
+  - `middleware/auth.go` 里 **2 处**调用 `tryRuoYiJWTAuth` 都在（用户链 + 管理员链）
+  - 调用处写法是 `else if err != nil && err != errNoRuoYiJWT`（哨兵不当错误）
+  - `fromRuoYi` 标志位在，且 `if !fromRuoYi { 要求 New-Api-User 头 }` 判断在
+  - `common/init.go` 里 `RuoYiAuthEnabled`、`RuoYiJWTSecret` 读取还在
+  - 快速验证：`grep -c tryRuoYiJWTAuth middleware/auth.go` 应为 2
+- [ ] `common/init.go` 里 `QUOTA_DATA_STREAM_*` 环境变量读取还在
 - [ ] `model/main.go chooseDB` MySQL 分支用 `MYSQL_PREPARE_STMT` env，默认 false
 - [ ] `model/main.go migrateLOGDB` 对 ClickHouse skip AutoMigrate
 - [ ] `dto/channel_settings.go` 的 `ByteplusAssetAK/SK/Region/ProjectName` / `EnableModerationQuery` / `AzureModelApiVersions` 还在
 - [ ] `controller/channel_authz.go` 的 `channelNonSensitiveFields` 包含 `"cost_discount"`
 - [ ] `common/utils.go GetTimeString` 用 UTC+8
+- [ ] 🔴 **双前端 workspace 结构完整（第 4.5 节）**：
+  - `web/package.json` 仍是 workspace 根（含 `"workspaces": ["default", "classic"]` + `catalog`）
+  - `web/default/` 和 `web/classic/` 两个目录都在
+  - `main.go` 里 **4 处** `//go:embed`：`web/default/dist`、`web/default/dist/index.html`、`web/classic/dist`、`web/classic/dist/index.html`
+  - `router/web-router.go` 的 `ThemeAssets` + `NewThemeAwareFS(defaultFS, classicFS)` + `GetTheme() == "classic"` 分支都在
+  - `setting/system_setting/theme.go` 还在（官方已删除）
+  - `Dockerfile` 两个 builder stage（`builder` + `builder-classic`）都在
+  - 快速验证：`grep -c 'go:embed' main.go` 应为 4（+1 个 buildFS 共 5，视实际）；`grep -c classic Dockerfile` 应 ≥ 4
 - [ ] web/classic 前端 `/console/setting?tab=ratio` 界面所有 15 个字段（见 4.1）
 - [ ] `model/log.go` 的 `LogTypeRetryFail=7`、`LogTypeTest=8`、`LogTypeLogin=9`（编号别被官方覆盖）
 - [ ] OperLog 系统（第 7.5 节）完整保留：
