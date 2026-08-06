@@ -624,7 +624,10 @@ main-alpha 的 `ResponseId string` 已按此规则加进 aux（阶段2 处理）
 
 ### 7.11.4 `relay/channel/task/ali/adaptor.go` —— 整体保留 main-alpha
 
-- **13 个 wan 模型**（wan2.7 t2v/i2v/r2v + wan2.6 全系 5 个 + wan2.5 + wan2.2 + wan2-1），官方只 5 个
+- **21 个模型**（`relay/channel/task/ali/constants.go` 的 `ModelList`），官方只 5 个：
+  - **15 个 wan**：wan2.7 t2v/i2v/r2v + wan2.6 全系 5 个 + wan2.5 preview 2 个 + wan2.2 flash/plus + wan2-1 + wanx2.1 turbo/plus
+  - **6 个 happyhorse**：1.0 和 1.1 各 t2v/i2v/r2v（1.1 于 2026-08-06 由 wpr 新增）
+  - ⚠️ 合并时 `ModelList` 一律**取 ours 再补官方新增**，不能反过来
 - **计费引擎**：`AdjustBillingOnSubmit` / `AdjustBillingOnComplete` / `BillingResolutionKeyFromParams` / `ParseBillingResolutionFromSize` / `ParseBillingResolutionKeyFromUpstreamJSON`，官方完全没有
 - 官方的 `normalizeWan27I2VInput` / `firstTaskImage` / `secondTaskImage` / `firstNonEmpty` 是同功能的另一套实现，**混用会破坏计费**
 - 处理方式：`git checkout --ours relay/channel/task/ali/adaptor.go`（连 `adaptor_test.go` 一起）
@@ -687,6 +690,52 @@ return GetSSRFProtectedHTTPClient().Do(req)   // 官方：防内网探测
 
 ⚠️ 官方的 `buildUsageFromGeminiResponse` 依赖一整条新辅助链（`geminiResponseUsageText` / `patchGeminiZeroCompletionUsage` / `geminiResponseInlineImageCount` / `attachEstimatedGeminiBillingUsage` / `dto.NewEstimatedGeminiChatBillingUsage`），且它的 `buildUsageFromGeminiMetadata` 收**指针**而 main-alpha 收**值**。要迁移就得整条链一起迁 —— 计划在阶段4 随 relaykit 一并处理。
 
+### 7.11.12 🔴 `setting/operation_setting/status_code_ranges.go` —— **main-alpha 删掉了官方的 504/524 硬编码不重试**
+
+这是一处**反向偏离**：不是 main-alpha 加了东西，而是 main-alpha **删掉了官方的东西**。
+这类最容易在下次合并时被官方悄悄带回来，务必每次检查。
+
+**官方的行为**：硬编码一张 `alwaysSkipRetryStatusCodes = {504, 524}` 表，
+`ShouldRetryByStatusCode()` 一开头就查它，命中直接返回 false ——
+**即使管理员在后台把 504/524 配进了重试范围也不生效**。
+
+**main-alpha 的行为**（2026-08-06 由 wpr 改）：把这张表和
+`IsAlwaysSkipRetryStatusCode()` 整个删掉，504/524 是否重试**完全由后台
+`AutomaticRetryStatusCodes` 配置决定**。业务上有些上游 504 是瞬时的，值得重试。
+
+✅ **默认行为没有改变**：默认区间 `{500-503}`、`{505-523}`、`{525-599}` 本来就
+**跳过了 504 和 524**，所以不配置的话表现和官方一致。区别只在于
+**现在管理员可以把 504/524 配进重试范围**，官方是配了也不生效。
+（两个测试看似矛盾——`TestShouldRetryByStatusCode` 手动设了 `500-599` 断言 True、
+`TestShouldRetryByStatusCode_DefaultMatchesLegacyBehavior` 用默认区间断言 False——
+其实正是在验这件事，不要以为哪个写错了。）
+
+**必须同时保留的 3 处**：
+
+| 位置 | main-alpha 的样子 |
+|---|---|
+| `setting/operation_setting/status_code_ranges.go` | **没有** `alwaysSkipRetryStatusCodes` 变量、**没有** `IsAlwaysSkipRetryStatusCode()` 函数；`ShouldRetryByStatusCode()` 直接 `return shouldMatchStatusCodeRanges(...)`，开头不做 skip 判断 |
+| `controller/relay.go` 的 `shouldRetryTaskRelay` | 5xx 分支里 504/524 走 `operation_setting.ShouldRetryByStatusCode(code)`，其余 5xx 仍 `return true` |
+| `status_code_ranges_test.go` | `TestShouldRetryByStatusCode` 里 504/524 断言是 **True**；**没有** `TestIsAlwaysSkipRetryStatusCode` |
+
+⚠️ **合并官方时**：只要 diff 里出现 `alwaysSkipRetryStatusCodes` 或
+`IsAlwaysSkipRetryStatusCode`，一律**取 ours**（即删掉）。
+快速验证：`grep -c IsAlwaysSkipRetryStatusCode setting/operation_setting/*.go` 应为 **0**。
+
+### 7.11.13 `controller/channel-test.go` —— 渠道测试补 requestId
+
+main-alpha 在构造测试用 `c.Request` 之后主动调一次 `middleware.RequestId()(c)`，
+让渠道测试的日志也带 requestId，方便排查。官方没有这行。
+
+```go
+c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, requestPath, nil)
+middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初始化之后
+```
+
+⚠️ 顺序不能颠倒 —— 中间件是基于 `c.Request.Context()` 派生新 ctx 再 `WithContext` 回去的，
+`c.Request` 为 nil 时会 panic。官方若又改了 `c.Request` 的构造方式（这次就从手工
+`&http.Request{}` 换成了 `httptest.NewRequestWithContext`），**取官方的构造 + 保留这行**。
+
 ---
 
 ## 八、依赖包
@@ -747,6 +796,13 @@ return GetSSRFProtectedHTTPClient().Do(req)   // 官方：防内网探测
 - [ ] `AnthropicBetaTarget` / `AzureModelResponsesVersions` 在 `dto/channel_settings.go`，且消费方（`relay/channel/claude/adaptor.go`、`relay/channel/openai/adaptor.go`）还在
 - [ ] `service/relayconvert/responses_to_chat.go` 的 `UsageFromResponsesUsage` 里 `CacheWriteTokens` 透传还在（GPT-5.6 缓存写入计费）
 - [ ] `relay/channel/claude/media_source.go` 在（Claude 媒体 URL 转 base64）
+- [ ] 🔴 **504/524 重试改由配置决定（第 7.11.12 节，反向偏离，最易被官方带回来）**：
+  - `grep -c IsAlwaysSkipRetryStatusCode setting/operation_setting/*.go` 应为 **0**
+  - `grep -c alwaysSkipRetryStatusCodes setting/operation_setting/*.go` 应为 **0**
+  - `controller/relay.go` 的 `shouldRetryTaskRelay` 里 504/524 走 `ShouldRetryByStatusCode`
+  - `status_code_ranges_test.go` 里 504/524 断言是 `require.True`
+- [ ] `controller/channel-test.go` 里 `middleware.RequestId()(c)` 还在，且在 `c.Request` 初始化**之后**（第 7.11.13 节）
+- [ ] `relay/channel/task/ali/constants.go` 的 `ModelList` 有 **21 个模型**（15 wan + 6 happyhorse），官方只 5 个
 - [ ] `common/body_storage.go` 在（上游中断 body 回退重试）
 - [ ] `model/vendor_meta.go` 在（模型厂商管理）
 - [ ] 全仓库无残留旧 DB API：`grep -rn "common.UsingSQLite\|common.UsingMySQL\|common.UsingPostgreSQL\|common.UsingClickHouse\|common.LogSqlType" --include="*.go" .` 应为空

@@ -157,6 +157,10 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 
 	c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, requestPath, nil)
+	// 渠道测试使用独立上下文，主动复用正常请求的 requestId 中间件。
+	// 必须在初始化 c.Request 后调用，因为中间件会基于 Request.WithContext 设置上下文
+	// （在上面传入的 ctx 之上派生，不会丢）。
+	middleware.RequestId()(c)
 
 	cache, err := model.GetUserCache(testUserID)
 	if err != nil {
@@ -245,7 +249,6 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			newAPIError: types.NewError(err, types.ErrorCodeGenRelayInfoFailed),
 		}
 	}
-
 	info.IsChannelTest = true
 	info.InitChannelMeta(c)
 
