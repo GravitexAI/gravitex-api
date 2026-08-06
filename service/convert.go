@@ -256,6 +256,11 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 	if info.ClaudeConvertInfo.Done {
 		return nil
 	}
+	setFinalUsage := func(openAIUsage *dto.Usage) *dto.ClaudeUsage {
+		claudeUsage := buildClaudeUsageFromOpenAIUsage(openAIUsage)
+		info.SetUsageConversion(claudeUsage)
+		return claudeUsage
+	}
 
 	var claudeResponses []*dto.ClaudeResponse
 	// stopOpenBlocks emits the required content_block_stop event(s) for the currently open block(s)
@@ -421,7 +426,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			if oaiUsage != nil {
 				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
 					Type:  "message_delta",
-					Usage: buildClaudeUsageFromOpenAIUsage(oaiUsage),
+					Usage: setFinalUsage(oaiUsage),
 					Delta: &dto.ClaudeMediaMessage{
 						StopReason: common.GetPointer[string](stopReasonOpenAI2Claude(info.FinishReason)),
 					},
@@ -449,7 +454,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			}
 			claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
 				Type:  "message_delta",
-				Usage: buildClaudeUsageFromOpenAIUsage(oaiUsage),
+				Usage: setFinalUsage(oaiUsage),
 				Delta: &dto.ClaudeMediaMessage{
 					StopReason: common.GetPointer[string](stopReason),
 				},
@@ -587,7 +592,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			if oaiUsage != nil {
 				claudeResponses = append(claudeResponses, &dto.ClaudeResponse{
 					Type:  "message_delta",
-					Usage: buildClaudeUsageFromOpenAIUsage(oaiUsage),
+					Usage: setFinalUsage(oaiUsage),
 					Delta: &dto.ClaudeMediaMessage{
 						StopReason: common.GetPointer[string](stopReasonOpenAI2Claude(info.FinishReason)),
 					},
@@ -639,6 +644,7 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relayco
 	claudeResponse.Content = contents
 	claudeResponse.StopReason = stopReason
 	claudeResponse.Usage = buildClaudeUsageFromOpenAIUsage(&openAIResponse.Usage)
+	info.SetUsageConversion(claudeResponse.Usage)
 
 	return claudeResponse
 }
@@ -899,6 +905,7 @@ func ResponseOpenAI2Gemini(openAIResponse *dto.OpenAITextResponse, info *relayco
 		candidate.Content = content
 		geminiResponse.Candidates = append(geminiResponse.Candidates, candidate)
 	}
+	info.SetUsageConversion(geminiResponse.UsageMetadata)
 
 	return geminiResponse
 }
@@ -936,6 +943,7 @@ func StreamResponseOpenAI2Gemini(openAIResponse *dto.ChatCompletionsStreamRespon
 		geminiResponse.UsageMetadata.CandidatesTokenCount = openAIResponse.Usage.CompletionTokens
 		geminiResponse.UsageMetadata.TotalTokenCount = openAIResponse.Usage.TotalTokens
 	}
+	info.SetUsageConversion(geminiResponse.UsageMetadata)
 
 	for _, choice := range openAIResponse.Choices {
 		candidate := dto.GeminiChatCandidate{

@@ -1439,6 +1439,7 @@ func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, clau
 	} else if info.RelayFormat == types.RelayFormatOpenAI {
 		if info.ShouldIncludeUsage {
 			openAIUsage := buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
+			info.SetUsageConversion(openAIUsage)
 			response := helper.GenerateFinalUsageResponse(claudeInfo.ResponseId, claudeInfo.Created, info.UpstreamModelName, openAIUsage)
 			err := helper.ObjectData(c, response)
 			if err != nil {
@@ -1504,6 +1505,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	case types.RelayFormatOpenAI:
 		openaiResponse := ResponseClaude2OpenAI(&claudeResponse, c.GetString(jsonSchemaToolNameKey))
 		openaiResponse.Usage = buildOpenAIStyleUsageFromClaudeUsage(claudeInfo.Usage)
+		info.SetUsageConversion(openaiResponse.Usage)
 		responseData, err = json.Marshal(openaiResponse)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeBadResponseBody)

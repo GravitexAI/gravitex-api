@@ -153,6 +153,9 @@ type RelayInfo struct {
 	// It is shaped as {"usage": {...}} or {"usageMetadata": {...}} and is only
 	// attached to log.other when the corresponding option is enabled.
 	UpstreamResponses map[string]any
+	// UsageConversion stores the exact usage object emitted to a client after a
+	// protocol conversion. It is persisted to log.other only when enabled.
+	UsageConversion any
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.
 	SubscriptionAmountTotal               int64
 	SubscriptionAmountUsedAfterPreConsume int64
@@ -693,6 +696,33 @@ func (info *RelayInfo) SetUpstreamResponsesField(field string, payload any) {
 	info.UpstreamResponses = map[string]any{
 		field: decoded,
 	}
+}
+
+func (info *RelayInfo) SetUsageConversion(payload any) {
+	if info == nil || payload == nil {
+		return
+	}
+
+	data, err := common.Marshal(payload)
+	if err != nil || len(data) == 0 || string(data) == "null" {
+		return
+	}
+
+	var decoded any
+	if err := common.Unmarshal(data, &decoded); err != nil || decoded == nil {
+		return
+	}
+
+	info.UsageConversion = decoded
+}
+
+func (info *RelayInfo) HasRequestFormatConversion() bool {
+	if info == nil || len(info.RequestConversionChain) < 2 {
+		return false
+	}
+	first := info.RequestConversionChain[0]
+	last := info.RequestConversionChain[len(info.RequestConversionChain)-1]
+	return first != "" && last != "" && first != last
 }
 
 func (info *RelayInfo) HasSendResponse() bool {
