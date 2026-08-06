@@ -1,13 +1,3 @@
-import { useQueryClient } from '@tanstack/react-query'
-import type { ColumnDef } from '@tanstack/react-table'
-import {
-  AlertTriangle,
-  ChevronDown,
-  ChevronRight,
-  ListOrdered,
-  Shuffle,
-  SlidersHorizontal,
-} from 'lucide-react'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -27,7 +17,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 /* eslint-disable react-refresh/only-export-components */
-import { useState, useMemo } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import type { ColumnDef } from '@tanstack/react-table'
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  ListOrdered,
+  Shuffle,
+  SlidersHorizontal,
+} from 'lucide-react'
+import { useState, useMemo, useContext, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -46,21 +46,18 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { toIntlLocale } from '@/i18n/languages'
 import {
   formatCurrencyFromUSD,
   formatQuotaWithCurrency,
   getCurrencyLabel,
 } from '@/lib/currency'
-import {
-  formatTimestampToDate,
-  formatQuota as formatQuotaValue,
-} from '@/lib/format'
+import { formatTimestampToDate } from '@/lib/format'
 import { truncateText } from '@/lib/utils'
 
 import { getCodexUsage } from '../api'
 import { CHANNEL_STATUS_CONFIG, MODEL_FETCHABLE_TYPES } from '../constants'
 import {
-  formatBalance,
   formatRelativeTime,
   formatResponseTime,
   getBalanceVariant,
@@ -74,11 +71,13 @@ import {
   handleUpdateChannelField,
   handleUpdateTagField,
   handleUpdateChannelBalance,
+  createChannelFieldUpdateScheduler,
   isTagAggregateRow,
   type TagRow,
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
+import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
 import { DataTableTagRowActions } from './data-table-tag-row-actions'
@@ -174,53 +173,87 @@ function UpstreamUpdateTags({ channel }: { channel: Channel }) {
  * Priority cell component with inline editing
  */
 function PriorityCell({ channel }: { channel: Channel }) {
+  if (isTagAggregateRow(channel)) {
+    return <TagPriorityCell channel={channel} />
+  }
+
+  return (
+    <ChannelFieldCell
+      channelId={channel.id}
+      value={channel.priority}
+      field='priority'
+      min={-999}
+    />
+  )
+}
+
+function TagPriorityCell({ channel }: { channel: TagRow }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const isTagRow = isTagAggregateRow(channel)
   const priority = channel.priority
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pendingValue, setPendingValue] = useState<number | null>(null)
+  const tag = channel.tag || ''
+  const channelCount = channel.children?.length || 0
 
-  // Tag row - editable with confirmation for all tag channels
-  if (isTagRow) {
-    const tag = channel.tag || ''
-    const channelCount = channel.children?.length || 0
+  return (
+    <>
+      <NumericSpinnerInput
+        value={priority ?? 0}
+        onChange={(value) => {
+          setPendingValue(value)
+          setConfirmOpen(true)
+        }}
+        min={-999}
+      />
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={t('Confirm Batch Update')}
+        desc={t(
+          'This will update the priority to {{value}} for all {{count}} channel(s) with tag "{{tag}}". Continue?',
+          { value: pendingValue, count: channelCount, tag }
+        )}
+        confirmText={t('Update')}
+        handleConfirm={() => {
+          if (pendingValue !== null) {
+            handleUpdateTagField(tag, 'priority', pendingValue, queryClient)
+          }
+          setConfirmOpen(false)
+        }}
+      />
+    </>
+  )
+}
 
-    return (
-      <>
-        <NumericSpinnerInput
-          value={priority ?? 0}
-          onChange={(value) => {
-            setPendingValue(value)
-            setConfirmOpen(true)
-          }}
-          min={-999}
-        />
-        <ConfirmDialog
-          open={confirmOpen}
-          onOpenChange={setConfirmOpen}
-          title={t('Confirm Batch Update')}
-          desc={`This will update the priority to ${pendingValue} for all ${channelCount} channel(s) with tag "${tag}". Continue?`}
-          confirmText='Update'
-          handleConfirm={() => {
-            if (pendingValue !== null) {
-              handleUpdateTagField(tag, 'priority', pendingValue, queryClient)
-            }
-            setConfirmOpen(false)
-          }}
-        />
-      </>
-    )
-  }
+function ChannelFieldCell({
+  channelId,
+  value,
+  field,
+  min,
+}: {
+  channelId: number
+  value: number | null | undefined
+  field: 'priority' | 'weight'
+  min: number
+}) {
+  const queryClient = useQueryClient()
+  const fieldUpdateScheduler = useMemo(
+    () =>
+      createChannelFieldUpdateScheduler((nextValue) => {
+        void handleUpdateChannelField(channelId, field, nextValue, queryClient)
+      }),
+    [channelId, field, queryClient]
+  )
 
-  // Regular channel row - editable
+  useEffect(() => () => fieldUpdateScheduler.flush(), [fieldUpdateScheduler])
+
   return (
     <NumericSpinnerInput
-      value={priority ?? 0}
-      onChange={(value) => {
-        handleUpdateChannelField(channel.id, 'priority', value, queryClient)
-      }}
-      min={-999}
+      value={value ?? 0}
+      onChange={fieldUpdateScheduler.schedule}
+      onCommit={fieldUpdateScheduler.flush}
+      min={min}
     />
   )
 }
@@ -229,54 +262,56 @@ function PriorityCell({ channel }: { channel: Channel }) {
  * Weight cell component with inline editing
  */
 function WeightCell({ channel }: { channel: Channel }) {
+  if (isTagAggregateRow(channel)) {
+    return <TagWeightCell channel={channel} />
+  }
+
+  return (
+    <ChannelFieldCell
+      channelId={channel.id}
+      value={channel.weight}
+      field='weight'
+      min={0}
+    />
+  )
+}
+
+function TagWeightCell({ channel }: { channel: TagRow }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const isTagRow = isTagAggregateRow(channel)
   const weight = channel.weight
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pendingValue, setPendingValue] = useState<number | null>(null)
+  const tag = channel.tag || ''
+  const channelCount = channel.children?.length || 0
 
-  // Tag row - editable with confirmation for all tag channels
-  if (isTagRow) {
-    const tag = channel.tag || ''
-    const channelCount = channel.children?.length || 0
-
-    return (
-      <>
-        <NumericSpinnerInput
-          value={weight ?? 0}
-          onChange={(value) => {
-            setPendingValue(value)
-            setConfirmOpen(true)
-          }}
-          min={0}
-        />
-        <ConfirmDialog
-          open={confirmOpen}
-          onOpenChange={setConfirmOpen}
-          title={t('Confirm Batch Update')}
-          desc={`This will update the weight to ${pendingValue} for all ${channelCount} channel(s) with tag "${tag}". Continue?`}
-          confirmText='Update'
-          handleConfirm={() => {
-            if (pendingValue !== null) {
-              handleUpdateTagField(tag, 'weight', pendingValue, queryClient)
-            }
-            setConfirmOpen(false)
-          }}
-        />
-      </>
-    )
-  }
-
-  // Regular channel row - editable
   return (
-    <NumericSpinnerInput
-      value={weight ?? 0}
-      onChange={(value) => {
-        handleUpdateChannelField(channel.id, 'weight', value, queryClient)
-      }}
-      min={0}
-    />
+    <>
+      <NumericSpinnerInput
+        value={weight ?? 0}
+        onChange={(value) => {
+          setPendingValue(value)
+          setConfirmOpen(true)
+        }}
+        min={0}
+      />
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={t('Confirm Batch Update')}
+        desc={t(
+          'This will update the weight to {{value}} for all {{count}} channel(s) with tag "{{tag}}". Continue?',
+          { value: pendingValue, count: channelCount, tag }
+        )}
+        confirmText={t('Update')}
+        handleConfirm={() => {
+          if (pendingValue !== null) {
+            handleUpdateTagField(tag, 'weight', pendingValue, queryClient)
+          }
+          setConfirmOpen(false)
+        }}
+      />
+    </>
   )
 }
 
@@ -293,6 +328,7 @@ const SENSITIVE_MASK = '••••'
 function BalanceCell({ channel }: { channel: Channel }) {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
+  const layout = useContext(ChannelRowActionsLayoutContext)
   const { sensitiveVisible } = useChannels()
   const isTagRow = isTagAggregateRow(channel)
   const balance = channel.balance || 0
@@ -306,19 +342,44 @@ function BalanceCell({ channel }: { channel: Channel }) {
   const withSuffix = (value: string) =>
     tokenSuffix && value !== '-' ? `${value}${tokenSuffix}` : value
 
-  const locale = i18n.resolvedLanguage || i18n.language
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
+  const balanceFormatOptions = {
+    digitsLarge: 2,
+    digitsSmall: 4,
+    abbreviate: false,
+    showSymbol: layout !== 'card',
+  } as const
   // Precise values are kept for the tooltip; long values are shown compactly inline.
-  const usedFull = withSuffix(formatQuotaValue(usedQuota))
-  const remainingFull = withSuffix(formatBalance(balance))
+  const usedFull = withSuffix(
+    formatQuotaWithCurrency(usedQuota, {
+      digitsLarge: 2,
+      digitsSmall: 4,
+      abbreviate: true,
+      showSymbol: layout !== 'card',
+    })
+  )
+  const remainingFull = withSuffix(
+    formatCurrencyFromUSD(balance, balanceFormatOptions)
+  )
   const usedDisplay =
     usedFull.length > MAX_INLINE_BALANCE_CHARS
       ? withSuffix(
-          formatQuotaWithCurrency(usedQuota, { compact: true, locale })
+          formatQuotaWithCurrency(usedQuota, {
+            compact: true,
+            locale,
+            showSymbol: layout !== 'card',
+          })
         )
       : usedFull
   const remainingDisplay =
     remainingFull.length > MAX_INLINE_BALANCE_CHARS
-      ? withSuffix(formatCurrencyFromUSD(balance, { compact: true, locale }))
+      ? withSuffix(
+          formatCurrencyFromUSD(balance, {
+            compact: true,
+            locale,
+            showSymbol: layout !== 'card',
+          })
+        )
       : remainingFull
   const usedLabel = `${t('Used:')} ${usedFull}`
   const remainingLabel = `${t('Remaining:')} ${remainingFull}`
@@ -482,10 +543,15 @@ function BalanceCell({ channel }: { channel: Channel }) {
 /**
  * Generate channels columns configuration
  */
-export function useChannelsColumns(): ColumnDef<Channel>[] {
+export function useChannelsColumns(
+  options: {
+    enableSelection?: boolean
+  } = {}
+): ColumnDef<Channel>[] {
   const { t, i18n } = useTranslation()
   const { sensitiveVisible } = useChannels()
-  const locale = i18n.resolvedLanguage || i18n.language
+  const enableSelection = options.enableSelection ?? true
+  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   // The column definitions only depend on the translation function, the active
   // locale, and sensitive-data visibility. Memoizing keeps the array (and every
   // cell renderer reference) stable across unrelated re-renders, so react-table
@@ -493,38 +559,43 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
   return useMemo<ColumnDef<Channel>[]>(
     () => [
       // Checkbox column
-      {
-        id: 'select',
-        header: ({ table }) => (
-          <Checkbox
-            checked={table.getIsAllPageRowsSelected()}
-            indeterminate={table.getIsSomePageRowsSelected()}
-            onCheckedChange={(value) =>
-              table.toggleAllPageRowsSelected(!!value)
-            }
-            aria-label='Select all'
-          />
-        ),
-        cell: ({ row }) => {
-          const isTagRow = isTagAggregateRow(row.original)
+      ...(enableSelection
+        ? [
+            {
+              id: 'select',
+              header: ({ table }) => (
+                <Checkbox
+                  checked={table.getIsAllPageRowsSelected()}
+                  indeterminate={table.getIsSomePageRowsSelected()}
+                  onCheckedChange={(value) =>
+                    table.toggleAllPageRowsSelected(!!value)
+                  }
+                  aria-label={t('Select all')}
+                />
+              ),
+              cell: ({ row }) => {
+                const isTagRow = isTagAggregateRow(row.original)
 
-          // Don't show checkbox for tag rows
-          if (isTagRow) {
-            return null
-          }
+                // Don't show checkbox for tag rows
+                if (isTagRow) {
+                  return null
+                }
 
-          return (
-            <Checkbox
-              checked={row.getIsSelected()}
-              onCheckedChange={(value) => row.toggleSelected(!!value)}
-              aria-label='Select row'
-            />
-          )
-        },
-        enableSorting: false,
-        enableHiding: false,
-        size: 40,
-      },
+                return (
+                  <Checkbox
+                    checked={row.getIsSelected()}
+                    onCheckedChange={(value) => row.toggleSelected(!!value)}
+                    aria-label={t('Select row')}
+                  />
+                )
+              },
+              enableSorting: false,
+              enableHiding: false,
+              enableResizing: false,
+              size: 40,
+            } satisfies ColumnDef<Channel>,
+          ]
+        : []),
 
       // ID column
       {
@@ -537,7 +608,6 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
         },
         size: 80,
       },
-
       // Name column
       {
         accessorKey: 'name',
@@ -586,13 +656,13 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
           const hasParamOverride = Boolean(channel.param_override?.trim())
 
           return (
-            <div className='flex items-center gap-2'>
-              <div className='flex flex-col gap-1'>
-                <div className='flex items-center gap-1.5'>
+            <div className='flex max-w-full min-w-0 items-center gap-2'>
+              <div className='flex max-w-full min-w-0 flex-col gap-1'>
+                <div className='flex max-w-full min-w-0 items-center gap-1.5'>
                   <TruncatedText
                     text={sensitiveVisible ? name : SENSITIVE_MASK}
                     className='font-medium'
-                    maxWidth='max-w-[180px]'
+                    maxWidth='max-w-full'
                   />
                   {isPassThrough && (
                     <TooltipProvider delay={100}>
@@ -646,6 +716,7 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
             </div>
           )
         },
+        size: 260,
         minSize: 200,
       },
 
@@ -1108,12 +1179,11 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
 
           return <DataTableRowActions row={row} />
         },
-        size: 132,
         enableSorting: false,
         enableHiding: false,
         meta: { pinned: 'right' as const },
       },
     ],
-    [t, locale, sensitiveVisible]
+    [enableSelection, t, locale, sensitiveVisible]
   )
 }

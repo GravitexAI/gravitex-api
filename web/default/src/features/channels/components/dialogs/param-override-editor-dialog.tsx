@@ -17,14 +17,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import {
-  type DragEvent,
-  type KeyboardEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react'
-import {
   ChevronDown,
   ChevronUp,
   Copy,
@@ -33,9 +25,19 @@ import {
   Search,
   Trash2,
 } from 'lucide-react'
+import {
+  type DragEvent,
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { cn } from '@/lib/utils'
+
+import { Dialog } from '@/components/dialog'
+import { JsonCodeEditor } from '@/components/json-code-editor'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -55,7 +57,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import { Dialog } from '@/components/dialog'
+import { cn } from '@/lib/utils'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -290,12 +292,29 @@ const GEMINI_IMAGE_4K_TEMPLATE = {
   ],
 }
 
+// Keep in sync with upstream Codex request headers:
+// https://github.com/openai/codex/commit/7c7b4861d88960f7e3bd5b7f30f8351be666dd84
+// https://github.com/openai/codex/commit/14df0e8833aad0d6d78287954b61ffac67af936c
+// https://github.com/openai/codex/commit/ebdd8795e924a8149b616e46ca2ed7848c207a4b
 const CODEX_CLI_HEADER_PASSTHROUGH_HEADERS = [
   'Originator',
   'Session_id',
+  'Thread_id',
+  'Session-Id',
+  'Thread-Id',
+  'X-Client-Request-Id',
   'User-Agent',
   'X-Codex-Beta-Features',
+  'X-Codex-Turn-State',
   'X-Codex-Turn-Metadata',
+  'X-Codex-Window-Id',
+  'X-Codex-Parent-Thread-Id',
+  // 'X-Codex-Installation-Id',
+  'X-OpenAI-Subagent',
+  'X-OpenAI-Memgen-Request',
+  // 'X-OAI-Attestation',
+  'X-ResponsesAPI-Include-Timing-Metrics',
+  'X-OpenAI-Internal-Codex-Responses-Lite',
 ]
 
 const CLAUDE_CLI_HEADER_PASSTHROUGH_HEADERS = [
@@ -320,9 +339,15 @@ const buildPassHeadersTemplate = (headers: string[]) => ({
   ],
 })
 
-const CODEX_CLI_HEADER_PASSTHROUGH_TEMPLATE = buildPassHeadersTemplate(
-  CODEX_CLI_HEADER_PASSTHROUGH_HEADERS
-)
+const CODEX_CLI_HEADER_PASSTHROUGH_TEMPLATE = {
+  operations: [
+    {
+      mode: 'pass_headers',
+      value: [...CODEX_CLI_HEADER_PASSTHROUGH_HEADERS],
+      keep_origin: true,
+    },
+  ],
+}
 const CLAUDE_CLI_HEADER_PASSTHROUGH_TEMPLATE = buildPassHeadersTemplate(
   CLAUDE_CLI_HEADER_PASSTHROUGH_HEADERS
 )
@@ -1632,17 +1657,6 @@ export function ParamOverrideEditorDialog(
     [t]
   )
 
-  const formatJson = useCallback(() => {
-    const trimmed = jsonText.trim()
-    if (!trimmed) return
-    if (!verifyJSON(trimmed)) {
-      toast.error(t('Parameter override must be valid JSON format'))
-      return
-    }
-    setJsonText(JSON.stringify(JSON.parse(trimmed), null, 2))
-    setJsonError('')
-  }, [jsonText, t])
-
   const visualValidationError = useMemo(() => {
     if (editMode !== 'visual') return ''
     try {
@@ -1808,12 +1822,12 @@ export function ParamOverrideEditorDialog(
               <p className='text-muted-foreground mb-2 text-sm'>
                 {t('Legacy Format (JSON Object)')}
               </p>
-              <Textarea
+              <JsonCodeEditor
                 value={legacyValue}
-                onChange={(e) => setLegacyValue(e.target.value)}
+                onChange={setLegacyValue}
                 placeholder={JSON.stringify(LEGACY_TEMPLATE, null, 2)}
-                rows={14}
-                className='font-mono text-xs'
+                heightClassName='h-72 min-h-72 max-h-72'
+                ariaLabel={t('Legacy Format (JSON Object)')}
               />
               <p className='text-muted-foreground mt-2 text-xs'>
                 {t(
@@ -2020,24 +2034,17 @@ export function ParamOverrideEditorDialog(
           /* JSON mode */
           <div className='p-4'>
             <div className='mb-2 flex items-center gap-2'>
-              <Button
-                type='button'
-                variant='outline'
-                size='sm'
-                onClick={formatJson}
-              >
-                {t('Format')}
-              </Button>
               <span className='text-muted-foreground text-xs'>
                 {t('Advanced text editing')}
               </span>
             </div>
-            <Textarea
+            <JsonCodeEditor
               value={jsonText}
-              onChange={(e) => handleJsonChange(e.target.value)}
+              onChange={handleJsonChange}
               placeholder={JSON.stringify(OPERATION_TEMPLATE, null, 2)}
-              rows={20}
-              className='font-mono text-xs'
+              heightClassName='h-[420px] min-h-[420px] max-h-[420px]'
+              aria-invalid={Boolean(jsonError)}
+              ariaLabel={t('Advanced text editing')}
             />
             <p className='text-muted-foreground mt-2 text-xs'>
               {t('Edit JSON text directly. Format will be validated on save.')}

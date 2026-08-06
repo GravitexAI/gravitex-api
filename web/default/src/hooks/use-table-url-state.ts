@@ -16,17 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useState } from 'react'
 import type {
   ColumnFiltersState,
   OnChangeFn,
   PaginationState,
 } from '@tanstack/react-table'
+import { useEffect, useMemo, useState } from 'react'
 
 type SearchRecord = Record<string, unknown>
 
-// Page size persists globally under the classic theme's key (raw number
-// string), so the choice is remembered and carries over from classic.
+// Page size persists globally under the established storage key (raw number
+// string), so the choice is remembered across tables and upgrades.
 const PAGE_SIZE_STORAGE_KEY = 'page-size'
 
 function getStoredPageSize(): number | undefined {

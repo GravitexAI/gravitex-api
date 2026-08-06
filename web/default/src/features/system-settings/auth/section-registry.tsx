@@ -47,6 +47,7 @@ const AUTH_SECTIONS = [
     titleKey: 'OAuth Integrations',
     build: (settings: AuthSettings) => (
       <OAuthSection
+        serverAddress={settings.ServerAddress}
         defaultValues={{
           GitHubOAuthEnabled: settings.GitHubOAuthEnabled,
           GitHubClientId: settings.GitHubClientId,
@@ -55,6 +56,7 @@ const AUTH_SECTIONS = [
           'discord.client_id': settings['discord.client_id'],
           'discord.client_secret': settings['discord.client_secret'],
           'oidc.enabled': settings['oidc.enabled'],
+          'oidc.display_name': settings['oidc.display_name'],
           'oidc.client_id': settings['oidc.client_id'],
           'oidc.client_secret': settings['oidc.client_secret'],
           'oidc.well_known': settings['oidc.well_known'],
@@ -115,7 +117,9 @@ const AUTH_SECTIONS = [
   {
     id: 'custom-oauth',
     titleKey: 'Custom OAuth',
-    build: () => <CustomOAuthSection />,
+    build: (settings: AuthSettings) => (
+      <CustomOAuthSection serverAddress={settings.ServerAddress} />
+    ),
   },
 ] as const
 

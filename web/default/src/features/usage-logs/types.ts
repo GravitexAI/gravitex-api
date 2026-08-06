@@ -92,12 +92,33 @@ export interface ChannelAffinityInfo {
   using_group?: string
 }
 
+export const USAGE_BILLING_PATH = {
+  LOCAL: 'local',
+  UPSTREAM: 'upstream',
+  OPENAI: 'billing-usage-openai',
+  OPENAI_ESTIMATED: 'billing-usage-openai-estimated',
+  ANTHROPIC: 'billing-usage-anthropic',
+  ANTHROPIC_ESTIMATED: 'billing-usage-anthropic-estimated',
+  GEMINI: 'billing-usage-gemini',
+  GEMINI_ESTIMATED: 'billing-usage-gemini-estimated',
+} as const
+
+export type UsageBillingPath =
+  (typeof USAGE_BILLING_PATH)[keyof typeof USAGE_BILLING_PATH]
+
+export interface ToolSurchargeItem {
+  name: string
+  count: number
+  price: number
+}
+
 export interface LogOtherData {
   admin_info?: {
     is_multi_key?: boolean
     multi_key_index?: number
     use_channel?: number[]
     local_count_tokens?: boolean
+    usage_billing_path?: UsageBillingPath | string
     channel_affinity?: ChannelAffinityInfo
     // Top-up audit fields (type=1, admin only)
     payment_method?: string
@@ -111,6 +132,15 @@ export interface LogOtherData {
     admin_id?: number | string
     admin_role?: number
     auth_method?: 'session' | 'access_token' | string
+    // Quota saturation marker: set when a quota conversion clamped at the
+    // int32 bound (overflow/underflow) or hit a NaN fallback while computing
+    // this request's charge. Admin-only (nested under admin_info).
+    quota_saturation?: {
+      op: string
+      kind: 'overflow' | 'underflow' | 'nan'
+      original: number
+      clamped: number
+    }
   }
   // Language-independent operation descriptor (audit/login logs).
   // Frontend renders localized content from action + params via i18n templates.
@@ -173,11 +203,13 @@ export interface LogOtherData {
   file_search?: boolean
   file_search_call_count?: number
   file_search_price?: number
+  tool_surcharges?: ToolSurchargeItem[]
   audio_input_seperate_price?: boolean
   audio_input_token_count?: number
   audio_input_price?: number
   image_generation_call?: boolean
   image_generation_call_price?: number
+  image_generation_call_count?: number
   is_system_prompt_overwritten?: boolean
   po?: string[]
   billing_source?: string

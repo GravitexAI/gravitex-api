@@ -16,10 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect } from 'react'
-import { type Resolver, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useEffect } from 'react'
+import { type Resolver, useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
+
+import { CopyButton } from '@/components/copy-button'
+import { Dialog } from '@/components/dialog'
+import { JsonCodeEditor } from '@/components/json-code-editor'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -41,13 +46,13 @@ import {
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
-import { Dialog } from '@/components/dialog'
+
 import {
   SettingsForm,
   SettingsSwitchContent,
   SettingsSwitchItem,
 } from '../../../components/settings-form-layout'
+import { buildOAuthCallbackUrl } from '../../oauth-callback-url'
 import {
   useCreateProvider,
   useUpdateProvider,
@@ -65,6 +70,7 @@ type ProviderFormDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   provider?: CustomOAuthProvider | null
+  serverAddress: string
 }
 
 const PROVIDER_FORM_ID = 'custom-oauth-provider-form'
@@ -100,6 +106,13 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
       access_denied_message: '',
     },
   })
+  const watchedSlug = useWatch({ control: form.control, name: 'slug' })
+  const callbackPath = watchedSlug?.trim() || '{slug}'
+  const callbackUrl = buildOAuthCallbackUrl(
+    props.serverAddress,
+    callbackPath,
+    t('Site URL')
+  )
 
   useEffect(() => {
     if (props.open && props.provider) {
@@ -167,6 +180,12 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
   }
 
   const isPending = createProvider.isPending || updateProvider.isPending
+  let submitLabel = t('Create Provider')
+  if (isPending) {
+    submitLabel = t('Saving...')
+  } else if (isEditing) {
+    submitLabel = t('Update Provider')
+  }
 
   return (
     <Dialog
@@ -192,11 +211,7 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
             {t('Cancel')}
           </Button>
           <Button type='submit' form={PROVIDER_FORM_ID} disabled={isPending}>
-            {isPending
-              ? t('Saving...')
-              : isEditing
-                ? t('Update Provider')
-                : t('Create Provider')}
+            {submitLabel}
           </Button>
         </>
       }
@@ -208,6 +223,34 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
         >
           {/* Preset Selector (only for creating) */}
           {!isEditing && <PresetSelector form={form} />}
+
+          <Alert>
+            <AlertTitle>{t('OAuth callback URL')}</AlertTitle>
+            <AlertDescription className='space-y-3 text-sm'>
+              <p>
+                {t(
+                  'This callback URL updates from the slug field and is the value to register with your provider.'
+                )}
+              </p>
+              <div className='flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between'>
+                <span className='text-muted-foreground shrink-0'>
+                  {t('Authorization callback URL')}
+                </span>
+                <span className='flex min-w-0 items-center gap-2'>
+                  <code className='bg-muted text-foreground min-w-0 rounded px-1.5 py-0.5 text-xs break-all'>
+                    {callbackUrl}
+                  </code>
+                  <CopyButton
+                    value={callbackUrl}
+                    size='icon'
+                    className='size-7'
+                    tooltip={t('Copy callback URL')}
+                    aria-label={t('Copy callback URL')}
+                  />
+                </span>
+              </div>
+            </AlertDescription>
+          </Alert>
 
           {/* Basic Info */}
           <div className='space-y-4'>
@@ -339,12 +382,10 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
                 <FormItem>
                   <FormLabel>{t('Auth Style')}</FormLabel>
                   <Select
-                    items={[
-                      ...AUTH_STYLE_OPTIONS.map((option) => ({
-                        value: String(option.value),
-                        label: t(option.labelKey),
-                      })),
-                    ]}
+                    items={AUTH_STYLE_OPTIONS.map((option) => ({
+                      value: String(option.value),
+                      label: t(option.labelKey),
+                    }))}
                     value={String(field.value)}
                     onValueChange={(val) => field.onChange(Number(val))}
                   >
@@ -563,12 +604,16 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
                 <FormItem>
                   <FormLabel>{t('Access Policy (JSON)')}</FormLabel>
                   <FormControl>
-                    <Textarea
+                    <JsonCodeEditor
+                      value={field.value || ''}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
                       placeholder={t(
                         'Optional JSON policy to restrict access based on user info fields'
                       )}
-                      className='min-h-[80px] font-mono text-xs'
-                      {...field}
+                      heightClassName='h-40 min-h-40 max-h-40'
                     />
                   </FormControl>
                   <FormDescription>
