@@ -214,6 +214,73 @@ web/                                      web/
 - **打包**：镜像里同时包含 `web/default/dist` 和 `web/classic/dist`，运行时按设置切换
 - ⚠️ 官方已彻底移除主题切换（`setting/system_setting/theme.go` 删除、`router/retired_frontend_routes_test.go` 新增测试断言旧前端路由已下线）。这些**都不接受**
 
+### 4.5.4bis 🔴🔴 拒绝"官方大删除"最隐蔽的陷阱：git 会静默丢掉你没改过的文件（2026-08-06 踩坑实录）
+
+**这是本仓库出过的最严重一次静默丢功能，务必理解原理。**
+
+官方 `31d70fca3` 干了两件事：① 删掉整个 `web/classic/`（约 432 文件）② 把 `web/default/*` 摊平到 `web/`（等于删掉 `web/default/` 全部 960 文件、在 `web/` 根新建）。我们的决策是**两套嵌套目录都保留、整体拒绝这次删除**。
+
+但**「拒绝目录删除」不是一个 git 能自动执行的动作**。三路合并时，对 `web/classic/` 和 `web/default/` 里的每个文件，git 独立判断：
+
+- 文件**我方本地改过** → 产生 modify/delete 冲突 → 停下来等人解决 → 我们手动 `git checkout --ours` 保留 ✅
+- 文件**我方从未改过**（跟某个官方历史点一致） → git 判定「官方删除 + 我方无修改」→ **静默采纳删除，不报冲突** ❌
+
+结果：`web/classic` 只有我们改过的 35 个文件触发冲突被保住，**其余 397 个被静默删除**；`web/default` 更惨，只有 1 个 `auth-store.ts` 改过被保住，**其余 959 个全没了**（连 `index.html` / `src/index.jsx` / `src/main.tsx` 入口都没了）。当时 `go build` / `go vet` / 后端测试全过，**完全没报错**，直到 2026-08-06 主人跑 `bun run build` 才炸出 `Failed to resolve HTML template`。
+
+**根因一句话**：越是"整体拒绝官方大删除"的目录，越危险——因为你手动改过的文件只是少数，绝大多数未改文件会被 git 静默删掉，而后端编译完全无感。
+
+**发现方式（每次合并官方后必做）**：
+
+```bash
+# 双前端文件数必须和权威 origin/main-alpha 对齐，不能少
+echo "classic HEAD/main-alpha: $(git ls-files web/classic | wc -l) / $(git ls-tree -r --name-only origin/main-alpha -- web/classic | wc -l)"
+echo "default HEAD/main-alpha: $(git ls-files web/default | wc -l) / $(git ls-tree -r --name-only origin/main-alpha -- web/default | wc -l)"
+# 入口文件必须在
+ls web/classic/index.html web/classic/src/index.jsx web/default/index.html web/default/src/main.tsx
+```
+
+**恢复方式**（已用于 `f068ca978`）：以 `origin/main-alpha` 为权威整体恢复。恢复前先确认 HEAD 没有 main-alpha 所缺的独有文件（`comm -13` 检查），确认后：
+
+```bash
+git checkout origin/main-alpha -- web/classic web/default
+cd web/classic && bun run build   # 两套都要能打包
+cd ../default && bun run build
+```
+
+### 4.5.4ter 🔴🔴 `web/src/`（官方摊平版）和 `web/default/src/`（我们 embed 的）已长期分叉——default 前端落后官方几个月
+
+**这是上面那次恢复后才暴露的第二个更深的问题，2026-08-06 记录，尚未解决。**
+
+因为我们 HEAD 已经吸收了官方全部 commit（`git rev-list --count HEAD..origin/main` = 0），官方摊平后在 `web/` 根**持续更新**的那套 default 前端（`web/index.html` + `web/src/`，约 1070 文件）**也进到了我们树里**。于是现在 HEAD 同时存在两份 default 前端：
+
+| 路径 | 来源 | 是否被使用 |
+|---|---|---|
+| `web/src/`（1042 文件） | 官方摊平后**最新**的 default 前端，跟随官方每次更新 | ❌ **没有被 embed，也没进 Dockerfile 构建**，等于死代码 |
+| `web/default/src/`（960 文件） | main-alpha 嵌套保留的 default，停在旧版 | ✅ `main.go` embed `web/default/dist`、Dockerfile 构建的就是它 |
+
+**分叉规模**（`web/src` vs `web/default/src`）：官方新增 **121** 个文件、**756** 个共同文件内容不同、我们 default 独有 **12** 个文件。也就是说线上 default 前端**落后官方几个月的更新**（auto-group、log stream status、OIDC 自定义登录名、playground 参数面板等前端改动都在 `web/src` 里，没进 `web/default`）。
+
+**我们 `web/default/src` 独有、`web/src` 没有的 12 个文件**（迁移时不能被官方版覆盖丢掉，需逐个核对是不是 main-alpha 定制）：
+
+```
+features/channels/constants.ts
+features/playground/components/message-action-button.tsx
+features/playground/components/message-actions.tsx
+features/playground/components/message-error.tsx
+features/playground/components/playground-chat.tsx
+features/playground/components/playground-input.tsx
+features/playground/lib/message-styles.ts
+features/playground/lib/message-utils.ts
+features/playground/lib/payload-builder.ts
+features/playground/lib/storage.ts
+routes/console/log.tsx
+routes/console/topup.tsx
+```
+
+**待办（未定方案，需主人决策）**：把官方 `web/src/` 的最新前端改动同步进 `web/default/src/`，同时保留上述 12 个 main-alpha 定制 + 756 个差异文件里的 main-alpha 改动。这是一次大工程（756 文件三路对比），必须逐文件辨别"官方更新" vs "main-alpha 定制"，不能无脑覆盖。详见 [官方合并待办追踪.md](官方合并待办追踪.md)。
+
+> ⚠️ 顺带隐患：`web/src/`（官方摊平版死代码）如果一直留着，未来 `git checkout origin/main-alpha -- web/default` 之类的恢复操作不会动它，它会持续误导"以为 default 已是最新"。迁移完成后应决定是否删掉 `web/src/` + `web/index.html` + 根 `rsbuild.config.ts` 等官方摊平残留（注意别删到 workspace 根的 `web/package.json`）。
+
 ### 4.5.5 未来可选：改造成官方摊平结构（暂不做）
 
 如果哪天想彻底对齐官方以减少长期合并成本，需要先解决 4.5.2 的 4 个坑：
@@ -812,6 +879,10 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
   - `TestLogMarshalJSONIDsAreString`
   - `TestFormatClaudeResponseInfo_*`
   - `TestStreamServerToolUse*`
+- [ ] 前端资源包文件数**没被官方大删除静默吞掉**（第 4.5.4bis 节）：
+  - `git ls-files web/classic | wc -l` 应 ≈ **432**（不是几十个）
+  - `git ls-files web/default | wc -l` 应 ≈ **960**（不是个位数）
+  - 若被删：`git checkout origin/main-alpha -- web/classic web/default` 恢复
 - [ ] （如涉及）前端 `bun run build` 通过
 
 ---
