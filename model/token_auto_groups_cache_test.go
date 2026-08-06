@@ -4,9 +4,32 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/alicebob/miniredis/v2"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// useUserCacheMiniRedis 用内存 redis 替换全局 RDB，测试结束自动还原。
+// 官方把它放在 user_cache_auth_version_test.go，那个文件属于阶段3 已决定不引入的
+// auth 改写，所以这里单独保留一份。
+func useUserCacheMiniRedis(t *testing.T) *miniredis.Miniredis {
+	t.Helper()
+	server := miniredis.RunT(t)
+	oldRedisEnabled := common.RedisEnabled
+	oldRDB := common.RDB
+	oldSyncFrequency := common.SyncFrequency
+	common.RedisEnabled = true
+	common.SyncFrequency = 2
+	common.RDB = redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() {
+		_ = common.RDB.Close()
+		common.RedisEnabled = oldRedisEnabled
+		common.RDB = oldRDB
+		common.SyncFrequency = oldSyncFrequency
+	})
+	return server
+}
 
 func TestTokenAutoGroupsRoundTripThroughRedisHashCache(t *testing.T) {
 	useUserCacheMiniRedis(t)

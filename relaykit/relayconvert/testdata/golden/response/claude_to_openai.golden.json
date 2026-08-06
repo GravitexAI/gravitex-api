@@ -36,9 +36,7 @@
         "input_tokens": 10,
         "cache_creation_input_tokens": 2,
         "cache_read_input_tokens": 3,
-        "output_tokens": 5,
-        "claude_cache_creation_5_m_tokens": 0,
-        "claude_cache_creation_1_h_tokens": 0
+        "output_tokens": 5
       }
     },
     "prompt_tokens_details": {
@@ -53,12 +51,13 @@
       "text_tokens": 0,
       "audio_tokens": 0,
       "image_tokens": 0,
-      "reasoning_tokens": 0
+      "reasoning_tokens": 0,
+      "accepted_prediction_tokens": 0,
+      "rejected_prediction_tokens": 0
     },
     "input_tokens": 15,
     "output_tokens": 0,
     "input_tokens_details": null,
-    "claude_cache_creation_5_m_tokens": 2,
-    "claude_cache_creation_1_h_tokens": 0
+    "claude_cache_creation_5_m_tokens": 2
   }
 }

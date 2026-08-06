@@ -120,6 +120,7 @@ func TestIsQwenThinkingBudgetModel(t *testing.T) {
 func TestOpenAIResponsesRequestPreserveExplicitZeroValues(t *testing.T) {
 	raw := []byte(`{
 		"model":"gpt-4.1",
+		"prompt_cache_options":{"mode":"explicit","ttl":"30m"},
 		"max_output_tokens":0,
 		"max_tool_calls":0,
 		"stream":false,
@@ -134,6 +135,9 @@ func TestOpenAIResponsesRequestPreserveExplicitZeroValues(t *testing.T) {
 	require.NoError(t, err)
 
 	require.True(t, gjson.GetBytes(encoded, "max_output_tokens").Exists())
+	// main-alpha 显式缓存控制：prompt_cache_options 必须原样透传给上游
+	require.Equal(t, "explicit", gjson.GetBytes(encoded, "prompt_cache_options.mode").String())
+	require.Equal(t, "30m", gjson.GetBytes(encoded, "prompt_cache_options.ttl").String())
 	require.True(t, gjson.GetBytes(encoded, "max_tool_calls").Exists())
 	require.True(t, gjson.GetBytes(encoded, "stream").Exists())
 	require.True(t, gjson.GetBytes(encoded, "top_p").Exists())

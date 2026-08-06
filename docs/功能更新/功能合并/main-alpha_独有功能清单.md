@@ -739,7 +739,7 @@ return GetSSRFProtectedHTTPClient().Do(req)   // 官方：防内网探测
   - `FIELD_LABELS` 里的 23 个字段没被删（若官方新增倍率字段，同步补进 FIELD_LABELS）
 - [ ] platform_id 隔离（第 7.6 节）：`middleware/platform.go` 在，`common/init.go` 里 `PlatformIsolationEnabled` 读取还在
 - [ ] 企业账号体系（第 7.7 节）：`model/enterprise.go` 在，`model/task_cas_test.go` 的 AutoMigrate/truncate 含 Enterprise 表
-- [ ] AllowNegativeBalance（第 7.8 节）：`dto/user_settings.go` 字段在，`service/negative_balance.go` 在，**6 处扣费预检查放行判断都在**
+- [ ] AllowNegativeBalance（第 7.8 节）：`dto/user_settings.go` 字段在，`service/negative_balance.go` 在，**4 处扣费预检查放行判断都在**（`service/quota.go` / `service/billing_session.go` ×2 / `relay/relay_task.go`）。原为 6 处，阶段2 官方 `116004fd4` 的 BillingSession 重构删掉了 `service/pre_consume_quota.go`，其中 2 处由 `billing_session.go` 承接，非丢失
 - [ ] Seedance 官方镜像（第 7.9 节）：`middleware/seedance_official_mirror.go`、`controller/seedance_official_{video,asset}.go` 在，`router/video-router.go` 里 `/api/v3/contents/generations` + `/api/v3/seedance` 路由挂载
 - [ ] 渠道类型常量未被覆盖：`ChannelTypeTencentTokenHub = 61`、`ChannelTypeSeedanceGateway = 62`（官方若新增渠道类型可能撞号，需重新编号）
 - [ ] TokenHub Base URL 仍为 `https://tokenhub.tencentcloudmaas.com`（`constant/channel.go` 第 129 行附近），**没被官方的 `tokenhub.tencentmaas.com` 覆盖**

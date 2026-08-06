@@ -322,7 +322,18 @@ func (token *Token) Insert() error {
 // Update Make sure your token's fields is completed, because this will update non-zero values
 func (token *Token) Update() (err error) {
 	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-		"model_limits_enabled", "model_limits", "vendor_limits", "allow_ips", "group", "cross_group_retry", "daily_spend_threshold").Updates(token).Error
+		"model_limits_enabled", "model_limits", "vendor_limits", "allow_ips", "group", "cross_group_retry",
+		"daily_spend_threshold", "auto_groups").Updates(token).Error
+	// 同步刷缓存（不能异步）：收窄 auto_groups / model_limits 这类限制后，
+	// 异步刷新会留下一个仍按旧宽松配置放行的窗口。刷新失败则直接失效缓存。
+	if shouldUpdateRedis(true, err) {
+		if cacheErr := cacheSetToken(*token); cacheErr != nil {
+			common.SysLog("failed to update token cache: " + cacheErr.Error())
+			if deleteErr := cacheDeleteToken(token.Key); deleteErr != nil {
+				common.SysLog("failed to invalidate token cache after update: " + deleteErr.Error())
+			}
+		}
+	}
 	return err
 }
 

@@ -23,8 +23,6 @@
     "cache_creation_input_tokens": 0,
     "cache_read_input_tokens": 0,
     "output_tokens": 5,
-    "claude_cache_creation_5_m_tokens": 0,
-    "claude_cache_creation_1_h_tokens": 0,
     "billing_usage": {
       "source": "oai_responses",
       "semantic": "openai",
@@ -42,13 +40,13 @@
           "text_tokens": 0,
           "audio_tokens": 0,
           "image_tokens": 0,
-          "reasoning_tokens": 0
+          "reasoning_tokens": 0,
+          "accepted_prediction_tokens": 0,
+          "rejected_prediction_tokens": 0
         },
         "input_tokens": 10,
         "output_tokens": 5,
-        "input_tokens_details": null,
-        "claude_cache_creation_5_m_tokens": 0,
-        "claude_cache_creation_1_h_tokens": 0
+        "input_tokens_details": null
       }
     }
   }

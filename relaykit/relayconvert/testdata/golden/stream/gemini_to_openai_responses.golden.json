@@ -162,7 +162,9 @@
               "text_tokens": 0,
               "audio_tokens": 0,
               "image_tokens": 0,
-              "reasoning_tokens": 0
+              "reasoning_tokens": 0,
+              "accepted_prediction_tokens": 0,
+              "rejected_prediction_tokens": 0
             },
             "input_tokens": 4,
             "output_tokens": 2,
@@ -171,9 +173,7 @@
               "text_tokens": 4,
               "audio_tokens": 0,
               "image_tokens": 0
-            },
-            "claude_cache_creation_5_m_tokens": 0,
-            "claude_cache_creation_1_h_tokens": 0
+            }
           },
           "user": null,
           "metadata": null
@@ -210,7 +210,9 @@
       "text_tokens": 0,
       "audio_tokens": 0,
       "image_tokens": 0,
-      "reasoning_tokens": 0
+      "reasoning_tokens": 0,
+      "accepted_prediction_tokens": 0,
+      "rejected_prediction_tokens": 0
     },
     "input_tokens": 4,
     "output_tokens": 2,
@@ -219,8 +221,6 @@
       "text_tokens": 4,
       "audio_tokens": 0,
       "image_tokens": 0
-    },
-    "claude_cache_creation_5_m_tokens": 0,
-    "claude_cache_creation_1_h_tokens": 0
+    }
   }
 }

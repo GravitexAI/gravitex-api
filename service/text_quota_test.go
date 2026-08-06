@@ -30,12 +30,12 @@ func TestCalculateTextQuotaSummaryBillsVideoInputAlongsideImageOutput(t *testing
 	relayInfo := &relaycommon.RelayInfo{
 		RelayFormat:     types.RelayFormatGemini,
 		OriginModelName: "gemini-3.1-flash-image",
-		PriceData: types.PriceData{
+		PriceData: hosttypes.PriceData{
 			ModelRatio:           0.25,
 			CompletionRatio:      6,
 			ImageCompletionRatio: 120,
 			VideoRatio:           2,
-			GroupRatioInfo:       types.GroupRatioInfo{GroupRatio: 1},
+			GroupRatioInfo:       hosttypes.GroupRatioInfo{GroupRatio: 1},
 		},
 		StartTime: time.Now(),
 	}
