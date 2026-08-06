@@ -234,9 +234,6 @@
     "SMTP 端口": "SMTP Port",
     "SMTP 访问凭证": "SMTP Access Credential",
     "SMTP 账户": "SMTP Account",
-    "SMTP 加密方式": "SMTP encryption",
-    "SSL/TLS": "SSL/TLS",
-    "STARTTLS": "STARTTLS",
     "Sonnet 模型": "Sonnet Model",
     "speed 字段用于控制 Claude 推理速度模式。默认关闭以避免意外切换到 fast 模式": "The speed field controls Claude inference speed mode. Disabled by default to avoid unintentionally switching to fast mode",
     "SSE 事件": "SSE Events",
@@ -1361,7 +1358,7 @@
     "已发起支付": "Payment initiated",
     "已发送到 Fluent": "Sent to Fluent",
     "已取消 Passkey 注册": "Passkey registration cancelled",
-    "已切换到新版前端，正在跳转首页": "Switched to the new frontend, redirecting to home",
+    "已切换到新版前端，正在刷新页面": "Switched to the new frontend, refreshing page",
     "已同步到渠道": "Synced to Channel",
     "已启用": "Enabled",
     "已启用 Passkey，无需密码即可登录": "Passkey enabled, login without password",
@@ -1811,7 +1808,6 @@
     "新获取的模型": "New models",
     "新额度：": "New quota: ",
     "无": "None",
-    "无加密": "No encryption",
     "无GPU": "No GPU",
     "无冲突项": "No conflict items",
     "无效的部署信息": "Invalid deployment information",
@@ -3236,7 +3232,6 @@
     "请选择该渠道所支持的模型，留空则不更改": "Please select the models supported by the channel, leaving blank will not change",
     "请选择过期时间": "Please select expiration time",
     "请选择通知方式": "Please select notification method",
-    "请选择一种 SMTP 传输加密方式": "Please select one SMTP transport security mode",
     "调整额度": "Adjust Quota",
     "调整额度成功": "Quota adjusted successfully",
     "调用次数": "Call Count",
@@ -3842,11 +3837,6 @@
     "固定过期（命中后不刷新 TTL）": "Fixed expiration (do not refresh TTL on hit)",
     "开启后，命中同一亲和渠道不会续期 TTL，缓存从首次写入起自然到期，到期后重新负载均衡；关闭时每次成功请求都会续期（滑动过期），只要持续有请求就会一直粘在同一渠道。": "When enabled, hitting the same affinity channel does not renew the TTL. The cache expires naturally from first write, allowing periodic rebalancing across channels of equal priority. When disabled, every successful request renews the TTL (sliding expiration), keeping the affinity sticky as long as requests keep coming.",
     "固定过期": "Fixed expiration",
-    "滑动过期": "Sliding expiration",
-    "你正在使用旧版前端，该版本即将停止维护，部分功能可能无法使用。建议切换到新版前端以获得完整体验。": "You are using the classic frontend. This version will stop receiving maintenance soon, and some features may be unavailable. Switch to the new frontend for the complete experience.",
-    "你正在使用旧版前端，该版本即将停止维护，部分功能可能无法使用。请联系管理员切换到新版前端。": "You are using the classic frontend. This version will stop receiving maintenance soon, and some features may be unavailable. Contact an administrator to switch to the new frontend.",
-    "提示：如果切换后页面无法正常渲染，请清空浏览器缓存后重试。": "Tip: If the page does not render correctly after switching, clear your browser cache and try again.",
-    "旧版前端即将停止维护": "Classic frontend maintenance will end soon",
-    "该条历史记录缺少审计字段。当前版本已支持记录服务器 IP、回调 IP、支付方式与系统版本等审计信息；这些字段仅会写入后续新产生的记录，历史记录无法自动补齐。": "This historical record predates audit-info tracking and cannot be backfilled. The current instance already records server IP, callback IP, payment method, and system version for new top-ups going forward."
+    "滑动过期": "Sliding expiration"
   }
 }

@@ -227,9 +227,6 @@
     "SMTP 端口": "Cổng SMTP",
     "SMTP 访问凭证": "Thông tin xác thực truy cập SMTP",
     "SMTP 账户": "Tài khoản SMTP",
-    "SMTP 加密方式": "Mã hóa SMTP",
-    "SSL/TLS": "SSL/TLS",
-    "STARTTLS": "STARTTLS",
     "Sonnet 模型": "Model Sonnet",
     "speed 字段用于控制 Claude 推理速度模式。默认关闭以避免意外切换到 fast 模式": "Trường speed kiểm soát chế độ tốc độ suy luận Claude. Mặc định tắt để tránh vô tình chuyển sang chế độ fast",
     "SSE 事件": "Sự kiện SSE",
@@ -1342,7 +1339,7 @@
     "已发起支付": "Đã khởi tạo thanh toán",
     "已发送到 Fluent": "Đã gửi đến Fluent",
     "已取消 Passkey 注册": "Đã hủy đăng ký Passkey",
-    "已切换到新版前端，正在跳转首页": "Đã chuyển sang frontend mới, đang chuyển đến trang chủ",
+    "已切换到新版前端，正在刷新页面": "Đã chuyển sang frontend mới, đang làm mới trang",
     "已同步到渠道": "Synced to Channel",
     "已启用": "Đã bật",
     "已启用 Passkey，无需密码即可登录": "Đã bật Passkey, đăng nhập không cần mật khẩu",
@@ -1776,7 +1773,6 @@
     "新获取的模型": "Mô hình mới",
     "新额度：": "Hạn ngạch mới: ",
     "无": "Không",
-    "无加密": "Không mã hóa",
     "无GPU": "No GPU",
     "无冲突项": "Không có mục xung đột",
     "无效的部署信息": "Invalid deployment information",
@@ -3636,7 +3632,6 @@
     "请选择语言": "Vui lòng chọn ngôn ngữ",
     "请选择过期时间": "Vui lòng chọn thời gian hết hạn",
     "请选择通知方式": "Vui lòng chọn phương thức thông báo",
-    "请选择一种 SMTP 传输加密方式": "Vui lòng chọn một chế độ bảo mật truyền tải SMTP",
     "请阅读并同意": "Vui lòng đọc và đồng ý",
     "读取": "Đọc",
     "读取失败": "Đọc thất bại",
@@ -4219,11 +4214,6 @@
     "固定过期（命中后不刷新 TTL）": "Hết hạn cố định (không làm mới TTL khi trùng khớp)",
     "开启后，命中同一亲和渠道不会续期 TTL，缓存从首次写入起自然到期，到期后重新负载均衡；关闭时每次成功请求都会续期（滑动过期），只要持续有请求就会一直粘在同一渠道。": "Khi bật, việc trùng khớp cùng một kênh liên kết sẽ không làm mới TTL. Bộ nhớ đệm sẽ tự hết hạn kể từ lần ghi đầu tiên, cho phép cân bằng lại định kỳ giữa các kênh có cùng mức ưu tiên. Khi tắt, mỗi yêu cầu thành công sẽ làm mới TTL (hết hạn trượt), giữ liên kết miễn là các yêu cầu vẫn tiếp tục đến.",
     "固定过期": "Hết hạn cố định",
-    "滑动过期": "Hết hạn trượt",
-    "你正在使用旧版前端，该版本即将停止维护，部分功能可能无法使用。建议切换到新版前端以获得完整体验。": "Bạn đang sử dụng frontend cũ. Phiên bản này sắp ngừng được bảo trì và một số tính năng có thể không khả dụng. Hãy chuyển sang frontend mới để có trải nghiệm đầy đủ.",
-    "你正在使用旧版前端，该版本即将停止维护，部分功能可能无法使用。请联系管理员切换到新版前端。": "Bạn đang sử dụng frontend cũ. Phiên bản này sắp ngừng được bảo trì và một số tính năng có thể không khả dụng. Vui lòng liên hệ quản trị viên để chuyển sang frontend mới.",
-    "提示：如果切换后页面无法正常渲染，请清空浏览器缓存后重试。": "Gợi ý: Nếu trang không hiển thị đúng sau khi chuyển đổi, hãy xóa bộ nhớ đệm của trình duyệt rồi thử lại.",
-    "旧版前端即将停止维护": "Frontend cũ sắp ngừng bảo trì",
-    "该条历史记录缺少审计字段。当前版本已支持记录服务器 IP、回调 IP、支付方式与系统版本等审计信息；这些字段仅会写入后续新产生的记录，历史记录无法自动补齐。": "Bản ghi lịch sử này được tạo trước khi tính năng thông tin kiểm toán ra đời nên thiếu dữ liệu kiểm toán. Phiên bản hiện tại đã hỗ trợ ghi lại IP máy chủ, IP gọi lại, phương thức thanh toán và phiên bản hệ thống, nhưng các trường này chỉ được ghi cho các bản ghi mới về sau — không thể bổ sung hồi tố cho bản ghi cũ."
+    "滑动过期": "Hết hạn trượt"
   }
 }

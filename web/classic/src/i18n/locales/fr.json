@@ -232,9 +232,6 @@
     "SMTP 端口": "Port SMTP",
     "SMTP 访问凭证": "Informations d'identification d'accès SMTP",
     "SMTP 账户": "Compte SMTP",
-    "SMTP 加密方式": "Chiffrement SMTP",
-    "SSL/TLS": "SSL/TLS",
-    "STARTTLS": "STARTTLS",
     "Sonnet 模型": "Modèle Sonnet",
     "speed 字段用于控制 Claude 推理速度模式。默认关闭以避免意外切换到 fast 模式": "Le champ speed contrôle le mode de vitesse d'inférence de Claude. Désactivé par défaut pour éviter un passage involontaire au mode fast",
     "SSE 事件": "Événement SSE",
@@ -1362,7 +1359,7 @@
     "已发起支付": "Paiement initié",
     "已发送到 Fluent": "Envoyé à Fluent",
     "已取消 Passkey 注册": "Enregistrement du Passkey annulé",
-    "已切换到新版前端，正在跳转首页": "Passage au nouveau frontend effectué, redirection vers l'accueil",
+    "已切换到新版前端，正在刷新页面": "Passage au nouveau frontend effectué, actualisation de la page",
     "已同步到渠道": "Synced to Channel",
     "已启用": "Activé",
     "已启用 Passkey，无需密码即可登录": "Passkey activé. Connexion sans mot de passe disponible.",
@@ -1804,7 +1801,6 @@
     "新获取的模型": "Nouveaux modèles",
     "新额度：": "Nouveau quota : ",
     "无": "Aucun",
-    "无加密": "Aucun chiffrement",
     "无GPU": "No GPU",
     "无冲突项": "Aucun élément en conflit",
     "无效的部署信息": "Invalid deployment information",
@@ -3220,7 +3216,6 @@
     "请选择该渠道所支持的模型，留空则不更改": "Veuillez sélectionner les modèles pris en charge par le canal, laisser vide ne changera rien",
     "请选择过期时间": "Veuillez sélectionner une date d'expiration",
     "请选择通知方式": "Veuillez sélectionner la méthode de notification",
-    "请选择一种 SMTP 传输加密方式": "Veuillez sélectionner un mode de sécurité de transport SMTP",
     "调整额度": "Ajuster le quota",
     "调整额度成功": "Quota ajusté avec succès",
     "调用次数": "Nombre d'appels",
@@ -3685,11 +3680,6 @@
     "固定过期（命中后不刷新 TTL）": "Expiration fixe (ne pas renouveler le TTL en cas de correspondance)",
     "开启后，命中同一亲和渠道不会续期 TTL，缓存从首次写入起自然到期，到期后重新负载均衡；关闭时每次成功请求都会续期（滑动过期），只要持续有请求就会一直粘在同一渠道。": "Si activé, le fait d'utiliser le même canal d'affinité ne renouvelle pas le TTL. Le cache expire naturellement depuis la première écriture, ce qui permet un rééquilibrage périodique entre les canaux de même priorité. Si désactivé, chaque requête réussie renouvelle le TTL (expiration glissante), maintenant l'affinité tant que des requêtes continuent d'arriver.",
     "固定过期": "Expiration fixe",
-    "滑动过期": "Expiration glissante",
-    "你正在使用旧版前端，该版本即将停止维护，部分功能可能无法使用。建议切换到新版前端以获得完整体验。": "Vous utilisez le frontend classique. Cette version ne sera bientôt plus maintenue et certaines fonctionnalités peuvent être indisponibles. Passez au nouveau frontend pour profiter de l’expérience complète.",
-    "你正在使用旧版前端，该版本即将停止维护，部分功能可能无法使用。请联系管理员切换到新版前端。": "Vous utilisez le frontend classique. Cette version ne sera bientôt plus maintenue et certaines fonctionnalités peuvent être indisponibles. Contactez un administrateur pour passer au nouveau frontend.",
-    "提示：如果切换后页面无法正常渲染，请清空浏览器缓存后重试。": "Conseil : si la page ne s’affiche pas correctement après le changement, videz le cache du navigateur puis réessayez.",
-    "旧版前端即将停止维护": "Le frontend classique ne sera bientôt plus maintenu",
-    "该条历史记录缺少审计字段。当前版本已支持记录服务器 IP、回调 IP、支付方式与系统版本等审计信息；这些字段仅会写入后续新产生的记录，历史记录无法自动补齐。": "Cet enregistrement historique date d'avant le suivi des informations d'audit et ne peut pas être complété rétroactivement. La version actuelle enregistre déjà l'IP du serveur, l'IP de rappel, le mode de paiement et la version du système pour les nouveaux paiements à venir."
+    "滑动过期": "Expiration glissante"
   }
 }
