@@ -165,6 +165,7 @@ touch web/classic/dist/index.html web/default/dist/index.html
 | 2026-06-17 → 2026-06-22 | (少量) | (见文档) | [20260622/](20260622/) |
 | 2026-06-22 → 2026-07-02 | 48 | authz+SystemTaskRunner / relayconvert 重构 / channel 路由抽离 / advanced custom editor | [20260702/](20260702/) |
 | 2026-07-02 → 2026-08-04 | 78（合到安全点 `df01273b9`） | 计费溢出加固 / SSRF 防护 / PriceData 封装 / GPT-5.6 倍率 / 渠道列宽 / 订阅额度重置。同轮还合了 main-alpha 145 个 commit | [20260804/](20260804/) |
+| 2026-08-04 → 2026-08-06 | 103（分 4 阶段合到 `origin/main` 最新，**官方已全部合完**） | 三次大重构：计费会话 BillingSession / auth 无状态 token（❌拒绝，保 RuoYi）/ relaykit 协议转换独立模块。修掉 OpenAI 缓存写入**重复计费**真 bug。新增 TokenHub、Sub2API、New API 渠道（❌改号 63/64）、工具调用配价、未设价模型页 | [20260806/](20260806/) |
 
 ### ⚠️ 官方合并未完成 —— 见 [官方合并待办追踪.md](官方合并待办追踪.md)
 
