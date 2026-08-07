@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
@@ -50,6 +51,8 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		return fmt.Sprintf("%s/v1/messages", info.ChannelBaseUrl), nil
 	default:
 		switch info.RelayMode {
+		case constant.RelayModeResponses:
+			return fmt.Sprintf("%s/v1/responses", info.ChannelBaseUrl), nil
 		case constant.RelayModeEmbeddings:
 			return fmt.Sprintf("%s/v1/embeddings", info.ChannelBaseUrl), nil
 		case constant.RelayModeCompletions:
@@ -83,7 +86,19 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	return nil, errors.New("not implemented")
+	if !isDeepSeekV4ResponsesModel(request.Model) {
+		return nil, fmt.Errorf("Tencent TokenHub Responses API only supports DeepSeek V4 Flash and Pro models, got %q", request.Model)
+	}
+	return request, nil
+}
+
+func isDeepSeekV4ResponsesModel(model string) bool {
+	switch strings.ToLower(model) {
+	case "deepseek-v4-flash-202605", "deepseek-v4-pro-202606", "deepseek-v4-flash", "deepseek-v4-pro":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
