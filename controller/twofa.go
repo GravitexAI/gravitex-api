@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
@@ -20,6 +21,9 @@ type Setup2FARequest struct {
 // Verify2FARequest 验证2FA请求结构
 type Verify2FARequest struct {
 	Code string `json:"code" binding:"required"`
+	// FlowToken 为 default 前端登录时携带的短寿命凭证，用于承接“已验密码、待验二次因子”状态；
+	// classic 走 cookie 里的 pending_user_id，可不传。
+	FlowToken string `json:"flow_token"`
 }
 
 // Setup2FAResponse 设置2FA响应结构
@@ -405,23 +409,37 @@ func Verify2FALogin(c *gin.Context) {
 		return
 	}
 
-	// 从会话中获取pending用户信息
+	// 优先使用 default 前端的 flow_token 解析待验用户；缺省再回退到 classic 的 cookie pending_user_id。
 	session := sessions.Default(c)
-	pendingUserId := session.Get("pending_user_id")
-	if pendingUserId == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "会话已过期，请重新登录",
-		})
-		return
-	}
-	userId, ok := pendingUserId.(int)
-	if !ok {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "会话数据无效，请重新登录",
-		})
-		return
+	var userId int
+	if req.FlowToken != "" {
+		uid, ferr := service.ParseFlowToken(req.FlowToken)
+		if ferr != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "会话已过期，请重新登录",
+			})
+			return
+		}
+		userId = uid
+	} else {
+		pendingUserId := session.Get("pending_user_id")
+		if pendingUserId == nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "会话已过期，请重新登录",
+			})
+			return
+		}
+		uid, ok := pendingUserId.(int)
+		if !ok {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "会话数据无效，请重新登录",
+			})
+			return
+		}
+		userId = uid
 	}
 	// 获取用户信息
 	user, err := model.GetUserById(userId, false)

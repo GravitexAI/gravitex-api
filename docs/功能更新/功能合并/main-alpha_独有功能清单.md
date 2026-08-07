@@ -317,7 +317,7 @@ routes/console/topup.tsx
 | 位置 | 内容 |
 |---|---|
 | `middleware/ruoyi_auth.go` | **整个文件都是 main-alpha 独有**，核心函数 `tryRuoYiJWTAuth(c) (*model.User, error)` + 哨兵错误 `errNoRuoYiJWT` |
-| `middleware/auth.go` | **2 处**调用 `tryRuoYiJWTAuth`（约 line 49 用户鉴权链、line 216 管理员鉴权链）+ `fromRuoYi` 标志位 |
+| `middleware/auth.go` | **2 处**调用 `tryRuoYiJWTAuth`（约 line 128 用户鉴权链 authHelper、line 303 管理员鉴权链 authTokenHelper）+ `fromRuoYi` 标志位。⚠️ 2026-08-07 起 access_token JWT 层排在 RuoYi 之前，见 [5.7](#57-a2-双前端无状态-token-鉴权体系%EF%BC%88access_token--flow_token--login_session2026-08-07-补做) |
 | `common/init.go` | `RuoYiAuthEnabled = GetEnvOrDefaultBool("RUOYI_AUTH_ENABLED", false)`、`RuoYiJWTSecret = GetEnvOrDefaultString("RUOYI_JWT_SECRET", "")` |
 | `common/constants.go` | 两个变量的声明 |
 
@@ -330,7 +330,7 @@ routes/console/topup.tsx
 
 #### 鉴权流程（合并时必须完整保留的行为）
 
-1. **触发时机**：`middleware/auth.go` 里 session 取不到 `username` 时，**优先**尝试 RuoYi JWT（在其它 fallback 之前）
+1. **触发时机**：`middleware/auth.go` 里 session 取不到 `username`（且未被 default 前端 access_token JWT 命中）时，尝试 RuoYi JWT。⚠️ 顺序：**access_token JWT（本体系）→ RuoYi JWT → char32 系统令牌**。access_token JWT 必须排在 RuoYi 之前（见 [5.7](#57-a2-双前端无状态-token-鉴权体系%EF%BC%88access_token--flow_token--login_session2026-08-07-补做)），否则 RuoYi 层会把本体系 JWT 当成自己的、用 `RuoYiJWTSecret` 验签失败而直接 401
 2. **取 token**：从 `Authorization` header 取，同时支持 `Bearer xxx` 前缀和裸 JWT
 3. **快速判别**：`strings.Count(tokenString, ".") != 2` 就返回 `errNoRuoYiJWT`（不是 JWT，让后面的鉴权方式接手）
 4. **验签**：HMAC 算法（拒绝其它 signing method），密钥用 `common.RuoYiJWTSecret`
@@ -346,7 +346,7 @@ routes/console/topup.tsx
    调用处必须写成 `else if err != nil && err != errNoRuoYiJWT { 拒绝 }`。如果把 `errNoRuoYiJWT` 也当错误直接 401，**所有非 RuoYi 的正常登录都会挂**。
 
 2. **`fromRuoYi` 标志位控制 `New-Api-User` 头的强制校验**
-   `middleware/auth.go` 约 line 128 有 `if !fromRuoYi { ...要求 New-Api-User 头... }`。RuoYi JWT 模式下**不强制**这个头，因为 Java 端跳转不会带。删掉这个判断 → Java 跳转全部 400/401。
+   `middleware/auth.go` 约 line 208 有 `if !fromRuoYi && !fromAccessJWT { ...要求 New-Api-User 头... }`。RuoYi JWT 模式**和 default 前端 access_token JWT 模式**下都**不强制**这个头（Java 端跳转、default 前端都不带）。删掉这个判断 → Java 跳转 / default 前端全部 400/401。
 
 3. **platform_id 锁定语义**
    `middleware/auth.go` 约 line 295 的注释说明：「仅对 access_token 生效：session 为内部登录、RuoYi JWT 已在解析时按平台锁定」。也就是说 RuoYi 路径的平台隔离**在 `tryRuoYiJWTAuth` 内部就做完了**，外层不要重复施加，否则会误伤。
@@ -357,13 +357,55 @@ routes/console/topup.tsx
 
 **处理方式：`middleware/auth.go` 与 `middleware/ruoyi_auth.go` 一律取 main-alpha 版（`--ours`）。**
 
-如果将来要吸收官方的会话管理能力（`model/user_session.go` / `service/auth_session.go` / `service/auth_token.go` 等），必须**单独立项**并满足：
-- [ ] 在官方新 auth 链路里重新插入 `tryRuoYiJWTAuth` 分支（保持"优先尝试"的位置）
-- [ ] 保留 `errNoRuoYiJWT` 哨兵语义
-- [ ] 保留 `fromRuoYi` 对 `New-Api-User` 头的豁免
-- [ ] 保留 platform_id 在 RuoYi 路径内部锁定
-- [ ] **真机验证**：从 Java 管理端跳转进 Go 界面免登录成功
-- [ ] **真机验证**：普通用户密码登录、API key 调用、access_token 调用都不受影响
+官方的会话管理能力已在 **2026-08-07 以 A2 完整版补做**（见下方 [5.7](#57-a2-双前端无状态-token-鉴权体系%EF%BC%88access_token--flow_token--login_session2026-08-07-补做)），当时是在 main-alpha 版 `middleware/auth.go` 基础上**叠加**、而非采用官方重写版，因此下列约束已全部满足并需在后续合并中继续守住：
+- [x] 在 auth 链路里保留 `tryRuoYiJWTAuth` 分支（现位于 access_token JWT 层**之后**、char32 令牌之前）
+- [x] 保留 `errNoRuoYiJWT` 哨兵语义
+- [x] 保留 `fromRuoYi`（及新增 `fromAccessJWT`）对 `New-Api-User` 头的豁免
+- [x] 保留 platform_id 在 RuoYi 路径内部锁定
+- [x] **真机验证**：从 Java 管理端跳转进 Go 界面免登录成功
+- [x] **真机验证**：普通用户密码登录、API key 调用、access_token 调用、default 前端登录都不受影响
+
+⚠️ 官方版 `service/auth_session.go` / `service/auth_token.go` 与我们的**同名文件语义不同**（我们的是自研，不是官方那套 `user_sessions` 表）。后续合并若遇官方这些文件，**一律取 ours**，不要用官方版覆盖。
+
+### 5.7 A2 双前端无状态 token 鉴权体系（access_token + flow_token + login_session，2026-08-07 补做）
+
+**用途**：官方新前端 `web/default` 走"token bundle + 无状态 access_token + 持久化登录会话"这套鉴权（登录响应要含 `access_token` / `token_type` / `access_expires_at` / `user{id 为整数}` / `session{sid,...}`）。fork 原来的扁平 cookie 登录喂不出这个结构，导致 default 前端登录后**无限刷新**。A2 完整版补齐了这套，同时**保留 classic 的扁平 cookie 登录**与 **RuoYi SSO**。
+
+#### 文件与位置（均为 main-alpha 独有，合并遇官方同名文件一律取 ours）
+
+| 位置 | 内容 |
+|---|---|
+| `model/login_session.go` | **整个文件独有**。`login_session` 表 + CRUD（多设备管理 / 远程下线）。时间字段 Unix 秒，`RevokedAt==0` 表示有效。已在 `model/main.go` AutoMigrate 注册 |
+| `service/auth_token.go` | **整个文件独有**（与官方同名文件语义完全不同）。签发/校验两种 HS256 JWT：`access_token`（载 uid+sid，TTL 15min）、2FA `flow_token`（载 pending_uid，TTL 5min），均用 `common.SessionSecret` 签名，带唯一 subject `new-api-access` / `new-api-2fa-flow` |
+| `controller/auth_session.go` | **整个文件独有**。`RefreshAuth`（POST /api/user/auth/refresh，靠 cookie/`X-Auth-Session` 头恢复会话、复签 token）、`LogoutAuth`、`GetLoginSessions`、`RevokeLoginSessionBySid`、`RevokeOtherLoginSessions` |
+| `controller/user.go` | `setupLogin` 改为同时吐"扁平字段(classic 兼容, id 为字符串)+ token bundle(default, user.id 为整数)"；`buildAuthBundle` / `buildAuthUser`；cookie 里额外存 `sid` 供首屏刷新回退；Login 的 2FA 分支下发 `flow_token` |
+| `controller/twofa.go` | `Verify2FALogin` 优先用 `flow_token` 解析待验用户，缺省回退 classic 的 cookie `pending_user_id` |
+| `middleware/auth.go` | `authHelper` 里新增 `tryAccessTokenJWTAuth` 层 + `fromAccessJWT` 标志位 |
+| `router/api-router.go` | `POST /api/user/auth/refresh`、`POST /api/user/auth/logout`；selfRoute 下 `GET /sessions`、`DELETE /sessions/:sid`、`POST /sessions/revoke-others` |
+| `middleware/access_token_jwt_auth_test.go` | 回归测试：RuoYi 启用 + cookie+bearer 无 New-Api-User 时应 200 |
+
+#### 🔴 鉴权层顺序（合并时最易被破坏，必须守住）
+
+`authHelper` 里判定顺序**必须**是：
+
+1. **access_token JWT（本体系）** —— `tryAccessTokenJWTAuth`，**无条件最先判定**，先于 cookie、先于 RuoYi
+2. **cookie session**（classic）
+3. **RuoYi JWT**（Java SSO）
+4. **char32 系统管理令牌**（`ValidateAccessToken`）
+
+两个曾经踩过的坑（都会表现为 default 前端登录后无限刷新 / 接口全 401）：
+
+1. **access_token 必须先于 RuoYi**：本体系 JWT 是三段 HS256、用 `SessionSecret` 签名；RuoYi 层会把任意三段 JWT 当自己的、用 `RuoYiJWTSecret` 验签失败即直接拒绝。放在 RuoYi 之后 → 永远拿不到判定机会。靠唯一 subject `new-api-access` 与 RuoYi/系统令牌区分，非本体系 JWT 返回 `errNotAccessJWT` 正常回退。
+2. **access_token 必须先于 cookie**：`setupLogin` 给 default 前端也写了 cookie，浏览器同源会自动带上；若 cookie 层抢先接管，而 default 前端不发 `New-Api-User` 头 → 撞该头校验 401。所以有合法 access_token 时以它为准（`fromAccessJWT=true`，跳过 New-Api-User）。
+
+#### 环境变量依赖
+
+- 复用 `SESSION_SECRET` 作为 access_token/flow_token 的签名密钥。**多副本部署（k8s 多 pod）必须给所有 pod 注入同一个 `SESSION_SECRET`**，否则 A pod 签的 token 到 B pod 验签失败 → 401（cookie 若走 Redis session 则不受影响，故只有 A2 token 会暴露这个问题）。
+
+#### 前端切换开关（与 4.5.4 联动）
+
+- `theme.frontend`（options 表，值 `default`/`classic`，默认 classic）决定服务哪套 dist。default 走 A2 token bundle，classic 走扁平 cookie，两者从同一个 `setupLogin` 出口分流。
+- ⚠️ 官方有个 retired migration `normalizeRetiredThemeOption()`（`model/frontend_option_migration.go`）会**每次启动强制把 `theme.frontend` 归一成 default**。本 fork **未接线**（无调用点），保留双前端切换能力。合并时若有人把 `MigrateRetiredFrontendOptions` 接进启动流程，classic 会被强制改回 default，**必须拒绝接线**。
 
 ### 5.4 MYSQL_PREPARE_STMT 环境变量
 - **位置**：`model/main.go chooseDB`
@@ -898,4 +940,5 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
 
 | 日期 | 发现点 | 位置 | 说明 |
 |---|---|---|---|
-| _(留空待补)_ | | | |
+| 2026-08-07 | A2 双前端无状态 token 鉴权 | 见 [5.7](#57-a2-双前端无状态-token-鉴权体系%EF%BC%88access_token--flow_token--login_session2026-08-07-补做) | login_session 表 / auth_token service / auth_session controller / setupLogin token bundle / 2FA flow_token / 鉴权层顺序（access_token→cookie→RuoYi→char32）。合并遇官方同名 auth_session.go / auth_token.go 一律取 ours |
+| 2026-08-07 | classic 渠道启停/编辑适配官方新接口 | `web/classic/src/hooks/channels/useChannelsData.jsx`、`.../modals/EditChannelModal.jsx` | 官方把渠道状态改成独立接口 `POST /api/channel/:id/status`，并在 `UpdateChannel` 加了"请求体带 status 即拒绝"校验。classic 已适配：启停改走 `POST /:id/status`（成功回调按 action 回填 status，不再取 res.data.data.status）、编辑保存提交前 `delete localInputs.status`。合并若回退这两个 classic 文件会导致渠道无法启停/编辑保存 |

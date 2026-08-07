@@ -2006,6 +2006,9 @@ const EditChannelModal = (props) => {
     }
 
     if (isEdit) {
+      // 后端 PUT /api/channel/ 禁止携带 status 字段（启停走独立接口 POST /:id/status）；
+      // 编辑加载会灌入整条渠道含 status，提交前必须剥掉，否则被拦为“无效的参数”。
+      delete localInputs.status;
       res = await API.put(`/api/channel/`, {
         ...localInputs,
         id: parseInt(channelId),

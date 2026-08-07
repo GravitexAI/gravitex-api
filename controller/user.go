@@ -90,11 +90,21 @@ func Login(c *gin.Context) {
 			return
 		}
 
+		// 为 default 前端签发短寿命 flow_token，承接“已验密码、待验二次因子”的状态；
+		// classic 仍走 cookie 里的 pending_user_id，两条路径并存互不影响。
+		flowToken, ferr := service.IssueFlowToken(user.Id)
+		if ferr != nil {
+			common.SysLog(fmt.Sprintf("Login failed to issue 2FA flow token for user %d: %v", user.Id, ferr))
+			common.ApiErrorI18n(c, i18n.MsgGenerateFailed)
+			return
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"message": i18n.T(c, i18n.MsgUserRequire2FA),
 			"success": true,
 			"data": map[string]interface{}{
 				"require_2fa": true,
+				"flow_token":  flowToken,
 			},
 		})
 		return
@@ -143,30 +153,117 @@ func recordLoginAudit(user *model.User, c *gin.Context) {
 // setup session & cookies and then return user info
 func setupLogin(user *model.User, c *gin.Context) {
 	model.UpdateUserLastLoginAt(user.Id)
+	recordLoginAudit(user, c)
+
+	loginSession, err := model.CreateLoginSession(
+		user.Id,
+		loginMethodFromContext(c),
+		c.ClientIP(),
+		c.Request.UserAgent(),
+	)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to create login session for user %d: %v", user.Id, err))
+		common.ApiErrorI18n(c, i18n.MsgUserSessionSaveFailed)
+		return
+	}
+
 	session := sessions.Default(c)
 	session.Set("id", user.Id)
 	session.Set("username", user.Username)
 	session.Set("role", user.Role)
 	session.Set("status", user.Status)
 	session.Set("group", user.Group)
-	err := session.Save()
+	// 存 sid，供 default 前端在不带 X-Auth-Session 头时（首次加载）刷新令牌回退使用。
+	session.Set("sid", loginSession.Sid)
+	if err := session.Save(); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgUserSessionSaveFailed)
+		return
+	}
+
+	data, err := buildAuthBundle(user, loginSession, true)
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserSessionSaveFailed)
 		return
 	}
-	recordLoginAudit(user, c)
 	c.JSON(http.StatusOK, gin.H{
 		"message": "",
 		"success": true,
-		"data": map[string]any{
-			"id":           strconv.Itoa(user.Id),
-			"username":     user.Username,
-			"display_name": user.DisplayName,
-			"role":         user.Role,
-			"status":       user.Status,
-			"group":        user.Group,
-		},
+		"data":    data,
 	})
+}
+
+// buildAuthBundle 基于给定登录会话构建登录/刷新响应体，签发一枚新的 access_token。
+//
+// 该响应体同时服务两个前端且互不冲突：
+//   - classic（web/classic）消费顶层扁平字段（id 为字符串、username、role...），沿用 cookie 会话；
+//   - default（web/default）消费 token bundle 字段（access_token/token_type/access_expires_at/
+//     user{id 为整数}/session），走无状态 access_token + 持久化 login_session。
+//
+// 顶层扁平字段与 bundle 字段并存：前端类型守卫只校验各自所需字段是否存在，多余字段被忽略。
+func buildAuthBundle(user *model.User, loginSession *model.LoginSession, current bool) (map[string]any, error) {
+	accessToken, accessExpiresAt, err := service.IssueAccessToken(user.Id, loginSession.Sid)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to issue access token for user %d: %v", user.Id, err))
+		return nil, err
+	}
+	return map[string]any{
+		// 扁平字段（classic 向后兼容）：id 为字符串。
+		"id":           strconv.Itoa(user.Id),
+		"username":     user.Username,
+		"display_name": user.DisplayName,
+		"role":         user.Role,
+		"status":       user.Status,
+		"group":        user.Group,
+		// token bundle（default 前端）。
+		"access_token":      accessToken,
+		"token_type":        "Bearer",
+		"access_expires_at": accessExpiresAt,
+		"user":              buildAuthUser(user),
+		"session": map[string]any{
+			"sid":            loginSession.Sid,
+			"current":        current,
+			"login_method":   loginSession.LoginMethod,
+			"ip":             loginSession.Ip,
+			"user_agent":     loginSession.UserAgent,
+			"created_at":     loginSession.CreatedAt,
+			"last_active_at": loginSession.LastActiveAt,
+			"expires_at":     loginSession.ExpiresAt,
+		},
+	}, nil
+}
+
+// buildAuthUser 构建 default 前端 AuthUser 对象；关键差异是 id 为整数（前端 isAuthUser 要求）。
+func buildAuthUser(user *model.User) map[string]any {
+	userSetting := user.GetSetting()
+	permissions := calculateUserPermissions(user.Role)
+	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
+	return map[string]any{
+		"id":                user.Id,
+		"username":          user.Username,
+		"display_name":      user.DisplayName,
+		"role":              user.Role,
+		"status":            user.Status,
+		"email":             user.Email,
+		"github_id":         user.GitHubId,
+		"discord_id":        user.DiscordId,
+		"oidc_id":           user.OidcId,
+		"wechat_id":         user.WeChatId,
+		"telegram_id":       user.TelegramId,
+		"linux_do_id":       user.LinuxDOId,
+		"group":             user.Group,
+		"quota":             user.Quota,
+		"used_quota":        user.UsedQuota,
+		"request_count":     user.RequestCount,
+		"aff_code":          user.AffCode,
+		"aff_count":         user.AffCount,
+		"aff_quota":         user.AffQuota,
+		"aff_history_quota": user.AffHistoryQuota,
+		"inviter_id":        user.InviterId,
+		"setting":           user.Setting,
+		"stripe_customer":   user.StripeCustomer,
+		"sidebar_modules":   userSetting.SidebarModules,
+		"permissions":       permissions,
+	}
 }
 
 func Logout(c *gin.Context) {

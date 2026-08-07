@@ -75,6 +75,9 @@ func SetApiRouter(router *gin.Engine) {
 			userRoute.POST("/passkey/login/finish", middleware.CriticalRateLimit(), anonymousRequestBodyLimit, controller.PasskeyLoginFinish)
 			//userRoute.POST("/tokenlog", middleware.CriticalRateLimit(), controller.TokenLog)
 			userRoute.GET("/logout", controller.Logout)
+			// default 前端令牌刷新：靠 cookie/X-Auth-Session 头恢复会话，不需已登录鉴权。
+			userRoute.POST("/auth/refresh", middleware.CriticalRateLimit(), controller.RefreshAuth)
+			userRoute.POST("/auth/logout", controller.LogoutAuth)
 			userRoute.POST("/epay/notify", anonymousRequestBodyLimit, controller.EpayNotify)
 			userRoute.GET("/epay/notify", controller.EpayNotify)
 			userRoute.GET("/groups", controller.GetUserGroups)
@@ -125,6 +128,11 @@ func SetApiRouter(router *gin.Engine) {
 				// Custom OAuth bindings
 				selfRoute.GET("/oauth/bindings", controller.GetUserOAuthBindings)
 				selfRoute.DELETE("/oauth/bindings/:provider_id", controller.UnbindCustomOAuth)
+
+				// Login sessions (default 前端多设备管理 / 远程下线)
+				selfRoute.GET("/sessions", controller.GetLoginSessions)
+				selfRoute.DELETE("/sessions/:sid", controller.RevokeLoginSessionBySid)
+				selfRoute.POST("/sessions/revoke-others", controller.RevokeOtherLoginSessions)
 			}
 
 			adminRoute := userRoute.Group("/")
