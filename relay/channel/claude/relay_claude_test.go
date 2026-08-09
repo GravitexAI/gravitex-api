@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -534,4 +535,95 @@ func TestApplyOpenAIPromptCachePolicy_SingleTurnNoSystem(t *testing.T) {
 	cr, err := RequestOpenAI2ClaudeMessage(nil, req)
 	require.NoError(t, err)
 	require.Equal(t, 0, countCacheBreakpoints(cr))
+}
+
+func TestApplyClaudeToolChoicePolicy(t *testing.T) {
+	// Anthropic 只在 manual extended thinking(type=enabled) 下拒绝强制工具调用；
+	// adaptive thinking 支持强制工具调用，包括 thinking 常开的 Fable / Mythos / Opus 4.7+。
+	tests := []struct {
+		name     string
+		model    string
+		thinking *dto.Thinking
+		choice   *dto.ClaudeToolChoice
+		want     string
+	}{
+		{
+			name:     "fable adaptive keeps forced tool",
+			model:    "claude-fable-5",
+			thinking: &dto.Thinking{Type: "adaptive"},
+			choice:   &dto.ClaudeToolChoice{Type: "tool", Name: "json_schema_output"},
+			want:     "tool",
+		},
+		{
+			name:     "fable adaptive keeps any",
+			model:    "claude-fable-5",
+			thinking: &dto.Thinking{Type: "adaptive"},
+			choice:   &dto.ClaudeToolChoice{Type: "any"},
+			want:     "any",
+		},
+		{
+			name:     "mythos adaptive keeps any",
+			model:    "claude-mythos-5",
+			thinking: &dto.Thinking{Type: "adaptive"},
+			choice:   &dto.ClaudeToolChoice{Type: "any"},
+			want:     "any",
+		},
+		{
+			name:     "fable without thinking keeps any",
+			model:    "claude-fable-5",
+			thinking: nil,
+			choice:   &dto.ClaudeToolChoice{Type: "any"},
+			want:     "any",
+		},
+		{
+			name:     "manual extended thinking downgrades any",
+			model:    "claude-sonnet-4-5",
+			thinking: &dto.Thinking{Type: "enabled"},
+			choice:   &dto.ClaudeToolChoice{Type: "any"},
+			want:     "auto",
+		},
+		{
+			name:     "manual extended thinking downgrades tool",
+			model:    "claude-sonnet-4-5",
+			thinking: &dto.Thinking{Type: "enabled"},
+			choice:   &dto.ClaudeToolChoice{Type: "tool", Name: "search"},
+			want:     "auto",
+		},
+		{
+			name:     "manual extended thinking keeps none",
+			model:    "claude-sonnet-4-5",
+			thinking: &dto.Thinking{Type: "enabled"},
+			choice:   &dto.ClaudeToolChoice{Type: "none"},
+			want:     "none",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &dto.ClaudeRequest{Model: tt.model, Thinking: tt.thinking, ToolChoice: tt.choice}
+			ApplyClaudeToolChoicePolicy(req)
+			tc, ok := req.ToolChoice.(*dto.ClaudeToolChoice)
+			require.True(t, ok)
+			assert.Equal(t, tt.want, tc.Type)
+		})
+	}
+}
+
+func TestRequestOpenAI2ClaudeMessage_FableKeepsForcedToolChoiceForJSONSchema(t *testing.T) {
+	// json_schema 模拟依赖 tool_choice.type=tool 才能保证结构化输出；
+	// 在 Fable 上被降级成 auto 会让模型可以不调合成工具，直接返回自由文本。
+	req := dto.GeneralOpenAIRequest{
+		Model:    "claude-fable-5",
+		Messages: []dto.Message{{Role: "user", Content: "hi"}},
+		ResponseFormat: &dto.ResponseFormat{
+			Type:       "json_schema",
+			JsonSchema: json.RawMessage(`{"name":"result","schema":{"type":"object","properties":{"a":{"type":"string"}}}}`),
+		},
+	}
+	cr, err := RequestOpenAI2ClaudeMessage(nil, req)
+	require.NoError(t, err)
+
+	tc, ok := cr.ToolChoice.(*dto.ClaudeToolChoice)
+	require.True(t, ok)
+	assert.Equal(t, "tool", tc.Type)
+	assert.Equal(t, "result", tc.Name)
 }

@@ -829,7 +829,6 @@ func OpusVersionAtLeast47(model string) bool {
 // IsFableModel reports whether the model is a claude-fable series model.
 // Fable models share the same restrictions as Opus 4.7+: top_p/temperature/top_k
 // are deprecated and thinking.type="enabled" is not supported (adaptive only).
-// They also do not support forced tool_choice (type=any/tool).
 func IsFableModel(model string) bool {
 	return strings.HasPrefix(model, "claude-fable-")
 }
@@ -870,10 +869,15 @@ func ApplyClaudeSamplingPolicy(req *dto.ClaudeRequest) {
 	}
 }
 
-// ApplyClaudeToolChoicePolicy strips forced tool_choice types (any, tool) for
-// models that do not support them, silently downgrading to auto. Applies to
-// Fable and Mythos families which reject forced tool_choice with 400 when
-// adaptive thinking is active (and on these models thinking is always on).
+// ApplyClaudeToolChoicePolicy strips forced tool_choice types (any, tool) when
+// manual extended thinking is active, silently downgrading to auto. Anthropic
+// rejects forced tool use only for thinking.type="enabled"; adaptive thinking
+// supports it, including on models where thinking is always on (Fable, Mythos,
+// Opus 4.7+). Keying off the resolved thinking type rather than the model family
+// keeps forced tool_choice working on those models — and with it the json_schema
+// emulation above, which relies on tool_choice.type="tool" to guarantee output.
+//
+// Must run after ApplyClaudeThinkingPolicy so req.Thinking holds the final type.
 //
 // Exported so other Anthropic-family upstreams (e.g. Vertex) can apply the same
 // normalization on their native /v1/messages path.
@@ -881,11 +885,12 @@ func ApplyClaudeToolChoicePolicy(req *dto.ClaudeRequest) {
 	if req == nil || req.ToolChoice == nil {
 		return
 	}
-	if IsFableModel(req.Model) || IsMythosModel(req.Model) {
-		if tc, ok := req.ToolChoice.(*dto.ClaudeToolChoice); ok {
-			if tc.Type == "any" || tc.Type == "tool" {
-				req.ToolChoice = &dto.ClaudeToolChoice{Type: "auto"}
-			}
+	if req.Thinking == nil || req.Thinking.Type != "enabled" {
+		return
+	}
+	if tc, ok := req.ToolChoice.(*dto.ClaudeToolChoice); ok {
+		if tc.Type == "any" || tc.Type == "tool" {
+			req.ToolChoice = &dto.ClaudeToolChoice{Type: "auto"}
 		}
 	}
 }
