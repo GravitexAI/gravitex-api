@@ -57,16 +57,19 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		request.MaxTokens = &defaultMaxTokens
 	}
 
+	// 判定一律用剥掉 effort 后缀的 baseModel：带后缀的名字（claude-fable-5-high）
+	// 不在任何模型家族的命名规则里，用它判断会把 Fable / Mythos 整个漏掉，后缀
+	// 便原样发给上游，换来一个"模型不存在"。
 	if baseModel, effortLevel, ok := reasoning.TrimEffortSuffix(request.Model); ok && effortLevel != "" &&
-		(strings.HasPrefix(request.Model, "claude-opus-4-6") || claude.OpusVersionAtLeast47(request.Model)) {
+		(strings.HasPrefix(baseModel, "claude-opus-4-6") || claude.IsAdaptiveOnlyModel(baseModel)) {
 		request.Model = baseModel
 		request.Thinking = &dto.Thinking{
 			Type: "adaptive",
 		}
 		request.OutputConfig = json.RawMessage(fmt.Sprintf(`{"effort":"%s"}`, effortLevel))
-		if claude.OpusVersionAtLeast47(request.Model) {
-			// Opus 4.7+ rejects non-default temperature/top_p/top_k with 400
-			// and defaults display to "omitted"; restore the 4.6 visible summary.
+		if claude.IsAdaptiveOnlyModel(baseModel) {
+			// Opus 4.7+ / Fable / Mythos rejects non-default temperature/top_p/top_k
+			// with 400 and defaults display to "omitted"; restore the 4.6 visible summary.
 			request.Thinking.Display = "summarized"
 			request.Temperature = nil
 			request.TopP = nil

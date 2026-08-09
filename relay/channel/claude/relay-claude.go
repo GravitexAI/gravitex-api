@@ -573,7 +573,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 			// the same 400 rather than silently rewriting it, so callers learn to switch
 			// to adaptive. Internally-generated enabled (from reasoning / reasoning_effort
 			// above) is not affected: it is converted to adaptive a few lines below.
-			if thinking.Type == "enabled" && isAdaptiveOnlyModel(claudeRequest.Model) {
+			if thinking.Type == "enabled" && IsAdaptiveOnlyModel(claudeRequest.Model) {
 				return nil, types.NewError(
 					fmt.Errorf("thinking.type \"enabled\" is not supported on %s; use thinking.type \"adaptive\" with output_config.effort", claudeRequest.Model),
 					types.ErrorCodeInvalidRequest,
@@ -594,7 +594,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	// enabled thinking (from reasoning_effort / reasoning inputs) to adaptive so
 	// those requests succeed and return visible reasoning.
 	if claudeRequest.Thinking != nil && claudeRequest.Thinking.Type == "enabled" &&
-		isAdaptiveOnlyModel(claudeRequest.Model) {
+		IsAdaptiveOnlyModel(claudeRequest.Model) {
 		claudeRequest.Thinking.Type = "adaptive"
 		claudeRequest.Thinking.BudgetTokens = nil
 		if claudeRequest.Thinking.Display == "" {
@@ -758,7 +758,7 @@ func ApplyClaudeThinkingPolicy(req *dto.ClaudeRequest) {
 		if req.Thinking == nil {
 			var r openrouter.RequestReasoning
 			if err := common.Unmarshal(req.Reasoning, &r); err == nil && (r.Enabled || r.MaxTokens > 0) {
-				if isAdaptiveOnlyModel(req.Model) {
+				if IsAdaptiveOnlyModel(req.Model) {
 					req.Thinking = &dto.Thinking{Type: "adaptive"}
 				} else {
 					budget := r.MaxTokens
@@ -775,7 +775,7 @@ func ApplyClaudeThinkingPolicy(req *dto.ClaudeRequest) {
 		req.OutputConfig = mergeEffortIntoOutputConfig(req.OutputConfig, req.Effort)
 		req.Effort = ""
 	}
-	if req.Thinking != nil && isAdaptiveOnlyModel(req.Model) &&
+	if req.Thinking != nil && IsAdaptiveOnlyModel(req.Model) &&
 		req.Thinking.Type == "adaptive" && req.Thinking.Display == "" {
 		req.Thinking.Display = "summarized"
 	}
@@ -814,16 +814,25 @@ func OpusVersionAtLeast47(model string) bool {
 	if !ok {
 		return false
 	}
-	parts := strings.SplitN(rest, "-", 3) // "4-7" / "4-8" / "4-7-20260416" / "5-0"
+	// "5" / "4-7" / "4-8" / "4-7-20260416" / "5-0"
+	parts := strings.SplitN(rest, "-", 3)
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return false
+	}
+	if major != 4 {
+		// Opus 5 起的模型 ID 只有主版本号（claude-opus-5），没有 minor 可解析，
+		// 要求两段会把它整个漏掉。
+		return major > 4
+	}
 	if len(parts) < 2 {
 		return false
 	}
-	major, err1 := strconv.Atoi(parts[0])
-	minor, err2 := strconv.Atoi(parts[1])
-	if err1 != nil || err2 != nil {
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil {
 		return false
 	}
-	return major > 4 || (major == 4 && minor >= 7)
+	return minor >= 7
 }
 
 // IsFableModel reports whether the model is a claude-fable series model.
@@ -841,10 +850,14 @@ func IsMythosModel(model string) bool {
 	return strings.HasPrefix(model, "claude-mythos-")
 }
 
-// isAdaptiveOnlyModel reports whether the model requires adaptive thinking
+// IsAdaptiveOnlyModel reports whether the model requires adaptive thinking
 // (thinking.type="enabled" returns 400) AND has fully deprecated
 // temperature/top_p/top_k. Covers Opus 4.7+, Fable, and Mythos families.
-func isAdaptiveOnlyModel(model string) bool {
+//
+// Exported because the native /v1/messages handler needs the same family check
+// when normalizing the effort-suffix model syntax; keeping one definition avoids
+// the two paths drifting apart as new model families land.
+func IsAdaptiveOnlyModel(model string) bool {
 	return OpusVersionAtLeast47(model) || IsFableModel(model) || IsMythosModel(model)
 }
 
@@ -860,7 +873,7 @@ func ApplyClaudeSamplingPolicy(req *dto.ClaudeRequest) {
 	if req == nil {
 		return
 	}
-	if isAdaptiveOnlyModel(req.Model) {
+	if IsAdaptiveOnlyModel(req.Model) {
 		req.Temperature, req.TopP, req.TopK = nil, nil, nil
 		return
 	}

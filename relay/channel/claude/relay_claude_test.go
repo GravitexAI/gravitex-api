@@ -627,3 +627,54 @@ func TestRequestOpenAI2ClaudeMessage_FableKeepsForcedToolChoiceForJSONSchema(t *
 	assert.Equal(t, "tool", tc.Type)
 	assert.Equal(t, "result", tc.Name)
 }
+
+func TestOpusVersionAtLeast47(t *testing.T) {
+	// Opus 5 起的模型 ID 只有主版本号（claude-opus-5），旧实现要求 major-minor
+	// 两段，会把它判成 false，导致采样参数不剥离、thinking 不转换。
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{"claude-opus-5", true},
+		{"claude-opus-5-0", true},
+		{"claude-opus-6", true},
+		{"claude-opus-4-8", true},
+		{"claude-opus-4-7", true},
+		{"claude-opus-4-7-20260416", true},
+		{"claude-opus-4-6", false},
+		{"claude-opus-4-5", false},
+		{"claude-opus-4-1", false},
+		{"claude-opus-4", false},
+		{"claude-sonnet-5", false},
+		{"claude-fable-5", false},
+		{"claude-opus-abc", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			assert.Equal(t, tt.want, OpusVersionAtLeast47(tt.model))
+		})
+	}
+}
+
+func TestIsAdaptiveOnlyModel(t *testing.T) {
+	// 这个判定同时被 OpenAI 兼容路径和原生 /v1/messages 的 effort 后缀语法复用，
+	// 漏掉任一家族都会让该家族的 effort 后缀原样发给上游。
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{"claude-fable-5", true},
+		{"claude-mythos-5", true},
+		{"claude-opus-5", true},
+		{"claude-opus-4-8", true},
+		{"claude-opus-4-7", true},
+		{"claude-opus-4-6", false},
+		{"claude-sonnet-4-6", false},
+		{"claude-haiku-4-5", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsAdaptiveOnlyModel(tt.model))
+		})
+	}
+}
