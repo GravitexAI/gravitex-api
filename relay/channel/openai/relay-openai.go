@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -133,6 +134,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 		}
 		if len(data) > 0 {
+			captureOpenAIStreamUsage(info, data)
 			// 对音频模型，保存倒数第二个stream data
 			if isAudioModel && lastStreamData != "" {
 				secondLastStreamData = lastStreamData
@@ -183,8 +185,6 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	if !containStreamUsage {
 		usage = service.ResponseText2Usage(c, responseTextBuilder.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
 		usage.CompletionTokens += toolCount * 7
-	} else if service.ValidUsage(usage) {
-		info.SetUpstreamResponsesField("usage", usage)
 	}
 
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
@@ -220,6 +220,25 @@ func collectStreamFunctionCallNames(data string, seen map[string]struct{}, names
 			seen[key] = struct{}{}
 			*names = append(*names, name)
 		}
+	}
+}
+
+func captureOpenAIStreamUsage(info *relaycommon.RelayInfo, data string) {
+	if info == nil || data == "" {
+		return
+	}
+	var streamResponse struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := common.Unmarshal(common.StringToByteSlice(data), &streamResponse); err != nil {
+		return
+	}
+	var usage dto.Usage
+	if err := common.Unmarshal(streamResponse.Usage, &usage); err != nil {
+		return
+	}
+	if service.ValidUsage(&usage) {
+		info.SetUpstreamResponsesField("usage", streamResponse.Usage)
 	}
 }
 

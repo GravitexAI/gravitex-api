@@ -38,6 +38,7 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 	info.UpstreamResponseId = geminiResponse.ResponseId
 	if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
 		info.SetUpstreamResponsesField("usageMetadata", geminiResponse.UsageMetadata)
+		info.SetUsageConversion(geminiResponse.UsageMetadata)
 	}
 
 	if len(geminiResponse.Candidates) == 0 && geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {

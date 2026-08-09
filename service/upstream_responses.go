@@ -6,11 +6,18 @@ import (
 )
 
 const logUpstreamResponsesEnabledOption = "LogUpstreamResponsesEnabled"
+const logUsageConversionEnabledOption = "LogUsageConversionEnabled"
 
 func isLogUpstreamResponsesEnabled() bool {
 	common.OptionMapRWMutex.RLock()
 	defer common.OptionMapRWMutex.RUnlock()
 	return common.OptionMap[logUpstreamResponsesEnabledOption] == "true"
+}
+
+func isLogUsageConversionEnabled() bool {
+	common.OptionMapRWMutex.RLock()
+	defer common.OptionMapRWMutex.RUnlock()
+	return common.OptionMap[logUsageConversionEnabledOption] == "true"
 }
 
 func appendUpstreamResponses(other map[string]interface{}, relayInfo *relaycommon.RelayInfo) {
@@ -21,4 +28,14 @@ func appendUpstreamResponses(other map[string]interface{}, relayInfo *relaycommo
 		return
 	}
 	other["upstream_responses"] = relayInfo.UpstreamResponses
+}
+
+func appendUsageConversion(other map[string]interface{}, relayInfo *relaycommon.RelayInfo) {
+	if other == nil || relayInfo == nil || !isLogUsageConversionEnabled() {
+		return
+	}
+	if !relayInfo.HasRequestFormatConversion() || relayInfo.UsageConversion == nil {
+		return
+	}
+	other["usage_conversion"] = relayInfo.UsageConversion
 }

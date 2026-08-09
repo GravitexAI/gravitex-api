@@ -78,3 +78,24 @@ func TestRelayInfoMetaTypedNilReceiver(t *testing.T) {
 	assert.NotNil(t, firstOptions.Gemini.SafetySetting)
 	assert.NotNil(t, firstOptions.PreserveThinkingSuffix)
 }
+
+func TestRelayInfoUsageConversionAndRequestFormatConversion(t *testing.T) {
+	info := &RelayInfo{
+		RequestConversionChain: []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatGemini},
+	}
+	info.SetUsageConversion(map[string]any{
+		"promptTokenCount": 12,
+		"nested":           map[string]any{"tokenCount": 3},
+	})
+
+	require.True(t, info.HasRequestFormatConversion())
+	require.Equal(t, map[string]any{
+		"promptTokenCount": float64(12),
+		"nested":           map[string]any{"tokenCount": float64(3)},
+	}, info.UsageConversion)
+
+	info.RequestConversionChain = []types.RelayFormat{types.RelayFormatOpenAI}
+	assert.False(t, info.HasRequestFormatConversion())
+	info.RequestConversionChain = []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatOpenAI}
+	assert.False(t, info.HasRequestFormatConversion())
+}

@@ -1500,6 +1500,9 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		if geminiResponse.ResponseId != "" {
 			info.UpstreamResponseId = geminiResponse.ResponseId
 		}
+		if info.RelayFormat == types.RelayFormatGemini && geminiResponse.UsageMetadata.TotalTokenCount != 0 {
+			info.SetUsageConversion(geminiResponse.UsageMetadata)
+		}
 
 		if len(geminiResponse.Candidates) == 0 && geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
 			common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", *geminiResponse.PromptFeedback.BlockReason))
@@ -1682,6 +1685,9 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	}
 
 	response := helper.GenerateFinalUsageResponse(id, createAt, info.UpstreamModelName, *usage)
+	if info.RelayFormat == types.RelayFormatOpenAI {
+		info.SetUsageConversion(response.Usage)
+	}
 	if info.RelayFormat == types.RelayFormatClaude && info.ClaudeConvertInfo != nil && !info.ClaudeConvertInfo.Done {
 		response = helper.GenerateStopResponse(id, createAt, info.UpstreamModelName, finishReason)
 		response.Usage = usage
@@ -1803,6 +1809,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
+		info.SetUsageConversion(fullTextResponse.Usage)
 		responseBody, err = common.Marshal(fullTextResponse)
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
