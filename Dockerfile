@@ -15,7 +15,11 @@ WORKDIR /build/web
 COPY web/package.json web/bun.lock ./
 COPY web/default/package.json ./default/package.json
 COPY web/classic/package.json ./classic/package.json
-RUN bun install --filter ./classic --frozen-lockfile
+# 全量安装（勿用 --filter ./classic）：classic 依赖 @visactor/vchart@1.8.x，其 vrender-core/kits(0.17.x)
+# 需嵌套在 classic/node_modules/@visactor/vchart 下，rsbuild.config 的 alias 正指向该嵌套路径。
+# --filter 会改变 bun 的 hoist 布局导致嵌套副本缺失，构建报 "Cannot find module @visactor/vrender-core"。
+# 与上方 default stage 保持一致的全量安装才能复刻可用布局。
+RUN bun install --frozen-lockfile
 COPY ./web/classic ./classic
 COPY ./VERSION /build/VERSION
 RUN cd classic && VITE_REACT_APP_VERSION=$(cat /build/VERSION) bun run build
