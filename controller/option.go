@@ -221,10 +221,10 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "theme.frontend":
-		if option.Value != "default" {
+		if option.Value != "default" && option.Value != "classic" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "Classic 前端已移除，主题只能设置为 default",
+				"message": "Invalid theme; only 'default' or 'classic' is allowed",
 			})
 			return
 		}

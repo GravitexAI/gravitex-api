@@ -2039,7 +2039,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相關項目",
     "footer.defaultCopyright": "版權所有。",
-    "footer.new\u0061pi.projectAttributionSuffix": "版權所有，由項目貢獻者設計與開發。",
+    "footer.newapi.projectAttributionSuffix": "版權所有，由項目貢獻者設計與開發。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "對於 2025 年 5 月 10 日之後新增的渠道，在部署時無需從模型名稱中移除 \".\"",
     "For private deployments, format: https://fastgpt.run/api/openapi": "對於私有部署，格式為：https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "強制返回語法合法的 JSON",
@@ -4469,6 +4469,7 @@
     "Templates": "模板",
     "Templates appended": "模板已追加",
     "Tencent": "騰訊",
+    "Tencent TokenHub": "Tencent TokenHub",
     "Termination requested": "終止請求",
     "Test": "測試",
     "Test {{count}} matching models": "測試 {{count}} 個匹配模型",
@@ -5248,6 +5249,19 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Fixed expiration (do not refresh TTL on hit)": "Fixed expiration (do not refresh TTL on hit)",
+    "When enabled, hitting the same affinity channel does not renew the TTL. The cache expires naturally from first write, allowing periodic rebalancing across channels of equal priority. When disabled, every successful request renews the TTL (sliding expiration), keeping the affinity sticky as long as requests keep coming.": "When enabled, hitting the same affinity channel does not renew the TTL. The cache expires naturally from first write, allowing periodic rebalancing across channels of equal priority. When disabled, every successful request renews the TTL (sliding expiration), keeping the affinity sticky as long as requests keep coming.",
+    "Fixed": "Fixed",
+    "Video input price": "Video input price",
+    "Token price for video input.": "Token price for video input.",
+    "Video ratio": "Video ratio",
+    "Ratio applied to video inputs for video billing.": "Ratio applied to video inputs for video billing.",
+    "Sliding": "Sliding",
+    "Switch to classic frontend": "切換到舊版前端",
+    "Confirm switch": "確認切換",
+    "Switched to the classic frontend. Reloading...": "已切換到舊版前端，正在重新整理頁面…",
+    "Failed to switch frontend": "切換前端失敗，請稍後重試",
+    "The page will reload and enter the classic frontend. Continue?": "切換後頁面會自動重新整理，並進入舊版前端。是否繼續？"
   }
 }

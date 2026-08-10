@@ -2039,7 +2039,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
     "For private deployments, format: https://fastgpt.run/api/openapi": "For private deployments, format: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Force a syntactically valid JSON response",
@@ -5257,6 +5257,11 @@
     "Token price for video input.": "Token price for video input.",
     "Video ratio": "Video ratio",
     "Ratio applied to video inputs for video billing.": "Ratio applied to video inputs for video billing.",
-    "Sliding": "Sliding"
+    "Sliding": "Sliding",
+    "Switch to classic frontend": "Switch to classic frontend",
+    "Confirm switch": "Confirm switch",
+    "Switched to the classic frontend. Reloading...": "Switched to the classic frontend. Reloading...",
+    "Failed to switch frontend": "Failed to switch frontend",
+    "The page will reload and enter the classic frontend. Continue?": "The page will reload and enter the classic frontend. Continue?"
   }
 }

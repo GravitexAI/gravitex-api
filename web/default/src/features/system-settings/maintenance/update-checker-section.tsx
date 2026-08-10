@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { ExternalLinkIcon, RefreshCcwIcon } from 'lucide-react'
+import { ExternalLinkIcon, RefreshCcwIcon, UndoIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -26,6 +26,7 @@ import { Button } from '@/components/ui/button'
 import { Markdown } from '@/components/ui/markdown'
 import { formatTimestamp, formatTimestampToDate } from '@/lib/format'
 
+import { updateSystemOption } from '../api'
 import { SettingsSection } from '../components/settings-section'
 
 type ReleaseInfo = {
@@ -49,9 +50,33 @@ export function UpdateCheckerSection({
   const [checking, setChecking] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [release, setRelease] = useState<ReleaseInfo | null>(null)
+  const [classicDialogOpen, setClassicDialogOpen] = useState(false)
+  const [switchingToClassic, setSwitchingToClassic] = useState(false)
 
   const uptime = startTime ? formatTimestamp(startTime) : t('Unknown')
   const version = currentVersion || t('Unknown')
+
+  const handleSwitchToClassic = async () => {
+    setSwitchingToClassic(true)
+    try {
+      const res = await updateSystemOption({
+        key: 'theme.frontend',
+        value: 'classic',
+      })
+      if (!res.success) {
+        toast.error(res.message || t('Failed to switch frontend'))
+        return
+      }
+      toast.success(t('Switched to the classic frontend. Reloading...'))
+      setTimeout(() => {
+        window.location.reload()
+      }, 600)
+    } catch {
+      toast.error(t('Failed to switch frontend'))
+    } finally {
+      setSwitchingToClassic(false)
+    }
+  }
 
   const handleCheckUpdates = async () => {
     setChecking(true)
@@ -122,16 +147,27 @@ export function UpdateCheckerSection({
             </div>
           </div>
 
-          <Button onClick={handleCheckUpdates} disabled={checking}>
-            {checking ? (
-              t('Checking updates...')
-            ) : (
-              <>
-                <RefreshCcwIcon className='me-2 h-4 w-4' />
-                {t('Check for updates')}
-              </>
-            )}
-          </Button>
+          <div className='flex flex-wrap gap-2'>
+            <Button onClick={handleCheckUpdates} disabled={checking}>
+              {checking ? (
+                t('Checking updates...')
+              ) : (
+                <>
+                  <RefreshCcwIcon className='me-2 h-4 w-4' />
+                  {t('Check for updates')}
+                </>
+              )}
+            </Button>
+
+            <Button
+              variant='outline'
+              onClick={() => setClassicDialogOpen(true)}
+              disabled={switchingToClassic}
+            >
+              <UndoIcon className='me-2 h-4 w-4' />
+              {t('Switch to classic frontend')}
+            </Button>
+          </div>
         </div>
       </SettingsSection>
 
@@ -183,6 +219,35 @@ export function UpdateCheckerSection({
             </p>
           )}
         </div>
+      </Dialog>
+
+      <Dialog
+        open={classicDialogOpen}
+        onOpenChange={setClassicDialogOpen}
+        title={t('Switch to classic frontend')}
+        footer={
+          <>
+            <Button
+              type='button'
+              variant='secondary'
+              onClick={() => setClassicDialogOpen(false)}
+              disabled={switchingToClassic}
+            >
+              {t('Cancel')}
+            </Button>
+            <Button
+              type='button'
+              onClick={handleSwitchToClassic}
+              disabled={switchingToClassic}
+            >
+              {t('Confirm switch')}
+            </Button>
+          </>
+        }
+      >
+        <p className='text-muted-foreground text-sm'>
+          {t('The page will reload and enter the classic frontend. Continue?')}
+        </p>
       </Dialog>
     </>
   )

@@ -2039,7 +2039,7 @@
     "footer.columns.related.links.oneApi": "1つのAPI",
     "footer.columns.related.title": "関連プロジェクト",
     "footer.defaultCopyright": "すべての権利を留保します。",
-    "footer.new\u0061pi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
+    "footer.newapi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "2025 年 5 月 10 日以降に追加されたチャネルの場合、デプロイ時にモデル名から「.」を削除する必要はありません",
     "For private deployments, format: https://fastgpt.run/api/openapi": "プライベートデプロイメントの場合、形式: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "構文的に有効な JSON 応答を強制",
@@ -5257,6 +5257,11 @@
     "Token price for video input.": "動画入力のトークン価格。",
     "Video ratio": "動画倍率",
     "Ratio applied to video inputs for video billing.": "動画入力の課金に適用する倍率。",
-    "Sliding": "スライド"
+    "Sliding": "スライド",
+    "Switch to classic frontend": "Switch to classic frontend",
+    "Confirm switch": "Confirm switch",
+    "Switched to the classic frontend. Reloading...": "Switched to the classic frontend. Reloading...",
+    "Failed to switch frontend": "Failed to switch frontend",
+    "The page will reload and enter the classic frontend. Continue?": "The page will reload and enter the classic frontend. Continue?"
   }
 }

@@ -5257,6 +5257,11 @@
     "Token price for video input.": "视频输入的 Token 价格。",
     "Video ratio": "视频倍率",
     "Ratio applied to video inputs for video billing.": "应用于视频输入计费的视频倍率。",
-    "Sliding": "滑动"
+    "Sliding": "滑动",
+    "Switch to classic frontend": "切换到旧版前端",
+    "Confirm switch": "确认切换",
+    "Switched to the classic frontend. Reloading...": "已切换到旧版前端，正在刷新页面…",
+    "Failed to switch frontend": "切换前端失败，请稍后重试",
+    "The page will reload and enter the classic frontend. Continue?": "切换后页面会自动刷新，并进入旧版前端。是否继续？"
   }
 }
