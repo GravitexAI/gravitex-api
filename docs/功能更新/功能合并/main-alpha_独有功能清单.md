@@ -5,6 +5,10 @@
 > 这里记录 main-alpha 相对官方 main 独有的功能和改动。合并 main 时，官方的 merge 冲突/silent overwrite 都可能把这些东西改没，导致生产环境功能回归。
 >
 > 每次发现新的 main-alpha 独有点，都补到这里。
+>
+> **⚠️ 路径迁移提醒（2026-08 relaykit 重构后）**：官方把 `dto/`、`service/relayconvert/`、部分 channel 转换逻辑整体搬进了独立子模块 `relaykit/`。本清单里若干旧路径（如 `dto/channel_settings.go`、`dto/user_settings.go`、`dto/openai_request.go`、`service/relayconvert/responses_to_chat.go`）在 HEAD 上已迁至 `relaykit/dto/*`、`relaykit/relayconvert/*`,**功能全部保留、未丢失**,只是路径变了。核对时若旧路径 grep 不到,先去 `relaykit/` 下找再判断是否真丢。
+>
+> **✅ 2026-08-10 全量核对结论**:对 fork 团队(chz/t0ng7u/Apple/Seefs/king_15)相对官方的 694 个代码提交做过一次聚类比对,并逐条跑第九节 grep/文件校验 + `go build` + 关键回归测试。**未发现任何独有功能被官方合并静默覆盖或丢失**；补记了本次发现的 ~8 个漏记功能簇(见 3.6 / 7.11.14 / 七点十各表新增行 / 草稿区)。
 
 ---
 
@@ -119,6 +123,15 @@ main-alpha 比官方早占用了 58/59/60 三个号，导致 `ChannelTypeAdvance
 - **位置**：`relay/channel/claude/relay-claude.go HandleStreamResponseData` + `stream_server_tool_use_test.go`
 - **背景**：Claude 流式响应下 `server_tool_use.web_search_requests` 可能挂在 `message_start.message.usage` 或 `message_delta.usage`，两种事件都要捕获，写入 `c.Set("claude_web_search_requests", ...)`
 - **合并时注意**：这是 bingyu commit `14e1aa54` 的修复
+
+### 3.6 视频计费多节点 CAS 终态保护 + 计费锁自动释放（2026-08 补记）
+- **位置**：`controller/task_video.go`
+  - `:673` 终态（SUCCESS/FAILURE）用 **CAS** 更新,防多节点/多路径竞态导致重复计费或重复退款
+  - `:1229` / `:1637` 计费前用 DB 级原子抢占（仅当 `quota=0` 时原子改成 `quota=-1` 计费中）作为**计费锁**
+  - `:1242` 计费失败时自动释放锁（`quota=-1` 回滚为 `0`),允许 fallback 重试
+- **背景**：生产是多 pod 部署,`handleVideoPerSecondBilling` / `handleVideoTokenRatioBilling` 若无这套原子保护,轮询/回调/差额结算多路径并发命中同一终态任务会**重复扣费或重复退款**
+- **commit**：`77b3123ad`、`6cde7c665`（令牌/用户额度扣费一致性）
+- **合并时注意**：官方 `task_video.go` 只有 327 行僵尸代码（见断崖①调查),main-alpha 是 2168 行活代码。官方若重写视频计费,这套 CAS/计费锁极易被整段抹掉 → 多 pod 下重复计费。与 [3.2](#32-视频按秒计费--按量计费) 联动,一并保留
 
 ---
 
@@ -657,6 +670,9 @@ routes/console/topup.tsx
 | Claude 媒体 URL 输入支持 | `relay/channel/claude/media_source.go` | image/document URL 自动转 base64；Vertex 与 Anthropic 兼容渠道都要补；下载失败**降级透传**不报错；下载请求带浏览器 UA/Accept 头 |
 | 渠道亲和性滑动 TTL 修复 | `middleware/distributor.go` 的 `MarkChannelAffinityUsed` | 修复同优先级渠道无法负载均衡 |
 | 上游连接中断 body 回退重试 | `common/body_storage.go`、`relay/channel/api_request.go` | `do request failed` 日志显示真实原因且不暴露 URL |
+| TokenHub deepseek-v4 走 `/v1/responses` 端点 | `relay/channel/tokenhub/adaptor.go:54`(responses URL)、`:89`/`:95` `isDeepSeekV4ResponsesModel`、`adaptor_responses_test.go` | deepseek-v4-flash/pro 系列改用 `/v1/responses` 转发,其余走默认。commit `1138f2950`(2026-08-07)。官方改 TokenHub adaptor 或 responses 路由判定会覆盖 |
+| Gemini imagine 模型走 OpenAI 图片端点 | `relay/channel/gemini/relay-gemini.go:1932` `CHZ-PATCH(gemini-imagine-images-generations)`(约 312 行)、`setting/model_setting/gemini.go` `SupportedImagineModels`/`IsGeminiModelSupportImagine`、连带 `relay/channel/gemini/adaptor.go`、`relay/channel/vertex/adaptor.go`、`relaykit/dto/openai_image.go` | nano banana 等 imagine 模型可经 `/v1/images/generations`、`/v1/images/edits` 调用,底层翻译成 `:generateContent`,含 aspect_ratio/imageSize 映射、图生图参考图。commit `43103bce0`。⚠️ 连带 adaptor 不在 [7.11.11](#71111-relaychannelclauderelay-claudego--relaychannelgeminirelay-geminigo-暂时整体保留) 整体保留范围,官方改图片链路会丢 |
+| claude-fable-5 / Mythos 模型 API 限制适配 | `relay/channel/claude/relay-claude.go:841` `IsFableModel`、`:849` `IsMythosModel`、`:861` `RequiresAdaptiveThinking`(覆盖 Opus4.7+/Fable/Mythos)、连带 `adaptor.go`、`relay/channel/vertex/adaptor.go` | Fable5/Mythos 系列强制 adaptive thinking、剥离 top_p/temperature/top_k、tool_choice 降级,否则上游 400。commit `4e6153d42`。判定按 `thinking.type=enabled` 而非模型系列(见 [[project_fable5_openai_format_thinking_loss]])。连带 adaptor 不在整体保留范围 |
 
 ### 计费
 | 功能 | 位置 | 说明 |
@@ -675,11 +691,13 @@ routes/console/topup.tsx
 |---|---|---|
 | 模型厂商（Vendor）管理 | `model/vendor_meta.go` 的 `Vendor`、`model/pricing.go` | 新增/编辑模型时保存厂商；返回模型时带厂商；按厂商限制模型可见范围 |
 | token 支持 vendor 限制 | `model/token.go` 的 vendor limits | 与企业子账号收敛联动 |
+| 模型昵称 ModelNickName | `model/model_meta.go:52` `ModelNickName string gorm:"type:longtext"`,`pricing.go` Select 列含 `model_nick_name` | 模型元数据新增展示昵称字段。commit `d4261ca51`/`fbf0df3bc`。与官方共享 `model_meta` 结构,官方 AutoMigrate 结构调整可能丢字段 |
 
 ### 通知 / 告警
 | 功能 | 位置 | 说明 |
 |---|---|---|
 | 额度预警 webhook 默认指向 Java | `service/quota.go` 的 `DefaultQuotaWarningWebhookURL` | 地址可用环境变量覆盖 |
+| 余额预警子系统(委托 Java + 每日一次去重) | `service/user_quota_warning_notify_api.go` 的 `SendQuotaWarningNotifyToAPIEnd` + `acquireQuotaWarningNotifyLock`、`service/quota.go:659/671/735/747`(**4 处**接入)、`model/user.go` 阈值字段 | 余额低于阈值时用 Redis 锁做每日一次去重,委托 Java 端发通知；Redis 未启用时降级放行不去重。commit `af68d55d3`/`ce94827e3`(每日一次)/`f27ce81a2`(TTL)。官方重写 `quota.go` 预警链路会丢这 4 处接入点 |
 | 邮件通知文案改造（含日限额） | `common/email.go` / notify 相关 | wpr 多次迭代 |
 | 子账号敏感操作回调 Java 告警 | `service/sensitive_op_notify.go` | |
 
@@ -688,6 +706,10 @@ routes/console/topup.tsx
 |---|---|---|
 | 请求追踪响应头 `X-Api-Request-Id` | `middleware/request-id.go` | |
 | readiness / liveness probe initial delay 增大 | k8s 部署配置 | |
+| 429 限流不触发重试 | `controller/relay.go:721`(直接返回不重试)、`controller/task_video.go:133`(轮询遇 429 跳过本轮,下轮再试) | 避免无 backoff 反复打上游。commit `1a1a786d7`。与 [7.11.12](#71112--settingoperation_settingstatus_code_rangesgo--main-alpha-删掉了官方的-504524-硬编码不重试) 的 504/524 相邻但独立,官方改重试判定易带回 429 重试 |
+| 模型不存在/无渠道返回 404 而非 503 | `middleware/distributor.go:146/150`(`ErrorCodeModelNotFound` + `StatusNotFound`) | 官方默认 503。commit `5247ec9da` |
+| Vertex AI token 换取重试 | `relay/channel/vertex/service_account.go:126/178`(sleep 2s 重试循环) | 解决代理偶发超时导致的 401/500。commit `d61319f34` |
+| 管理员充值/扣减/覆盖三类审计文案 | `controller/user.go` `TopUp` + 充值/扣减/覆盖三类审计 | commit `ca9a36639`/`1a6f7e6ab` |
 
 ---
 
@@ -845,6 +867,24 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
 `c.Request` 为 nil 时会 panic。官方若又改了 `c.Request` 的构造方式（这次就从手工
 `&http.Request{}` 换成了 `httptest.NewRequestWithContext`），**取官方的构造 + 保留这行**。
 
+### 7.11.14 🔴 上游原始响应 + 转换前用量审计落库（upstream_responses + usage_conversion）
+
+**用途**：可开关地把**上游原始响应体**、以及**格式转换前的原始用量对象**落进 log 的 `other` 字段,用于对账排查（OpenAI ↔ Claude ↔ Gemini 互转时用量口径追溯）。
+
+**必须同时保留的链路（散在多个官方高频改动文件里,最易被合并静默覆盖）**：
+
+| 位置 | 内容 |
+|---|---|
+| `model/option.go:61-62` | 两个开关常量 `LogUpstreamResponsesEnabled` / `LogUsageConversionEnabled`（默认 `false`） |
+| `relay/common/relay_info.go:151` | `UsageConversion any` 字段 + `:853` `SetUsageConversion` / `:871` `HasRequestFormatConversion` |
+| `service/upstream_responses.go` | `appendUpstreamResponses` / `appendUsageConversion` 落库 |
+| `service/convert.go` | `setClaudeUsageConversion` / `setGeminiUsageConversion` 在转换点记录转换前用量 |
+| `service/log_info_generate.go:121` | 生成 log 时把上述数据写入 `other` |
+
+- **commit**：`e10e94769` / `8008a45f9`（上游计费信息）、`4c179ab54`（保存转换前用量）
+- **合并风险**：`model/option.go`（官方 option 表重构高频）、`relay/common/relay_info.go`（官方高频改动）两个文件都极易在冲突时把这两个常量 / `UsageConversion` 字段吃掉。[7.11.6](#7116-relaychannelopenairelay_responsescompactgo--保留分项计费) 只提了 `SetUpstreamResponsesField`,**没覆盖这套完整的开关 + 落库链路**
+- **验证**：`grep -c "LogUpstreamResponsesEnabled\|LogUsageConversionEnabled" model/option.go` 应 ≥ 2；`grep -c UsageConversion relay/common/relay_info.go` 应 ≥ 3
+
 ---
 
 ## 八、依赖包
@@ -914,6 +954,13 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
 - [ ] `relay/channel/task/ali/constants.go` 的 `ModelList` 有 **21 个模型**（15 wan + 6 happyhorse），官方只 5 个
 - [ ] `common/body_storage.go` 在（上游中断 body 回退重试）
 - [ ] `model/vendor_meta.go` 在（模型厂商管理）
+- [ ] 🔴 **上游用量审计落库（第 7.11.14 节）**：`grep -c "LogUpstreamResponsesEnabled\|LogUsageConversionEnabled" model/option.go` 应 ≥ 2；`grep -c UsageConversion relay/common/relay_info.go` 应 ≥ 3；`service/upstream_responses.go`、`service/convert.go` 在
+- [ ] 视频计费 CAS 多节点安全（第 3.6 节）：`controller/task_video.go` 里终态 CAS 分支 + `quota=0→-1` 计费锁抢占 + 失败释放锁都在
+- [ ] TokenHub deepseek-v4 走 `/v1/responses`（`relay/channel/tokenhub/adaptor.go` 的 `isDeepSeekV4ResponsesModel` 在）；Gemini imagine 图片端点（`setting/model_setting/gemini.go` 的 `SupportedImagineModels` + `relay-gemini.go` `CHZ-PATCH(gemini-imagine-images-generations)` 在）；Fable/Mythos 限制（`relay-claude.go` `IsFableModel`/`IsMythosModel`/`RequiresAdaptiveThinking` 在）
+- [ ] 余额预警子系统（第七点十）：`service/user_quota_warning_notify_api.go` 在,`service/quota.go` 里 `SendQuotaWarningNotifyToAPIEnd` **4 处**接入都在
+- [ ] `model/model_meta.go` 的 `ModelNickName` 字段在,且 `pricing.go` 的 Select 列含 `model_nick_name`
+- [ ] 429 不重试（`controller/relay.go` + `controller/task_video.go`）、无渠道返回 404（`middleware/distributor.go`）、Vertex token 重试（`relay/channel/vertex/service_account.go`）都在
+- [ ] Qwen 扩展参数(`search_options`/`thinking_budget`/`preserve_thinking`/`enable_code_interpreter`/`tool_stream`)在 —— ⚠️ 已随 dto 包搬迁到 **`relaykit/dto/openai_request.go:94-100`**,不在旧 `dto/openai_request.go`。commit `60cbe7917`
 - [ ] 全仓库无残留旧 DB API：`grep -rn "common.UsingSQLite\|common.UsingMySQL\|common.UsingPostgreSQL\|common.UsingClickHouse\|common.LogSqlType" --include="*.go" .` 应为空
 - [ ] Go build 通过
 - [ ] `go test ./model/... ./relay/channel/claude/...` 关键回归通过：
@@ -942,3 +989,8 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
 |---|---|---|---|
 | 2026-08-07 | A2 双前端无状态 token 鉴权 | 见 [5.7](#57-a2-双前端无状态-token-鉴权体系%EF%BC%88access_token--flow_token--login_session2026-08-07-补做) | login_session 表 / auth_token service / auth_session controller / setupLogin token bundle / 2FA flow_token / 鉴权层顺序（access_token→cookie→RuoYi→char32）。合并遇官方同名 auth_session.go / auth_token.go 一律取 ours |
 | 2026-08-07 | classic 渠道启停/编辑适配官方新接口 | `web/classic/src/hooks/channels/useChannelsData.jsx`、`.../modals/EditChannelModal.jsx` | 官方把渠道状态改成独立接口 `POST /api/channel/:id/status`，并在 `UpdateChannel` 加了"请求体带 status 即拒绝"校验。classic 已适配：启停改走 `POST /:id/status`（成功回调按 action 回填 status，不再取 res.data.data.status）、编辑保存提交前 `delete localInputs.status`。合并若回退这两个 classic 文件会导致渠道无法启停/编辑保存 |
+| 2026-08-10 | 上游用量审计落库 | 见 [7.11.14](#71114--上游原始响应--转换前用量审计落库upstream_responses--usage_conversion) | 上游原始响应 + 转换前用量可开关落库,依赖 `model/option.go` + `relay/common/relay_info.go` 两个官方高频文件,最易被合并覆盖 |
+| 2026-08-10 | 视频计费多节点 CAS 安全 | 见 [3.6](#36-视频计费多节点-cas-终态保护--计费锁自动释放2026-08-补记) | 终态 CAS + `quota=0→-1` 计费锁,防多 pod 重复扣费/退款 |
+| 2026-08-10 | TokenHub deepseek-v4 responses / Gemini imagine 图片 / Fable·Mythos 限制 | 见 [七点十](#七点十本轮2026-07-前后其它-main-alpha-独有改动) 渠道协议表 | 三处渠道协议兼容,连带 adaptor.go/vertex adaptor.go 不在整体保留范围,易被官方改图片/协议链路时丢 |
+| 2026-08-10 | 余额预警子系统 / ModelNickName / 429·404·Vertex 重试等运维微调 | 见 [七点十](#七点十本轮2026-07-前后其它-main-alpha-独有改动) 通知·模型·运维表 | 余额预警 4 处接入 + 模型昵称字段 + HTTP 行为微调,均已验证在 HEAD |
+| 2026-08-10 | (排除,非丢失)Qwen 扩展参数已随 dto 包迁至 relaykit | `relaykit/dto/openai_request.go:94-100` | 子 agent 一度误报丢失,实为随 relaykit 重构整体搬迁,5 个字段全在 |
