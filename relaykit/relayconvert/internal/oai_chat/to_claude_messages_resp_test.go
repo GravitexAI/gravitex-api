@@ -5,6 +5,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,6 +78,37 @@ func TestResponseOpenAI2ClaudeUsageCarriesOpenAIBillingUsage(t *testing.T) {
 	assert.Equal(t, 5, resp.Usage.BillingUsage.OpenAIUsage.CompletionTokens)
 	assert.Equal(t, 16, resp.Usage.BillingUsage.OpenAIUsage.TotalTokens)
 	assert.Nil(t, resp.Usage.BillingUsage.OpenAIUsage.BillingUsage)
+}
+
+// 渠道类型是 openai、客户端走 /v1/messages 时，下发的 usage 必须只有 Claude 命名的
+// 字段；上游原始 OpenAI 用量只能留在结构体里给计费链路用，不能跟着 JSON 一起下发。
+func TestResponseOpenAI2ClaudeUsageJSONOmitsOpenAIFields(t *testing.T) {
+	resp := ResponseOpenAI2Claude(&dto.OpenAITextResponse{
+		Id:    "chatcmpl_1",
+		Model: "gpt-test",
+		Choices: []dto.OpenAITextResponseChoice{
+			{Message: dto.Message{Role: "assistant", Content: "hello"}, FinishReason: "stop"},
+		},
+		Usage: dto.Usage{
+			PromptTokens:     11,
+			CompletionTokens: 5,
+			TotalTokens:      16,
+		},
+	}, nil)
+
+	require.NotNil(t, resp.Usage)
+	require.NotNil(t, resp.Usage.BillingUsage, "内部计费链路仍需拿到上游原始用量")
+
+	data, err := kitutil.Marshal(resp)
+	require.NoError(t, err)
+
+	body := string(data)
+	assert.Contains(t, body, `"input_tokens":11`)
+	assert.Contains(t, body, `"output_tokens":5`)
+	assert.NotContains(t, body, `"billing_usage"`)
+	assert.NotContains(t, body, `"prompt_tokens"`)
+	assert.NotContains(t, body, `"completion_tokens"`)
+	assert.NotContains(t, body, `"total_tokens"`)
 }
 
 func TestBuildClaudeUsageFromOpenAICacheWriteUsage(t *testing.T) {

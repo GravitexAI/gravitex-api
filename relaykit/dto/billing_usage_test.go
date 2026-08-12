@@ -63,6 +63,47 @@ func TestNewEstimatedGeminiChatBillingUsage(t *testing.T) {
 	assert.Equal(t, 18, billingUsage.GeminiUsageMetadata.TotalTokenCount)
 }
 
+// BillingUsage 只服务于内部计费链路，绝不能出现在下发给客户端的用量对象里。一旦
+// 泄漏，跨协议转换后的响应会在 usage 内嵌一份源协议命名的用量（Claude 响应里出现
+// prompt_tokens/completion_tokens，OpenAI 响应里出现 claude_usage），客户端会误判
+// 成网关没有做协议转换。
+func TestUsageStructsNeverSerializeBillingUsage(t *testing.T) {
+	tests := []struct {
+		name  string
+		usage any
+	}{
+		{
+			name: "openai usage",
+			usage: &Usage{
+				PromptTokens: 11,
+				BillingUsage: NewClaudeMessagesBillingUsage(&ClaudeUsage{InputTokens: 9}),
+			},
+		},
+		{
+			name: "claude usage",
+			usage: &ClaudeUsage{
+				InputTokens:  11,
+				BillingUsage: NewOpenAIChatBillingUsage(&Usage{PromptTokens: 11, CompletionTokens: 5, TotalTokens: 16}),
+			},
+		},
+		{
+			name: "gemini usage metadata",
+			usage: &GeminiUsageMetadata{
+				PromptTokenCount: 11,
+				BillingUsage:     NewOpenAIChatBillingUsage(&Usage{PromptTokens: 11}),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := kitutil.Marshal(tt.usage)
+			require.NoError(t, err)
+			assert.NotContains(t, string(data), `"billing_usage"`)
+		})
+	}
+}
+
 func TestBillingUsageJSONUsesProtocolNamedFields(t *testing.T) {
 	billingUsage := &BillingUsage{
 		OpenAIUsage:         &Usage{PromptTokens: 1, BillingUsage: NewClaudeMessagesBillingUsage(&ClaudeUsage{InputTokens: 9})},

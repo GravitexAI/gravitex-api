@@ -516,7 +516,8 @@ type GeminiUsageMetadata struct {
 	PromptTokensDetails        []GeminiPromptTokensDetails `json:"promptTokensDetails"`
 	ToolUsePromptTokensDetails []GeminiPromptTokensDetails `json:"toolUsePromptTokensDetails"`
 	CandidatesTokensDetails    []GeminiPromptTokensDetails `json:"candidatesTokensDetails"`
-	BillingUsage               *BillingUsage               `json:"billing_usage,omitempty"`
+	// BillingUsage 只在进程内传递上游原始用量给计费链路，绝不下发给客户端。
+	BillingUsage *BillingUsage `json:"-"`
 }
 
 type GeminiPromptTokensDetails struct {

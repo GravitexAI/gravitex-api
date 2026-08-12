@@ -575,7 +575,8 @@ type ClaudeUsage struct {
 	// OutputTokensDetails 携带上游对 output_tokens 的拆分，其中 thinking_tokens 用于
 	// 映射到 OpenAI 协议的 completion_tokens_details.reasoning_tokens。
 	OutputTokensDetails *ClaudeOutputTokensDetails `json:"output_tokens_details,omitempty"`
-	BillingUsage        *BillingUsage              `json:"billing_usage,omitempty"`
+	// BillingUsage 只在进程内传递上游原始用量给计费链路，绝不下发给客户端。
+	BillingUsage *BillingUsage `json:"-"`
 }
 
 type ClaudeOutputTokensDetails struct {
