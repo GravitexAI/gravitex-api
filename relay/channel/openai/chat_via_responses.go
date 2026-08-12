@@ -40,6 +40,9 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if oaiError := responsesResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	if responsesResp.Usage != nil && service.ValidUsage(responsesResp.Usage) {
+		info.SetUpstreamResponsesField("usage", responsesResp.Usage)
+	}
 
 	chatResult, err := relayconvert.ConvertResponse(c, info, types.RelayFormatOpenAI, &responsesResp)
 	if err != nil {
@@ -68,6 +71,7 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 		responseValue = targetResult.Value
 	}
+	recordConvertedResponseUsage(info, responseValue)
 	responseBody, err := common.Marshal(responseValue)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
@@ -149,6 +153,9 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 		}
 	}
 	accumulator.SupplementResponseOutput(finalResponse)
+	if finalResponse.Usage != nil && service.ValidUsage(finalResponse.Usage) {
+		info.SetUpstreamResponsesField("usage", finalResponse.Usage)
+	}
 
 	chatResult, err := relayconvert.ConvertResponse(c, info, types.RelayFormatOpenAI, finalResponse)
 	if err != nil {
@@ -176,6 +183,7 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 		}
 		responseValue = targetResult.Value
 	}
+	recordConvertedResponseUsage(info, responseValue)
 	responseBody, err := common.Marshal(responseValue)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
@@ -232,6 +240,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 				return false
 			}
+			recordConvertedResponseUsage(info, &value)
 			return true
 		case *dto.ChatCompletionsStreamResponse:
 			if value == nil || (len(value.Choices) == 0 && value.Usage == nil) {
@@ -241,12 +250,14 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 				return false
 			}
+			recordConvertedResponseUsage(info, value)
 			return true
 		case dto.ClaudeResponse:
 			if err := helper.ClaudeData(c, value); err != nil {
 				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 				return false
 			}
+			recordConvertedResponseUsage(info, &value)
 			return true
 		case *dto.ClaudeResponse:
 			if value == nil {
@@ -256,10 +267,13 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 				return false
 			}
+			recordConvertedResponseUsage(info, value)
 			return true
 		case dto.GeminiChatResponse:
+			recordConvertedResponseUsage(info, &value)
 			return sendGeminiResponse(&value)
 		case *dto.GeminiChatResponse:
+			recordConvertedResponseUsage(info, value)
 			return sendGeminiResponse(value)
 		default:
 			streamErr = types.NewOpenAIError(fmt.Errorf("unsupported converted stream response type %T", result.Value), types.ErrorCodeBadResponse, http.StatusInternalServerError)
@@ -278,6 +292,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			logger.LogError(c, "failed to unmarshal responses stream event: "+err.Error())
 			sr.Error(err)
 			return
+		}
+		if streamResp.Response != nil && streamResp.Response.Usage != nil && service.ValidUsage(streamResp.Response.Usage) {
+			info.SetUpstreamResponsesField("usage", streamResp.Response.Usage)
 		}
 
 		if streamResp.Type == "response.error" || streamResp.Type == "response.failed" {
@@ -333,6 +350,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if err := helper.ObjectData(c, helper.GenerateFinalUsageResponse(responseId, createAt, info.UpstreamModelName, *usage)); err != nil {
 			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 		}
+	}
+	if info.RelayFormat == types.RelayFormatOpenAI && usage != nil {
+		info.SetUsageConversion(usage)
 	}
 
 	if info.RelayFormat == types.RelayFormatOpenAI {

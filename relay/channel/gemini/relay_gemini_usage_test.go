@@ -187,6 +187,28 @@ func TestGeminiTextGenerationHandlerPromptTokensIncludeToolUsePromptTokens(t *te
 	require.Equal(t, 1120, usage.CompletionTokenDetails.ReasoningTokens)
 }
 
+func TestGeminiTextGenerationHandlerDoesNotMarkNativeUsageAsConverted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-3-flash-preview:generateContent", nil)
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatGemini,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gemini-3-flash-preview",
+		},
+	}
+	body, err := common.Marshal(dto.GeminiChatResponse{
+		UsageMetadata: dto.GeminiUsageMetadata{TotalTokenCount: 12},
+	})
+	require.NoError(t, err)
+
+	_, newAPIError := GeminiTextGenerationHandler(c, info, &http.Response{
+		Body: io.NopCloser(bytes.NewReader(body)),
+	})
+	require.Nil(t, newAPIError)
+	require.Nil(t, info.UsageConversion)
+}
+
 func TestGeminiChatHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *testing.T) {
 	t.Parallel()
 

@@ -34,7 +34,7 @@ func appendUsageConversion(other map[string]interface{}, relayInfo *relaycommon.
 	if other == nil || relayInfo == nil || !isLogUsageConversionEnabled() {
 		return
 	}
-	if !relayInfo.HasRequestFormatConversion() || relayInfo.UsageConversion == nil {
+	if relayInfo.UsageConversion == nil {
 		return
 	}
 	other["usage_conversion"] = relayInfo.UsageConversion

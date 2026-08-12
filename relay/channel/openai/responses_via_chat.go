@@ -34,6 +34,9 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if oaiError := chatResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	if service.ValidUsage(&chatResp.Usage) {
+		info.SetUpstreamResponsesField("usage", chatResp.Usage)
+	}
 
 	if responseID := helper.GetResponseID(c); responseID != "" {
 		chatResp.Id = responseID
@@ -52,6 +55,7 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		usage = service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
 		responsesResp.Usage = relayconvert.UsageFromChatUsage(usage)
 	}
+	info.SetUsageConversion(responsesResp.Usage)
 
 	responseBody, err := common.Marshal(responsesResp)
 	if err != nil {
@@ -109,6 +113,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Error(err)
 			return
 		}
+		captureOpenAIStreamUsage(info, data)
 
 		results, err := relayconvert.ConvertStreamResponseChunk(c, info, state, &chunk)
 		if err != nil {
@@ -151,6 +156,9 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		if !sendEvent(event) {
 			return nil, streamErr
+		}
+		if event.Payload.Response != nil {
+			info.SetUsageConversion(event.Payload.Response.Usage)
 		}
 	}
 

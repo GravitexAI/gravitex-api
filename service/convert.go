@@ -15,8 +15,8 @@ func NormalizeCacheCreationSplit(totalTokens int, tokens5m int, tokens1h int) (i
 // 从转换结果里取回 usage 再写入 info。转换结果里的 usage 还挂着仅供内部计费链路
 // 使用的 billing_usage，下面两个函数负责剥掉它，让记录下来的只是协议本身的字段。
 
-func setClaudeUsageConversion(info *relaycommon.RelayInfo, usage *dto.ClaudeUsage) {
-	if usage == nil {
+func RecordClaudeUsageConversion(info *relaycommon.RelayInfo, usage *dto.ClaudeUsage) {
+	if info == nil || usage == nil {
 		return
 	}
 	cleaned := *usage
@@ -24,7 +24,10 @@ func setClaudeUsageConversion(info *relaycommon.RelayInfo, usage *dto.ClaudeUsag
 	info.SetUsageConversion(&cleaned)
 }
 
-func setGeminiUsageConversion(info *relaycommon.RelayInfo, usage dto.GeminiUsageMetadata) {
+func RecordGeminiUsageConversion(info *relaycommon.RelayInfo, usage dto.GeminiUsageMetadata) {
+	if info == nil {
+		return
+	}
 	usage.BillingUsage = nil
 	info.SetUsageConversion(usage)
 }
@@ -34,7 +37,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 	// 流式下用量只随 message_delta 下发，逐个覆盖后留下的就是最终用量。
 	for _, claudeResponse := range claudeResponses {
 		if claudeResponse != nil && claudeResponse.Type == "message_delta" {
-			setClaudeUsageConversion(info, claudeResponse.Usage)
+			RecordClaudeUsageConversion(info, claudeResponse.Usage)
 		}
 	}
 	return claudeResponses
@@ -43,7 +46,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relaycommon.RelayInfo) *dto.ClaudeResponse {
 	claudeResponse := relayconvert.ResponseOpenAI2Claude(openAIResponse, info)
 	if claudeResponse != nil {
-		setClaudeUsageConversion(info, claudeResponse.Usage)
+		RecordClaudeUsageConversion(info, claudeResponse.Usage)
 	}
 	return claudeResponse
 }
@@ -51,7 +54,7 @@ func ResponseOpenAI2Claude(openAIResponse *dto.OpenAITextResponse, info *relayco
 func ResponseOpenAI2Gemini(openAIResponse *dto.OpenAITextResponse, info *relaycommon.RelayInfo) *dto.GeminiChatResponse {
 	geminiResponse := relayconvert.ResponseOpenAI2Gemini(openAIResponse, info)
 	if geminiResponse != nil {
-		setGeminiUsageConversion(info, geminiResponse.UsageMetadata)
+		RecordGeminiUsageConversion(info, geminiResponse.UsageMetadata)
 	}
 	return geminiResponse
 }
@@ -59,7 +62,7 @@ func ResponseOpenAI2Gemini(openAIResponse *dto.OpenAITextResponse, info *relayco
 func StreamResponseOpenAI2Gemini(openAIResponse *dto.ChatCompletionsStreamResponse, info *relaycommon.RelayInfo) *dto.GeminiChatResponse {
 	geminiResponse := relayconvert.StreamResponseOpenAI2Gemini(openAIResponse, info)
 	if geminiResponse != nil {
-		setGeminiUsageConversion(info, geminiResponse.UsageMetadata)
+		RecordGeminiUsageConversion(info, geminiResponse.UsageMetadata)
 	}
 	return geminiResponse
 }

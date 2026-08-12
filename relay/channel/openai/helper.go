@@ -52,6 +52,7 @@ func handleClaudeFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 		return fmt.Errorf("expected Claude stream responses, got %T", result.Value)
 	}
 	for _, resp := range claudeResponses {
+		recordConvertedResponseUsage(info, resp)
 		helper.ClaudeData(c, *resp)
 	}
 	return nil
@@ -77,6 +78,7 @@ func handleGeminiFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 	if geminiResponse == nil {
 		return nil
 	}
+	recordConvertedResponseUsage(info, geminiResponse)
 
 	geminiResponseStr, err := common.Marshal(geminiResponse)
 	if err != nil {
@@ -192,6 +194,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 			return
 		}
 		for _, resp := range claudeResponses {
+			recordConvertedResponseUsage(info, resp)
 			_ = helper.ClaudeData(c, *resp)
 		}
 		info.ClaudeConvertInfo.Done = true
@@ -223,6 +226,7 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		if geminiResponse == nil {
 			return
 		}
+		recordConvertedResponseUsage(info, geminiResponse)
 
 		geminiResponseStr, err := common.Marshal(geminiResponse)
 		if err != nil {

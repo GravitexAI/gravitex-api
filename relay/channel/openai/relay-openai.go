@@ -341,6 +341,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
+		recordConvertedResponseUsage(info, convertResult.Value)
 		claudeRespStr, err := common.Marshal(convertResult.Value)
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
@@ -351,6 +352,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 		}
+		recordConvertedResponseUsage(info, convertResult.Value)
 		geminiRespStr, err := common.Marshal(convertResult.Value)
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
@@ -361,4 +363,29 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	return &simpleResponse.Usage, nil
+}
+
+func recordConvertedResponseUsage(info *relaycommon.RelayInfo, response any) {
+	switch value := response.(type) {
+	case *dto.ClaudeResponse:
+		if value != nil && (value.Type == "message" || value.Type == "message_delta") {
+			service.RecordClaudeUsageConversion(info, value.Usage)
+		}
+	case *dto.GeminiChatResponse:
+		if value != nil {
+			service.RecordGeminiUsageConversion(info, value.UsageMetadata)
+		}
+	case *dto.OpenAIResponsesResponse:
+		if value != nil {
+			info.SetUsageConversion(value.Usage)
+		}
+	case *dto.OpenAITextResponse:
+		if value != nil {
+			info.SetUsageConversion(&value.Usage)
+		}
+	case *dto.ChatCompletionsStreamResponse:
+		if value != nil && value.Usage != nil {
+			info.SetUsageConversion(value.Usage)
+		}
+	}
 }
