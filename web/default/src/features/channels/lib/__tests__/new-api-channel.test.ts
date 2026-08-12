@@ -22,8 +22,10 @@ import { describe, test } from 'node:test'
 import {
   CHANNEL_TYPE_NEW_API,
   CHANNEL_TYPE_OPTIONS,
+  CHANNEL_TYPE_SUB2API,
   MODEL_FETCHABLE_TYPES,
 } from '../../constants'
+import { CHANNEL_TYPE_ADVANCED_CUSTOM } from '../advanced-custom'
 import { CHANNEL_FORM_DEFAULT_VALUES, channelFormSchema } from '../channel-form'
 import { getChannelTypeConfig } from '../channel-type-config'
 import { getChannelTypeIcon, getKeyPromptForType } from '../channel-utils'
@@ -53,7 +55,9 @@ describe('New API channel', () => {
       CHANNEL_TYPE_OPTIONS.findIndex(
         (item) => item.value === CHANNEL_TYPE_NEW_API
       ) + 1,
-      CHANNEL_TYPE_OPTIONS.findIndex((item) => item.value === 58)
+      CHANNEL_TYPE_OPTIONS.findIndex(
+        (item) => item.value === CHANNEL_TYPE_ADVANCED_CUSTOM
+      )
     )
     assert.equal(MODEL_FETCHABLE_TYPES.has(CHANNEL_TYPE_NEW_API), true)
     assert.equal(getChannelTypeIcon(CHANNEL_TYPE_NEW_API), 'NewAPI')
@@ -89,7 +93,7 @@ describe('New API channel', () => {
   test('keeps Sub2API Base URL validation unchanged', () => {
     const result = channelFormSchema.safeParse({
       ...newAPIForm(''),
-      type: 59,
+      type: CHANNEL_TYPE_SUB2API,
     })
 
     assert.equal(result.success, true)

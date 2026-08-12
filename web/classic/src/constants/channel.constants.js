@@ -209,11 +209,36 @@ export const CHANNEL_OPTIONS = [
     color: 'blue',
     label: 'SeedanceGateway',
   },
+  {
+    value: 60,
+    color: 'indigo',
+    label: 'Advanced Custom',
+  },
+  {
+    value: 63,
+    color: 'violet',
+    label: 'Sub2API',
+  },
+  {
+    value: 64,
+    color: 'green',
+    label: 'New API',
+  },
 ];
+
+// 不再允许新建的渠道类型：仍保留在 CHANNEL_OPTIONS 里，让存量渠道的表格标签、
+// Tab 和编辑弹窗能正常显示，但从新建下拉选项中排除。
+export const CHANNEL_DEPRECATED_TYPES = new Set([58, 59]);
+
+// 新建/编辑渠道时可选的类型，供类型下拉使用。
+export const CHANNEL_CREATABLE_OPTIONS = CHANNEL_OPTIONS.filter(
+  (option) => !CHANNEL_DEPRECATED_TYPES.has(option.value),
+);
 
 // Channel types that support upstream model list fetching in UI.
 export const MODEL_FETCHABLE_CHANNEL_TYPES = new Set([
-  1, 4, 14, 34, 17, 26, 27, 24, 47, 25, 20, 23, 31, 40, 42, 48, 43,
+  1, 4, 14, 34, 17, 26, 27, 24, 47, 25, 20, 23, 31, 35, 40, 42, 48, 43, 57, 60,
+  63, 64,
 ]);
 
 export const MODEL_TABLE_PAGE_SIZE = 10;

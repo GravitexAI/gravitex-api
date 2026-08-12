@@ -61,6 +61,8 @@ import {
   Jimeng,
   Perplexity,
   Replicate,
+  Vidu,
+  NewAPI,
 } from '@lobehub/icons';
 
 import {
@@ -334,7 +336,21 @@ export function getChannelIcon(channelType) {
     case 1: // OpenAI
     case 3: // Azure OpenAI
     case 57: // Codex
+    case 58: // Azure Video
+    case 59: // Uptoken
+    case 53: // Submodel
+    case 55: // Sora
+    case 63: // Sub2API
       return <OpenAI size={iconSize} />;
+    case 52: // Vidu
+      return <Vidu.Color size={iconSize} />;
+    case 60: // Advanced Custom
+    case 64: // New API
+      return <NewAPI.Color size={iconSize} />;
+    case 61: // 腾讯云 TokenHub
+      return <Hunyuan.Color size={iconSize} />;
+    case 62: // SeedanceGateway
+      return <Doubao.Color size={iconSize} />;
     case 2: // MjProxy
     case 5: // MjProxyPlus
       return <MjProxyIcon size={iconSize} />;

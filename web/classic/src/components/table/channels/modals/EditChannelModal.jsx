@@ -27,7 +27,11 @@ import {
   verifyJSON,
 } from '../../../../helpers';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
-import { CHANNEL_OPTIONS, MODEL_FETCHABLE_CHANNEL_TYPES } from '../../../../constants';
+import {
+  CHANNEL_DEPRECATED_TYPES,
+  CHANNEL_OPTIONS,
+  MODEL_FETCHABLE_CHANNEL_TYPES,
+} from '../../../../constants';
 import {
   SideSheet,
   Space,
@@ -144,7 +148,7 @@ function type2secretPrompt(type) {
     case 22:
       return '按照如下格式输入：APIKey-AppId，例如：fastgpt-0sp2gtvfdgyi4k30jwlgwf1i-64f335d84283f05518e9e041';
     case 23:
-      return '按照如下格式输入：AppId|SecretId|SecretKey';
+      return '输入 TokenHub API Key，或旧格式：AppId|SecretId|SecretKey';
     case 33:
       return '按照如下格式输入：Ak|Sk|Region';
     case 45:
@@ -155,6 +159,8 @@ function type2secretPrompt(type) {
       return '按照如下格式输入: AccessKey|SecretAccessKey';
     case 57:
       return '请输入 JSON 格式的 OAuth 凭据（必须包含 access_token 和 account_id）';
+    case 61:
+      return '请输入 TokenHub API Key';
     default:
       return '请输入渠道对应的鉴权密钥';
   }
@@ -1747,8 +1753,9 @@ const EditChannelModal = (props) => {
       showInfo(t('请至少选择一个模型！'));
       return;
     }
+    // New API(64) 上游地址不能为空，后端 controller/channel.go 也会拒绝
     if (
-      localInputs.type === 45 &&
+      (localInputs.type === 45 || localInputs.type === 64) &&
       (!localInputs.base_url || localInputs.base_url.trim() === '')
     ) {
       showInfo(t('请输入API地址！'));
@@ -2222,12 +2229,16 @@ const EditChannelModal = (props) => {
 
   const channelOptionList = useMemo(
     () =>
-      CHANNEL_OPTIONS.map((opt) => ({
+      CHANNEL_OPTIONS.filter(
+        // 已废弃的类型不再出现在新建下拉里，但编辑存量渠道时要能显示当前类型
+        (opt) =>
+          !CHANNEL_DEPRECATED_TYPES.has(opt.value) || opt.value === inputs.type,
+      ).map((opt) => ({
         ...opt,
         // 保持 label 为纯文本以支持搜索
         label: opt.label,
       })),
-    [],
+    [inputs.type],
   );
 
   const renderChannelOption = (renderProps) => {

@@ -21,7 +21,10 @@ For commercial licensing, please contact support@quantumnous.com
 // All label/name values are i18n keys; use t(value) when displaying.
 // ============================================================================
 
-export const CHANNEL_TYPE_NEW_API = 60
+// 官方在 59/60 定义了 Sub2API/NewAPI，但本仓库早已占用 59(Uptoken)/60(AdvancedCustom)，
+// 故官方新渠道顺延到 63/64，须与 constant/channel.go 保持一致。
+export const CHANNEL_TYPE_NEW_API = 64
+export const CHANNEL_TYPE_SUB2API = 63
 
 export const CHANNEL_TYPES = {
   0: 'Unknown',
@@ -78,32 +81,38 @@ export const CHANNEL_TYPES = {
   55: 'Sora',
   56: 'Replicate',
   57: 'ChatGPT Subscription (Codex)',
-  58: 'Advanced Custom',
-  59: 'Sub2API',
-  60: 'New API',
+  58: 'Azure Video',
+  59: 'Uptoken',
+  60: 'Advanced Custom',
   61: 'Tencent TokenHub',
   62: 'SeedanceGateway',
+  63: 'Sub2API',
+  64: 'New API',
 } as const
 
 const CHANNEL_TYPE_DISPLAY_ORDER: number[] = [
-  1, 14, 33, 24, 43, 3, 41, 48, 60, 58, 42, 34, 20, 4, 40, 27, 25, 17, 26, 15,
-  46, 23, 61, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 59, 22, 21, 44,
+  1, 14, 33, 24, 43, 3, 41, 48, 64, 60, 42, 34, 20, 4, 40, 27, 25, 17, 26, 15,
+  46, 23, 61, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 63, 22, 21, 44,
   2, 5, 36, 50, 51, 52, 53, 54, 55, 56, 62,
 ]
+
+// 不再允许新建的渠道类型：仍保留在 CHANNEL_TYPES 里，让存量渠道能正常显示和编辑，
+// 但从新建下拉选项中排除。
+const CHANNEL_TYPE_DEPRECATED: ReadonlySet<number> = new Set([58, 59])
 
 export const CHANNEL_TYPE_OPTIONS: { value: number; label: string }[] = (() => {
   const ordered: { value: number; label: string }[] = []
   const seen = new Set<number>()
   for (const id of CHANNEL_TYPE_DISPLAY_ORDER) {
     const label = CHANNEL_TYPES[id as keyof typeof CHANNEL_TYPES]
-    if (label) {
+    if (label && !CHANNEL_TYPE_DEPRECATED.has(id)) {
       ordered.push({ value: id, label })
       seen.add(id)
     }
   }
   for (const [key, label] of Object.entries(CHANNEL_TYPES)) {
     const id = Number(key)
-    if (id !== 0 && !seen.has(id)) {
+    if (id !== 0 && !seen.has(id) && !CHANNEL_TYPE_DEPRECATED.has(id)) {
       ordered.push({ value: id, label })
     }
   }
@@ -390,8 +399,8 @@ export const FIELD_DESCRIPTIONS = {
 // ============================================================================
 
 export const MODEL_FETCHABLE_TYPES = new Set([
-  1, 4, 14, 17, 20, 23, 24, 25, 26, 27, 31, 34, 35, 40, 42, 43, 47, 48, 57, 58,
-  59, 60,
+  1, 4, 14, 17, 20, 23, 24, 25, 26, 27, 31, 34, 35, 40, 42, 43, 47, 48, 57, 60,
+  63, 64,
 ])
 
 export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
@@ -403,8 +412,8 @@ export const TYPE_TO_KEY_PROMPT: Record<number, string> = {
   50: 'Format: AccessKey|SecretKey (or just ApiKey if upstream is New API)',
   51: 'Format: Access Key ID|Secret Access Key',
   57: 'Paste Codex OAuth JSON credential (access_token / refresh_token / account_id)',
-  59: 'Enter API key for this channel',
-  60: 'Enter API key for this channel',
+  63: 'Enter API key for this channel',
+  64: 'Enter API key for this channel',
 }
 
 export const CHANNEL_TYPE_WARNINGS: Record<number, string> = {

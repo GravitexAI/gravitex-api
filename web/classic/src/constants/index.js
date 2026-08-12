@@ -19,6 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 
 export {
   CHANNEL_OPTIONS,
+  CHANNEL_CREATABLE_OPTIONS,
+  CHANNEL_DEPRECATED_TYPES,
   MODEL_FETCHABLE_CHANNEL_TYPES,
   MODEL_TABLE_PAGE_SIZE,
 } from './channel.constants';

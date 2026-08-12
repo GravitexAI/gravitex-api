@@ -24,7 +24,8 @@ import type {
   AdvancedCustomRouteAuth,
 } from '../types'
 
-export const CHANNEL_TYPE_ADVANCED_CUSTOM = 58
+// 与 constant/channel.go 的 ChannelTypeAdvancedCustom 保持一致（官方为 58，本仓库为 60）。
+export const CHANNEL_TYPE_ADVANCED_CUSTOM = 60
 export const ADVANCED_CUSTOM_MODEL_LIST_PATH = '/v1/models'
 export const ADVANCED_CUSTOM_MODEL_LIST_LABEL = 'OpenAI Models'
 
