@@ -226,7 +226,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			info.PriceData.ModelPrice = actualPrice
 			info.PriceData.ImageBillingUsage = billingUsage
 			if billingUsage != nil {
-				info.PriceData.PerImageUnitPrice = info.PriceData.ImagePerImagePricing.OutputImage[billingUsage.OutputSizeTier]
+				info.PriceData.PerImageUnitPrice = helper.ImageOutputUnitPrice(*info.PriceData.ImagePerImagePricing, billingUsage.OutputSizeTier)
 			}
 			info.PriceData.ImagePriceMultiplier = 1
 		}

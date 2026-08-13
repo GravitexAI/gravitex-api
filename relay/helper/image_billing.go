@@ -11,9 +11,13 @@ import (
 )
 
 const (
-	seedreamOutputPixelThreshold int64 = 2_360_000
-	seedreamLessPixelTier              = "pixelLessEqual236W"
-	seedreamMorePixelTier              = "pixelMoreThan236W"
+	seedreamOutputPixelThreshold int64 = 2_610_000
+	// Keep the existing configuration keys stable. Their threshold semantics
+	// follow the current upstream 2.61M-pixel boundary.
+	seedreamLessPixelTier        = "pixelLessEqual236W"
+	seedreamMorePixelTier        = "pixelMoreThan236W"
+	seedreamLessPixelTierCurrent = "pixelLessEqual261W"
+	seedreamMorePixelTierCurrent = "pixelMoreThan261W"
 )
 
 // seedreamOutputDimensions is the one-dimensional catalog used to build the
@@ -149,9 +153,25 @@ func ImagePerImageCost(config types.ImagePerImagePricing, usage *types.ImageBill
 		if tier == "" && usage.OutputWidth > 0 && usage.OutputHeight > 0 {
 			tier = outputTierForSize(usage.OutputWidth, usage.OutputHeight)
 		}
-		cost += float64(usage.SuccessfulImageCount) * config.OutputImage[tier]
+		cost += float64(usage.SuccessfulImageCount) * ImageOutputUnitPrice(config, tier)
 	}
 	return cost
+}
+
+// ImageOutputUnitPrice keeps the persisted 236W configuration keys compatible
+// while accepting the newer 261W key names during migration.
+func ImageOutputUnitPrice(config types.ImagePerImagePricing, tier string) float64 {
+	if price, ok := config.OutputImage[tier]; ok {
+		return price
+	}
+	switch tier {
+	case seedreamLessPixelTier:
+		return config.OutputImage[seedreamLessPixelTierCurrent]
+	case seedreamMorePixelTier:
+		return config.OutputImage[seedreamMorePixelTierCurrent]
+	default:
+		return 0
+	}
 }
 
 func SettleImagePerImageUsage(config types.ImagePerImagePricing, request *dto.ImageRequest, usage *dto.Usage) (float64, *types.ImageBillingUsage, error) {

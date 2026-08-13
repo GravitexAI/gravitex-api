@@ -419,6 +419,10 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
 	isStream bool, group string, other map[string]interface{}) {
 	logger.LogInfo(c, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, channelId, modelName, tokenName, common.LocalLogPreview(content)))
+	if other == nil {
+		other = make(map[string]interface{})
+	}
+	AppendConfiguredClientRequestHeaders(c, userId, other)
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
@@ -505,6 +509,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if params.PriceChain != nil && params.PriceChain.VendorId != nil {
 		other["vendor_id"] = *params.PriceChain.VendorId
 	}
+	AppendConfiguredClientRequestHeaders(c, userId, other)
 	// Compute official_quota (vendor cost without group markup)
 	if params.Quota != 0 && params.Other != nil {
 		effectiveGroupRatio := 1.0

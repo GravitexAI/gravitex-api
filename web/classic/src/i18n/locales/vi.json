@@ -4214,6 +4214,14 @@
     "固定过期（命中后不刷新 TTL）": "Hết hạn cố định (không làm mới TTL khi trùng khớp)",
     "开启后，命中同一亲和渠道不会续期 TTL，缓存从首次写入起自然到期，到期后重新负载均衡；关闭时每次成功请求都会续期（滑动过期），只要持续有请求就会一直粘在同一渠道。": "Khi bật, việc trùng khớp cùng một kênh liên kết sẽ không làm mới TTL. Bộ nhớ đệm sẽ tự hết hạn kể từ lần ghi đầu tiên, cho phép cân bằng lại định kỳ giữa các kênh có cùng mức ưu tiên. Khi tắt, mỗi yêu cầu thành công sẽ làm mới TTL (hết hạn trượt), giữ liên kết miễn là các yêu cầu vẫn tiếp tục đến.",
     "固定过期": "Hết hạn cố định",
-    "滑动过期": "Hết hạn trượt"
+    "滑动过期": "Hết hạn trượt",
+    "记录用户请求头": "Ghi lại header yêu cầu của người dùng",
+    "请求头记录模式": "Chế độ ghi header",
+    "全部请求头": "Tất cả header yêu cầu",
+    "指定请求头": "Header yêu cầu đã chọn",
+    "指定请求头字段": "Trường header đã chọn",
+    "请选择要记录的请求头": "Chọn header cần ghi",
+    "请求头将原样写入 logs.other，请谨慎开启": "Header được lưu nguyên dạng trong logs.other. Hãy bật thận trọng.",
+    "请输入请求头名称，多个用逗号或换行分隔": "Nhập tên header, phân tách bằng dấu phẩy hoặc dòng mới"
   }
 }

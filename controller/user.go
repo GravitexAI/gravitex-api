@@ -822,19 +822,24 @@ func GetUserModelsAccount(c *gin.Context) {
 }
 
 func UpdateUser(c *gin.Context) {
+	type updateUserSettingPatch struct {
+		AllowNegativeBalance *bool                         `json:"allow_negative_balance"`
+		RequestHeadersLog    *dto.RequestHeadersLogSetting `json:"request_headers_log"`
+	}
+
 	type updateUserRequest struct {
-		Id          common.Int64Flexible `json:"id"`
-		Username    string               `json:"username"`
-		DisplayName string               `json:"display_name"`
-		Password    string               `json:"password"`
-		Group       string               `json:"group"`
-		Quota       *int                 `json:"quota,omitempty"`
-		Remark      string               `json:"remark"`
-		Role        int                  `json:"role"`
-		Status      int                  `json:"status"`
-		Type        *int                 `json:"type,omitempty"`
-		Operation   *int                 `json:"operation,omitempty"`
-		Setting     *dto.UserSetting     `json:"setting,omitempty"`
+		Id          common.Int64Flexible    `json:"id"`
+		Username    string                  `json:"username"`
+		DisplayName string                  `json:"display_name"`
+		Password    string                  `json:"password"`
+		Group       string                  `json:"group"`
+		Quota       *int                    `json:"quota,omitempty"`
+		Remark      string                  `json:"remark"`
+		Role        int                     `json:"role"`
+		Status      int                     `json:"status"`
+		Type        *int                    `json:"type,omitempty"`
+		Operation   *int                    `json:"operation,omitempty"`
+		Setting     *updateUserSettingPatch `json:"setting,omitempty"`
 	}
 
 	var req updateUserRequest
@@ -915,8 +920,16 @@ func UpdateUser(c *gin.Context) {
 	// user-managed notify/webhook preferences.
 	if req.Setting != nil {
 		current := originUser.GetSetting()
-		if current.AllowNegativeBalance != req.Setting.AllowNegativeBalance {
-			current.AllowNegativeBalance = req.Setting.AllowNegativeBalance
+		settingChanged := false
+		if req.Setting.AllowNegativeBalance != nil && current.AllowNegativeBalance != *req.Setting.AllowNegativeBalance {
+			current.AllowNegativeBalance = *req.Setting.AllowNegativeBalance
+			settingChanged = true
+		}
+		if req.Setting.RequestHeadersLog != nil {
+			current.RequestHeadersLog = req.Setting.RequestHeadersLog
+			settingChanged = true
+		}
+		if settingChanged {
 			originUser.SetSetting(current)
 			if err := model.DB.Model(&model.User{}).
 				Where("id = ?", originUser.Id).

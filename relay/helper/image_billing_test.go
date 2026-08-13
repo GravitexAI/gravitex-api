@@ -38,6 +38,18 @@ func TestImagePerImageCost(t *testing.T) {
 	require.InDelta(t, 0.096, cost, 0.0000001)
 }
 
+func TestImageOutputUnitPriceSupportsCurrentTierKeyNames(t *testing.T) {
+	config := types.ImagePerImagePricing{
+		OutputImage: map[string]float64{
+			"pixelLessEqual261W": 0.045,
+			"pixelMoreThan261W":  0.09,
+		},
+	}
+
+	require.InDelta(t, 0.045, ImageOutputUnitPrice(config, "pixelLessEqual236W"), 0.0000001)
+	require.InDelta(t, 0.09, ImageOutputUnitPrice(config, "pixelMoreThan236W"), 0.0000001)
+}
+
 func TestCountImageInputs(t *testing.T) {
 	request := &dto.ImageRequest{Image: []byte(`["a","b"]`)}
 	require.Equal(t, 2, CountImageInputs(request))

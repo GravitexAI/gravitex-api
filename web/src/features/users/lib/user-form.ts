@@ -27,7 +27,62 @@ import { quotaUnitsToDollars } from '@/lib/format'
 import { ROLE } from '@/lib/roles'
 
 import { DEFAULT_GROUP } from '../constants'
-import { type UserFormData, type User } from '../types'
+import type {
+  RequestHeadersLogMode,
+  RequestHeadersLogSetting,
+  UserFormData,
+  User,
+} from '../types'
+
+export const DEFAULT_REQUEST_HEADERS_LOG_SETTING: RequestHeadersLogSetting = {
+  enabled: false,
+  mode: 'selected',
+  headers: [],
+}
+
+export function parseRequestHeadersLogSetting(
+  setting: string | null | undefined
+): RequestHeadersLogSetting {
+  if (!setting) return DEFAULT_REQUEST_HEADERS_LOG_SETTING
+
+  try {
+    const parsed: unknown = JSON.parse(setting)
+    if (!parsed || typeof parsed !== 'object') {
+      return DEFAULT_REQUEST_HEADERS_LOG_SETTING
+    }
+
+    const raw = (parsed as { request_headers_log?: unknown })
+      .request_headers_log
+    if (!raw || typeof raw !== 'object') {
+      return DEFAULT_REQUEST_HEADERS_LOG_SETTING
+    }
+
+    const config = raw as {
+      enabled?: unknown
+      mode?: unknown
+      headers?: unknown
+    }
+    const mode: RequestHeadersLogMode =
+      config.mode === 'all' ? 'all' : 'selected'
+    const headers = Array.isArray(config.headers)
+      ? Array.from(
+          new Set(
+            config.headers.filter(
+              (header): header is string => typeof header === 'string'
+            )
+          )
+        )
+      : []
+
+    return {
+      enabled: config.enabled === true,
+      mode,
+      headers,
+    }
+  } catch {
+    return DEFAULT_REQUEST_HEADERS_LOG_SETTING
+  }
+}
 
 // ============================================================================
 // Form Schema
@@ -41,6 +96,9 @@ export const userFormSchema = z.object({
   quota_dollars: z.number().min(0).optional(),
   group: z.string().optional(),
   remark: z.string().optional(),
+  request_headers_log_enabled: z.boolean(),
+  request_headers_log_mode: z.enum(['all', 'selected']),
+  request_headers_log_headers: z.string(),
   admin_permissions: z
     .record(z.string(), z.record(z.string(), z.boolean()))
     .optional(),
@@ -62,6 +120,9 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   remark: '',
   // Filled against the backend catalog at render time; see UsersMutateDrawer.
   admin_permissions: {},
+  request_headers_log_enabled: false,
+  request_headers_log_mode: 'selected',
+  request_headers_log_headers: '',
 }
 
 // ============================================================================
@@ -104,6 +165,16 @@ export function transformFormDataToPayload(
     // For update: quota is adjusted atomically via /api/user/manage, not sent here
     payload.group = data.group
     payload.remark = data.remark || undefined
+    payload.setting = {
+      request_headers_log: {
+        enabled: data.request_headers_log_enabled,
+        mode: data.request_headers_log_mode,
+        headers: data.request_headers_log_headers
+          .split(/[\n,]+/)
+          .map((header) => header.trim().toLowerCase())
+          .filter((header, index, headers) => header && headers.indexOf(header) === index),
+      },
+    }
     payload.id = userId
   }
 
@@ -116,6 +187,8 @@ export function transformFormDataToPayload(
  * the catalog at render time in UsersMutateDrawer.
  */
 export function transformUserToFormDefaults(user: User): UserFormValues {
+  const requestHeadersLog = parseRequestHeadersLogSetting(user.setting)
+
   return {
     username: user.username,
     display_name: user.display_name,
@@ -125,5 +198,8 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
     group: user.group || DEFAULT_GROUP,
     remark: user.remark || '',
     admin_permissions: user.admin_permissions ?? {},
+    request_headers_log_enabled: requestHeadersLog.enabled,
+    request_headers_log_mode: requestHeadersLog.mode,
+    request_headers_log_headers: requestHeadersLog.headers.join('\n'),
   }
 }

@@ -89,7 +89,7 @@ import {
   transformFormDataToPayload,
   transformUserToFormDefaults,
 } from '../lib'
-import { type User } from '../types'
+import type { User } from '../types'
 import { UserQuotaDialog } from './user-quota-dialog'
 import { useUsers } from './users-provider'
 
@@ -448,6 +448,104 @@ export function UsersMutateDrawer({
                       </FormItem>
                     )}
                   />
+                </SideDrawerSection>
+              )}
+
+              {isUpdate && (
+                <SideDrawerSection>
+                  <h3 className='text-sm font-medium'>
+                    {t('Client Request Header Logging')}
+                  </h3>
+                  <p className='text-muted-foreground text-xs'>
+                    {t(
+                      'Records the original inbound request headers in the usage log other field.'
+                    )}
+                  </p>
+
+                  <FormField
+                    control={form.control}
+                    name='request_headers_log_enabled'
+                    render={({ field }) => (
+                      <FormItem className='flex items-center justify-between rounded-md border p-3'>
+                        <div>
+                          <FormLabel>{t('Enable request header logging')}</FormLabel>
+                          <FormDescription>
+                            {t('Disabled by default for existing users.')}
+                          </FormDescription>
+                        </div>
+                        <FormControl>
+                          <Checkbox
+                            checked={field.value}
+                            onCheckedChange={(checked) =>
+                              field.onChange(checked === true)
+                            }
+                          />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name='request_headers_log_mode'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Request header logging mode')}</FormLabel>
+                        <Select
+                          items={[
+                            { value: 'selected', label: t('Selected headers') },
+                            { value: 'all', label: t('All headers') },
+                          ]}
+                          onValueChange={(value) =>
+                            value !== null && field.onChange(value)
+                          }
+                          value={field.value}
+                        >
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent alignItemWithTrigger={false}>
+                            <SelectGroup>
+                              <SelectItem value='selected'>
+                                {t('Selected headers')}
+                              </SelectItem>
+                              <SelectItem value='all'>
+                                {t('All headers')}
+                              </SelectItem>
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  {form.watch('request_headers_log_mode') === 'selected' && (
+                    <FormField
+                      control={form.control}
+                      name='request_headers_log_headers'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Headers to record')}</FormLabel>
+                          <FormControl>
+                            <Textarea
+                              {...field}
+                              placeholder={t(
+                                'Enter request header names, separated by commas or new lines'
+                              )}
+                              rows={3}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {t('Header names are case-insensitive and stored with their original values.')}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
                 </SideDrawerSection>
               )}
 

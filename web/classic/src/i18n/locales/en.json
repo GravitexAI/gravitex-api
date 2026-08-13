@@ -3837,6 +3837,14 @@
     "固定过期（命中后不刷新 TTL）": "Fixed expiration (do not refresh TTL on hit)",
     "开启后，命中同一亲和渠道不会续期 TTL，缓存从首次写入起自然到期，到期后重新负载均衡；关闭时每次成功请求都会续期（滑动过期），只要持续有请求就会一直粘在同一渠道。": "When enabled, hitting the same affinity channel does not renew the TTL. The cache expires naturally from first write, allowing periodic rebalancing across channels of equal priority. When disabled, every successful request renews the TTL (sliding expiration), keeping the affinity sticky as long as requests keep coming.",
     "固定过期": "Fixed expiration",
-    "滑动过期": "Sliding expiration"
+    "滑动过期": "Sliding expiration",
+    "记录用户请求头": "Record user request headers",
+    "请求头记录模式": "Request header logging mode",
+    "全部请求头": "All request headers",
+    "指定请求头": "Selected request headers",
+    "指定请求头字段": "Selected request header fields",
+    "请选择要记录的请求头": "Select request headers to record",
+    "请求头将原样写入 logs.other，请谨慎开启": "Request headers are stored raw in logs.other. Enable with caution.",
+    "请输入请求头名称，多个用逗号或换行分隔": "Enter request header names, separated by commas or new lines"
   }
 }

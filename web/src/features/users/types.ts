@@ -20,6 +20,14 @@ import { z } from 'zod'
 
 import type { AdminPermissionMatrix } from '@/lib/admin-permissions'
 
+export type RequestHeadersLogMode = 'all' | 'selected'
+
+export interface RequestHeadersLogSetting {
+  enabled: boolean
+  mode: RequestHeadersLogMode
+  headers: string[]
+}
+
 // ============================================================================
 // User Schema & Types
 // ============================================================================
@@ -59,6 +67,7 @@ export const userSchema = z.object({
   last_login_at: z.number().optional(),
   DeletedAt: z.any().nullable().optional(),
   remark: z.string().optional(),
+  setting: z.string().nullable().optional(),
   admin_permissions: z
     .record(z.string(), z.record(z.string(), z.boolean()))
     .optional(),
@@ -126,6 +135,9 @@ export interface UserFormData {
   group?: string // Only used when updating user
   remark?: string // Only used when updating user
   admin_permissions?: AdminPermissionMatrix
+  setting?: {
+    request_headers_log?: RequestHeadersLogSetting
+  }
 }
 
 export type ManageUserAction =

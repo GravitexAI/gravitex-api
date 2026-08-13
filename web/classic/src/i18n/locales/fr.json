@@ -3680,6 +3680,14 @@
     "固定过期（命中后不刷新 TTL）": "Expiration fixe (ne pas renouveler le TTL en cas de correspondance)",
     "开启后，命中同一亲和渠道不会续期 TTL，缓存从首次写入起自然到期，到期后重新负载均衡；关闭时每次成功请求都会续期（滑动过期），只要持续有请求就会一直粘在同一渠道。": "Si activé, le fait d'utiliser le même canal d'affinité ne renouvelle pas le TTL. Le cache expire naturellement depuis la première écriture, ce qui permet un rééquilibrage périodique entre les canaux de même priorité. Si désactivé, chaque requête réussie renouvelle le TTL (expiration glissante), maintenant l'affinité tant que des requêtes continuent d'arriver.",
     "固定过期": "Expiration fixe",
-    "滑动过期": "Expiration glissante"
+    "滑动过期": "Expiration glissante",
+    "记录用户请求头": "Enregistrer les en-têtes de requête utilisateur",
+    "请求头记录模式": "Mode de journalisation des en-têtes",
+    "全部请求头": "Tous les en-têtes",
+    "指定请求头": "En-têtes sélectionnés",
+    "指定请求头字段": "Champs d’en-tête sélectionnés",
+    "请选择要记录的请求头": "Sélectionnez les en-têtes à enregistrer",
+    "请求头将原样写入 logs.other，请谨慎开启": "Les en-têtes sont enregistrés tels quels dans logs.other. Activez avec prudence.",
+    "请输入请求头名称，多个用逗号或换行分隔": "Saisissez les noms des en-têtes, séparés par des virgules ou des retours à la ligne"
   }
 }

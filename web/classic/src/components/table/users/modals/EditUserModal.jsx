@@ -95,6 +95,9 @@ const EditUserModal = (props) => {
     group: 'default',
     remark: '',
     allow_negative_balance: false,
+    request_headers_log_enabled: false,
+    request_headers_log_mode: 'selected',
+    request_headers_log_headers: '',
   });
 
   const fetchGroups = async () => {
@@ -122,8 +125,22 @@ const EditUserModal = (props) => {
       try {
         const parsedSetting = data.setting ? JSON.parse(data.setting) : {};
         data.allow_negative_balance = !!parsedSetting.allow_negative_balance;
+        const requestHeadersLog = parsedSetting.request_headers_log || {};
+        data.request_headers_log_enabled = requestHeadersLog.enabled === true;
+        data.request_headers_log_mode =
+          requestHeadersLog.mode === 'all' ? 'all' : 'selected';
+        data.request_headers_log_headers = Array.isArray(
+          requestHeadersLog.headers,
+        )
+          ? requestHeadersLog.headers
+              .filter((header) => typeof header === 'string')
+              .join('\n')
+          : '';
       } catch (e) {
         data.allow_negative_balance = false;
+        data.request_headers_log_enabled = false;
+        data.request_headers_log_mode = 'selected';
+        data.request_headers_log_headers = '';
       }
       setInputs({ ...getInitValues(), ...data });
     } else {
@@ -162,6 +179,17 @@ const EditUserModal = (props) => {
     if (userId) {
       payload.setting = {
         allow_negative_balance: !!values.allow_negative_balance,
+        request_headers_log: {
+          enabled: values.request_headers_log_enabled === true,
+          mode: values.request_headers_log_mode === 'all' ? 'all' : 'selected',
+          headers: String(values.request_headers_log_headers || '')
+            .split(/[\n,]+/)
+            .map((header) => header.trim().toLowerCase())
+            .filter(
+              (header, index, headers) =>
+                header && headers.indexOf(header) === index,
+            ),
+        },
       };
     }
     delete payload.allow_negative_balance;
@@ -187,7 +215,11 @@ const EditUserModal = (props) => {
   const adjustQuota = async () => {
     const quotaVal = parseInt(adjustQuotaLocal) || 0;
     if (quotaVal <= 0 && adjustMode !== 'override') return;
-    if (adjustMode === 'override' && (adjustQuotaLocal === '' || adjustQuotaLocal == null)) return;
+    if (
+      adjustMode === 'override' &&
+      (adjustQuotaLocal === '' || adjustQuotaLocal == null)
+    )
+      return;
     setAdjustLoading(true);
     try {
       const res = await API.post('/api/user/manage', {
@@ -409,6 +441,40 @@ const EditUserModal = (props) => {
                       </Col>
 
                       <Col span={24}>
+                        <Form.Switch
+                          field='request_headers_log_enabled'
+                          label={t('记录用户请求头')}
+                          checkedText={t('开')}
+                          uncheckedText={t('关')}
+                          extraText={t(
+                            '请求头将原样写入 logs.other，请谨慎开启',
+                          )}
+                        />
+                      </Col>
+
+                      <Col span={24}>
+                        <Form.Select
+                          field='request_headers_log_mode'
+                          label={t('请求头记录模式')}
+                          optionList={[
+                            { label: t('全部请求头'), value: 'all' },
+                            { label: t('指定请求头'), value: 'selected' },
+                          ]}
+                        />
+                      </Col>
+
+                      <Col span={24}>
+                        <Form.TextArea
+                          field='request_headers_log_headers'
+                          label={t('指定请求头字段')}
+                          placeholder={t(
+                            '请输入请求头名称，多个用逗号或换行分隔',
+                          )}
+                          autosize={{ minRows: 2, maxRows: 4 }}
+                        />
+                      </Col>
+
+                      <Col span={24}>
                         <div
                           className='text-xs cursor-pointer'
                           style={{ color: 'var(--semi-color-text-2)' }}
@@ -418,7 +484,10 @@ const EditUserModal = (props) => {
                             ? `▾ ${t('收起原生额度输入')}`
                             : `▸ ${t('使用原生额度输入')}`}
                         </div>
-                        <div style={{ display: showQuotaInput ? 'block' : 'none' }} className='mt-2'>
+                        <div
+                          style={{ display: showQuotaInput ? 'block' : 'none' }}
+                          className='mt-2'
+                        >
                           <Form.InputNumber
                             field='quota'
                             label={t('额度')}
@@ -433,7 +502,9 @@ const EditUserModal = (props) => {
                         <Form.Switch
                           field='allow_negative_balance'
                           label={t('允许透支使用（欠费不拦截）')}
-                          extraText={t('⚠ 开启后该用户余额 ≤ 0 也可继续调用 API，请谨慎使用')}
+                          extraText={t(
+                            '⚠ 开启后该用户余额 ≤ 0 也可继续调用 API，请谨慎使用',
+                          )}
                         />
                       </Col>
                     </Row>
@@ -564,7 +635,10 @@ const EditUserModal = (props) => {
             ? `▾ ${t('收起原生额度输入')}`
             : `▸ ${t('使用原生额度输入')}`}
         </div>
-        <div style={{ display: showAdjustQuotaRaw ? 'block' : 'none' }} className='mt-2'>
+        <div
+          style={{ display: showAdjustQuotaRaw ? 'block' : 'none' }}
+          className='mt-2'
+        >
           <div className='mb-1'>
             <Text size='small'>{t('额度')}</Text>
           </div>

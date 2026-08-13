@@ -113,6 +113,7 @@ export interface ToolSurchargeItem {
 }
 
 export interface LogOtherData {
+  client_request_headers?: Record<string, string>
   admin_info?: {
     is_multi_key?: boolean
     multi_key_index?: number

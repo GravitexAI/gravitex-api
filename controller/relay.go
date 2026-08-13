@@ -414,6 +414,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			adminInfo["cost_discount"] = costDiscount
 		}
 		other["admin_info"] = adminInfo
+		model.AppendConfiguredClientRequestHeaders(c, userId, other)
 		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 		if startTime.IsZero() {
 			startTime = time.Now()
