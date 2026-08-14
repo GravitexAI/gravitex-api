@@ -73,9 +73,11 @@ func buildOmniRequestBody(req relaycommon.TaskSubmitReq) ([]byte, error) {
 	}
 	videoInput := metadataString(metadata, "video")
 	if videoInput == "" {
+		videoInput = metadataString(metadata, "input_reference")
+	}
+	if videoInput == "" {
 		videoInput = strings.TrimSpace(req.InputReference)
 	}
-	task := omniTaskFromMetadata(metadata, req.Images, videoInput)
 	content := []omniContent{{Type: "text", Text: req.Prompt}}
 	images := req.Images
 	if len(images) == 0 {
@@ -86,6 +88,11 @@ func buildOmniRequestBody(req relaycommon.TaskSubmitReq) ([]byte, error) {
 			images = []string{image}
 		}
 	}
+	if isOmniImageInput(videoInput) {
+		images = appendUniqueOmniInput(images, videoInput)
+		videoInput = ""
+	}
+	task := omniTaskFromMetadata(metadata, images, videoInput)
 	for _, image := range images {
 		parsed, err := ParseImageInput(image)
 		if err != nil {
@@ -162,6 +169,33 @@ func buildOmniRequestBody(req relaycommon.TaskSubmitReq) ([]byte, error) {
 		body["previous_interaction_id"] = previousID
 	}
 	return common.Marshal(body)
+}
+
+func isOmniImageInput(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if strings.HasPrefix(value, "data:image/") {
+		return true
+	}
+	path := strings.TrimSuffix(strings.Split(value, "?")[0], "/")
+	for _, suffix := range []string{".jpg", ".jpeg", ".png", ".webp", ".gif"} {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendUniqueOmniInput(values []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if strings.TrimSpace(existing) == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 // BuildOmniRequestBody is shared by the Gemini Developer API and Vertex
@@ -301,11 +335,11 @@ func ParseOmniTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
 			ti.TextOutputTokens += modality.Tokens
 		}
 	}
-	if ti.VideoOutputTokens == 0 && interaction.Usage.TotalOutputTokens > ti.TextOutputTokens {
-		ti.VideoOutputTokens = interaction.Usage.TotalOutputTokens - ti.TextOutputTokens
-	}
 	if ti.TextOutputTokens == 0 && interaction.Usage.TotalThoughtTokens > 0 {
 		ti.TextOutputTokens = interaction.Usage.TotalThoughtTokens
+	}
+	if ti.VideoOutputTokens == 0 && interaction.Usage.TotalOutputTokens > ti.TextOutputTokens {
+		ti.VideoOutputTokens = interaction.Usage.TotalOutputTokens - ti.TextOutputTokens
 	}
 	ti.CompletionTokens = ti.VideoOutputTokens
 	ti.TotalTokens = interaction.Usage.TotalTokens

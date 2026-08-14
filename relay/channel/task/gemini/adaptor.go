@@ -297,6 +297,9 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 			}
 			return "", nil, service.TaskErrorWrapper(err, "invalid_response", http.StatusInternalServerError)
 		}
+		if interaction.Usage.TotalInputTokens > 0 || interaction.Usage.TotalOutputTokens > 0 || interaction.Usage.TotalTokens > 0 {
+			info.SetUpstreamResponsesField("usage", interaction.Usage)
+		}
 		info.PublicTaskID = interaction.ID
 		video := dto.NewOpenAIVideo()
 		video.ID, video.TaskID, video.Model = interaction.ID, interaction.ID, info.OriginModelName
@@ -586,7 +589,14 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	video.Status = task.Status.ToVideoStatus()
 	video.SetProgressStr(task.Progress)
 	video.CreatedAt = task.CreatedAt
-	if task.FinishTime > 0 {
+	if isOmniModel(modelName) {
+		if task.Status == model.TaskStatusSuccess || task.Status == model.TaskStatusFailure {
+			video.CompletedAt = task.FinishTime
+			if video.CompletedAt == 0 {
+				video.CompletedAt = task.UpdatedAt
+			}
+		}
+	} else if task.FinishTime > 0 {
 		video.CompletedAt = task.FinishTime
 	} else if task.UpdatedAt > 0 {
 		video.CompletedAt = task.UpdatedAt

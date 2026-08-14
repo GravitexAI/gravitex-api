@@ -4,9 +4,29 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/stretchr/testify/require"
 )
+
+func TestConvertToOpenAIVideoDoesNotSetCompletedAtWhileOmniIsInProgress(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	data, err := adaptor.ConvertToOpenAIVideo(&model.Task{
+		TaskID:    "omni:interaction-1",
+		Status:    model.TaskStatusInProgress,
+		Progress:  "50%",
+		CreatedAt: 100,
+		UpdatedAt: 200,
+		Properties: model.Properties{
+			OriginModelName: omniModelName,
+		},
+	})
+	require.NoError(t, err)
+	var response map[string]interface{}
+	require.NoError(t, common.Unmarshal(data, &response))
+	_, hasCompletedAt := response["completed_at"]
+	require.False(t, hasCompletedAt)
+}
 
 func TestBuildOmniRequestBodySupportsReferenceImagesAndEditVideo(t *testing.T) {
 	body, err := buildOmniRequestBody(relaycommon.TaskSubmitReq{
@@ -47,6 +67,36 @@ func TestBuildOmniRequestBodyUsesEditTaskForVideoInput(t *testing.T) {
 	responseFormat := responseFormats[0].(map[string]interface{})
 	_, hasAspectRatio := responseFormat["aspect_ratio"]
 	require.False(t, hasAspectRatio)
+}
+
+func TestBuildOmniRequestBodyTreatsImageInputReferenceAsImage(t *testing.T) {
+	body, err := buildOmniRequestBody(relaycommon.TaskSubmitReq{
+		Prompt:         "generate from image",
+		InputReference: "data:image/jpeg;base64,YWJj",
+	})
+	require.NoError(t, err)
+	var payload map[string]interface{}
+	require.NoError(t, common.Unmarshal(body, &payload))
+
+	contents := payload["input"].([]interface{})
+	require.Len(t, contents, 2)
+	image := contents[1].(map[string]interface{})
+	require.Equal(t, "image", image["type"])
+	require.Equal(t, "image/jpeg", image["mime_type"])
+	videoConfig := payload["generation_config"].(map[string]interface{})["video_config"].(map[string]interface{})
+	require.Equal(t, "image_to_video", videoConfig["task"])
+}
+
+func TestBuildOmniRequestBodyDeduplicatesImageInputReference(t *testing.T) {
+	body, err := buildOmniRequestBody(relaycommon.TaskSubmitReq{
+		Prompt:         "generate from image",
+		Images:         []string{"data:image/jpeg;base64,YWJj"},
+		InputReference: "data:image/jpeg;base64,YWJj",
+	})
+	require.NoError(t, err)
+	var payload map[string]interface{}
+	require.NoError(t, common.Unmarshal(body, &payload))
+	require.Len(t, payload["input"].([]interface{}), 2)
 }
 
 func TestBuildOmniRequestBodyUsesInlineDelivery(t *testing.T) {
@@ -149,6 +199,25 @@ func TestParseOmniTaskResultExtractsVideoDataAndUsage(t *testing.T) {
 	require.Equal(t, 34, result.VideoOutputTokens)
 	require.Equal(t, 34, result.CompletionTokens)
 	require.Equal(t, 46, result.TotalTokens)
+}
+
+func TestParseOmniTaskResultSeparatesThoughtTokensFromVideoTokens(t *testing.T) {
+	result, err := ParseOmniTaskResult([]byte(`{
+		"id":"v1_test",
+		"status":"completed",
+		"usage":{
+			"total_input_tokens":12,
+			"total_output_tokens":100,
+			"total_tokens":112,
+			"total_thought_tokens":10
+		}
+	}`))
+
+	require.NoError(t, err)
+	require.Equal(t, 10, result.TextOutputTokens)
+	require.Equal(t, 90, result.VideoOutputTokens)
+	require.Equal(t, 90, result.CompletionTokens)
+	require.Equal(t, 112, result.TotalTokens)
 }
 
 func TestParseOmniTaskResultKeepsURIWithoutOSSConversion(t *testing.T) {

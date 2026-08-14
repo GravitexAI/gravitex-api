@@ -472,6 +472,15 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		if taskModelName == "" {
 			taskModelName = task.Properties.UpstreamModelName
 		}
+		// Omni sometimes returns SUCCESS on the first poll, so no IN_PROGRESS
+		// response populated StartTime. Preserve a real task boundary before
+		// writing the consume log instead of leaving use_time at zero.
+		if isGeminiOmniVideoModel(taskModelName) && task.StartTime == 0 {
+			task.StartTime = task.SubmitTime
+			if task.StartTime == 0 {
+				task.StartTime = task.CreatedAt
+			}
+		}
 		billingRoute := "pre_deduction_settle"
 		if isVideoPerSecondModel(taskModelName) {
 			billingRoute = "per_second"
@@ -916,6 +925,8 @@ func mergeBillingFieldsIntoTaskData(existingData, newData []byte) []byte {
 		"has_video_input",
 		"video_resolution",
 		"billing_cost_discount",
+		"admin_info", "client_request_headers", "upstream_responses",
+		"usage_conversion", "reasoning_effort", "request_conversion",
 	}
 	var existMap, newMap map[string]interface{}
 	if len(existingData) > 0 {
@@ -1003,6 +1014,54 @@ func isVideoTokenRatioModel(name string) bool {
 	return false
 }
 
+// videoTaskUseTimeSeconds returns the actual duration for Omni async billing.
+// Omni can reach SUCCESS without an intermediate IN_PROGRESS poll, so StartTime
+// may be empty; in that case SubmitTime is the reliable task boundary.
+func videoTaskUseTimeSeconds(task *model.Task, modelName string) int {
+	if task == nil || !strings.EqualFold(modelName, "gemini-omni-flash-preview") {
+		return 0
+	}
+	start := task.StartTime
+	finish := task.FinishTime
+	// The GET terminal path can hold a stale task snapshot while the polling
+	// worker has already persisted start/finish timestamps. Read only the time
+	// columns in that case; billing/quota fields must remain owned by the caller.
+	if task.ID > 0 && (start == 0 || finish == 0) {
+		var persisted struct {
+			CreatedAt  int64
+			SubmitTime int64
+			StartTime  int64
+			FinishTime int64
+		}
+		if err := model.DB.Model(&model.Task{}).
+			Select("created_at, submit_time, start_time, finish_time").
+			Where("id = ?", task.ID).First(&persisted).Error; err == nil {
+			if task.CreatedAt == 0 {
+				task.CreatedAt = persisted.CreatedAt
+			}
+			if task.SubmitTime == 0 {
+				task.SubmitTime = persisted.SubmitTime
+			}
+			if start == 0 {
+				start = persisted.StartTime
+			}
+			if finish == 0 {
+				finish = persisted.FinishTime
+			}
+		}
+	}
+	if start == 0 {
+		start = task.SubmitTime
+	}
+	if start == 0 {
+		start = task.CreatedAt
+	}
+	if finish <= start || start <= 0 {
+		return 0
+	}
+	return int(finish - start)
+}
+
 func isGeminiOmniVideoModel(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), "gemini-omni-flash-preview")
 }
@@ -1023,6 +1082,8 @@ func MergeVideoTaskDataWithUpstreamResponse(task *model.Task, responseBody []byt
 		"generate_audio", "generateAudio",
 		"has_video_input",
 		"billing_cost_discount",
+		"admin_info", "client_request_headers", "upstream_responses",
+		"usage_conversion", "reasoning_effort", "request_conversion",
 	}
 	var existingData, newData map[string]interface{}
 	if len(task.Data) > 0 {
@@ -1503,10 +1564,7 @@ func handleVideoPerSecondBilling(ctx context.Context, task *model.Task) error {
 		username = user.Username
 	}
 
-	useTime := 0
-	if task.FinishTime > 0 && task.StartTime > 0 {
-		useTime = int(task.FinishTime - task.StartTime)
-	}
+	useTime := videoTaskUseTimeSeconds(task, modelName)
 
 	logContent := fmt.Sprintf("视频任务成功，模型 %s，时长 %d 秒，耗时 %ds，扣费 %s",
 		modelName, requestedSeconds, useTime, logger.LogQuota(actualQuota))
@@ -1837,7 +1895,7 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		// Omni uses one input price and separate text/video output prices.
 		// Do not collapse all modalities into the video price: the Interaction
 		// usage object reports them independently.
-		inputTokens := taskResult.InputTokens
+		inputTokens, textInputTokens := geminiOmniInputTokens(taskResult)
 		videoTokens := taskResult.VideoOutputTokens
 		if videoTokens <= 0 {
 			videoTokens = tokens
@@ -1850,7 +1908,7 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		logPromptTokens = inputTokens
 		logCompletionTokens = videoTokens + textTokens
 		otherMap["input_tokens"] = inputTokens
-		otherMap["input_text_tokens"] = taskResult.TextInputTokens
+		otherMap["input_text_tokens"] = textInputTokens
 		otherMap["input_image_tokens"] = taskResult.ImageInputTokens
 		otherMap["input_video_tokens"] = taskResult.VideoInputTokens
 		otherMap["text_output_tokens"] = textTokens
@@ -1891,10 +1949,7 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		username = user.Username
 	}
 
-	useTime := 0
-	if task.FinishTime > 0 && task.StartTime > 0 {
-		useTime = int(task.FinishTime - task.StartTime)
-	}
+	useTime := videoTaskUseTimeSeconds(task, modelName)
 
 	logContent := fmt.Sprintf("视频任务成功，模型 %s，tokens %d，耗时 %ds，扣费 %s",
 		modelName, tokens, useTime, logger.LogQuota(actualQuota))
@@ -1972,6 +2027,30 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		}
 	}
 	return nil
+}
+
+func geminiOmniInputTokens(taskResult *relaycommon.TaskInfo) (aggregate int, textInput int) {
+	if taskResult == nil {
+		return 0, 0
+	}
+	aggregate = taskResult.InputTokens
+	if aggregate <= 0 {
+		aggregate = taskResult.TextInputTokens + taskResult.ImageInputTokens + taskResult.VideoInputTokens
+	}
+	textInput = taskResult.TextInputTokens
+	// Some Gemini Interaction responses expose only aggregate input_tokens.
+	// Keep image/video input tokens in their own lanes when the provider returns
+	// the modality breakdown, so Java/list consumers do not mislabel them as text.
+	if textInput <= 0 {
+		textInput = aggregate - taskResult.ImageInputTokens - taskResult.VideoInputTokens
+		if textInput < 0 {
+			textInput = 0
+		}
+		if textInput == 0 && taskResult.ImageInputTokens == 0 && taskResult.VideoInputTokens == 0 {
+			textInput = aggregate
+		}
+	}
+	return aggregate, textInput
 }
 
 func extractVideoUsageTokensFromTaskData(taskData map[string]interface{}) int {

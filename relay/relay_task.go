@@ -296,6 +296,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		taskData = mergeVideoTaskBillingData(c, info, taskData, modelName, info.UsingGroup, upstreamBodyBytes)
 	} else if isVideoTokenRatioBilling {
 		taskData = mergeVideoTokenRatioBillingData(c, info, taskData, modelName, info.UsingGroup)
+		taskData = service.AppendGeminiOmniTaskLogMetadata(c, info, taskData)
 	} else {
 		taskData = mergeTokenInfoToTaskData(c, info, taskData)
 	}

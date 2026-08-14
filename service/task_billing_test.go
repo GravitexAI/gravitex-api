@@ -353,6 +353,54 @@ func TestTaskBillingOtherIncludesVideoBillingFields(t *testing.T) {
 	assert.Equal(t, 0.12, other["video_price_per_second"])
 }
 
+func TestEnrichTaskBillingDataForTokenSettlementAddsVideoBillingDetails(t *testing.T) {
+	task := makeTask(1, 1, 3000, 1, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.OriginModelName = "gemini-omni-flash-preview"
+	task.Properties.OriginModelName = "gemini-omni-flash-preview"
+	task.Data = json.RawMessage(`{"requested_seconds":4}`)
+
+	result := &relaycommon.TaskInfo{TotalTokens: 17813, InputTokens: 1000, TextOutputTokens: 100, VideoOutputTokens: 500}
+	enrichTaskBillingDataForTokenSettlement(task, result)
+
+	var data map[string]interface{}
+	require.NoError(t, common.Unmarshal(task.Data, &data))
+	assert.Equal(t, "video_token_ratio", data["billing_type"])
+	assert.Equal(t, float64(17813), data["tokens"])
+	assert.Equal(t, float64(1000), data["input_tokens"])
+	assert.Equal(t, float64(1000), data["input_text_tokens"])
+	assert.Equal(t, float64(100), data["text_output_tokens"])
+	assert.Equal(t, float64(500), data["video_output_tokens"])
+	assert.Equal(t, 1.5, data["input_price_per_million_tokens"])
+
+	actualQuota, ok, _ := calculateGeminiOmniQuota(task, result)
+	require.True(t, ok)
+	assert.Equal(t, 5575, actualQuota)
+}
+
+func TestRecalculateGeminiOmniWritesUsageAndDurationColumns(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+	seedUser(t, 21, 10000)
+	seedToken(t, 21, 21, "sk-omni", 10000)
+	seedChannel(t, 21)
+
+	task := makeTask(21, 21, 1000, 21, BillingSourceWallet, 0)
+	task.Properties.OriginModelName = "gemini-omni-flash-preview"
+	task.PrivateData.BillingContext.OriginModelName = "gemini-omni-flash-preview"
+	task.StartTime = 100
+	task.FinishTime = 116
+	task.Data = json.RawMessage(`{"billing_type":"video_token_ratio","input_tokens":21,"input_text_tokens":21,"text_output_tokens":199,"video_output_tokens":23168}`)
+	require.NoError(t, model.DB.Create(task).Error)
+
+	RecalculateTaskQuota(ctx, task, 2000, "Gemini Omni token重算")
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	require.Equal(t, 21, log.PromptTokens)
+	require.Equal(t, 23367, log.CompletionTokens)
+	require.Equal(t, 16, log.UseTime)
+}
+
 func TestRefundTaskQuota_Subscription(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()

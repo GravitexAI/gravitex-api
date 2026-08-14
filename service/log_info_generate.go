@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -123,6 +124,50 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
 	return other
+}
+
+// AppendGeminiOmniTaskLogMetadata snapshots the standard request/response
+// metadata into the async task data. It is intentionally scoped to Gemini
+// Omni; regular relay/task logs keep their existing path unchanged.
+func AppendGeminiOmniTaskLogMetadata(c *gin.Context, relayInfo *relaycommon.RelayInfo, taskData []byte) []byte {
+	if relayInfo == nil || !strings.EqualFold(strings.TrimSpace(relayInfo.OriginModelName), "gemini-omni-flash-preview") {
+		return taskData
+	}
+	data := make(map[string]interface{})
+	if len(taskData) > 0 {
+		if err := common.Unmarshal(taskData, &data); err != nil || data == nil {
+			data = make(map[string]interface{})
+		}
+	}
+	if relayInfo.ReasoningEffort != "" {
+		data["reasoning_effort"] = relayInfo.ReasoningEffort
+	}
+	adminInfo := make(map[string]interface{})
+	adminInfo["use_channel"] = c.GetStringSlice("use_channel")
+	if common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey) {
+		adminInfo["is_multi_key"] = true
+		adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
+	}
+	if common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens) {
+		adminInfo["local_count_tokens"] = true
+	}
+	AppendChannelAffinityAdminInfo(c, adminInfo)
+	if discount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount); discount > 0 {
+		adminInfo["cost_discount"] = discount
+	}
+	data["admin_info"] = adminInfo
+	model.AppendConfiguredClientRequestHeaders(c, relayInfo.UserId, data)
+	appendRequestPath(c, relayInfo, data)
+	appendRequestConversionChain(relayInfo, data)
+	appendFinalRequestFormat(relayInfo, data)
+	appendUpstreamResponses(data, relayInfo)
+	appendUsageConversion(data, relayInfo)
+	appendBillingInfo(relayInfo, data)
+	merged, err := common.Marshal(data)
+	if err != nil {
+		return taskData
+	}
+	return merged
 }
 
 func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {

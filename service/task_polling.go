@@ -641,6 +641,11 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 	}
 	// 2. 回退到 token 重算
 	if taskResult.TotalTokens > 0 {
+		enrichTaskBillingDataForTokenSettlement(task, taskResult)
+		if actualQuota, ok, clamp := calculateGeminiOmniQuota(task, taskResult); ok {
+			RecalculateTaskQuota(ctx, task, actualQuota, "Gemini Omni token重算", clamp)
+			return
+		}
 		RecalculateTaskQuotaByTokens(ctx, task, taskResult.TotalTokens)
 		return
 	}

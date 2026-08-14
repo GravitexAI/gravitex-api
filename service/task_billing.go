@@ -158,7 +158,112 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 		other["upstream_model_name"] = props.UpstreamModelName
 	}
 	appendTaskVideoBillingOther(task, other)
+	if strings.Contains(strings.ToLower(taskModelName(task)), "gemini-omni") {
+		inputTokens := taskDataNumber(other, "input_tokens")
+		textOutputTokens := taskDataNumber(other, "text_output_tokens")
+		videoOutputTokens := taskDataNumber(other, "video_output_tokens")
+		if inputTokens > 0 || textOutputTokens > 0 || videoOutputTokens > 0 {
+			rawCost := inputTokens*1.5 + textOutputTokens*9.0 + videoOutputTokens*17.5
+			other["official_quota"] = common.QuotaFromFloat(rawCost / 1_000_000.0 * common.QuotaPerUnit)
+		}
+	}
 	return other
+}
+
+// enrichTaskBillingDataForTokenSettlement preserves the billing discriminator
+// and token count for the generic token-settlement path. Task-specific billing
+// writes these fields directly to the consume log, but the generic path builds
+// its log from task.Data; without them the admin detail can only show a total.
+func enrichTaskBillingDataForTokenSettlement(task *model.Task, taskResult *relaycommon.TaskInfo) {
+	if task == nil || taskResult == nil || taskResult.TotalTokens <= 0 {
+		return
+	}
+	modelName := strings.ToLower(taskModelName(task))
+	if !strings.Contains(modelName, "gemini-omni") {
+		return
+	}
+
+	data := make(map[string]interface{})
+	if len(task.Data) > 0 {
+		if err := common.Unmarshal(task.Data, &data); err != nil || data == nil {
+			data = make(map[string]interface{})
+		}
+	}
+	if _, exists := data["billing_type"]; !exists {
+		data["billing_type"] = "video_token_ratio"
+	}
+	if _, exists := data["tokens"]; !exists {
+		data["tokens"] = taskResult.TotalTokens
+	}
+	if taskResult.InputTokens > 0 || taskResult.TextOutputTokens > 0 || taskResult.VideoOutputTokens > 0 {
+		inputTextTokens := taskResult.TextInputTokens
+		if inputTextTokens <= 0 {
+			inputTextTokens = taskResult.InputTokens - taskResult.ImageInputTokens - taskResult.VideoInputTokens
+			if inputTextTokens < 0 {
+				inputTextTokens = 0
+			}
+			if inputTextTokens == 0 && taskResult.ImageInputTokens == 0 && taskResult.VideoInputTokens == 0 {
+				inputTextTokens = taskResult.InputTokens
+			}
+		}
+		data["input_tokens"] = taskResult.InputTokens
+		data["input_text_tokens"] = inputTextTokens
+		data["input_image_tokens"] = taskResult.ImageInputTokens
+		data["input_video_tokens"] = taskResult.VideoInputTokens
+		data["text_output_tokens"] = taskResult.TextOutputTokens
+		data["video_output_tokens"] = taskResult.VideoOutputTokens
+		data["input_price_per_million_tokens"] = 1.5
+		data["text_output_price_per_million_tokens"] = 9.0
+		data["video_output_price_per_million_tokens"] = 17.5
+	}
+	if merged, err := common.Marshal(data); err == nil {
+		task.Data = merged
+	}
+}
+
+// calculateGeminiOmniQuota applies the same modality prices used by the
+// dedicated Omni billing path when the generic task settlement path is used.
+func calculateGeminiOmniQuota(task *model.Task, taskResult *relaycommon.TaskInfo) (int, bool, *common.QuotaClamp) {
+	if task == nil || taskResult == nil || !strings.Contains(strings.ToLower(taskModelName(task)), "gemini-omni") {
+		return 0, false, nil
+	}
+	if taskResult.InputTokens <= 0 && taskResult.TextOutputTokens <= 0 && taskResult.VideoOutputTokens <= 0 {
+		return 0, false, nil
+	}
+
+	groupRatio := 0.0
+	if task.PrivateData.BillingContext != nil {
+		groupRatio = task.PrivateData.BillingContext.GroupRatio
+	}
+	if groupRatio <= 0 {
+		group := task.Group
+		if group == "" {
+			if user, err := model.GetUserById(task.UserId, false); err == nil && user != nil {
+				group = user.Group
+			}
+		}
+		if group != "" {
+			groupRatio = ratio_setting.GetGroupRatio(group)
+			if specialRatio, ok := ratio_setting.GetGroupGroupRatio(group, group); ok {
+				groupRatio = specialRatio
+			}
+		}
+	}
+	if groupRatio <= 0 {
+		groupRatio = 1
+	}
+
+	inputCost := float64(taskResult.InputTokens) * 1.5
+	textOutputCost := float64(taskResult.TextOutputTokens) * 9.0
+	videoOutputCost := float64(taskResult.VideoOutputTokens) * 17.5
+	otherMultiplier := 1.0
+	if priceData := taskBillingContextPriceData(task.PrivateData.BillingContext); priceData != nil {
+		otherMultiplier = priceData.OtherRatioMultiplier()
+	}
+	quota, clamp := common.QuotaFromFloatChecked(
+		(inputCost + textOutputCost + videoOutputCost) / 1_000_000.0 * common.QuotaPerUnit * groupRatio * otherMultiplier,
+	)
+	return quota, true, clamp
 }
 
 func appendTaskVideoBillingOther(task *model.Task, other map[string]interface{}) {
@@ -175,6 +280,22 @@ func appendTaskVideoBillingOther(task *model.Task, other map[string]interface{})
 		"requested_seconds",
 		"billing_requested_seconds",
 		"tokens",
+		"input_tokens",
+		"input_text_tokens",
+		"input_image_tokens",
+		"input_video_tokens",
+		"text_output_tokens",
+		"video_output_tokens",
+		"input_price_per_million_tokens",
+		"text_output_price_per_million_tokens",
+		"video_output_price_per_million_tokens",
+		"official_quota",
+		"admin_info",
+		"client_request_headers",
+		"upstream_responses",
+		"usage_conversion",
+		"reasoning_effort",
+		"request_conversion",
 		"generate_audio",
 		"has_video_input",
 		"video_resolution",
@@ -366,17 +487,47 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		attachQuotaSaturationToOther(other, clamp)
 	}
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
-		UserId:    task.UserId,
-		LogType:   logType,
-		Content:   reason,
-		ChannelId: task.ChannelId,
-		ModelName: taskModelName(task),
-		Quota:     logQuota,
-		TokenId:   task.PrivateData.TokenId,
-		Group:     task.Group,
-		Other:     other,
-		NodeName:  task.PrivateData.NodeName,
+		UserId:           task.UserId,
+		LogType:          logType,
+		Content:          reason,
+		ChannelId:        task.ChannelId,
+		ModelName:        taskModelName(task),
+		Quota:            logQuota,
+		TokenId:          task.PrivateData.TokenId,
+		Group:            task.Group,
+		Other:            other,
+		NodeName:         task.PrivateData.NodeName,
+		PromptTokens:     int(taskDataNumber(other, "input_text_tokens")),
+		CompletionTokens: int(taskDataNumber(other, "text_output_tokens") + taskDataNumber(other, "video_output_tokens")),
+		UseTime:          geminiOmniTaskUseTimeSeconds(task),
 	})
+}
+
+func geminiOmniTaskUseTimeSeconds(task *model.Task) int {
+	if task == nil || !strings.EqualFold(taskModelName(task), "gemini-omni-flash-preview") {
+		return 0
+	}
+	start, finish := task.StartTime, task.FinishTime
+	if task.ID > 0 && (start == 0 || finish == 0) {
+		var persisted struct {
+			StartTime  int64
+			FinishTime int64
+		}
+		if err := model.DB.Model(&model.Task{}).
+			Select("start_time, finish_time").
+			Where("id = ?", task.ID).First(&persisted).Error; err == nil {
+			if start == 0 {
+				start = persisted.StartTime
+			}
+			if finish == 0 {
+				finish = persisted.FinishTime
+			}
+		}
+	}
+	if finish <= start || start <= 0 {
+		return 0
+	}
+	return int(finish - start)
 }
 
 // RecalculateTaskQuotaByTokens 根据实际 token 消耗重新计费（异步差额结算）。
