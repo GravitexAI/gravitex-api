@@ -732,10 +732,11 @@ func GetUserModels(c *gin.Context) {
 			return
 		}
 
+		models := model.GetGroupEnabledModels(group)
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "",
-			"data":    model.GetGroupEnabledModels(group),
+			"data":    prependAutoVirtualModels(c, models),
 		})
 		return
 	}
@@ -751,9 +752,15 @@ func GetUserModels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    models,
+		"data":    prependAutoVirtualModels(c, models),
 	})
-	return
+}
+
+func prependAutoVirtualModels(c *gin.Context, models []string) []string {
+	if !service.ShouldExposeAutoModels(c, models) {
+		return models
+	}
+	return append(service.AutoVirtualModelNames(), models...)
 }
 
 func GetUserModelsAccount(c *gin.Context) {
