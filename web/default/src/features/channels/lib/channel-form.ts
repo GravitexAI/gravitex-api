@@ -130,6 +130,25 @@ function isOptionalModelMapping(value: string | undefined): boolean {
   }
 }
 
+function isOptionalModelCostDiscount(value: string | undefined): boolean {
+  try {
+    const parsed = parseOptionalJson(value)
+    if (parsed === undefined || !isJsonObjectValue(parsed)) {
+      return parsed === undefined
+    }
+    return Object.entries(parsed).every(
+      ([modelName, discount]) =>
+        modelName.trim().length > 0 &&
+        typeof discount === 'number' &&
+        Number.isFinite(discount) &&
+        discount > 0 &&
+        discount <= 1
+    )
+  } catch {
+    return false
+  }
+}
+
 function isOptionalStatusCodeMapping(value: string | undefined): boolean {
   try {
     const parsed = parseOptionalJson(value)
@@ -208,6 +227,13 @@ export const channelFormSchema = z
       .refine(
         isOptionalModelMapping,
         'Model mapping must be a JSON object with string values'
+      ),
+    model_cost_discount: z
+      .string()
+      .optional()
+      .refine(
+        isOptionalModelCostDiscount,
+        'Model cost discount must be a JSON object with values between 0 and 1'
       ),
     priority: z.number().optional(),
     weight: z.number().optional(),
@@ -412,6 +438,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   models: '',
   group: ['default'],
   model_mapping: '',
+  model_cost_discount: '',
   priority: 0,
   weight: 0,
   test_model: '',
@@ -493,8 +520,7 @@ export function transformChannelToFormDefaults(
         thinking_to_content: parsed.thinking_to_content || false,
         proxy: parsed.proxy || '',
         http_protocol: protocol,
-        http2_connection_shards:
-          protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
+        http2_connection_shards: protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
         system_prompt: parsed.system_prompt || '',
         system_prompt_override: parsed.system_prompt_override || false,
@@ -517,12 +543,18 @@ export function transformChannelToFormDefaults(
   let allowInferenceGeo = false
   let allowSpeed = false
   let claudeBetaQuery = false
-  let anthropicBetaTarget: '' | 'bedrock' | 'bedrock-converse' | 'vertex' | 'direct' = ''
+  let anthropicBetaTarget:
+    | ''
+    | 'bedrock'
+    | 'bedrock-converse'
+    | 'vertex'
+    | 'direct' = ''
   let disableTaskPollingSleep = false
   let upstreamModelUpdateCheckEnabled = false
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
   let advancedCustom = ''
+  let modelCostDiscount = ''
 
   if (channel.settings) {
     try {
@@ -539,8 +571,15 @@ export function transformChannelToFormDefaults(
       allowSpeed = parsed.allow_speed === true
       claudeBetaQuery = parsed.claude_beta_query === true
       {
-        const raw = String(parsed.anthropic_beta_target ?? '').trim().toLowerCase()
-        if (raw === 'bedrock' || raw === 'bedrock-converse' || raw === 'vertex' || raw === 'direct') {
+        const raw = String(parsed.anthropic_beta_target ?? '')
+          .trim()
+          .toLowerCase()
+        if (
+          raw === 'bedrock' ||
+          raw === 'bedrock-converse' ||
+          raw === 'vertex' ||
+          raw === 'direct'
+        ) {
           anthropicBetaTarget = raw
         }
       }
@@ -557,6 +596,9 @@ export function transformChannelToFormDefaults(
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
+      if (isJsonObjectValue(parsed.model_cost_discount)) {
+        modelCostDiscount = JSON.stringify(parsed.model_cost_discount, null, 2)
+      }
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Failed to parse channel settings:', error)
@@ -572,6 +614,7 @@ export function transformChannelToFormDefaults(
     models: channel.models || '',
     group: parseGroups(channel.group || 'default'),
     model_mapping: channel.model_mapping || '',
+    model_cost_discount: modelCostDiscount,
     priority: channel.priority || 0,
     weight: channel.weight || 0,
     test_model: channel.test_model || '',
@@ -731,7 +774,8 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
   } else {
     if ('allow_speed' in settingsObj) delete settingsObj.allow_speed
     if ('claude_beta_query' in settingsObj) delete settingsObj.claude_beta_query
-    if ('anthropic_beta_target' in settingsObj) delete settingsObj.anthropic_beta_target
+    if ('anthropic_beta_target' in settingsObj)
+      delete settingsObj.anthropic_beta_target
   }
 
   settingsObj.disable_task_polling_sleep =
@@ -761,6 +805,14 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     if (typeof settingsObj.upstream_model_update_last_check_time !== 'number') {
       settingsObj.upstream_model_update_last_check_time = 0
     }
+  }
+
+  // Preserve this inside the existing channel settings JSON; it is a channel
+  // cost override and must never enter user pricing or group-ratio payloads.
+  if (formData.model_cost_discount?.trim()) {
+    settingsObj.model_cost_discount = JSON.parse(formData.model_cost_discount)
+  } else {
+    delete settingsObj.model_cost_discount
   }
 
   if (formData.type === CHANNEL_TYPE_ADVANCED_CUSTOM) {

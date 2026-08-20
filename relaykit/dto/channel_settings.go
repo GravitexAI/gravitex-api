@@ -2,6 +2,7 @@ package dto
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"regexp"
 	"strings"
@@ -66,12 +67,15 @@ const (
 )
 
 type ChannelOtherSettings struct {
-	AzureResponsesVersion       string            `json:"azure_responses_version,omitempty"`
-	AzureModelApiVersions       map[string]string `json:"azure_model_api_versions,omitempty"`       // 模型特定的普通 API 版本映射
-	AzureModelResponsesVersions map[string]string `json:"azure_model_responses_versions,omitempty"` // 模型特定的 Responses API 版本映射（独立于普通 API 版本）
-	VertexKeyType               VertexKeyType     `json:"vertex_key_type,omitempty"`                // "json" or "api_key"
-	OpenRouterEnterprise        *bool             `json:"openrouter_enterprise,omitempty"`
-	ClaudeBetaQuery             bool              `json:"claude_beta_query,omitempty"` // Claude 渠道是否强制追加 ?beta=true
+	// ModelCostDiscount is a channel cost override by the original client model.
+	// It must not be used for user pricing, group ratios, or quota deduction.
+	ModelCostDiscount           map[string]float64 `json:"model_cost_discount,omitempty"`
+	AzureResponsesVersion       string             `json:"azure_responses_version,omitempty"`
+	AzureModelApiVersions       map[string]string  `json:"azure_model_api_versions,omitempty"`       // 模型特定的普通 API 版本映射
+	AzureModelResponsesVersions map[string]string  `json:"azure_model_responses_versions,omitempty"` // 模型特定的 Responses API 版本映射（独立于普通 API 版本）
+	VertexKeyType               VertexKeyType      `json:"vertex_key_type,omitempty"`                // "json" or "api_key"
+	OpenRouterEnterprise        *bool              `json:"openrouter_enterprise,omitempty"`
+	ClaudeBetaQuery             bool               `json:"claude_beta_query,omitempty"` // Claude 渠道是否强制追加 ?beta=true
 	// AnthropicBetaTarget 显式指定 anthropic-beta 白名单过滤目标，覆盖按 ChannelType 的默认判断。
 	// 用于 Anthropic 类型渠道但上游实际是 Bedrock/Vertex 转发的场景（此时若按渠道类型走 direct 透传，
 	// 客户端脏 flag 会打到不支持这些 flag 的底层 AWS/Vertex 上游导致 400）。
@@ -104,6 +108,18 @@ type ChannelOtherSettings struct {
 	EnableModerationQuery bool `json:"enable_moderation_query,omitempty"`
 
 	AdvancedCustom *AdvancedCustomConfig `json:"advanced_custom,omitempty"`
+}
+
+func (s ChannelOtherSettings) ValidateModelCostDiscount() error {
+	for modelName, discount := range s.ModelCostDiscount {
+		if strings.TrimSpace(modelName) == "" {
+			return fmt.Errorf("model_cost_discount contains an empty model name")
+		}
+		if math.IsNaN(discount) || math.IsInf(discount, 0) || discount <= 0 || discount > 1 {
+			return fmt.Errorf("invalid model_cost_discount for %s: %v", modelName, discount)
+		}
+	}
+	return nil
 }
 
 func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {

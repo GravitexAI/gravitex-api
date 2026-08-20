@@ -550,6 +550,11 @@ func RelayTask(c *gin.Context) {
 		respondTaskError(c, taskErr)
 		return
 	}
+	// Keep the client-requested model stable for task properties and async
+	// billing. The upstream model is stored separately in UpstreamModelName.
+	if originalModel := strings.TrimSpace(c.GetString("original_model")); originalModel != "" {
+		relayInfo.OriginModelName = originalModel
+	}
 
 	var result *relay.TaskSubmitResult
 	var taskErr *taskdto.TaskError
@@ -631,6 +636,9 @@ func RelayTask(c *gin.Context) {
 	// ── 成功：结算 + 日志 + 插入任务 ──
 	if taskErr == nil {
 		// 按秒/按量视频计费模型：提交时不预扣费、不记录日志，轮询成功后由 controller.UpdateVideoTaskAll 计费
+		// Keep the legacy billing-route decision unchanged. Cost-discount
+		// snapshots are persisted independently below and must not alter whether
+		// a task uses pre-deduction, per-second, or token-ratio settlement.
 		isPerSecondOrTokenRatio := result.IsPerSecondBilling || result.IsVideoTokenRatioBilling
 
 		if !isPerSecondOrTokenRatio {
@@ -649,7 +657,7 @@ func RelayTask(c *gin.Context) {
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
 		task.PrivateData.TokenId = relayInfo.TokenId
 		task.PrivateData.NodeName = common.NodeName
-		task.PrivateData.BillingContext = &model.TaskBillingContext{
+		billingContext := &model.TaskBillingContext{
 			ModelPrice:      relayInfo.PriceData.ModelPrice,
 			GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
 			ModelRatio:      relayInfo.PriceData.ModelRatio,
@@ -657,6 +665,7 @@ func RelayTask(c *gin.Context) {
 			OriginModelName: relayInfo.OriginModelName,
 			PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
 		}
+		task.PrivateData.BillingContext = billingContext
 
 		// 按秒/按量视频计费模型：task.Quota=0（DB guard，轮询完成后实际计费）
 		if isPerSecondOrTokenRatio {
@@ -665,6 +674,12 @@ func RelayTask(c *gin.Context) {
 			task.Quota = result.Quota
 		}
 		task.Data = result.TaskData
+		// Snapshot the effective discount for every newly created async task.
+		// The task endpoint also serves models whose billing route is resolved
+		// only after polling; tying this to isPerSecondOrTokenRatio can therefore
+		// lose the snapshot before settlement. Existing task data is preserved,
+		// and an existing billing_cost_discount is never overwritten.
+		task.Data = ensureAsyncTaskCostDiscountSnapshot(c, billingContext, task.Data)
 		task.Action = relayInfo.Action
 
 		// 按秒计费模型：保存 Properties.RequestedSeconds 供轮询计费使用
@@ -691,6 +706,38 @@ func RelayTask(c *gin.Context) {
 	if taskErr != nil {
 		respondTaskError(c, taskErr)
 	}
+}
+
+// ensureAsyncTaskCostDiscountSnapshot writes the effective discount to both
+// existing task.Data metadata and private_data.billing_context. The private
+// copy is required because polling may replace task.Data with the upstream
+// response. An existing task.Data value remains authoritative for backward
+// compatibility, while an unconfigured task keeps both snapshots absent.
+func ensureAsyncTaskCostDiscountSnapshot(c *gin.Context, billingContext *model.TaskBillingContext, taskData []byte) []byte {
+	discount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
+	if discount <= 0 || discount > 1 {
+		return taskData
+	}
+	if billingContext != nil {
+		billingContext.CostDiscount = common.GetPointer(discount)
+	}
+
+	data := make(map[string]interface{})
+	if len(taskData) > 0 {
+		if err := common.Unmarshal(taskData, &data); err != nil {
+			return taskData
+		}
+	}
+	if _, exists := data["billing_cost_discount"]; exists {
+		return taskData
+	}
+	data["billing_cost_discount"] = discount
+	merged, err := common.Marshal(data)
+	if err != nil {
+		common.SysLog("[ensureAsyncTaskCostDiscountSnapshot] failed to marshal task data: " + err.Error())
+		return taskData
+	}
+	return merged
 }
 
 // respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）

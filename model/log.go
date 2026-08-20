@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/types"
 
@@ -508,6 +509,22 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	}
 	if params.PriceChain != nil && params.PriceChain.VendorId != nil {
 		other["vendor_id"] = *params.PriceChain.VendorId
+	}
+	// The distributor has already resolved the effective discount with this
+	// priority: settings.model_cost_discount[original model] > cost_discount.
+	// This is a log-only fallback; when neither is configured, leave the legacy
+	// other payload untouched. Preserve a value explicitly supplied by a
+	// specialized billing path.
+	if discount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount); discount > 0 {
+		if rawAdminInfo, exists := other["admin_info"]; !exists {
+			other["admin_info"] = map[string]interface{}{"cost_discount": discount}
+		} else if rawAdminInfo == nil {
+			other["admin_info"] = map[string]interface{}{"cost_discount": discount}
+		} else if adminInfo, ok := rawAdminInfo.(map[string]interface{}); ok && adminInfo != nil {
+			if _, exists := adminInfo["cost_discount"]; !exists {
+				adminInfo["cost_discount"] = discount
+			}
+		}
 	}
 	AppendConfiguredClientRequestHeaders(c, userId, other)
 	// Compute official_quota (vendor cost without group markup)

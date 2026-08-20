@@ -5262,6 +5262,13 @@
     "Confirm switch": "确认切换",
     "Switched to the classic frontend. Reloading...": "已切换到旧版前端，正在刷新页面…",
     "Failed to switch frontend": "切换前端失败，请稍后重试",
-    "The page will reload and enter the classic frontend. Continue?": "切换后页面会自动刷新，并进入旧版前端。是否继续？"
+    "The page will reload and enter the classic frontend. Continue?": "切换后页面会自动刷新，并进入旧版前端。是否继续？",
+    "Model cost discount must be a JSON object with values between 0 and 1": "模型渠道成本折扣必须是值为 0 到 1 的 JSON 对象",
+    "Each model cost discount must be greater than 0 and at most 1": "每个模型的渠道成本折扣必须大于 0 且不超过 1",
+    "Delete cost discount": "删除成本折扣",
+    "Add Cost Discount": "添加成本折扣",
+    "Model Cost Discount": "模型成本折扣",
+    "Channel Cost Discount by Model": "按模型配置渠道成本折扣",
+    "Overrides the channel cost discount for selected request models. Unconfigured models use the channel default.": "为指定请求模型覆盖渠道成本折扣，未配置的模型使用渠道通用折扣。"
   }
 }

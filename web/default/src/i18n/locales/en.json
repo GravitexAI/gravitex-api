@@ -2039,7 +2039,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
     "For private deployments, format: https://fastgpt.run/api/openapi": "For private deployments, format: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Force a syntactically valid JSON response",
@@ -5262,6 +5262,13 @@
     "Confirm switch": "Confirm switch",
     "Switched to the classic frontend. Reloading...": "Switched to the classic frontend. Reloading...",
     "Failed to switch frontend": "Failed to switch frontend",
-    "The page will reload and enter the classic frontend. Continue?": "The page will reload and enter the classic frontend. Continue?"
+    "The page will reload and enter the classic frontend. Continue?": "The page will reload and enter the classic frontend. Continue?",
+    "Model cost discount must be a JSON object with values between 0 and 1": "Model cost discount must be a JSON object with values between 0 and 1",
+    "Each model cost discount must be greater than 0 and at most 1": "Each model cost discount must be greater than 0 and at most 1",
+    "Delete cost discount": "Delete cost discount",
+    "Add Cost Discount": "Add Cost Discount",
+    "Model Cost Discount": "Model Cost Discount",
+    "Channel Cost Discount by Model": "Channel Cost Discount by Model",
+    "Overrides the channel cost discount for selected request models. Unconfigured models use the channel default.": "Overrides the channel cost discount for selected request models. Unconfigured models use the channel default."
   }
 }

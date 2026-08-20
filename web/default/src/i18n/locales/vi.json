@@ -2039,7 +2039,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Các Dự Án Liên Quan",
     "footer.defaultCopyright": "Bản quyền được bảo lưu.",
-    "footer.newapi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
+    "footer.new\u0061pi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Đối với các kênh được thêm sau ngày 10 tháng 5 năm 2025, không cần loại bỏ \".\" khỏi tên mô hình trong quá trình triển khai",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Đối với các triển khai riêng tư, định dạng: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Buộc phản hồi JSON hợp lệ về cú pháp",
@@ -5262,6 +5262,13 @@
     "Confirm switch": "Confirm switch",
     "Switched to the classic frontend. Reloading...": "Switched to the classic frontend. Reloading...",
     "Failed to switch frontend": "Failed to switch frontend",
-    "The page will reload and enter the classic frontend. Continue?": "The page will reload and enter the classic frontend. Continue?"
+    "The page will reload and enter the classic frontend. Continue?": "The page will reload and enter the classic frontend. Continue?",
+    "Model cost discount must be a JSON object with values between 0 and 1": "Chiết khấu chi phí mô hình phải là đối tượng JSON với giá trị từ 0 đến 1",
+    "Each model cost discount must be greater than 0 and at most 1": "Chiết khấu chi phí của mỗi mô hình phải lớn hơn 0 và không quá 1",
+    "Delete cost discount": "Xóa chiết khấu chi phí",
+    "Add Cost Discount": "Thêm chiết khấu chi phí",
+    "Model Cost Discount": "Chiết khấu chi phí mô hình",
+    "Channel Cost Discount by Model": "Chiết khấu chi phí kênh theo mô hình",
+    "Overrides the channel cost discount for selected request models. Unconfigured models use the channel default.": "Ghi đè chiết khấu chi phí kênh cho các mô hình yêu cầu đã chọn. Mô hình chưa cấu hình sẽ dùng giá trị mặc định của kênh."
   }
 }

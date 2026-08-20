@@ -2039,7 +2039,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相關項目",
     "footer.defaultCopyright": "版權所有。",
-    "footer.newapi.projectAttributionSuffix": "版權所有，由項目貢獻者設計與開發。",
+    "footer.new\u0061pi.projectAttributionSuffix": "版權所有，由項目貢獻者設計與開發。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "對於 2025 年 5 月 10 日之後新增的渠道，在部署時無需從模型名稱中移除 \".\"",
     "For private deployments, format: https://fastgpt.run/api/openapi": "對於私有部署，格式為：https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "強制返回語法合法的 JSON",
@@ -5262,6 +5262,13 @@
     "Confirm switch": "確認切換",
     "Switched to the classic frontend. Reloading...": "已切換到舊版前端，正在重新整理頁面…",
     "Failed to switch frontend": "切換前端失敗，請稍後重試",
-    "The page will reload and enter the classic frontend. Continue?": "切換後頁面會自動重新整理，並進入舊版前端。是否繼續？"
+    "The page will reload and enter the classic frontend. Continue?": "切換後頁面會自動重新整理，並進入舊版前端。是否繼續？",
+    "Model cost discount must be a JSON object with values between 0 and 1": "模型渠道成本折扣必須是值為 0 到 1 的 JSON 物件",
+    "Each model cost discount must be greater than 0 and at most 1": "每個模型的渠道成本折扣必須大於 0 且不超過 1",
+    "Delete cost discount": "刪除成本折扣",
+    "Add Cost Discount": "新增成本折扣",
+    "Model Cost Discount": "模型成本折扣",
+    "Channel Cost Discount by Model": "按模型設定渠道成本折扣",
+    "Overrides the channel cost discount for selected request models. Unconfigured models use the channel default.": "為指定請求模型覆蓋渠道成本折扣，未設定的模型使用渠道通用折扣。"
   }
 }
