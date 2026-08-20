@@ -60,6 +60,12 @@ main-alpha 比官方早占用了 58/59/60 三个号，导致 `ChannelTypeAdvance
 
 **合并时验证**：`grep -E "ChannelTypeAzureVideo|ChannelTypeUptoken|ChannelTypeAdvancedCustom|ChannelTypeTencentTokenHub|ChannelTypeSeedanceGateway" constant/channel.go | grep "="` 应输出 58/59/60/61/62。
 
+**🔴 前端编号必须与后端对齐（2026-08-20 修复 commit `58b9ee533`）**：官方 default 前端把 Advanced Custom/Sub2API/New API 用的是官方号段(58/59/60),与本 fork 后端(**60/63/64**)冲突,导致 default 前端新建这三类渠道时类型号错位。已修:
+- `web/default`(`features/channels/constants.ts`、`lib/channel-type-config.ts`、`advanced-custom.ts`、`channel-utils.ts`):Advanced Custom→**60**、Sub2API→**63**、New API→**64**,与后端一致
+- `web/classic`(`constants/channel.constants.js` 等):补齐这三个类型的定义、图标、密钥输入提示
+- 两端新建渠道下拉都**隐藏已废弃的 58/59**(AzureVideo/Uptoken 是历史生产值,只保留识别、不再新建)
+- ⚠️ 合并官方前端时,官方会用它自己的 58/59/60 号,**必须改回 60/63/64**,否则 default 前端建出来的渠道后端识别错型
+
 ### 1.5 允许透传的 Claude 请求字段（channel-level 开关）
 - **位置**：`dto/channel_settings.go`
 - **字段**：`AllowInferenceGeo`（数据驻留）、`AllowSpeed`（推理速度模式）、`AllowSafetyIdentifier`、`DisableStore`、`AllowIncludeObfuscation`
@@ -219,6 +225,7 @@ web/                                      web/
 | `common` 的 `NewThemeAwareFS` / `GetTheme` | 双前端切换的核心 | 官方 `setting/system_setting/theme.go` 被删（-32 行）→ **必须取 ours** |
 | `Dockerfile` | 两个 builder stage：`builder`（default，`bun install --frozen-lockfile` + `cd default && bun run build`）、`builder-classic`（`bun install --filter ./classic` + `cd classic && bun run build`）；最后 `COPY --from=builder /build/web/default/dist ./web/default/dist` + `COPY --from=builder-classic /build/web/classic/dist ./web/classic/dist` | 官方简化成单 stage 构建 `web/` → **必须取 ours** |
 | `.gitignore` | `web/default/dist`、`web/classic/dist` | 官方改成 `web/dist` → 取 ours 或做并集 |
+| `Dockerfile` **builder-classic** stage 的 `bun install` | 🔴 **必须全量 `bun install --frozen-lockfile`,禁用 `--filter ./classic`**(2026-08-20 commit `8e08a92b2`) | classic 依赖 `@visactor/vchart@1.8.x`,其 `vrender-core/kits`(0.17.x)需**嵌套**在 `classic/node_modules/@visactor/vchart` 下,`rsbuild.config.ts` 的 alias 正指向该嵌套路径。`--filter ./classic` 会改变 bun 的 hoist 布局致嵌套副本缺失,构建报 `Cannot find module @visactor/vrender-core`(default 前端引入 vchart 2.x 后共享 lock 的 hoist 变化触发)。default stage 本就是全量装,两个 stage 保持一致 |
 
 ### 4.5.4 前端切换功能本身
 
@@ -311,7 +318,7 @@ routes/console/topup.tsx
 
 ### 5.1 RestrictAPIDomains 中间件
 - **位置**：`middleware/restrict_api_domain.go` + `main.go` 里 `server.Use(...)` 注入
-- **默认值**：`api.gravitex.cn,api.gravitex.ai,api.tennda.ai`（拿不到 `API_ONLY_DOMAINS` 环境变量时兜底）
+- **默认值**：`api.gravitex.cn,api.gravitex.ai,api.tennda.ai,cnapi.gravitex.ai`（拿不到 `API_ONLY_DOMAINS` 环境变量时兜底。`cnapi.gravitex.ai` 于 2026-08-20 commit `59c05b3cc` 加入）
 - **行为**：这些域名只放行 `/api/*`、`/v1/*` 等 API 路径，其它路径返回空 HTML（关闭前端界面）
 - **配套**：`docs/nginx/nginx65.conf` 已拆分 api 域名 server 块
 - **合并时注意**：合并 main 前后要检查 `main.go` 中间件顺序，`RestrictAPIDomains` 一般在 CORS 之后
@@ -679,6 +686,7 @@ routes/console/topup.tsx
 |---|---|---|
 | GPT-5.6 显式 prompt cache + cache_write_tokens | `dto/openai_response.go`、`service/text_quota.go`、`service/tiered_settle.go`、`service/relayconvert/responses_to_chat.go` | **`UsageFromResponsesUsage` 里必须透传 `CacheWriteTokens`**，流式和非流式都走这个函数 |
 | Gemini Omni 视频输入模态计费 + token 持久化 | `relay/channel/gemini/`、`controller/task_video.go`、`service/task_billing.go` | `has_video_input` 字段 |
+| 🔴 gemini-omni-flash-preview 能力接入 + 计费（**曾被合并覆盖,2026-08-20 恢复 commit `dbbd9b6cc`**） | `relay/channel/task/gemini/omni.go`(`isOmniImageInput`/`appendUniqueOmniInput`——把 `input_reference`/图片型 videoInput 识别为图片输入而非视频)、`adaptor.go`、`service/task_billing.go`(计费)、`controller/task_video.go`、`service/log_info_generate.go`、`service/task_polling.go`、`model/log.go` | 这套 omni 图/视频输入判别 + 按模态计费**上一次合并官方时被分支整体覆盖丢过一次**,wpr 重新恢复。涉及 11 文件,官方重写 task_video/task_billing/omni 时极易再丢 → omni 图片输入被误当视频计费。配套测试 `omni_test.go` / `task_billing_test.go` / `task_video_test.go` 一并保留 |
 | realtime WSS 计费完善 | `relay/channel/openai/relay_realtime.go` | 记录缓存文本/音频 token，补全音频/图片缓存倍率，日志记录**会话总用量**，修复 `CachedTokensDetails` 跨轮累积 |
 | dola-seedream-5-0-pro-260628 图片计费 | `relay/helper/image_billing.go` | |
 | veo 4k 分辨率解析修复 | `relay/channel/task/gemini/adaptor.go:797`、`billing.go` | 原来 `4k` 被解析成 `4kp` 导致误按 720p 计价 |
@@ -700,6 +708,7 @@ routes/console/topup.tsx
 | 余额预警子系统(委托 Java + 每日一次去重) | `service/user_quota_warning_notify_api.go` 的 `SendQuotaWarningNotifyToAPIEnd` + `acquireQuotaWarningNotifyLock`、`service/quota.go:659/671/735/747`(**4 处**接入)、`model/user.go` 阈值字段 | 余额低于阈值时用 Redis 锁做每日一次去重,委托 Java 端发通知；Redis 未启用时降级放行不去重。commit `af68d55d3`/`ce94827e3`(每日一次)/`f27ce81a2`(TTL)。官方重写 `quota.go` 预警链路会丢这 4 处接入点 |
 | 邮件通知文案改造（含日限额） | `common/email.go` / notify 相关 | wpr 多次迭代 |
 | 子账号敏感操作回调 Java 告警 | `service/sensitive_op_notify.go` | |
+| 记录用户请求头到日志(可按用户配置) | `model/request_headers_log.go`(把选定请求头打进 `logs.other["client_request_headers"]`,**非新表**)、`relaykit/dto/user_settings.go`(UserSetting 新增开关/字段)、`controller/user.go`(编辑用户时配置)、`controller/relay.go`(埋点)、classic `EditUserModal.jsx` + default `users-mutate-drawer.tsx` | api 用户管理编辑页可配置"记录该用户的哪些请求头",落在 logs 表 other 字段。commit `5f5e5063b`(wpr)。合并官方重写 user_settings/UpdateUserSetting 时注意保留该字段,勿被覆盖 |
 
 ### 运维
 | 功能 | 位置 | 说明 |
@@ -884,6 +893,21 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
 - **commit**：`e10e94769` / `8008a45f9`（上游计费信息）、`4c179ab54`（保存转换前用量）
 - **合并风险**：`model/option.go`（官方 option 表重构高频）、`relay/common/relay_info.go`（官方高频改动）两个文件都极易在冲突时把这两个常量 / `UsageConversion` 字段吃掉。[7.11.6](#7116-relaychannelopenairelay_responsescompactgo--保留分项计费) 只提了 `SetUpstreamResponsesField`,**没覆盖这套完整的开关 + 落库链路**
 - **验证**：`grep -c "LogUpstreamResponsesEnabled\|LogUsageConversionEnabled" model/option.go` 应 ≥ 2；`grep -c UsageConversion relay/common/relay_info.go` 应 ≥ 3
+- **2026-08-20 补全（commit `e7ac71262`）**：`service/convert.go` 新增 `RecordClaudeUsageConversion` / `RecordGeminiUsageConversion`,把"转换前用量"落库的钩子**接到所有跨协议转换出口**(OpenAI→Claude/Gemini 的流式与非流式 `StreamResponseOpenAI2Claude` / `ResponseOpenAI2Claude` / `ResponseOpenAI2Gemini` 等),并在 `relay/channel/openai/*`(`relay-openai.go` / `chat_via_responses.go` / `responses_via_chat.go` / `helper.go`)补齐 OpenAI 侧记录。**合并时注意**:这些记录调用散在各转换函数里,官方重写转换层极易漏接,导致部分协议的账单缺"转换前用量"。
+
+### 7.11.15 🔴 `BillingUsage` 内部计费字段绝不下发客户端（`json:"-"`,2026-08-20 修复 commit `c90b89f48`）
+
+跨协议转换时,`dto` 的用量结构里带一个**进程内**字段 `BillingUsage`(承载上游原始用量给计费链路用)。它曾被标成 `json:"billing_usage,omitempty"`,导致转换后**泄漏进客户端 usage**——例如 Claude 响应里内嵌出 OpenAI 命名的用量字段。
+
+**三处必须保持 `json:"-"`(永不序列化给客户端)**:
+
+| 文件 | 字段 |
+|---|---|
+| `relaykit/dto/claude.go:579` | `ClaudeUsage.BillingUsage *BillingUsage json:"-"` |
+| `relaykit/dto/gemini.go:520` | `GeminiUsageMetadata.BillingUsage *BillingUsage json:"-"` |
+| `relaykit/dto/openai_response.go:231` | `Usage.BillingUsage *BillingUsage json:"-"` |
+
+⚠️ **合并时**:只要 diff 里出现 `billing_usage,omitempty`(或给 `BillingUsage` 加回任何非 `-` 的 json tag),一律取 ours(即 `json:"-"`)。快速验证:`grep -c 'BillingUsage \*BillingUsage `json:"-"`' relaykit/dto/*.go` 应为 **3**;`grep -rc 'billing_usage' relaykit/dto/*.go` 应为 **0**。
 
 ---
 
@@ -994,3 +1018,10 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
 | 2026-08-10 | TokenHub deepseek-v4 responses / Gemini imagine 图片 / Fable·Mythos 限制 | 见 [七点十](#七点十本轮2026-07-前后其它-main-alpha-独有改动) 渠道协议表 | 三处渠道协议兼容,连带 adaptor.go/vertex adaptor.go 不在整体保留范围,易被官方改图片/协议链路时丢 |
 | 2026-08-10 | 余额预警子系统 / ModelNickName / 429·404·Vertex 重试等运维微调 | 见 [七点十](#七点十本轮2026-07-前后其它-main-alpha-独有改动) 通知·模型·运维表 | 余额预警 4 处接入 + 模型昵称字段 + HTTP 行为微调,均已验证在 HEAD |
 | 2026-08-10 | (排除,非丢失)Qwen 扩展参数已随 dto 包迁至 relaykit | `relaykit/dto/openai_request.go:94-100` | 子 agent 一度误报丢失,实为随 relaykit 重构整体搬迁,5 个字段全在 |
+| 2026-08-20 | 🔴 gemini-omni-flash-preview 能力+计费**曾被合并覆盖**、已恢复 | 见 [七点十 gemini omni 行](#七点十本轮2026-07-前后其它-main-alpha-独有改动) | commit `dbbd9b6cc`(wpr)。omni 图/视频输入判别 + 按模态计费上次合并被整体覆盖丢过,涉 11 文件,最易再丢 |
+| 2026-08-20 | 🔴 `BillingUsage` 内部字段泄漏客户端已修 | 见 [7.11.15](#71115--billingusage-内部计费字段绝不下发客户端json-2026-08-20-修复-commit-c90b89f48) | commit `c90b89f48`。三处 dto 必须 `json:"-"`,勿被官方改回 `billing_usage,omitempty` |
+| 2026-08-20 | 各协议转换后用量记录补全 | 见 [7.11.14](#71114--上游原始响应--转换前用量审计落库upstream_responses--usage_conversion) | commit `e7ac71262`。RecordClaude/GeminiUsageConversion 接到所有转换出口 |
+| 2026-08-20 | 🔴 default/classic 渠道类型编号对齐后端(60/63/64,隐藏58/59) | 见 [1.4b](#14b--渠道类型号段分叉与官方永久不一致2026-08-05-定) | commit `58b9ee533`。官方前端用 58/59/60,合并必改回 60/63/64,否则建错型 |
+| 2026-08-20 | 🔴 Dockerfile classic stage 必须全量 install(禁 `--filter`) | 见 [4.5.3](#453-必须保留的构建链路合并时逐项核对) | commit `8e08a92b2`。`--filter ./classic` 致 @visactor/vrender-core 嵌套副本缺失、构建失败 |
+| 2026-08-20 | 记录用户请求头到 logs.other(可按用户配置) | 见 [七点十 通知/告警](#七点十本轮2026-07-前后其它-main-alpha-独有改动) | commit `5f5e5063b`(wpr)。非新表,写 logs.other["client_request_headers"] |
+| 2026-08-20 | cnapi.gravitex.ai 加入 API 域名白名单 | 见 [5.1](#51-restrictapidomains-中间件) | commit `59c05b3cc`(wpr) |
