@@ -406,7 +406,7 @@ var defaultCompletionRatio = map[string]float64{
 //   - ImageCompletionRatio: 图片补全倍率，对应图片输出（与图片倍率成倍数关系；未配置时用模型倍率）
 //   - CacheRatio: 缓存倍率，与模型倍率成倍数关系
 //
-// 其它：ImageModelPricePerImage 按张计费从 OptionMap 加载；VideoModelPricePerSecond 在 loadVideoModelPricePerSecondFromDatabase
+// 其它：ImageModelPricePerImage 按张计费在 UpdateImageModelPricePerImageByJSONString 随配置变更刷新；VideoModelPricePerSecond 在 loadVideoModelPricePerSecondFromDatabase
 func InitRatioSettings() {
 	modelPriceMap.AddAll(defaultModelPrice)
 	modelRatioMap.AddAll(defaultModelRatio)
@@ -456,10 +456,6 @@ func GetModelPrice(name string, printErr bool) (float64, bool) {
 	// 按张计费：若 options 中配置了 ImageModelPricePerImage，则视为已配置价格（兼容 seedream-* 与 doubao-seedream-* 两种 key）
 	if perImage, okImage := GetImageModelPricePerImage(name); okImage && perImage >= 0 {
 		return perImage, true
-	}
-	// 兜底：直接读 OptionMap 并查找（避免懒加载时 OptionMap 尚未就绪）
-	if p, ok2 := getImageModelPricePerImageFromOptionMap(name); ok2 && p >= 0 {
-		return p, true
 	}
 	if printErr {
 		common.SysError("model price not found: " + name)
@@ -1527,11 +1523,15 @@ var (
 	videoModelPricePerSecondMapMutex                    = sync.RWMutex{}
 )
 
-// ImageModelPricePerImage：按张计费，从 options 表 key=ImageModelPricePerImage 的 JSON 加载；懒加载（因 InitRatioSettings 早于 InitOptionMap）
+// ImageModelPricePerImage：按张计费，从 options 表 key=ImageModelPricePerImage 的 JSON 加载。
+// 解析结果常驻内存，由 updateOptionMap 在配置变更时通过
+// UpdateImageModelPricePerImageByJSONString 刷新（与 VideoRatio 等倍率一致）。
+// relay 热路径只读这两个缓存，不再实时读 OptionMap，避免每个请求都去抢
+// common.OptionMapRWMutex 这把全局读写锁。
 var (
-	imageModelPricePerImageMap      map[string]float64
+	imageModelPricePerImageMap      map[string]float64                    // 数字单价，如 {"seedream-4": 0.03}
+	imageModelPriceConfigMap        map[string]types.ImagePerImagePricing // 结构化配置，如 {"gpt-image-2": {...}}
 	imageModelPricePerImageMapMutex = sync.RWMutex{}
-	imageModelPricePerImageLoadOnce sync.Once
 )
 
 var (
@@ -1555,131 +1555,80 @@ var (
 	videoModelPricePerSecondRawMapMutex                        = sync.RWMutex{}
 )
 
-// GetImageModelPricePerImageFromOptionMap 直接从 OptionMap 读并按 name 查找（供 relay 兜底），兼容 seedream-* / doubao-seedream-*
-func GetImageModelPricePerImageFromOptionMap(name string) (float64, bool) {
-	return getImageModelPricePerImageFromOptionMap(name)
-}
+// UpdateImageModelPricePerImageByJSONString 重建按张计费缓存。
+// 由 updateOptionMap 在持有 common.OptionMapRWMutex 写锁时调用，因此只允许使用
+// 入参，绝不能回读 common.OptionMap —— Go 的 RWMutex 不可重入，回读会死锁。
+// JSON 解析失败时保留原缓存，避免一个坏值把已生效的价格清空。
+func UpdateImageModelPricePerImageByJSONString(jsonStr string) error {
+	perImage := make(map[string]float64)
+	configs := make(map[string]types.ImagePerImagePricing)
 
-// GetImageModelPriceConfigFromOptionMap 读取结构化按张计费配置。
-// 数字单价仍由 GetImageModelPricePerImage 处理，避免影响已有模型。
-func GetImageModelPriceConfigFromOptionMap(name string) (types.ImagePerImagePricing, bool) {
-	common.OptionMapRWMutex.RLock()
-	priceStr := common.OptionMap["ImageModelPricePerImage"]
-	common.OptionMapRWMutex.RUnlock()
-	if priceStr == "" {
-		return types.ImagePerImagePricing{}, false
-	}
-
-	var rawMap map[string]json.RawMessage
-	if err := common.Unmarshal([]byte(priceStr), &rawMap); err != nil {
-		return types.ImagePerImagePricing{}, false
-	}
-
-	modelKeys := []string{name}
-	if strings.HasPrefix(name, "doubao-") {
-		modelKeys = append(modelKeys, strings.TrimPrefix(name, "doubao-"))
-	} else {
-		modelKeys = append(modelKeys, "doubao-"+name)
-	}
-
-	for _, key := range modelKeys {
-		raw, ok := rawMap[key]
-		if !ok || len(raw) == 0 || raw[0] != '{' {
-			continue
-		}
-		var config types.ImagePerImagePricing
-		if err := common.Unmarshal(raw, &config); err != nil {
-			return types.ImagePerImagePricing{}, false
-		}
-		if config.OutputImage == nil {
-			config.OutputImage = map[string]float64{}
-		}
-		return config, true
-	}
-
-	return types.ImagePerImagePricing{}, false
-}
-
-func getImageModelPricePerImageFromOptionMap(name string) (float64, bool) {
-	common.OptionMapRWMutex.RLock()
-	priceStr := common.OptionMap["ImageModelPricePerImage"]
-	common.OptionMapRWMutex.RUnlock()
-	if priceStr == "" {
-		return -1, false
-	}
-	var m map[string]json.RawMessage
-	if err := common.Unmarshal([]byte(priceStr), &m); err != nil {
-		return -1, false
-	}
-	lookup := func(key string) (float64, bool) {
-		raw, ok := m[key]
-		if !ok || len(raw) == 0 || raw[0] == '{' {
-			return -1, false
-		}
-		var p float64
-		if err := common.Unmarshal(raw, &p); err != nil || p < 0 {
-			return -1, false
-		}
-		return p, true
-	}
-	if p, ok := lookup(name); ok {
-		return p, true
-	}
-	if !strings.HasPrefix(name, "doubao-") {
-		if p, ok := lookup("doubao-" + name); ok {
-			return p, true
-		}
-	} else {
-		if p, ok := lookup(strings.TrimPrefix(name, "doubao-")); ok {
-			return p, true
-		}
-	}
-	return -1, false
-}
-
-// loadImageModelPricePerImageFromDatabase 从 OptionMap["ImageModelPricePerImage"] 加载按张计费价格（需在 InitOptionMap 之后生效，通过 Get 时懒加载）
-func loadImageModelPricePerImageFromDatabase() {
-	imageModelPricePerImageMapMutex.Lock()
-	defer imageModelPricePerImageMapMutex.Unlock()
-	imageModelPricePerImageMap = make(map[string]float64)
-	common.OptionMapRWMutex.RLock()
-	priceStr, exists := common.OptionMap["ImageModelPricePerImage"]
-	common.OptionMapRWMutex.RUnlock()
-	if exists && priceStr != "" {
+	if strings.TrimSpace(jsonStr) != "" {
 		var rawMap map[string]json.RawMessage
-		if err := common.Unmarshal([]byte(priceStr), &rawMap); err == nil {
-			for modelName, raw := range rawMap {
-				if len(raw) == 0 || raw[0] == '{' {
+		if err := common.Unmarshal([]byte(jsonStr), &rawMap); err != nil {
+			return err
+		}
+		for modelName, raw := range rawMap {
+			if len(raw) == 0 {
+				continue
+			}
+			if raw[0] == '{' {
+				var config types.ImagePerImagePricing
+				if err := common.Unmarshal(raw, &config); err != nil {
 					continue
 				}
-				var price float64
-				if err := common.Unmarshal(raw, &price); err == nil {
-					imageModelPricePerImageMap[modelName] = price
+				if config.OutputImage == nil {
+					config.OutputImage = map[string]float64{}
 				}
+				configs[modelName] = config
+				continue
+			}
+			var price float64
+			// 负单价会让配额计算出现负扣费（等于给用户充值），直接丢弃
+			if err := common.Unmarshal(raw, &price); err == nil && price >= 0 {
+				perImage[modelName] = price
 			}
 		}
 	}
+
+	imageModelPricePerImageMapMutex.Lock()
+	imageModelPricePerImageMap = perImage
+	imageModelPriceConfigMap = configs
+	imageModelPricePerImageMapMutex.Unlock()
+
+	InvalidateExposedDataCache()
+	return nil
 }
 
-// GetImageModelPricePerImage 获取按张计费价格；兼容 key 为 seedream-* 或 doubao-seedream-*（先查 name，再查 doubao-+name，再查去掉 doubao- 的 name）
-// 优先从 OptionMap 实时读取，与 nebula 行为一致
-func GetImageModelPricePerImage(name string) (float64, bool) {
-	if p, ok := getImageModelPricePerImageFromOptionMap(name); ok {
-		return p, true
+// imageModelPriceLookupKeys 按张计费配置兼容 doubao- 前缀别名：
+// seedream-4 与 doubao-seedream-4 视为同一模型。
+func imageModelPriceLookupKeys(name string) []string {
+	if strings.HasPrefix(name, "doubao-") {
+		return []string{name, strings.TrimPrefix(name, "doubao-")}
 	}
-	imageModelPricePerImageLoadOnce.Do(loadImageModelPricePerImageFromDatabase)
+	return []string{name, "doubao-" + name}
+}
+
+// GetImageModelPriceConfig 读取结构化按张计费配置。
+// 数字单价仍由 GetImageModelPricePerImage 处理，避免影响已有模型。
+func GetImageModelPriceConfig(name string) (types.ImagePerImagePricing, bool) {
 	imageModelPricePerImageMapMutex.RLock()
 	defer imageModelPricePerImageMapMutex.RUnlock()
-	if price, ok := imageModelPricePerImageMap[name]; ok {
-		return price, true
-	}
-	if !strings.HasPrefix(name, "doubao-") {
-		if price, ok := imageModelPricePerImageMap["doubao-"+name]; ok {
-			return price, true
+	for _, key := range imageModelPriceLookupKeys(name) {
+		if config, ok := imageModelPriceConfigMap[key]; ok {
+			return config, true
 		}
-	} else {
-		alt := strings.TrimPrefix(name, "doubao-")
-		if price, ok := imageModelPricePerImageMap[alt]; ok {
+	}
+	return types.ImagePerImagePricing{}, false
+}
+
+// GetImageModelPricePerImage 获取按张计费数字单价；兼容 key 为 seedream-* 或 doubao-seedream-*
+// （先查 name，再查 doubao-+name 或去掉 doubao- 的 name）
+func GetImageModelPricePerImage(name string) (float64, bool) {
+	imageModelPricePerImageMapMutex.RLock()
+	defer imageModelPricePerImageMapMutex.RUnlock()
+	for _, key := range imageModelPriceLookupKeys(name) {
+		if price, ok := imageModelPricePerImageMap[key]; ok {
 			return price, true
 		}
 	}

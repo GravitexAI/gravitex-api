@@ -72,7 +72,7 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hostty
 }
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (hosttypes.PriceData, error) {
-	if imagePricing, ok := ratio_setting.GetImageModelPriceConfigFromOptionMap(info.OriginModelName); ok {
+	if imagePricing, ok := ratio_setting.GetImageModelPriceConfig(info.OriginModelName); ok {
 		groupRatioInfo := HandleGroupRatio(c, info)
 		request, _ := info.Request.(*dto.ImageRequest)
 		estimatedPrice, estimatedUsage := EstimateImagePerImageCost(imagePricing, request)
