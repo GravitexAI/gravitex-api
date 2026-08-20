@@ -533,7 +533,7 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq) (*
 	if req.Ratio != "" {
 		r.Ratio = req.Ratio
 	}
-	if req.Duration > 0 {
+	if req.Duration > 0 || req.Duration == -1 {
 		d := dto.IntValue(req.Duration)
 		r.Duration = &d
 	}

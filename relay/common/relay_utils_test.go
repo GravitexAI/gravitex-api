@@ -112,6 +112,10 @@ func TestTaskDurationBounds(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "seedance automatic duration is accepted",
+			body: `{"model":"seedance-2-5","prompt":"a cat","duration":-1}`,
+		},
+		{
 			name: "normal duration is accepted",
 			body: `{"model":"sora-2","prompt":"a cat","seconds":"8"}`,
 		},
