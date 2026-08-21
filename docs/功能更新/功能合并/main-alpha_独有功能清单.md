@@ -632,12 +632,16 @@ routes/console/topup.tsx
 
 - **字段**：`dto.UserSetting.AllowNegativeBalance`（`dto/user_settings.go`）
 - **helper**：`service.IsNegativeBalanceAllowed(c)`（`service/negative_balance.go`）
-- **放行点**：**6 处**钱包扣费预检查都要判断这个开关（改动扣费链路时别漏）
+- **放行点**：**多处**钱包扣费预检查都要判断这个开关（改动扣费链路时别漏）。当前关键放行点：
+  - `service/billing_session.go` `tryWallet` 的 `userQuota <= 0 && !IsNegativeBalanceAllowed(c)` 与 `userQuota-preConsumedQuota < 0 && !IsNegativeBalanceAllowed(c)`（第一道 pre-check）
+  - 🔴 `service/funding_source.go` `WalletFunding.PreConsume`：**透支白名单用户走 `model.DecreaseUserQuota`(允许扣成负)，而非 `TryReserveUserQuota`(不足即拒)**。靠 `WalletFunding.allowNegative` 字段(构造时 `IsNegativeBalanceAllowed(c)` 注入)。**2026-08-21 修复合并回归**：官方 BillingSession reserve 重构把这里覆盖成无条件 `TryReserveUserQuota`，导致透支用户在第二道门被拦（生产报"用户额度不足, 剩余额度: 负数"）
+  - `service/quota.go:227` `userQuota < quota && !IsNegativeBalanceAllowed(ctx)`
+  - `relay/relay_task.go` 用户额度检查
 - **保护**：`UpdateUserSetting` 显式保留 `AllowNegativeBalance`，防止用户自己调接口清掉授权
 - **管理入口**：`UpdateUser` 支持 admin 修改（白名单字段）；classic 前端 `EditUserModal.jsx` 有"允许透支使用"开关
 - **设计文档**：见 commit `c6fab6838` 引入的设计文档
 
-**合并时注意**：官方合并如果重写了扣费预检查逻辑，6 处放行判断很容易被漏掉 → 表现是白名单用户欠费后被拦
+**合并时注意**：官方合并如果重写了扣费预检查逻辑（尤其 `WalletFunding.PreConsume` / `TryReserveUserQuota` / `funding_source.go`），放行判断很容易被漏掉 → 表现是白名单用户欠费后被拦。**验证**：`grep -n "allowNegative\|IsNegativeBalanceAllowed" service/funding_source.go service/billing_session.go` 应能看到 `WalletFunding.allowNegative` 注入 + PreConsume 分支
 
 ---
 

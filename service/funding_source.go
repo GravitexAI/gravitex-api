@@ -33,14 +33,25 @@ type FundingSource interface {
 var ErrInsufficientWalletQuota = errors.New("wallet quota insufficient")
 
 type WalletFunding struct {
-	userId   int
-	consumed int // 实际预扣的用户额度
+	userId        int
+	consumed      int  // 实际预扣的用户额度
+	allowNegative bool // AllowNegativeBalance 白名单：允许扣成负余额，跳过原子预留门禁
 }
 
 func (w *WalletFunding) Source() string { return BillingSourceWallet }
 
 func (w *WalletFunding) PreConsume(amount int) error {
 	if amount <= 0 {
+		return nil
+	}
+	// 透支白名单用户（AllowNegativeBalance）：直接扣减、允许余额为负，不走
+	// TryReserveUserQuota 的"余额不足即拒绝"原子门禁——否则已在 tryWallet 放行的
+	// 透支用户会被这第二道门拦住（表现为 open 透支后仍报"用户额度不足"）。
+	if w.allowNegative {
+		if err := model.DecreaseUserQuota(w.userId, amount, false); err != nil {
+			return err
+		}
+		w.consumed = amount
 		return nil
 	}
 	reserved, err := model.TryReserveUserQuota(w.userId, amount)
