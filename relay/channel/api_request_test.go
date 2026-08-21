@@ -1,8 +1,6 @@
 package channel
 
 import (
-	"bytes"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,57 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
-
-// setRewindableBody must wire req.GetBody for a seekable upstream body
-// (ReaderOnly(BodyStorage)) so net/http can rewind and retry the request after a
-// dropped keep-alive connection, instead of failing with
-// "net/http: cannot rewind body after connection loss". GetBody must yield the
-// full original body even after the primary body was already consumed.
-func TestSetRewindableBody_RewindsSeekableBody(t *testing.T) {
-	t.Parallel()
-
-	jsonData := []byte(`{"model":"claude-3","stream":true,"messages":[{"role":"user","content":"hi"}]}`)
-	body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = closer.Close() })
-	require.Equal(t, int64(len(jsonData)), size)
-
-	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/messages", body)
-	require.NoError(t, err)
-	// A type-erased seekable body is not one of the in-memory types http.NewRequest
-	// auto-detects, so GetBody starts nil — this is exactly the gap being fixed.
-	require.Nil(t, req.GetBody)
-
-	setRewindableBody(req, body)
-	require.NotNil(t, req.GetBody, "GetBody must be set so net/http can retry after connection loss")
-
-	// Consume the primary body, as the transport does on the first attempt.
-	first, err := io.ReadAll(req.Body)
-	require.NoError(t, err)
-	require.Equal(t, jsonData, first)
-
-	// GetBody must rewind and yield the full body again for the retry.
-	rewound, err := req.GetBody()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = rewound.Close() })
-	second, err := io.ReadAll(rewound)
-	require.NoError(t, err)
-	require.Equal(t, jsonData, second)
-}
-
-// A non-seekable body cannot be rewound, so setRewindableBody must leave GetBody
-// nil rather than wiring a closure that would replay a truncated body.
-func TestSetRewindableBody_NonSeekableLeavesGetBodyNil(t *testing.T) {
-	t.Parallel()
-
-	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/messages", nil)
-	require.NoError(t, err)
-	req.GetBody = nil
-
-	// *bytes.Buffer is a Reader but not a Seeker.
-	setRewindableBody(req, bytes.NewBufferString("not seekable"))
-	require.Nil(t, req.GetBody, "non-seekable body must leave GetBody nil")
-}
 
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 	t.Parallel()

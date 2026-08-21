@@ -1,56 +1,37 @@
 package common
 
 import (
-	"bytes"
 	"io"
+	"net/http"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// ReaderOnly must keep the seek capability of a seekable body (BodyStorage) so
-// that http.Request.GetBody can rewind and retry after a lost connection, while
-// still hiding io.Closer from the HTTP transport (which would otherwise close the
-// underlying storage prematurely).
-func TestReaderOnlyPreservesSeekForRewind(t *testing.T) {
-	data := []byte(`{"model":"claude","messages":[{"role":"user","content":"hi"}]}`)
-	storage, err := CreateBodyStorage(data)
+func TestNewReplayableBodyReaderKeepsStorageLifecycleWithCaller(t *testing.T) {
+	payload := []byte(`{"model":"test-model","input":"hello"}`)
+	storage, err := CreateBodyStorage(payload)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = storage.Close() })
+	defer storage.Close()
 
-	r := ReaderOnly(storage)
+	body := NewReplayableBodyReader(storage)
+	assert.EqualValues(t, len(payload), body.Size())
+	_, exposesCloser := any(body).(io.Closer)
+	assert.False(t, exposesCloser, "the request body must not expose the storage closer")
 
-	// io.Closer must stay hidden: the transport must not be able to close the
-	// underlying BodyStorage by type-asserting the body.
-	_, isCloser := r.(io.Closer)
-	require.False(t, isCloser, "ReaderOnly must hide io.Closer")
-
-	// Seek must be preserved so the body is rewindable for retries.
-	seeker, isSeeker := r.(io.Seeker)
-	require.True(t, isSeeker, "ReaderOnly must preserve io.Seeker for seekable bodies")
-
-	first, err := io.ReadAll(r)
+	req, err := http.NewRequest(http.MethodPost, "https://example.com", body)
 	require.NoError(t, err)
-	require.Equal(t, data, first)
+	require.NoError(t, req.Body.Close())
 
-	// Rewind and read again — the full body must come back byte-for-byte.
-	_, err = seeker.Seek(0, io.SeekStart)
+	replayBody, err := body.NewReader()
+	require.NoError(t, err, "closing the HTTP request body must not close the storage")
+	replay, err := io.ReadAll(replayBody)
 	require.NoError(t, err)
-	second, err := io.ReadAll(r)
-	require.NoError(t, err)
-	require.Equal(t, data, second)
-}
+	require.NoError(t, replayBody.Close())
+	assert.Equal(t, payload, replay)
 
-// A non-seekable body must not gain a phantom Seek capability, so callers can
-// reliably detect that it cannot be rewound.
-func TestReaderOnlyNonSeekableStaysNonSeekable(t *testing.T) {
-	// *bytes.Buffer is an io.Reader but not an io.Seeker.
-	r := ReaderOnly(bytes.NewBufferString("plain body"))
-
-	_, isSeeker := r.(io.Seeker)
-	require.False(t, isSeeker, "non-seekable body must not expose io.Seeker")
-
-	got, err := io.ReadAll(r)
-	require.NoError(t, err)
-	require.Equal(t, "plain body", string(got))
+	require.NoError(t, storage.Close())
+	_, err = body.NewReader()
+	require.ErrorIs(t, err, ErrStorageClosed)
 }

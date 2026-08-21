@@ -142,7 +142,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		if bodyBytes, err := storage.Bytes(); err == nil {
 			logger.LogInfo(c, fmt.Sprintf("image upstream request body(size=%d): %s", len(bodyBytes), truncateImageLogBody(bodyBytes)))
 		}
-		requestBody = common.ReaderOnly(storage)
+		requestBody = common.NewReplayableBodyReader(storage)
 	} else {
 		convertedRequest, err := adaptor.ConvertImageRequest(c, info, *request)
 		if err != nil {
@@ -172,21 +172,13 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			// JSON 形式的上游请求在应用参数覆盖后记录，确保日志反映最终发送结果。
 			logger.LogInfo(c, fmt.Sprintf("image upstream request body(size=%d): %s", len(jsonData), truncateImageLogBody(jsonData)))
 
-			if common.DebugEnabled {
-				const maxLogLen = 2000
-				bodyStr := string(jsonData)
-				if len(bodyStr) > maxLogLen {
-					bodyStr = bodyStr[:maxLogLen] + "...(truncated)"
-				}
-				logger.LogDebug(c, fmt.Sprintf("image request body: %s", bodyStr))
-			}
-			body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+			logger.LogDebug(c, "image request body: %s", jsonData)
+			body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 			if err != nil {
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
 			defer closer.Close()
 			jsonData = nil
-			info.UpstreamRequestBodySize = size
 			requestBody = body
 		}
 	}
