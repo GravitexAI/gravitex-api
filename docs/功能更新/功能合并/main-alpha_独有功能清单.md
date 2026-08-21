@@ -9,6 +9,8 @@
 > **⚠️ 路径迁移提醒（2026-08 relaykit 重构后）**：官方把 `dto/`、`service/relayconvert/`、部分 channel 转换逻辑整体搬进了独立子模块 `relaykit/`。本清单里若干旧路径（如 `dto/channel_settings.go`、`dto/user_settings.go`、`dto/openai_request.go`、`service/relayconvert/responses_to_chat.go`）在 HEAD 上已迁至 `relaykit/dto/*`、`relaykit/relayconvert/*`,**功能全部保留、未丢失**,只是路径变了。核对时若旧路径 grep 不到,先去 `relaykit/` 下找再判断是否真丢。
 >
 > **✅ 2026-08-10 全量核对结论**:对 fork 团队(chz/t0ng7u/Apple/Seefs/king_15)相对官方的 694 个代码提交做过一次聚类比对,并逐条跑第九节 grep/文件校验 + `go build` + 关键回归测试。**未发现任何独有功能被官方合并静默覆盖或丢失**；补记了本次发现的 ~8 个漏记功能簇(见 3.6 / 7.11.14 / 七点十各表新增行 / 草稿区)。
+>
+> **✅ 2026-08-21 合并官方 47 commit 后的静默回归专项审计**:本次合并暴露了一类新风险——**"文件还在、但 fork 定制行为被自动合并(非冲突)悄悄改回官方"**(典型:`WalletFunding.PreConsume` 的透支扣费被官方 reserve 覆盖,详见 [§7.8](#七点八允许用户欠费继续使用allownegativebalance))。据此对 **21 个"fork 改过 + 官方本批也改过 + 自动合并(非冲突)"** 的 .go 文件做了三方对比审计(`base 0ab020206 → fork tip b66b1fa07 → 合并结果 HEAD`)。**结论:除 `WalletFunding.PreConsume` 透支(已修 commit `478ec1c2f`)外,无第二处 fork 定制被静默改回官方。** 已确认保留:RuoYi+A2 三层鉴权顺序、cost_discount(且被增强为按模型)、UsageConversion 审计、BillingUsage 不下发、Qwen 扩展参数、gemini 图文/音频分离计费、`task_billing.taskAdjustFunding` 透支扣费、channel_settings 全字段、User.Id 精度、平台隔离等。**方法论已沉淀为 [README 铁律 4](README.md)(勿整文件 checkout 冲突文件)**;此类"自动合并静默改回"须靠这种三方审计发现,grep 存在性检查(第九节)测不到。
 
 ---
 
@@ -642,6 +644,13 @@ routes/console/topup.tsx
 - **设计文档**：见 commit `c6fab6838` 引入的设计文档
 
 **合并时注意**：官方合并如果重写了扣费预检查逻辑（尤其 `WalletFunding.PreConsume` / `TryReserveUserQuota` / `funding_source.go`），放行判断很容易被漏掉 → 表现是白名单用户欠费后被拦。**验证**：`grep -n "allowNegative\|IsNegativeBalanceAllowed" service/funding_source.go service/billing_session.go` 应能看到 `WalletFunding.allowNegative` 注入 + PreConsume 分支
+
+**✅ 2026-08-21 全量核对结论**：本次合并官方 47 commit 后,对所有用户钱包扣费路径做过一次专项审计——
+- 用户钱包"不足即拒"机制全仓**只有一条链**:`TryReserveUserQuota`/`reserveUserQuotaDB`(`WHERE quota >= ?`),唯一调用者 `WalletFunding.PreConsume`(**已修**,commit `478ec1c2f`)。
+- 其余 4 处 `IsNegativeBalanceAllowed` gate（`billing_session.go:381/387`、`relay_task.go:265`、`quota.go:227`）条件与合并前 `b66b1fa07` **逐字一致**,gate 后扣费走 `DecreaseUserQuota`/`PostConsumeQuota`(允许负,不拒)。
+- 钱包全生命周期(PreConsume/Settle/Refund)均透支安全;`Settle`/`Refund` 走 `DecreaseUserQuota`/`IncreaseUserQuota` 不拒。
+- Token 额度 reserve(`TryReserveTokenQuota`,`remain_quota >= ?`)是**令牌自身预算**,不足即拒是正确设计,非透支范畴。
+- **结论:除 WalletFunding 外无第二处透支放行丢失。**
 
 ---
 
