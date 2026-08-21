@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"strings"
 	"sync"
@@ -1016,6 +1017,9 @@ func (channel *Channel) ValidateSettings() error {
 			return err
 		}
 	}
+	if err := channelOtherSettings.ValidateModelCostDiscount(); err != nil {
+		return err
+	}
 	if channel.Type == constant.ChannelTypeAdvancedCustom {
 		if channelOtherSettings.AdvancedCustom == nil {
 			return fmt.Errorf("advanced_custom is required")
@@ -1067,6 +1071,22 @@ func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 		}
 	}
 	return setting
+}
+
+func (channel *Channel) GetCostDiscountForModel(modelName string) (float64, bool) {
+	// Resolve the effective upstream channel cost only after a channel is selected.
+	// Keep the request model (before model_mapping) as the lookup key so aliases
+	// can have their own cost without changing the upstream model name.
+	settings := channel.GetOtherSettings()
+	if discount, ok := settings.ModelCostDiscount[modelName]; ok &&
+		!math.IsNaN(discount) && !math.IsInf(discount, 0) && discount > 0 && discount <= 1 {
+		return discount, true
+	}
+	if channel.CostDiscount != nil && *channel.CostDiscount > 0 &&
+		!math.IsNaN(*channel.CostDiscount) && !math.IsInf(*channel.CostDiscount, 0) {
+		return *channel.CostDiscount, true
+	}
+	return 0, false
 }
 
 func (channel *Channel) SetOtherSettings(setting dto.ChannelOtherSettings) {

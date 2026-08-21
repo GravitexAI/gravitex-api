@@ -468,8 +468,10 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	// c.Request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", key))
 	common.SetContextKey(c, constant.ContextKeyChannelKey, key)
 	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, channel.GetBaseURL())
-	if channel.CostDiscount != nil {
-		common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, *channel.CostDiscount)
+	// Preserve the legacy cost_discount context contract. The value is now the
+	// effective channel cost for this request model, not a user billing ratio.
+	if costDiscount, ok := channel.GetCostDiscountForModel(modelName); ok {
+		common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, costDiscount)
 	} else {
 		// 重试切换渠道时，清除上一个渠道的 cost_discount，避免残留旧值
 		common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, float64(0))

@@ -53,6 +53,18 @@ func TestProbeRawMirrorBillingFields_UnknownTopLevelFieldsPreserved(t *testing.T
 	assert.Equal(t, "", resolution)
 }
 
+func TestConvertToRequestPayload_PreservesSeedanceAutomaticDuration(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	payload, err := adaptor.convertToRequestPayload(&relaycommon.TaskSubmitReq{
+		Model:    "seedance-2-5",
+		Prompt:   "a cat",
+		Duration: -1,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, payload.Duration)
+	assert.EqualValues(t, -1, *payload.Duration)
+}
+
 func TestExtractAssetVirtualIdsFromRaw(t *testing.T) {
 	raw := []byte(`{
 		"content":[

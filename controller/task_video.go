@@ -1252,6 +1252,25 @@ func shouldRunVideoFallbackBilling(ctx context.Context, task *model.Task) bool {
 	return true
 }
 
+// taskCostDiscountSnapshot returns the immutable channel-cost snapshot used by
+// asynchronous video settlement. The legacy task.Data value remains
+// authoritative; BillingContext is the durable copy used when task.Data was
+// replaced by an upstream response. A zero return preserves the old channel
+// fallback path and is also the result for unconfigured historical tasks.
+func taskCostDiscountSnapshot(task *model.Task, taskData map[string]interface{}) float64 {
+	if discount, ok := taskData["billing_cost_discount"].(float64); ok && discount > 0 && discount <= 1 {
+		return discount
+	}
+	if task == nil || task.PrivateData.BillingContext == nil || task.PrivateData.BillingContext.CostDiscount == nil {
+		return 0
+	}
+	discount := *task.PrivateData.BillingContext.CostDiscount
+	if discount <= 0 || discount > 1 {
+		return 0
+	}
+	return discount
+}
+
 // handleVideoPerSecondBilling 处理按秒计费视频模型的轮询成功计费逻辑（Veo / Sora-2 / kling-v3 / wan2.6 等所有按秒价模型）
 // 计费公式: actualQuota = videoPrice × requestedSeconds × QuotaPerUnit × groupRatio
 func handleVideoPerSecondBilling(ctx context.Context, task *model.Task) error {
@@ -1583,12 +1602,10 @@ func handleVideoPerSecondBilling(ctx context.Context, task *model.Task) error {
 	if groupRatio > 0 {
 		otherMap["official_quota"] = float64(actualQuota) / groupRatio
 	}
-	// 写入渠道成本折扣：优先从 task.Data 取（提交时保存），兜底从渠道查
+	// 写入渠道成本折扣：task.Data 旧快照优先，private_data 双快照次之，
+	// 最后才按旧逻辑读取渠道通用 cost_discount。
 	adminInfo := make(map[string]interface{})
-	costDiscount := 0.0
-	if v, ok := taskData["billing_cost_discount"].(float64); ok && v > 0 {
-		costDiscount = v
-	}
+	costDiscount := taskCostDiscountSnapshot(task, taskData)
 	if costDiscount <= 0 {
 		// 兜底：通过 channel_id 查询渠道信息
 		if ch, err := model.CacheGetChannel(task.ChannelId); err == nil && ch != nil && ch.CostDiscount != nil && *ch.CostDiscount > 0 {
@@ -1954,12 +1971,10 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	logContent := fmt.Sprintf("视频任务成功，模型 %s，tokens %d，耗时 %ds，扣费 %s",
 		modelName, tokens, useTime, logger.LogQuota(actualQuota))
 
-	// 写入渠道成本折扣：优先从 task.Data 取（提交时保存），兜底从渠道查
+	// 写入渠道成本折扣：task.Data 旧快照优先，private_data 双快照次之，
+	// 最后才按旧逻辑读取渠道通用 cost_discount。
 	adminInfoTokenRatio := make(map[string]interface{})
-	costDiscountTokenRatio := 0.0
-	if v, ok := taskData["billing_cost_discount"].(float64); ok && v > 0 {
-		costDiscountTokenRatio = v
-	}
+	costDiscountTokenRatio := taskCostDiscountSnapshot(task, taskData)
 	if costDiscountTokenRatio <= 0 {
 		if ch, err := model.CacheGetChannel(task.ChannelId); err == nil && ch != nil && ch.CostDiscount != nil && *ch.CostDiscount > 0 {
 			costDiscountTokenRatio = *ch.CostDiscount

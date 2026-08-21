@@ -96,6 +96,29 @@ const MODEL_MAPPING_EXAMPLE = {
   'gpt-3.5-turbo': 'gpt-3.5-turbo-0125',
 };
 
+const MODEL_COST_DISCOUNT_EXAMPLE = {
+  'seedance-2-0-fast': 0.75,
+};
+
+// Keep decimal overrides as JSON numbers. This is channel cost only; the Go
+// billing path validates the same 0 < discount <= 1 rule.
+const normalizeModelCostDiscountValue = (value) => {
+  if (!String(value || '').trim()) return '';
+  const parsed = JSON.parse(value);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('model_cost_discount must be a JSON object');
+  }
+  const normalized = {};
+  Object.entries(parsed).forEach(([modelName, rawDiscount]) => {
+    const discount = typeof rawDiscount === 'number' ? rawDiscount : Number(rawDiscount);
+    if (!modelName.trim() || !Number.isFinite(discount) || discount <= 0 || discount > 1) {
+      throw new Error('model_cost_discount values must be between 0 and 1');
+    }
+    normalized[modelName.trim()] = discount;
+  });
+  return JSON.stringify(normalized, null, 2);
+};
+
 const STATUS_CODE_MAPPING_EXAMPLE = {
   400: '500',
 };
@@ -233,6 +256,8 @@ const EditChannelModal = (props) => {
     azure_model_responses_versions: '',
     // 渠道成本设置
     cost_discount: null,
+    // 渠道成本折扣按请求模型覆盖，存入 settings.model_cost_discount
+    model_cost_discount: '',
   };
   const [batch, setBatch] = useState(false);
   const [multiToSingle, setMultiToSingle] = useState(false);
@@ -1011,6 +1036,9 @@ const EditChannelModal = (props) => {
           )
             ? parsedSettings.upstream_model_update_ignored_models.join(',')
             : '';
+          data.model_cost_discount = parsedSettings.model_cost_discount
+            ? JSON.stringify(parsedSettings.model_cost_discount, null, 2)
+            : '';
         } catch (error) {
           console.error('解析其他设置失败:', error);
           data.azure_responses_version = '';
@@ -1037,6 +1065,7 @@ const EditChannelModal = (props) => {
           data.upstream_model_update_last_check_time = 0;
           data.upstream_model_update_last_detected_models = [];
           data.upstream_model_update_ignored_models = '';
+          data.model_cost_discount = '';
         }
       } else {
         // 兼容历史数据：老渠道没有 settings 时，默认按 json 展示
@@ -1063,6 +1092,7 @@ const EditChannelModal = (props) => {
         data.upstream_model_update_last_check_time = 0;
         data.upstream_model_update_last_detected_models = [];
         data.upstream_model_update_ignored_models = '';
+        data.model_cost_discount = '';
       }
 
       if (
@@ -1862,6 +1892,23 @@ const EditChannelModal = (props) => {
       }
     }
 
+    // This is a channel cost override only. Do not move it into user pricing or group ratios.
+    try {
+      const normalizedModelCostDiscount = normalizeModelCostDiscountValue(
+        localInputs.model_cost_discount,
+      );
+      if (normalizedModelCostDiscount) {
+        settings.model_cost_discount = JSON.parse(normalizedModelCostDiscount);
+      } else {
+        delete settings.model_cost_discount;
+      }
+    } catch (error) {
+      showError(
+        t('设置范围 0~1，例如 0.5 表示成本按 5 折计算。不设置则不启用渠道级成本折扣'),
+      );
+      return;
+    }
+
     // type === 3 (Azure): 显式保存 azure_responses_version 和 azure_model_api_versions，防止偶发丢失
     if (localInputs.type === 3) {
       const respVer = (localInputs.azure_responses_version || '').trim();
@@ -1974,6 +2021,7 @@ const EditChannelModal = (props) => {
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
     delete localInputs.is_enterprise_account;
+    delete localInputs.model_cost_discount;
     // 顶层的 Azure 特定字段不应发送给后端（已序列化到 settings）
     delete localInputs.azure_responses_version;
     delete localInputs.azure_model_api_versions;
@@ -3934,6 +3982,34 @@ const EditChannelModal = (props) => {
                     onNumberChange={(value) =>
                       handleInputChange('cost_discount', value === undefined ? null : value)
                     }
+                    extraText={t(
+                      '设置范围 0~1，例如 0.5 表示成本按 5 折计算。不设置则不启用渠道级成本折扣',
+                    )}
+                  />
+                  {/* The backend resolves this before writing the legacy cost_discount log field. */}
+                  <JSONEditor
+                    key={`model_cost_discount-${isEdit ? channelId : 'new'}`}
+                    field='model_cost_discount'
+                    label={t('配置渠道级别的成本折扣')}
+                    placeholder={
+                      t('配置渠道级别的成本折扣') +
+                      `\n${JSON.stringify(MODEL_COST_DISCOUNT_EXAMPLE, null, 2)}`
+                    }
+                    value={inputs.model_cost_discount || ''}
+                    onChange={(value) => {
+                      try {
+                        handleInputChange(
+                          'model_cost_discount',
+                          normalizeModelCostDiscountValue(value),
+                        );
+                      } catch (error) {
+                        handleInputChange('model_cost_discount', value);
+                      }
+                    }}
+                    template={MODEL_COST_DISCOUNT_EXAMPLE}
+                    templateLabel={t('填入模板')}
+                    editorType='keyValue'
+                    formApi={formApiRef.current}
                     extraText={t(
                       '设置范围 0~1，例如 0.5 表示成本按 5 折计算。不设置则不启用渠道级成本折扣',
                     )}

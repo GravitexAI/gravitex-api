@@ -680,6 +680,81 @@ func TestTaskBillingOtherIncludesVideoBillingFields(t *testing.T) {
 	assert.Equal(t, 0.12, other["video_price_per_second"])
 }
 
+func TestTaskBillingOtherInjectsCostDiscountSnapshot(t *testing.T) {
+	task := makeTask(1, 1, 3000, 1, BillingSourceWallet, 0)
+	require.NoError(t, common.UnmarshalJsonStr(`{"billing_context":{"cost_discount":0.8}}`, &task.PrivateData))
+	task.Data = json.RawMessage(`{"billing_cost_discount":0.75,"admin_info":{"cost_discount":0.952,"use_channel":["81"]}}`)
+
+	other := taskBillingOther(task)
+
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, 0.75, adminInfo["cost_discount"])
+	assert.Equal(t, []interface{}{"81"}, adminInfo["use_channel"])
+}
+
+func TestTaskBillingOtherFallsBackToBillingContextCostDiscount(t *testing.T) {
+	task := makeTask(1, 1, 3000, 1, BillingSourceWallet, 0)
+	require.NoError(t, common.UnmarshalJsonStr(`{"billing_context":{"cost_discount":0.75}}`, &task.PrivateData))
+	task.Data = json.RawMessage(`{"status":"succeeded"}`)
+
+	other := taskBillingOther(task)
+
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, 0.75, adminInfo["cost_discount"])
+}
+
+func TestTaskBillingOtherFallsBackToChannelCostDiscount(t *testing.T) {
+	truncate(t)
+	originalMemoryCacheEnabled := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() { common.MemoryCacheEnabled = originalMemoryCacheEnabled })
+	discount := 0.952
+	require.NoError(t, model.DB.Create(&model.Channel{
+		Id:           81,
+		Name:         "cost-channel",
+		Key:          "sk-test",
+		Status:       common.ChannelStatusEnabled,
+		CostDiscount: &discount,
+	}).Error)
+	task := makeTask(1, 81, 3000, 1, BillingSourceWallet, 0)
+	task.Data = json.RawMessage(`{"status":"succeeded"}`)
+
+	other := taskBillingOther(task)
+
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, 0.952, adminInfo["cost_discount"])
+}
+
+func TestTaskBillingOtherWithoutCostDiscountDoesNotCreateAdminInfo(t *testing.T) {
+	task := makeTask(1, 1, 3000, 1, BillingSourceWallet, 0)
+	task.Data = json.RawMessage(`{"status":"submitted"}`)
+
+	other := taskBillingOther(task)
+
+	assert.NotContains(t, other, "admin_info")
+}
+
+func TestTaskBillingOtherIgnoresInvalidCostDiscount(t *testing.T) {
+	task := makeTask(1, 1, 3000, 1, BillingSourceWallet, 0)
+	task.Data = json.RawMessage(`{"billing_cost_discount":"invalid"}`)
+
+	other := taskBillingOther(task)
+
+	assert.NotContains(t, other, "admin_info")
+}
+
+func TestTaskBillingOtherIgnoresMalformedTaskData(t *testing.T) {
+	task := makeTask(1, 1, 3000, 1, BillingSourceWallet, 0)
+	task.Data = json.RawMessage(`{"billing_cost_discount":`)
+
+	other := taskBillingOther(task)
+
+	assert.NotContains(t, other, "admin_info")
+}
+
 func TestEnrichTaskBillingDataForTokenSettlementAddsVideoBillingDetails(t *testing.T) {
 	task := makeTask(1, 1, 3000, 1, BillingSourceWallet, 0)
 	task.PrivateData.BillingContext.OriginModelName = "gemini-omni-flash-preview"

@@ -181,6 +181,7 @@ import {
 } from '../dialogs/missing-models-confirmation-dialog'
 import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dialog'
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
+import { ModelCostDiscountEditor } from '../model-cost-discount-editor'
 import { ModelMappingEditor } from '../model-mapping-editor'
 import {
   ChannelAdvancedSection,
@@ -3439,6 +3440,38 @@ export function ChannelMutateDrawer({
                           <div className='border-border/60 rounded-lg border p-4'>
                             <FormField
                               control={form.control}
+                              name='model_cost_discount'
+                              render={({ field }) => (
+                                <FormItem className='space-y-3'>
+                                  <div className='space-y-1'>
+                                    <FormLabel>
+                                      {t('Channel Cost Discount by Model')}
+                                    </FormLabel>
+                                    <FormDescription>
+                                      {t(
+                                        'Overrides the channel cost discount for selected request models. Unconfigured models use the channel default.'
+                                      )}
+                                    </FormDescription>
+                                  </div>
+                                  <FormControl>
+                                    <ModelCostDiscountEditor
+                                      value={field.value || ''}
+                                      onChange={field.onChange}
+                                      disabled={isSubmitting}
+                                      modelOptions={modelOptions.map(
+                                        (option) => option.value
+                                      )}
+                                    />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
+
+                          <div className='border-border/60 rounded-lg border p-4'>
+                            <FormField
+                              control={form.control}
                               name='model_mapping'
                               render={({ field }) => (
                                 <FormItem className='space-y-3'>
@@ -4233,9 +4266,7 @@ export function ChannelMutateDrawer({
                                         <SelectValue />
                                       </SelectTrigger>
                                     </FormControl>
-                                    <SelectContent
-                                      alignItemWithTrigger={false}
-                                    >
+                                    <SelectContent alignItemWithTrigger={false}>
                                       <SelectGroup>
                                         <SelectItem value='auto'>
                                           {t('Auto')}
@@ -4617,27 +4648,76 @@ export function ChannelMutateDrawer({
                                           </FormLabel>
                                           <Select
                                             items={[
-                                              { value: '', label: t('Follow channel type (default)') },
-                                              { value: 'bedrock', label: t('Filter by Bedrock whitelist') },
-                                              { value: 'bedrock-converse', label: t('Filter by Bedrock Converse whitelist') },
-                                              { value: 'vertex', label: t('Filter by Vertex whitelist') },
-                                              { value: 'direct', label: t('Passthrough (no filter)') },
+                                              {
+                                                value: '',
+                                                label: t(
+                                                  'Follow channel type (default)'
+                                                ),
+                                              },
+                                              {
+                                                value: 'bedrock',
+                                                label: t(
+                                                  'Filter by Bedrock whitelist'
+                                                ),
+                                              },
+                                              {
+                                                value: 'bedrock-converse',
+                                                label: t(
+                                                  'Filter by Bedrock Converse whitelist'
+                                                ),
+                                              },
+                                              {
+                                                value: 'vertex',
+                                                label: t(
+                                                  'Filter by Vertex whitelist'
+                                                ),
+                                              },
+                                              {
+                                                value: 'direct',
+                                                label: t(
+                                                  'Passthrough (no filter)'
+                                                ),
+                                              },
                                             ]}
                                             onValueChange={field.onChange}
                                             value={field.value ?? ''}
                                           >
                                             <FormControl>
                                               <SelectTrigger>
-                                                <SelectValue placeholder={t('Follow channel type (default)')} />
+                                                <SelectValue
+                                                  placeholder={t(
+                                                    'Follow channel type (default)'
+                                                  )}
+                                                />
                                               </SelectTrigger>
                                             </FormControl>
-                                            <SelectContent alignItemWithTrigger={false}>
+                                            <SelectContent
+                                              alignItemWithTrigger={false}
+                                            >
                                               <SelectGroup>
-                                                <SelectItem value=''>{t('Follow channel type (default)')}</SelectItem>
-                                                <SelectItem value='bedrock'>{t('Filter by Bedrock whitelist')}</SelectItem>
-                                                <SelectItem value='bedrock-converse'>{t('Filter by Bedrock Converse whitelist')}</SelectItem>
-                                                <SelectItem value='vertex'>{t('Filter by Vertex whitelist')}</SelectItem>
-                                                <SelectItem value='direct'>{t('Passthrough (no filter)')}</SelectItem>
+                                                <SelectItem value=''>
+                                                  {t(
+                                                    'Follow channel type (default)'
+                                                  )}
+                                                </SelectItem>
+                                                <SelectItem value='bedrock'>
+                                                  {t(
+                                                    'Filter by Bedrock whitelist'
+                                                  )}
+                                                </SelectItem>
+                                                <SelectItem value='bedrock-converse'>
+                                                  {t(
+                                                    'Filter by Bedrock Converse whitelist'
+                                                  )}
+                                                </SelectItem>
+                                                <SelectItem value='vertex'>
+                                                  {t(
+                                                    'Filter by Vertex whitelist'
+                                                  )}
+                                                </SelectItem>
+                                                <SelectItem value='direct'>
+                                                  {t('Passthrough (no filter)')}
+                                                </SelectItem>
                                               </SelectGroup>
                                             </SelectContent>
                                           </Select>

@@ -2039,7 +2039,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Projets liés",
     "footer.defaultCopyright": "Tous droits réservés.",
-    "footer.newapi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
+    "footer.new\u0061pi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Pour les canaux ajoutés après le 10 mai 2025, pas besoin de supprimer \".\" des noms de modèles lors du déploiement",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Pour les déploiements privés, format : https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Imposer une réponse JSON syntaxiquement valide",
@@ -5262,6 +5262,13 @@
     "Confirm switch": "Confirm switch",
     "Switched to the classic frontend. Reloading...": "Switched to the classic frontend. Reloading...",
     "Failed to switch frontend": "Failed to switch frontend",
-    "The page will reload and enter the classic frontend. Continue?": "The page will reload and enter the classic frontend. Continue?"
+    "The page will reload and enter the classic frontend. Continue?": "The page will reload and enter the classic frontend. Continue?",
+    "Model cost discount must be a JSON object with values between 0 and 1": "La remise de coût du modèle doit être un objet JSON avec des valeurs entre 0 et 1",
+    "Each model cost discount must be greater than 0 and at most 1": "Chaque remise de coût doit être supérieure à 0 et inférieure ou égale à 1",
+    "Delete cost discount": "Supprimer la remise de coût",
+    "Add Cost Discount": "Ajouter une remise de coût",
+    "Model Cost Discount": "Remise de coût du modèle",
+    "Channel Cost Discount by Model": "Remise de coût du canal par modèle",
+    "Overrides the channel cost discount for selected request models. Unconfigured models use the channel default.": "Remplace la remise de coût du canal pour les modèles sélectionnés. Les modèles non configurés utilisent la valeur par défaut du canal."
   }
 }

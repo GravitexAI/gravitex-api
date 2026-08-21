@@ -143,12 +143,17 @@ func validatePrompt(prompt string) *dto.TaskError {
 // MaxTaskDurationSeconds caps user-supplied video duration. Duration is used
 // as a billing multiplier (OtherRatio "seconds"); an unbounded value could
 // overflow quota calculation into a negative charge.
-const MaxTaskDurationSeconds = 3600
+const MaxTaskDurationSeconds = 36000
 
 func validateTaskDurationBounds(req TaskSubmitReq) *dto.TaskError {
 	seconds := req.Duration
 	if seconds == 0 && req.Seconds != "" {
 		seconds, _ = strconv.Atoi(req.Seconds)
+	}
+	// Seedance uses -1 as a provider-defined sentinel for automatic duration.
+	// Keep other negative values and unbounded positive values out of billing.
+	if seconds == -1 && strings.Contains(strings.ToLower(req.Model), "seedance") {
+		return nil
 	}
 	if seconds < 0 || seconds > MaxTaskDurationSeconds {
 		return createTaskError(fmt.Errorf("seconds must be between 1 and %d", MaxTaskDurationSeconds), "invalid_seconds", http.StatusBadRequest, true)

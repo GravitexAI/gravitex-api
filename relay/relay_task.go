@@ -176,10 +176,28 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, taskErr
 	}
 
-	// 2. 确定模型名称
-	modelName := info.OriginModelName
+	// 2. 确定模型名称。The distributor stores the client model in
+	// original_model before any channel mapping. Prefer that value so model
+	// cost overrides, billing classification, and task logs use the same key.
+	modelName := strings.TrimSpace(c.GetString("original_model"))
+	if modelName == "" {
+		modelName = info.OriginModelName
+	}
 	if modelName == "" {
 		modelName = service.CoverTaskActionToModelName(platform, info.Action)
+	}
+	// Re-resolve from the selected channel at task submission time. Task
+	// endpoints can arrive through a locked/retry path where the middleware
+	// context was initialized earlier; the channel's model override must still
+	// be applied using the client model before any upstream mapping occurs.
+	if selectedChannel, cacheErr := model.CacheGetChannel(info.ChannelId); cacheErr == nil && selectedChannel != nil {
+		if costDiscount, ok := selectedChannel.GetCostDiscountForModel(modelName); ok {
+			common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, costDiscount)
+			logger.LogInfo(c, fmt.Sprintf("[ChannelCostDiscount] channel=%d model=%s discount=%.6f source=channel_or_model", info.ChannelId, modelName, costDiscount))
+		} else {
+			common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, float64(0))
+			logger.LogInfo(c, fmt.Sprintf("[ChannelCostDiscount] channel=%d model=%s discount=none", info.ChannelId, modelName))
+		}
 	}
 
 	// 2.5 应用渠道的模型映射（与同步任务对齐）
@@ -190,6 +208,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 
 	// 2.6 检测按秒/按量计费模型（提交时不预扣费，轮询成功后由 controller 计费）
+	// Keep the legacy billing classification unchanged. The channel-cost
+	// snapshot is independent of this classification and is persisted by the
+	// controller for every newly created async task.
 	isPerSecondBilling := isVideoPerSecondModel(modelName)
 	isVideoTokenRatioBilling := isVideoTokenRatioModel(modelName)
 
@@ -1000,6 +1021,8 @@ func mergeVideoTaskBillingData(c *gin.Context, info *relaycommon.RelayInfo, task
 	dataMap["requested_seconds"] = videoSeconds
 	costDiscount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
 	if costDiscount > 0 {
+		// Snapshot the effective channel cost at task creation. Settlement must
+		// not change when an administrator edits model_cost_discount later.
 		dataMap["billing_cost_discount"] = costDiscount
 	}
 	generateAudio := parseGenerateAudioForQuota(c)

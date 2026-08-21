@@ -158,6 +158,42 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 		other["upstream_model_name"] = props.UpstreamModelName
 	}
 	appendTaskVideoBillingOther(task, other)
+	// Async settlement has no request context, so restore the effective channel
+	// cost from the immutable task-creation snapshot. The snapshot already
+	// reflects settings.model_cost_discount[original model] > cost_discount.
+	// Keep task.Data authoritative for compatibility, then use the independent
+	// billing_context copy because an upstream task result may replace task.Data.
+	// Missing, malformed, or out-of-range values keep the legacy log unchanged.
+	var taskData map[string]interface{}
+	costDiscount := 0.0
+	if len(task.Data) > 0 && common.Unmarshal(task.Data, &taskData) == nil {
+		if discount, ok := taskData["billing_cost_discount"].(float64); ok && discount > 0 && discount <= 1 {
+			costDiscount = discount
+		}
+	}
+	if costDiscount <= 0 {
+		if bc := task.PrivateData.BillingContext; bc != nil && bc.CostDiscount != nil &&
+			*bc.CostDiscount > 0 && *bc.CostDiscount <= 1 {
+			costDiscount = *bc.CostDiscount
+		}
+	}
+	if costDiscount <= 0 {
+		// Historical tasks have no immutable model-level snapshot. Preserve the
+		// legacy fallback by reading only the channel's generic cost_discount;
+		// do not apply today's model_cost_discount to old requests.
+		if channel, err := model.CacheGetChannel(task.ChannelId); err == nil && channel != nil &&
+			channel.CostDiscount != nil && *channel.CostDiscount > 0 {
+			costDiscount = *channel.CostDiscount
+		}
+	}
+	if costDiscount > 0 {
+		adminInfo, _ := other["admin_info"].(map[string]interface{})
+		if adminInfo == nil {
+			adminInfo = make(map[string]interface{})
+			other["admin_info"] = adminInfo
+		}
+		adminInfo["cost_discount"] = costDiscount
+	}
 	if strings.Contains(strings.ToLower(taskModelName(task)), "gemini-omni") {
 		inputTokens := taskDataNumber(other, "input_tokens")
 		textOutputTokens := taskDataNumber(other, "text_output_tokens")

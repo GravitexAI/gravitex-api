@@ -2039,7 +2039,7 @@
     "footer.columns.related.links.oneApi": "Один API",
     "footer.columns.related.title": "Связанные проекты",
     "footer.defaultCopyright": "Все права защищены.",
-    "footer.newapi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
+    "footer.new\u0061pi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Для каналов, добавленных после 10 мая 2025 г., не нужно удалять \".\" из имён моделей при развёртывании",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Для частных развертываний, формат: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Принудительно возвращать синтаксически корректный JSON",
@@ -5262,6 +5262,13 @@
     "Confirm switch": "Confirm switch",
     "Switched to the classic frontend. Reloading...": "Switched to the classic frontend. Reloading...",
     "Failed to switch frontend": "Failed to switch frontend",
-    "The page will reload and enter the classic frontend. Continue?": "The page will reload and enter the classic frontend. Continue?"
+    "The page will reload and enter the classic frontend. Continue?": "The page will reload and enter the classic frontend. Continue?",
+    "Model cost discount must be a JSON object with values between 0 and 1": "Скидка стоимости модели должна быть JSON-объектом со значениями от 0 до 1",
+    "Each model cost discount must be greater than 0 and at most 1": "Скидка для каждой модели должна быть больше 0 и не превышать 1",
+    "Delete cost discount": "Удалить скидку стоимости",
+    "Add Cost Discount": "Добавить скидку стоимости",
+    "Model Cost Discount": "Скидка стоимости модели",
+    "Channel Cost Discount by Model": "Скидка стоимости канала по модели",
+    "Overrides the channel cost discount for selected request models. Unconfigured models use the channel default.": "Переопределяет скидку стоимости канала для выбранных моделей запросов. Для ненастроенных моделей используется значение канала по умолчанию."
   }
 }
