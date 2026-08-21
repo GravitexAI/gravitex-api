@@ -427,6 +427,19 @@ routes/console/topup.tsx
 - `theme.frontend`（options 表，值 `default`/`classic`，默认 classic）决定服务哪套 dist。default 走 A2 token bundle，classic 走扁平 cookie，两者从同一个 `setupLogin` 出口分流。
 - ⚠️ 官方有个 retired migration `normalizeRetiredThemeOption()`（`model/frontend_option_migration.go`）会**每次启动强制把 `theme.frontend` 归一成 default**。本 fork **未接线**（无调用点），保留双前端切换能力。合并时若有人把 `MigrateRetiredFrontendOptions` 接进启动流程，classic 会被强制改回 default，**必须拒绝接线**。
 
+### 5.8 🔴 拒绝官方 AuthVersion 会话失效机制（2026-08-21 记）
+
+官方 `31d70fca3` 无状态会话方案里有一套 **AuthVersion 会话失效**：`User.AuthVersion` 字段 + `IncrementUserAuthVersionWithTx`（改密码/角色/状态/分组时自增，令旧会话失效）+ `user_auth_cache.go`（`getUserAuthVersionFloor` / `ErrUserAuthCachePending` / `RefreshUserGroupCache`）+ 用户缓存 `CacheSchema` 版本。fork 用 **A2(`login_session` 远程下线) + RuoYi SSO** 替代这套,**整体拒绝**。
+
+**合并官方时会反复带回来的连锁点(逐一剔除):**
+- `model/user.go` `UpdateWithTx`:官方在 Omit 前插 `authChanged` + `IncrementUserAuthVersionWithTx`,并把 `auth_version` 加进 Omit。**只保留并发防覆盖的 Omit 扩展**(`access_token`/`aff_count`/`aff_quota`/`aff_history` + quota/used_quota/request_count),**删掉 authChanged 块与 `auth_version`**。
+- `model/user_cache.go`:官方 `RefreshUserGroupCache(userId)`(无 group 参)、`getUserAuthVersionFloor`、`ErrUserAuthCachePending`——fork 无调用者,取 ours(保留 fork 的 `updateUserStatusCache`/`updateUserQuotaCache`/`updateUserGroupCache(userId, group)` 三个字段级函数)。
+- `model/user_auth_cache.go` / `model/user_session.go`:官方新文件,**不引入**。
+- 测试连带:`model/user_update_test.go`、`model/quota_reserve_test.go` 里的 `User{... AuthVersion: 1 ...}` 字段初始化**必须剔除**(User 结构无此字段,否则编译失败)。
+- ⚠️ 但 `userCacheSchemaVersion` / `UserBase.CacheSchema` 是**要保留的**——它被 quota reserve 门禁复用,fork 自己在 `ToBaseUser()` 里置值(见 [§7.11.16](#71116--user-quota-redis-预留的-cacheschema-门禁--同步水合2026-08-21-合并官方-quota_reserve-时的关键集成));这是 AuthVersion 机制里**唯一保留**的一小块,别一起删。
+
+**验证**:`grep -rn "AuthVersion\|IncrementUserAuthVersion\|getUserAuthVersionFloor\|ErrUserAuthCachePending" --include="*.go" model/` 应为空(仅注释或无)。
+
 ### 5.4 MYSQL_PREPARE_STMT 环境变量
 - **位置**：`model/main.go chooseDB`
 - **默认值**：`false`（官方默认 true）
@@ -909,6 +922,32 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
 
 ⚠️ **合并时**:只要 diff 里出现 `billing_usage,omitempty`(或给 `BillingUsage` 加回任何非 `-` 的 json tag),一律取 ours(即 `json:"-"`)。快速验证:`grep -c 'BillingUsage \*BillingUsage `json:"-"`' relaykit/dto/*.go` 应为 **3**;`grep -rc 'billing_usage' relaykit/dto/*.go` 应为 **0**。
 
+### 7.11.16 🔴 user-quota Redis 预留的 CacheSchema 门禁 + 同步水合（2026-08-21 合并官方 quota_reserve 时的关键集成）
+
+官方（`f11641428` 那批）把额度预留改成 Redis Lua 原子脚本 `model/quota_reserve.go`（`TryReserveUserQuota` / `TryReserveTokenQuota`，生产用于 `service/funding_source.go`、`service/quota.go`）。user 版脚本用 **`CacheSchema` 版本号门禁**（`userQuotaReserveScript` 校验缓存 hash 的 `CacheSchema == userCacheSchemaVersion`）。官方靠 `user_auth_cache.go`（AuthVersion 机制，**fork 已拒绝**）来写 `CacheSchema`。
+
+**为在 fork 下让预留正常工作、又不引入 AuthVersion,做了两处 main-alpha 独有适配:**
+
+| 位置 | 改动 |
+|---|---|
+| `model/user_cache.go` | 定义 `const userCacheSchemaVersion = 2`;`UserBase` 加 `CacheSchema int` 字段(`RedisHSetObj` 按字段名写入 hash 键 `CacheSchema`) |
+| `model/user.go` `ToBaseUser()` | 置 `CacheSchema: userCacheSchemaVersion`,使 `populateUserCache` 写入的缓存带 schema |
+| `model/quota_reserve.go` `TryReserveUserQuota` | 🔴 **水合改为同步**:`GetUserById + populateUserCache` 后再重试,**不能用 fork 的 `GetUserCache`**(它是 `gopool.Go` 异步 populate,预留"水合后立即重试"会因缓存尚未可见而 miss → 降级到批量模式下**过期的 DB 余额而超扣**) |
+
+**为什么必须同步水合(计费安全)**:`BatchUpdateEnabled` 开启时,扣费增量先进批量队列、DB 余额尚未刷新。若预留 miss 后降级读 DB,会读到**旧的偏大余额**,放大并发超扣。缓存路径(以缓存余额为准)才正确。回归测试 `TestRedisBatchReserveNeverFallsBackToStaleDatabaseBalance` 保护这条。
+
+⚠️ **合并时**:
+- `grep -rn "userCacheSchemaVersion" model/` 至少要有定义(user_cache.go)+ quota_reserve.go 引用;删了定义会编译失败。
+- `ToBaseUser()` 必须仍置 `CacheSchema`,否则 user 版预留恒 miss 恒降级 DB。
+- `TryReserveUserQuota` 的水合必须是**同步** populate;若被官方版改回 `GetUserCache`(fork 异步)会静默退化成"总是降级 DB"。
+- 官方的 `user_auth_cache.go` / `IncrementUserAuthVersionWithTx` / `RefreshUserGroupCache` / `AuthVersion` 字段一律**不引入**(见 [§5.8](#58--拒绝官方-authversion-会话失效机制2026-08-21-记))。
+
+### 7.11.17 官方已移除 compact 模型后缀机制（2026-08-21，反向跟随删除）
+
+官方 `bb234ff41 remove compact model suffix handling (#6770)` 删掉了整套 `WithCompactModelSuffix` / `CompactModelSuffix` / `CompactWildcardModelKey`（`setting/ratio_setting/compact_suffix.go` 删除）。fork 的 `setting/ratio_setting/model_ratio.go`（`GetModelPrice`/`GetModelRatio`）和 `middleware/distributor.go` 里对这些常量的残留引用**已同步删除**（保留按张计费兜底 `GetImageModelPricePerImage`）。
+
+⚠️ 合并时若官方或 fork 又出现 `CompactModelSuffix`/`CompactWildcardModelKey`：确认是否要恢复整套（含 `compact_suffix.go` 定义 + codex/distributor 调用），否则残留引用会编译失败。当前**约定跟随官方移除**。
+
 ---
 
 ## 八、依赖包
@@ -986,7 +1025,12 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
 - [ ] 429 不重试（`controller/relay.go` + `controller/task_video.go`）、无渠道返回 404（`middleware/distributor.go`）、Vertex token 重试（`relay/channel/vertex/service_account.go`）都在
 - [ ] Qwen 扩展参数(`search_options`/`thinking_budget`/`preserve_thinking`/`enable_code_interpreter`/`tool_stream`)在 —— ⚠️ 已随 dto 包搬迁到 **`relaykit/dto/openai_request.go:94-100`**,不在旧 `dto/openai_request.go`。commit `60cbe7917`
 - [ ] 全仓库无残留旧 DB API：`grep -rn "common.UsingSQLite\|common.UsingMySQL\|common.UsingPostgreSQL\|common.UsingClickHouse\|common.LogSqlType" --include="*.go" .` 应为空
-- [ ] Go build 通过
+- [ ] 🔴 **拒绝 AuthVersion 机制（第 5.8 节）**：`grep -rn "AuthVersion\|IncrementUserAuthVersion\|getUserAuthVersionFloor\|ErrUserAuthCachePending" --include="*.go" model/` 应为空；`user_auth_cache.go`/`user_session.go` 不存在；`user_update_test.go`/`quota_reserve_test.go` 无 `AuthVersion:` 字段初始化。但 `UpdateWithTx` 的 Omit 仍含 access_token/aff_*（并发防覆盖）
+- [ ] user-quota reserve 集成（第 7.11.16 节）：`userCacheSchemaVersion` 有定义、`UserBase.CacheSchema` 字段在、`ToBaseUser()` 置 `CacheSchema`、`TryReserveUserQuota` 水合用**同步** `GetUserById+populateUserCache`（非异步 `GetUserCache`）；`TestRedisBatchReserveNeverFallsBackToStaleDatabaseBalance` 通过
+- [ ] compact 后缀机制已移除（第 7.11.17 节）：`grep -rn "CompactModelSuffix\|CompactWildcardModelKey\|WithCompactModelSuffix" --include="*.go" .` 应为空
+- [ ] `model.InvalidateUserCache`（导出包装器）在 `model/user_cache.go`（controller 依赖，官方版无此导出，合并易丢）
+- [ ] MJ 计费不双扣：`relay/mjproxy_handler.go` 用官方 `SettleMidjourneyTaskBilling`、无 fork 的 defer `PostConsumeQuota` 并存
+- [ ] Go build 通过 + `cd relaykit && GOWORK=off go build ./...` 通过 + `go vet ./...` 通过
 - [ ] `go test ./model/... ./relay/channel/claude/...` 关键回归通过：
   - `TestSumUsedQuotaDoesNotResetQuotaByRpmTpmScan`
   - `TestLogMarshalJSONIDsAreString`
@@ -1025,3 +1069,10 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
 | 2026-08-20 | 🔴 Dockerfile classic stage 必须全量 install(禁 `--filter`) | 见 [4.5.3](#453-必须保留的构建链路合并时逐项核对) | commit `8e08a92b2`。`--filter ./classic` 致 @visactor/vrender-core 嵌套副本缺失、构建失败 |
 | 2026-08-20 | 记录用户请求头到 logs.other(可按用户配置) | 见 [七点十 通知/告警](#七点十本轮2026-07-前后其它-main-alpha-独有改动) | commit `5f5e5063b`(wpr)。非新表,写 logs.other["client_request_headers"] |
 | 2026-08-20 | cnapi.gravitex.ai 加入 API 域名白名单 | 见 [5.1](#51-restrictapidomains-中间件) | commit `59c05b3cc`(wpr) |
+| 2026-08-21 | 🔴 拒绝官方 AuthVersion 会话失效机制 | 见 [5.8](#58--拒绝官方-authversion-会话失效机制2026-08-21-记) | 合并官方 47 commit(2d61328c1)。只吸收 UpdateWithTx 并发防覆盖 Omit、拒 auth_version/user_auth_cache/RefreshUserGroupCache;测试剔除 `AuthVersion:1` 引用 |
+| 2026-08-21 | 🔴 user-quota reserve 的 CacheSchema 门禁 + 同步水合 | 见 [7.11.16](#71116--user-quota-redis-预留的-cacheschema-门禁--同步水合2026-08-21-合并官方-quota_reserve-时的关键集成) | 官方 quota_reserve 依赖 AuthVersion 写 CacheSchema;fork 改在 ToBaseUser 置 CacheSchema + reserve 同步水合适配 fork 异步缓存,防批量模式超扣 |
+| 2026-08-21 | compact 模型后缀机制官方已移除、fork 同步删残留 | 见 [7.11.17](#71117-官方已移除-compact-模型后缀机制2026-08-21反向跟随删除) | 官方 `bb234ff41`。删 model_ratio/distributor 残留引用,保按张计费 |
+| 2026-08-21 | MJ 任务计费改用官方机制(防双扣) | `relay/mjproxy_handler.go` | 官方 `Prepare/SettleMidjourneyTaskBilling`;删 fork defer 扣费(否则双扣),补 `GenerateMjOtherInfo` 首参 c |
+| 2026-08-21 | replay body 重试取代 fork seek 版 | `relay/channel/api_request.go`、`common/body_storage.go` | 官方 `ApplyUpstreamBodyMetadata`/`NewReplayableBodyReader`;fork `setRewindableBody`/`ReaderOnly` 成死代码(待清理) |
+| 2026-08-21 | `model.InvalidateUserCache` 导出包装器(合并易丢) | `model/user_cache.go` | 官方 user_cache.go 无此导出;auto-merge 曾丢,controller 依赖,已恢复 |
+| 2026-08-21 | ⚠️合并操作教训:勿对"混合冲突"文件用 `git checkout --theirs/--ours` | 见 [README 铁律 4](README.md) | 整文件 checkout 会丢自动合并区(本轮 api-router/channel-test 曾因此丢 fork 路由/RequestId),须只改冲突块 |

@@ -9,6 +9,7 @@
 1. **🔴 RuoYi JWT SSO 不能碰** —— `middleware/auth.go` + `middleware/ruoyi_auth.go` 一律取 ours。官方 `31d70fca3` 会删掉整段 RuoYi 鉴权，删了就 Java 跳转全线 401。详见[防丢清单 5.3](main-alpha_独有功能清单.md)
 2. **🔴 双前端结构不能摊平** —— `web/` 是 workspace 根（`default/` + `classic/`）。官方要把 `web/default/*` 挪到 `web/` 并删 classic，一律拒绝。`main.go` 4 处 embed、`Dockerfile` 两个 builder stage、`router/web-router.go` 主题切换、`setting/system_setting/theme.go` 全部取 ours。详见[防丢清单 4.5](main-alpha_独有功能清单.md)
 3. **🔴 合并中途绝不 `git stash` / `git commit --amend`** —— 两者都会破坏 merge 状态（丢 MERGE_HEAD / 丢第二 parent），导致 ancestor tracking 失效、同一批 commit 下次重复出现。已踩两次，见第四节 4.1
+4. **🔴 冲突文件绝不用 `git checkout --theirs/--ours` 整文件取一侧** —— 三路合并里冲突文件**同时含冲突块和自动合并区**，`git checkout --theirs/--ours` 会用一侧的**整份文件**覆盖，丢掉自动合并区里另一侧的改动。2026-08-21 曾因此让 `router/api-router.go` 丢掉全部 fork 独有路由（assetAdmin/A2/oper-log/seedance）、`controller/channel-test.go` 丢掉 `RequestId`。**正确做法：只编辑冲突块的 `<<<<<<<`/`=======`/`>>>>>>>` 标记**，保留自动合并区。仅当确认该文件"整份取一侧"才对（如 `web/src/**` 死代码取官方、`web/package.json`/`bun.lock` 取 fork）时，才可 `--theirs/--ours`。误用后可 `git checkout -m -- <file>` 恢复冲突态重解
 
 ---
 
@@ -166,6 +167,7 @@ touch web/classic/dist/index.html web/default/dist/index.html
 | 2026-06-22 → 2026-07-02 | 48 | authz+SystemTaskRunner / relayconvert 重构 / channel 路由抽离 / advanced custom editor | [20260702/](20260702/) |
 | 2026-07-02 → 2026-08-04 | 78（合到安全点 `df01273b9`） | 计费溢出加固 / SSRF 防护 / PriceData 封装 / GPT-5.6 倍率 / 渠道列宽 / 订阅额度重置。同轮还合了 main-alpha 145 个 commit | [20260804/](20260804/) |
 | 2026-08-04 → 2026-08-06 | 103（分 4 阶段合到 `origin/main` 最新，**官方已全部合完**） | 三次大重构：计费会话 BillingSession / auth 无状态 token（❌拒绝，保 RuoYi）/ relaykit 协议转换独立模块。修掉 OpenAI 缓存写入**重复计费**真 bug。新增 TokenHub、Sub2API、New API 渠道（❌改号 63/64）、工具调用配价、未设价模型页 | [20260806/](20260806/) |
+| 2026-08-21 | 47（`0ab020206`→`f11641428`，合并提交 `2d61328c1`） | 并发防覆盖 UpdateWithTx（❌去 auth_version）/ user-quota Redis 预留（CacheSchema 门禁+同步水合适配 fork 异步缓存）/ MJ task 计费（防双扣）/ replay body 重试 / channel test worker 池 / access-token 限流。❌拒绝 AuthVersion 会话机制。移除官方已删的 compact 后缀 | [20260821/](20260821/) |
 
 ### ⚠️ 官方合并未完成 —— 见 [官方合并待办追踪.md](官方合并待办追踪.md)
 
