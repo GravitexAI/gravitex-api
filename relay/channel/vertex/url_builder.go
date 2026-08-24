@@ -8,8 +8,15 @@ import (
 const (
 	DefaultAPIVersion    = "v1"
 	OpenSourceAPIVersion = "v1beta1"
-	PublisherGoogle      = "google"
-	PublisherAnthropic   = "anthropic"
+	// GeminiAPIVersion 是 Vertex 上 Gemini 的 preview 面。入站原生 Gemini 路由只有
+	// /v1beta/models/*（Gemini Developer API 的 preview 版本名），Vertex 对应的同义
+	// 版本名是 v1beta1 —— 两边命名互斥，v1beta 打 Vertex 会 404，因此这里做方言换名
+	// 而不是原样透传客户端路径里的版本号。Vertex 的若干能力只在 v1beta1 开放，例如
+	// urlContext 与 googleSearch 组合使用：
+	// https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/url-context
+	GeminiAPIVersion   = "v1beta1"
+	PublisherGoogle    = "google"
+	PublisherAnthropic = "anthropic"
 )
 
 func normalizeVertexBaseURL(baseURL string) string {

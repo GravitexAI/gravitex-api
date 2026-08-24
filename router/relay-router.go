@@ -302,14 +302,16 @@ func SetRelayRouter(router *gin.Engine) {
 		relaySunoRouter.GET("/fetch/:id", controller.RelayTaskFetch)
 	}
 
-	relayGeminiRouter := router.Group("/v1beta")
-	relayGeminiRouter.Use(middleware.RouteTag("relay"))
-	relayGeminiRouter.Use(middleware.SystemPerformanceCheck())
-	relayGeminiRouter.Use(middleware.TokenAuth())
-	relayGeminiRouter.Use(middleware.ModelRequestRateLimit())
-	relayGeminiRouter.Use(middleware.Distribute())
-	{
-		// Gemini API 路径格式: /v1beta/models/{model_name}:{action}
+	// Gemini API 路径格式: /v1beta/models/{model_name}:{action}
+	// v1beta 是 Gemini Developer API 的 preview 版本名，v1beta1 是 Vertex AI 对同一
+	// preview 面的叫法。两种写法都接受，上游用哪个由渠道 adaptor 按自己后端的方言决定。
+	for _, prefix := range []string{"/v1beta", "/v1beta1"} {
+		relayGeminiRouter := router.Group(prefix)
+		relayGeminiRouter.Use(middleware.RouteTag("relay"))
+		relayGeminiRouter.Use(middleware.SystemPerformanceCheck())
+		relayGeminiRouter.Use(middleware.TokenAuth())
+		relayGeminiRouter.Use(middleware.ModelRequestRateLimit())
+		relayGeminiRouter.Use(middleware.Distribute())
 		relayGeminiRouter.POST("/models/*path", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatGemini)
 		})

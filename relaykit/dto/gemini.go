@@ -47,6 +47,35 @@ type ToolConfig struct {
 	IncludeServerSideToolInvocations *bool                  `json:"includeServerSideToolInvocations,omitempty"`
 }
 
+// UnmarshalJSON allows ToolConfig to accept both snake_case and camelCase fields.
+func (c *ToolConfig) UnmarshalJSON(data []byte) error {
+	type Alias ToolConfig
+	var aux struct {
+		Alias
+		FunctionCallingConfigSnake            *FunctionCallingConfig `json:"function_calling_config,omitempty"`
+		RetrievalConfigSnake                  *RetrievalConfig       `json:"retrieval_config,omitempty"`
+		IncludeServerSideToolInvocationsSnake *bool                  `json:"include_server_side_tool_invocations,omitempty"`
+	}
+
+	if err := kitutil.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	*c = ToolConfig(aux.Alias)
+
+	if aux.FunctionCallingConfigSnake != nil {
+		c.FunctionCallingConfig = aux.FunctionCallingConfigSnake
+	}
+	if aux.RetrievalConfigSnake != nil {
+		c.RetrievalConfig = aux.RetrievalConfigSnake
+	}
+	if aux.IncludeServerSideToolInvocationsSnake != nil {
+		c.IncludeServerSideToolInvocations = aux.IncludeServerSideToolInvocationsSnake
+	}
+
+	return nil
+}
+
 type FunctionCallingConfig struct {
 	Mode                 FunctionCallingConfigMode `json:"mode,omitempty"`
 	AllowedFunctionNames []string                  `json:"allowedFunctionNames,omitempty"`
