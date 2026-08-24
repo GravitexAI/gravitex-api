@@ -12,8 +12,11 @@
 
 客户报的 3 个「病灶」里：
 
-- **2 个的根因是「渠道后端是 Vertex AI」，不是我们的转发代码**——其中 1 个是 Vertex **永远做不到**（Gemini Developer API 独有），另 1 个是 Vertex **能做到但必须走 `v1beta1`，而我们代码把版本写死成 `v1`**（这个我们能修）；
-- **1 个（请求体双重转义）在我们的原生 Gemini 路径上实测不成立**，需要客户/中间层配合抓包定位。
+- **病灶 1（无 `toolCall`/`toolResponse` 事件）+ 场景②（模型编造 URL）**：根因是 Vertex AI 不具备该能力（Gemini Developer API 独有）。实测为「接受后静默忽略」（HTTP 200 但 parts 无事件部件）。**无论我们怎么改都做不到**，要过验收必须接入 Gemini Developer API 渠道。
+- **病灶 2（URL Context 失败）**：分两层。「组合被上游拒绝」是我们把 Vertex API 版本写死 `v1` 导致的 —— **已修复上线**（改走 `v1beta1`），实测组合已能被接受；「URL Context 抓不到搜索结果页」是 Google 上游不跟随 grounding redirect 的限制，**实测仍失败，网关侧无解**。
+- **病灶 3（请求体双重转义）**：在我们的原生 Gemini 路径上**实测不成立**（含引号文本逐字节等价往返），需要客户/中间层配合抓包定位。
+
+另外顺手补了一个客户没提的易用性缺口：入站现在同时接受 `/v1beta/models/*` 与 `/v1beta1/models/*` 两种写法。
 
 另外顺带查出一个客户没提、但我们侧真实存在的丢字段问题（只影响 OpenAI / Claude / Responses 格式入口，不影响客户当前用的原生端点）。
 
@@ -23,9 +26,9 @@
 
 | 客户诉求 | 核查结论 | 归类 |
 |---|---|---|
-| 病灶 1：`toolConfig.includeServerSideToolInvocations` 未生效，响应无 `toolCall`/`toolResponse` | **Vertex AI 不支持该字段**（Gemini Developer API 独有）。我们侧转发完好（实测保留） | **A 类：Vertex 做不到** |
+| 病灶 1：`toolConfig.includeServerSideToolInvocations` 未生效，响应无 `toolCall`/`toolResponse` | **Vertex AI 不支持该字段**（Gemini Developer API 独有），实测为「接受后静默忽略」。我们侧转发完好（实测保留） | **A 类：Vertex 做不到** |
 | 场景 ②：googleSearch + functionDeclarations，模型编造 URL | **Vertex AI 官方文档明确不支持「搜索工具 + 非搜索工具」组合**；且缺少上面的事件回流机制 | **A 类：Vertex 做不到** |
-| 病灶 2：URL Context 检索一律失败 / 无 `urlContextMetadata` | **Vertex 支持 urlContext + googleSearch 组合，但仅在 `v1beta1`**；我们的 Vertex 适配器把 API 版本写死 `v1` | **B 类：我们可以修** |
+| 病灶 2：URL Context 检索一律失败 / 无 `urlContextMetadata` | 分两层：「组合被上游拒绝」是我们把 API 版本写死 `v1` 导致的，**已修**（切 `v1beta1`）；「抓不到搜索结果链接」是 Google 上游限制，**实测仍失败** | **B 类（已修）+ A 类（上游限制）** |
 | 病灶 3：请求体字符串双重转义 | 原生路径实测**逐字节等价，无二次转义**。不在我们侧 | **C 类：需客户侧/中间层复核** |
 | 修复建议：请求/响应字节级透传 | 原生 Gemini 端点**已经是字节透传**（请求 struct 重组但字段无损，响应原样回吐） | 已满足 |
 | （客户未提）响应 DTO 缺 `toolCall`/`toolResponse`/`urlContextMetadata`/完整 `groundingMetadata` | 真实存在，但**只影响 `/v1/chat/completions`、`/v1/messages`、`/v1/responses`** 这些需要重组响应的入口 | **B 类：我们可以修** |
@@ -58,7 +61,17 @@
    ```
    该 issue 的修复方案就是「从 combined tool config 里移除 `includeServerSideToolInvocations`，Vertex 用户先禁用，等 Google 补 API 支持」。
 
-**注意**：客户拿到的是 HTTP 200，而 Vertex 在 `v1` 上对该字段是 **400 硬拒**。两者不一致，说明客户实际打到的路径可能与 issue 场景有差异（不同模型/不同 location 的 schema 校验松紧不同，或字段被上游接受后静默忽略）。这一点在第六节列为待验证实验。
+**2026-08-24 实测确认（Vertex + v1beta1）**：我们用自己的 Vertex 渠道实打了一次
+`tools:[{googleSearch:{}}] + toolConfig.includeServerSideToolInvocations:true`：
+
+- HTTP **200**（不是 vercel/ai #14655 记录的 400 `Unknown name`）；
+- 但候选 parts 的 key 只有 `["text","thoughtSignature"]`，**完全没有 `toolCall` / `toolResponse`**；
+- `groundingMetadata.groundingChunks` 有 1 条，`web.uri` 是真实的
+  `https://vertexaisearch.cloud.google.com/grounding-api-redirect/AUZIYQ...`。
+
+结论：**Vertex 对该字段是「接受后静默忽略」，不是硬拒**。这正好解释了客户为什么拿到 200 却没有事件部件 —— 与 Spring AI 文档「not supported on Vertex AI」一致，A-1 成立。硬拒（400）与静默忽略只是不同模型/版本/location 下 schema 校验松紧的差异，能力缺失的结论不变。
+
+> 附带一个对客户有用的事实：grounding redirect 链接**确实在响应里**（`groundingMetadata.groundingChunks[].web.uri`，客户端可见），只是没有作为 model-visible 的 tool 事件部件回流给模型。客户如果只是要拿到真实 redirect 链接，可以自己从 `groundingChunks` 取；但要让**模型**在同一轮里把该链接传给自定义函数，仍需 A-1 的能力。
 
 **场景 ② 编造 URL 是同一根因的下游后果**：客户的协议依赖「模型可见的搜索结果」（PerQueryResult 的 `url` 字段）。没有 server-side tool 事件回流，模型拿不到真实 grounding redirect 链接，只能自己编一个 `https://www.google.com/search?q=...` 塞给自定义函数。
 
@@ -209,8 +222,8 @@ curl -X POST \
 |---|---|---|---|
 | ① HTTP 200 | ✅ | ✅ | |
 | ② parts 出现 `toolCall`/`toolResponse`（`GOOGLE_SEARCH_WEB` / `URL_CONTEXT`） | ❌ | ❌ **仍然过不了** | A-1：Vertex 不支持 `includeServerSideToolInvocations` |
-| ③ `urlContextMetadata` + `URL_RETRIEVAL_STATUS_SUCCESS` | ❌ | ⚠️ **有希望** | B-1 修完走官方支持路径；grounding redirect 链接能否被抓取仍受上游限制（见 python-genai #1322） |
-| ④ `webSearchQueries` 无字面反斜杠 | ⚠️ 待抓包 | ⚠️ 待抓包 | C-2 |
+| ③ `urlContextMetadata` + `URL_RETRIEVAL_STATUS_SUCCESS` | ❌ | ❌ **实测仍过不了** | 组合被接受了，但 URL Context 抓不到搜索结果链接。见第六节末「实测结果」VER-03 |
+| ④ `webSearchQueries` 无字面反斜杠 | ⚠️ 待抓包 | ✅ **实测通过** | 见「实测结果」ESC-01 |
 
 ### 用例二：googleSearch + functionDeclarations
 
@@ -218,9 +231,34 @@ curl -X POST \
 |---|---|---|---|
 | ① 出现一次 `GOOGLE_SEARCH_WEB` toolCall/toolResponse | ❌ | ❌ | A-1 |
 | ② `functionCall` 的 `grounding_uri` 为真实 redirect 链接 | ❌ | ❌ | A-2：Vertex 明确不支持搜索工具 + 函数调用组合 |
-| ③ `webSearchQueries` 无字面反斜杠 | ⚠️ 待抓包 | ⚠️ 待抓包 | C-2 |
+| ③ `webSearchQueries` 无字面反斜杠 | ⚠️ 待抓包 | ✅ **实测通过** | 见「实测结果」ESC-01 |
 
-**结论：只有 Vertex 资源时，用例二无法交付，用例一最多过 3 条中的 2~3 条（②必挂）。要 100% 过验收，必须有一条 Gemini Developer API（AI Studio API Key）渠道。**
+**结论：只有 Vertex 资源时，用例二无法交付，用例一只能过 4 条中的 2 条（②③ 必挂）。要 100% 过验收，必须有一条 Gemini Developer API（AI Studio API Key）渠道。**
+
+### 实测结果（2026-08-24，改动上线后在 Vertex 渠道上跑）
+
+脚本：`logs/gemini-vertex-test/test_gemini_vertex.py`（11 条用例，10 通过 / 1 不通过）。
+
+| 用例 | 结论 | 关键观测 |
+|---|---|---|
+| BASE-01 原 `/v1beta` generateContent | ✅ | 无回归 |
+| ALIAS-01～04 `/v1beta1` 别名 | ✅ | 可达 / 无凭证返回 401 JSON / `?key=` 鉴权生效 / 流式收到 SSE 事件 |
+| VER-01 `urlContext` 单独使用 | ✅ | `retrievedUrl=https://ai.google.dev/gemini-api/docs/url-context`，`urlRetrievalStatus=URL_RETRIEVAL_STATUS_SUCCESS` |
+| **VER-02 `urlContext` + `googleSearch` 组合被接受** | ✅ | HTTP 200，`groundingMetadata` 有，**不再报 `Multiple tools are supported only when they are all search tools`** —— B-1 的目标达成 |
+| **VER-03 组合场景下 URL Context 实际检索成功** | ❌ | `urlContextMetadata` **缺失**；模型正文自述 *"no page content was returned… I'm sorry. I'm not able to access the website(s) you've provided"* |
+| TC-01 `toolConfig` snake_case vs camelCase | ✅ | 两种写法都 HTTP 200，行为一致 |
+| ESC-01 含引号文本透传 | ✅ | 模型原样回显 `"AIRPAZ SINGAPORE PTE. LTD." 201528606C`，无字面 `\"` |
+| CLD-01 Claude `/v1/messages` | ✅ | HTTP 200，Claude 链路未受 Gemini 切版本影响 |
+
+**VER-01 与 VER-03 的对照是本次最有价值的定性证据**：
+
+- URL Context 在本平台上**本身是好的** —— 抓普通 URL 成功（VER-01）；
+- 失败**特定于「抓取 Google 搜索返回的 grounding redirect 链接」**（`vertexaisearch.cloud.google.com/grounding-api-redirect/...`），且模型自述的错误措辞与客户报告里的 "unable to access the website" 完全一致；
+- 这与 googleapis/python-genai #1322 记载一致（Google 的 browse 工具不跟随 redirect 链接），属 **Google 上游限制，网关侧无法修复**。
+
+也就是说：切 v1beta1 解开了「组合被上游拒绝」这一层（客户报告的第一层障碍），但「URL Context 能否读到搜索结果页」这一层不在我们能力范围内。
+
+> 待核实（从客户端无法判定，需在管理端确认）：本次实测用的 `gemini-3.5-flash` 与 `claude-sonnet-4-5-20250929` 是否确实落在 Vertex AI 渠道上。若 Gemini 模型被路由到了 Gemini Developer API 渠道，VER-01/02 的通过就不能作为 Vertex 分支的证据；CLD-01 同理。
 
 ---
 
@@ -293,11 +331,21 @@ curl -X POST \
 - `go build ./...`、`cd relaykit && GOWORK=off go build ./...` 均通过；
 - `go test ./relay/channel/vertex/`、`relaykit/dto` 全绿；
 - `model/`（11 个）与 `relay/channel/gemini/`（4 个）的失败用例改前改后**列表完全一致**，均为 main-alpha 分支既存失败，非本次回归；
-- 本次最终方案不含任何前端改动（配置项方案已撤回），改动面只有 3 个 Go 文件 + 2 个测试文件。
+- 本次最终方案不含任何前端改动（配置项方案已撤回），改动面为 6 个 Go 文件 + 3 个测试文件；
+- 端到端实测见第六节「实测结果」，脚本 `logs/gemini-vertex-test/test_gemini_vertex.py`。
 
-### 待验证实验（建议先做，1 分钟，直接决定 P1 的收益）
+### 待验证实验 —— 已完成（2026-08-24），结论如下
 
-用我们自己的 Vertex Key 手动跑两条 curl，确认 `v1beta1` 上 Vertex 对 `includeServerSideToolInvocations` 的真实行为（400 硬拒 / 接受但忽略 / 真的生效）：
+原计划验证 `v1beta1` 上 Vertex 对 `includeServerSideToolInvocations` 的真实行为，现已实测：
+
+| 实验 | 结果 | 影响 |
+|---|---|---|
+| 实验 1：`urlContext` + `googleSearch` 组合 | **200，组合被接受**（`groundingMetadata` 有）；但 `urlContextMetadata` 缺失、模型自述抓不到页面 | B-1 达成第一层（不再被拒），第二层（能否读到搜索结果页）受上游限制 |
+| 实验 2：`includeServerSideToolInvocations: true` | **200，但 parts 只有 `["text","thoughtSignature"]`，无 `toolCall`/`toolResponse`** | **A-1 结论确认**：Vertex 是「接受后静默忽略」而非 400 硬拒，能力仍然缺失 |
+
+即：A-1 不需要修正，Vertex 上确实拿不到工具事件回流；要过客户用例一的第 2 条，仍必须接入 Gemini Developer API 渠道。
+
+复现用的 curl（打我们平台，也可换成直连 Vertex）：
 
 ```bash
 # 实验 1：v1beta1 + urlContext + googleSearch（预期：应该正常，验证 B-1 收益）
@@ -322,9 +370,9 @@ curl -sS -X POST \
   }' | head -40
 ```
 
-判读：
-- 实验 2 返回 `Unknown name "includeServerSideToolInvocations" at 'tool_config'` → A-1 结论确认，Vertex 无解，必须上 Gemini API 渠道；
-- 实验 2 返回 200 且 parts 里有 `toolCall`/`toolResponse` → **A-1 结论需要修正**，`v1beta1` 上 Vertex 其实支持，那 P1 一改就全解了，优先级直接拉满。
+判读要点：**只看状态码会误判**。Vertex 对不支持的开关是静默忽略（200），必须去检查
+`candidates[].content.parts[]` 里有没有 `toolCall` / `toolResponse`，只有出现这两种部件
+才算该开关真的生效。
 
 ---
 
@@ -372,12 +420,15 @@ curl -sS -X POST \
 >
 > **1. `toolConfig.includeServerSideToolInvocations` 未生效**
 > 该字段并非被我们丢弃 —— 我们已用您提供的请求体原文验证过转发链路，该字段与 `tools[].urlContext`、`functionDeclarations[].parametersJsonSchema` 均完整保留并原样送达上游。
-> 真实原因是：**该能力是 Google Gemini Developer API（AI Studio API Key）独有，Vertex AI 后端不提供**。Google 官方生态已有明确记载：Spring AI 文档写明「This feature is only supported with the Gemini Developer API (MLDev / API key authentication). It is not supported on Vertex AI.」；vercel/ai #14655 记录了 Vertex 对该字段直接返回 `400 Unknown name "includeServerSideToolInvocations" at 'tool_config'`。
+> 真实原因是：**该能力是 Google Gemini Developer API（AI Studio API Key）独有，Vertex AI 后端不提供**。Google 官方生态已有明确记载：Spring AI 文档写明「This feature is only supported with the Gemini Developer API (MLDev / API key authentication). It is not supported on Vertex AI.」
+> 我们也在自有 Vertex 资源上实测复现了您看到的现象：携带该开关时上游返回 **HTTP 200**，但候选 parts 只有 `text` 与 `thoughtSignature`，**没有任何 `toolCall` / `toolResponse` 部件** —— 即 Vertex 对该字段是「接受后静默忽略」，这解释了为什么请求成功却拿不到事件流。
 > 您的场景②（模型编造 URL）是同一根因的下游后果；此外 Vertex AI 官方文档「使用 Google 搜索建立依据」还明确写了「不支持在同一 `generateContent` 请求中将搜索工具与非搜索工具（函数调用）相结合」。因此**验收用例二在 Vertex 后端上无法交付**。
+> 补充一个可能对您有用的信息：真实的 grounding redirect 链接其实**就在响应里** —— `candidates[].groundingMetadata.groundingChunks[].web.uri`（我们实测取到了 `https://vertexaisearch.cloud.google.com/grounding-api-redirect/...`）。如果您的协议只是需要拿到真实链接，可以直接从该字段读取；但若要让**模型本身**在同一轮内把链接传给自定义函数，仍依赖上面那项 Vertex 不具备的能力。
 >
 > **2. URL Context 检索失败 / `urlContextMetadata` 缺失**
-> 这一项确认我们侧有改进空间。Vertex AI 支持 urlContext 与 googleSearch 组合，但官方文档标注为「实验性功能，仅在 API 版本 `v1beta1` 可用」，而我们的 Vertex 适配器目前把 API 版本固定为 `v1`。我们已排期支持按渠道配置 `v1beta1`。
-> 需要提前说明：即使切到 `v1beta1`，URL Context 能否成功抓取 `vertexaisearch.cloud.google.com/grounding-api-redirect/...` 这类重定向链接仍受 Google 上游限制（参见 googleapis/python-genai #1322，Google 的 browse 工具不跟随重定向）。
+> 这一项确认我们侧有改进空间，**已修复并上线**。Vertex AI 支持 urlContext 与 googleSearch 组合，但官方文档标注为「实验性功能，仅在 API 版本 `v1beta1` 可用」，而我们的 Vertex 适配器此前把 API 版本固定为 `v1`。现已改为 Vertex 上的 Gemini 请求统一走 `v1beta1`。
+> 修复后实测：两个内置工具**已能被同时接受**（HTTP 200，`groundingMetadata` 正常返回），不再出现此前的 `Multiple tools are supported only when they are all search tools` 类拒绝。
+> 但需要如实告知：**URL Context 仍然抓不到搜索结果页**。同一次实测中 `urlContextMetadata` 依旧缺失，模型自述 "no page content was returned… I'm not able to access the website(s)"。对照实验可以定性 —— urlContext 单独抓一个普通 URL 时是成功的（`urlRetrievalStatus = URL_RETRIEVAL_STATUS_SUCCESS`），失败特定于「抓取 Google 搜索返回的 `vertexaisearch.cloud.google.com/grounding-api-redirect/...` 重定向链接」。这属 Google 上游限制（参见 googleapis/python-genai #1322，Google 的 browse 工具不跟随重定向），网关侧无法修复。
 >
 > **3. 请求体字符串双重转义**
 > 我们用您验收用例二的请求体原文跑通了完整转发链路，`contents[].parts[].text` 逐字节等价，`\"AIRPAZ...\"` 正确还原为 `"AIRPAZ..."`，未观察到二次转义；`tools` 整块以原始 JSON 透传。我们的原生 Gemini 端点响应侧本身就是字节级透传（上游给什么就下发什么，仅旁路解析 `usageMetadata` 用于计费）。
