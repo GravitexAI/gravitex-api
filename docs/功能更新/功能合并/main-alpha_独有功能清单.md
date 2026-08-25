@@ -459,6 +459,23 @@ routes/console/topup.tsx
 - **用途**：清理 tasks 表里过期的 `fail_reason` payloads
 - **合并时注意**：`main.go` 里必须调用 `service.StartTaskClearTask()`
 
+### 5.9 🔴 Gemini `/v1beta1/...` 入站路由别名（Vertex 版本面兼容，2026-08-25 commit `abe2973a2`）
+
+**用途**：Vertex AI 对 Gemini 用的版本名是 `v1beta1`,而官方只认 Developer API 的 `/v1beta`。fork 把 **`/v1beta1/...` 接受为 `/v1beta/...` 的入站别名**(客户端用 Vertex 风格路径也能打进来),并把 Vertex 渠道的 Gemini 上游请求改走 `v1beta1`(修复 `urlContext + googleSearch` 组合与 `urlContextMetadata` 失效);Claude on Vertex 仍走 `v1`。
+
+**🔴 涉及 4 处路由/鉴权基础设施(官方只有 `/v1beta`,合并极易被覆盖丢失):**
+
+| 文件 | 改动 |
+|---|---|
+| `router/relay-router.go` | gemini 路由组对 **`["/v1beta", "/v1beta1"]` 两个前缀**都注册(别名) |
+| `relay/constant/relay_mode.go` | relay mode 判定接受 `/v1beta1/models`、`/v1/models` |
+| `middleware/auth.go` | `TokenAuth` 的 query-key 白名单加 `/v1beta1/models` |
+| `middleware/distributor.go` | 模型名提取接受 `/v1beta1/models/`、`/v1/models/` |
+
+**连带**:`relay/channel/vertex/adaptor.go` + `url_builder.go`(上游走 v1beta1)、`relaykit/dto/gemini.go`(toolConfig 兼容 snake_case)。配套测试 `adaptor_url_test.go` / `gemini_tool_config_test.go` / `gemini_version_alias_router_test.go`。
+
+⚠️ **合并时**:官方重写 gemini 路由/relay_mode/distributor/auth 白名单时,`/v1beta1` 这 4 处别名极易被删。验证:`grep -rn "/v1beta1/models" router/ middleware/ relay/constant/` 应能看到 4 处。
+
 ---
 
 ## 六、数据库 schema
@@ -640,7 +657,7 @@ routes/console/topup.tsx
   - `service/quota.go:227` `userQuota < quota && !IsNegativeBalanceAllowed(ctx)`
   - `relay/relay_task.go` 用户额度检查
 - **保护**：`UpdateUserSetting` 显式保留 `AllowNegativeBalance`，防止用户自己调接口清掉授权
-- **管理入口**：`UpdateUser` 支持 admin 修改（白名单字段）；classic 前端 `EditUserModal.jsx` 有"允许透支使用"开关
+- **管理入口**：`UpdateUser` 支持 admin 修改（白名单字段）；classic 前端 `EditUserModal.jsx` 有"允许透支使用"开关。⚠️ 2026-08-25 commit `49b9b0669` 修复:**编辑用户调整额度时会把"允许透支"误关**——`EditUserModal.jsx` 提交时须保留 `allow_negative_balance` 现值,不能因只改额度而重置该开关(与后端 `UpdateUser` 的字段合并逻辑配套)
 - **设计文档**：见 commit `c6fab6838` 引入的设计文档
 
 **合并时注意**：官方合并如果重写了扣费预检查逻辑（尤其 `WalletFunding.PreConsume` / `TryReserveUserQuota` / `funding_source.go`），放行判断很容易被漏掉 → 表现是白名单用户欠费后被拦。**验证**：`grep -n "allowNegative\|IsNegativeBalanceAllowed" service/funding_source.go service/billing_session.go` 应能看到 `WalletFunding.allowNegative` 注入 + PreConsume 分支
@@ -1089,3 +1106,5 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
 | 2026-08-21 | replay body 重试取代 fork seek 版 | `relay/channel/api_request.go`、`common/body_storage.go` | 官方 `ApplyUpstreamBodyMetadata`/`NewReplayableBodyReader`;fork `setRewindableBody`/`ReaderOnly` 成死代码(待清理) |
 | 2026-08-21 | `model.InvalidateUserCache` 导出包装器(合并易丢) | `model/user_cache.go` | 官方 user_cache.go 无此导出;auto-merge 曾丢,controller 依赖,已恢复 |
 | 2026-08-21 | ⚠️合并操作教训:勿对"混合冲突"文件用 `git checkout --theirs/--ours` | 见 [README 铁律 4](README.md) | 整文件 checkout 会丢自动合并区(本轮 api-router/channel-test 曾因此丢 fork 路由/RequestId),须只改冲突块 |
+| 2026-08-25 | 🔴 Gemini `/v1beta1/...` 入站路由别名(Vertex 版本面) | 见 [5.9](#59--gemini-v1beta1-入站路由别名vertex-版本面兼容2026-08-25-commit-abe2973a2) | commit `abe2973a2`(chz)。router/relay_mode/auth/distributor 4 处别名,官方只认 /v1beta,合并极易删 |
+| 2026-08-25 | 编辑用户调整额度不再误关"允许透支" | 见 [7.8](#七点八允许用户欠费继续使用allownegativebalance) | commit `49b9b0669`(lbf)。EditUserModal 提交保留 allow_negative_balance 现值 + 渠道编辑密钥模式默认追加 + 分组下拉搜索(e7c80e917) |
