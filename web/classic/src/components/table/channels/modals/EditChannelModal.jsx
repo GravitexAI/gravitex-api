@@ -950,6 +950,8 @@ const EditChannelModal = (props) => {
         const modeVal = chInfo.multi_key_mode || 'random';
         setMultiKeyMode(modeVal);
         data.multi_key_mode = modeVal;
+        setKeyMode('append');
+        data.key_mode = 'append';
       } else {
         setBatch(false);
         setMultiToSingle(false);

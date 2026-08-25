@@ -100,6 +100,30 @@ const EditUserModal = (props) => {
     request_headers_log_headers: '',
   });
 
+  // 解析后端返回的 user.setting JSON 字符串，填充前端表单字段
+  const parseUserSettingToForm = (data) => {
+    try {
+      const parsedSetting = data.setting ? JSON.parse(data.setting) : {};
+      data.allow_negative_balance = !!parsedSetting.allow_negative_balance;
+      const requestHeadersLog = parsedSetting.request_headers_log || {};
+      data.request_headers_log_enabled = requestHeadersLog.enabled === true;
+      data.request_headers_log_mode =
+        requestHeadersLog.mode === 'all' ? 'all' : 'selected';
+      data.request_headers_log_headers = Array.isArray(
+        requestHeadersLog.headers,
+      )
+        ? requestHeadersLog.headers
+            .filter((header) => typeof header === 'string')
+            .join('\n')
+        : '';
+    } catch (e) {
+      data.allow_negative_balance = false;
+      data.request_headers_log_enabled = false;
+      data.request_headers_log_mode = 'selected';
+      data.request_headers_log_headers = '';
+    }
+  };
+
   const fetchGroups = async () => {
     try {
       let res = await API.get(`/api/group/`);
@@ -121,27 +145,8 @@ const EditUserModal = (props) => {
       data.quota_amount = Number(
         quotaToDisplayAmount(data.quota || 0).toFixed(6),
       );
-      // 解析 setting JSON 字符串，提取 allow_negative_balance
-      try {
-        const parsedSetting = data.setting ? JSON.parse(data.setting) : {};
-        data.allow_negative_balance = !!parsedSetting.allow_negative_balance;
-        const requestHeadersLog = parsedSetting.request_headers_log || {};
-        data.request_headers_log_enabled = requestHeadersLog.enabled === true;
-        data.request_headers_log_mode =
-          requestHeadersLog.mode === 'all' ? 'all' : 'selected';
-        data.request_headers_log_headers = Array.isArray(
-          requestHeadersLog.headers,
-        )
-          ? requestHeadersLog.headers
-              .filter((header) => typeof header === 'string')
-              .join('\n')
-          : '';
-      } catch (e) {
-        data.allow_negative_balance = false;
-        data.request_headers_log_enabled = false;
-        data.request_headers_log_mode = 'selected';
-        data.request_headers_log_headers = '';
-      }
+      // 解析 setting JSON 字符串，提取 allow_negative_balance 等字段
+      parseUserSettingToForm(data);
       setInputs({ ...getInitValues(), ...data });
     } else {
       showError(message);
@@ -241,6 +246,8 @@ const EditUserModal = (props) => {
           data.quota_amount = Number(
             quotaToDisplayAmount(data.quota || 0).toFixed(6),
           );
+          // 同步解析 setting，保留 allow_negative_balance 等字段，避免被默认值覆盖
+          parseUserSettingToForm(data);
           setInputs({ ...getInitValues(), ...data });
         }
         props.refresh();
