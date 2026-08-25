@@ -3874,6 +3874,19 @@ const EditChannelModal = (props) => {
                     placeholder={t('请选择可以使用该渠道的分组')}
                     multiple
                     allowAdditions
+                    search
+                    filter={(inputValue, option) => {
+                      const keyword = (inputValue || '').toLowerCase();
+                      const label =
+                        typeof option?.label === 'string'
+                          ? option.label.toLowerCase()
+                          : '';
+                      const value =
+                        typeof option?.value === 'string'
+                          ? option.value.toLowerCase()
+                          : '';
+                      return label.includes(keyword) || value.includes(keyword);
+                    }}
                     additionLabel={t(
                       '请在系统设置页面编辑分组倍率以添加新的分组：',
                     )}

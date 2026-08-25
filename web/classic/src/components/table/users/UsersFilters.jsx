@@ -76,6 +76,12 @@ const UsersFilters = ({
             field='searchGroup'
             placeholder={t('选择分组')}
             optionList={groupOptions}
+            filter={(inputValue, option) =>
+              typeof option?.label === 'string' &&
+              option.label.toLowerCase().includes(
+                (inputValue || '').toLowerCase(),
+              )
+            }
             onChange={(value) => {
               // Group change triggers automatic search
               setTimeout(() => {
