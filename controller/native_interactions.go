@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -55,7 +58,12 @@ func NativeInteractionsSubmit(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, types.OpenAIError{Message: err.Error(), Type: "server_error"})
 		return
 	}
-	if !c.GetBool("native_interactions_background") && !c.GetBool("native_interactions_stream") {
+	body, err = convertVertexLyriaResponse(body, c.GetBool("native_vertex_lyria_response"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, types.OpenAIError{Message: err.Error(), Type: "server_error"})
+		return
+	}
+	if shouldWaitNativeInteraction(c.GetString("native_interactions_model"), c.GetBool("native_interactions_background"), c.GetBool("native_interactions_stream")) {
 		body, err = waitNativeInteraction(c, body, false)
 		if err != nil {
 			c.JSON(http.StatusGatewayTimeout, types.OpenAIError{Message: err.Error(), Type: "timeout"})
@@ -63,6 +71,16 @@ func NativeInteractionsSubmit(c *gin.Context) {
 		}
 	}
 	c.Data(capture.status, "application/json", body)
+}
+
+func shouldWaitNativeInteraction(modelName string, background, stream bool) bool {
+	if background || stream {
+		return false
+	}
+	// Lyria 3 does not support background interactions. Its Vertex create call
+	// returns the completed audio synchronously, so no internal wait/poll loop is
+	// needed here; the response is persisted locally by the task submit path.
+	return modelName != "lyria-3-pro-preview" && modelName != "lyria-3-clip-preview"
 }
 
 // waitNativeInteraction keeps the normal task persistence and completion
@@ -117,7 +135,11 @@ func waitNativeInteraction(c *gin.Context, initial []byte, stream bool) ([]byte,
 			return nil, err
 		}
 		if len(capture.body.Bytes()) > 0 {
-			last, err = nativeInteractionResponse(capture.body.Bytes(), c.GetString("native_interactions_model"))
+			raw := capture.body.Bytes()
+			if augmented := augmentLyriaInteractionResponse(c.GetInt("id"), id, raw); len(augmented) > 0 {
+				raw = augmented
+			}
+			last, err = nativeInteractionResponse(raw, c.GetString("native_interactions_model"))
 			if err != nil {
 				return nil, err
 			}
@@ -167,9 +189,36 @@ func writeNativeSSEValue(c *gin.Context, value any) {
 }
 
 // NativeInteractionsFetch converts the existing task response to an
-// Interaction response. The underlying fetch also updates task state and
-// performs the existing completion billing.
+// Interaction response. Lyria terminal results are served from task.data;
+// other task platforms retain their existing realtime-fetch behavior.
 func NativeInteractionsFetch(c *gin.Context) {
+	// Locally dispatched Lyria background tasks are authoritative in tasks.data.
+	// Do not send their local task id to the provider's GET endpoint; the worker
+	// has already performed the provider call and finalized this row.
+	if taskID := c.Param("interaction_id"); taskID != "" {
+		if task, exists, err := model.GetByTaskId(c.GetInt("id"), taskID); err == nil && exists && task.Platform == constant.TaskPlatformLyria {
+			raw := task.Data
+			if len(raw) == 0 {
+				raw, _ = common.Marshal(map[string]any{"id": taskID, "object": "interaction", "status": nativeInteractionStatus(string(task.Status))})
+			}
+			// Local async tasks store the provider response verbatim. For a
+			// Vertex channel, convert that response before exposing it through
+			// the public Google Interactions endpoint. Native Google channels
+			// remain unchanged.
+			vertexLyria := false
+			if channel, channelErr := model.CacheGetChannel(task.ChannelId); channelErr == nil && channel != nil {
+				vertexLyria = channel.Type == constant.ChannelTypeVertexAi
+			}
+			response, responseErr := nativeInteractionResponse(raw, task.Properties.OriginModelName)
+			if responseErr == nil && vertexLyria {
+				response, responseErr = convertVertexLyriaResponseToGoogle(response)
+			}
+			if responseErr == nil {
+				c.Data(http.StatusOK, "application/json", response)
+				return
+			}
+		}
+	}
 	var capture nativeResponseWriter
 	capture.ResponseWriter = c.Writer
 	c.Writer = &capture
@@ -185,12 +234,57 @@ func NativeInteractionsFetch(c *gin.Context) {
 		_, _ = c.Writer.Write(capture.body.Bytes())
 		return
 	}
+	if taskID := c.Param("interaction_id"); taskID != "" {
+		if augmented := augmentLyriaInteractionResponse(c.GetInt("id"), taskID, capture.body.Bytes()); len(augmented) > 0 {
+			capture.body.Reset()
+			_, _ = capture.body.Write(augmented)
+		}
+	}
 	body, err := nativeInteractionResponse(capture.body.Bytes(), "")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, types.OpenAIError{Message: err.Error(), Type: "server_error"})
 		return
 	}
 	c.Data(capture.status, "application/json", body)
+}
+
+func augmentLyriaInteractionResponse(userID int, taskID string, raw []byte) []byte {
+	task, exists, err := model.GetByTaskId(userID, taskID)
+	if err != nil || !exists || task.Platform != constant.TaskPlatformLyria || len(task.Data) == 0 {
+		return nil
+	}
+	return mergeLyriaTaskSnapshot(raw, task.Data, task)
+}
+
+func mergeLyriaTaskSnapshot(raw, providerRaw []byte, task *model.Task) []byte {
+	if task == nil || task.Platform != constant.TaskPlatformLyria {
+		return nil
+	}
+	var current map[string]any
+	var provider map[string]any
+	if common.Unmarshal(raw, &current) != nil || common.Unmarshal(providerRaw, &provider) != nil {
+		return nil
+	}
+	target := current
+	if wrapped, ok := current["data"].(map[string]any); ok {
+		target = wrapped
+	}
+	for _, field := range []string{"steps", "outputs", "error", "errors"} {
+		if value, ok := provider[field]; ok {
+			target[field] = value
+		}
+	}
+	target["id"] = task.TaskID
+	target["task_id"] = task.TaskID
+	target["status"] = nativeInteractionStatus(task.Status)
+	if task.FailReason != "" {
+		target["fail_reason"] = task.FailReason
+	}
+	result, err := common.Marshal(current)
+	if err != nil {
+		return nil
+	}
+	return result
 }
 
 type nativeResponseWriter struct {
@@ -217,6 +311,9 @@ func (w *nativeResponseWriter) WriteString(value string) (int, error) {
 }
 
 func nativeInteractionResponse(raw []byte, fallbackModel string) ([]byte, error) {
+	if fallbackModel == "lyria-3-pro-preview" || fallbackModel == "lyria-3-clip-preview" {
+		return append([]byte(nil), raw...), nil
+	}
 	var envelope map[string]any
 	if err := common.Unmarshal(raw, &envelope); err != nil {
 		return nil, err
@@ -230,6 +327,11 @@ func nativeInteractionResponse(raw []byte, fallbackModel string) ([]byte, error)
 		"id":     data["id"],
 		"object": "interaction",
 		"status": nativeInteractionStatus(data["status"]),
+	}
+	if platform, _ := data["platform"].(string); platform == string(constant.TaskPlatformLyria) {
+		if taskID, _ := data["task_id"].(string); taskID != "" {
+			interaction["id"] = taskID
+		}
 	}
 	if interaction["id"] == nil {
 		interaction["id"] = data["task_id"]
@@ -247,6 +349,25 @@ func nativeInteractionResponse(raw []byte, fallbackModel string) ([]byte, error)
 				"uri":  url,
 			}},
 		}}
+	}
+	// Lyria stores the provider Interaction response in task.data. Preserve its
+	// audio/text steps instead of converting the audio data into a video URL.
+	if steps, ok := data["steps"]; ok {
+		interaction["steps"] = steps
+	} else if nested, ok := data["data"].(map[string]any); ok {
+		if steps, ok := nested["steps"]; ok {
+			interaction["steps"] = steps
+		}
+	}
+	if outputs, ok := data["outputs"]; ok {
+		interaction["outputs"] = outputs
+	} else if nested, ok := data["data"].(map[string]any); ok {
+		if outputs, ok := nested["outputs"]; ok {
+			interaction["outputs"] = outputs
+		}
+	}
+	if errors, ok := data["errors"]; ok {
+		interaction["errors"] = errors
 	}
 	// The video converter stores the original Interaction usage under the
 	// OpenAI-compatible response metadata. Expose it again at the native
@@ -270,13 +391,91 @@ func nativeInteractionResponse(raw []byte, fallbackModel string) ([]byte, error)
 	return common.Marshal(interaction)
 }
 
+// convertVertexLyriaResponse adapts only the Vertex Lyria response returned
+// through the public Google Interactions route. The original outputs/steps
+// are retained and Google convenience fields are added for clients that read
+// output_audio/output_text.
+func convertVertexLyriaResponse(raw []byte, vertexLyria bool) ([]byte, error) {
+	if !vertexLyria {
+		return raw, nil
+	}
+	return convertVertexLyriaResponseToGoogle(raw)
+}
+
+func convertVertexLyriaResponseToGoogle(raw []byte) ([]byte, error) {
+	var response map[string]any
+	if err := common.Unmarshal(raw, &response); err != nil {
+		return nil, err
+	}
+
+	var audio map[string]any
+	var textParts []string
+	collect := func(blocks []any) {
+		for _, value := range blocks {
+			block, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			typ, _ := block["type"].(string)
+			switch typ {
+			case "audio":
+				if audio == nil {
+					audio = map[string]any{}
+					for _, key := range []string{"data", "mime_type"} {
+						if item, exists := block[key]; exists {
+							audio[key] = item
+						}
+					}
+				}
+			case "text":
+				if text, ok := block["text"].(string); ok && text != "" {
+					textParts = append(textParts, text)
+				}
+			}
+		}
+	}
+	if outputs, ok := response["outputs"].([]any); ok {
+		collect(outputs)
+	}
+	if steps, ok := response["steps"].([]any); ok {
+		for _, value := range steps {
+			step, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			if content, ok := step["content"].([]any); ok {
+				collect(content)
+			}
+		}
+	}
+	if audio != nil && response["output_audio"] == nil {
+		response["output_audio"] = audio
+	}
+	if len(textParts) > 0 && response["output_text"] == nil {
+		response["output_text"] = strings.Join(textParts, "\n")
+	}
+	delete(response, "outputs")
+	delete(response, "steps")
+	return common.Marshal(response)
+}
+
 func nativeInteractionStatus(status any) string {
-	value, _ := status.(string)
-	switch value {
+	var value string
+	switch typed := status.(type) {
+	case string:
+		value = typed
+	case model.TaskStatus:
+		value = string(typed)
+	}
+	switch strings.ToLower(value) {
 	case "succeeded", "completed":
 		return "completed"
-	case "failed", "cancelled":
-		return value
+	case "success":
+		return "completed"
+	case "failed", "failure":
+		return "failed"
+	case "cancelled", "canceled":
+		return "cancelled"
 	default:
 		return "in_progress"
 	}

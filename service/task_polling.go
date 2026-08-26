@@ -63,6 +63,9 @@ func sweepTimedOutTasks(ctx context.Context) {
 	timedOutCount := 0
 
 	for _, task := range tasks {
+		if isLocallyDispatchedLyriaTask(task) {
+			continue
+		}
 		isLegacy := task.SubmitTime > 0 && task.SubmitTime < legacyTaskCutoff
 
 		oldStatus := task.Status
@@ -120,6 +123,16 @@ func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) 
 	common.SysLog("任务进度轮询开始")
 	sweepTimedOutTasks(ctx)
 	allTasks := model.GetAllUnFinishSyncTasks(constant.TaskQueryLimit)
+	// Native Lyria background tasks are completed by their dedicated worker.
+	// They use a local public task id, which must never be sent to the generic
+	// provider polling endpoint as if it were an upstream Interaction id.
+	filteredTasks := allTasks[:0]
+	for _, task := range allTasks {
+		if !isLocallyDispatchedLyriaTask(task) {
+			filteredTasks = append(filteredTasks, task)
+		}
+	}
+	allTasks = filteredTasks
 	summary.UnfinishedTasks = len(allTasks)
 	platformTask := make(map[constant.TaskPlatform][]*model.Task)
 	for _, t := range allTasks {
@@ -176,6 +189,10 @@ func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) 
 	}
 	common.SysLog("任务进度轮询完成")
 	return summary
+}
+
+func isLocallyDispatchedLyriaTask(task *model.Task) bool {
+	return task != nil && task.Platform == constant.TaskPlatformLyria && task.PrivateData.LocalAsync
 }
 
 // DispatchPlatformUpdate 按平台分发轮询更新
@@ -406,8 +423,13 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 	if adaptor == nil {
 		return fmt.Errorf("video adaptor not found")
 	}
+	pollingChannelType := 0
+	if platform == constant.TaskPlatformLyria {
+		pollingChannelType = cacheGetChannel.Type
+	}
 	info := &relaycommon.RelayInfo{}
 	info.ChannelMeta = &relaycommon.ChannelMeta{
+		ChannelType:    pollingChannelType,
 		ChannelBaseUrl: cacheGetChannel.GetBaseURL(),
 	}
 	info.ApiKey = cacheGetChannel.Key

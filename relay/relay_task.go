@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel"
+	taskLyria "github.com/QuantumNous/new-api/relay/channel/task/lyria"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -35,16 +36,26 @@ var CompleteVideoTaskOnUpstreamSuccessFn func(ctx context.Context, task *model.T
 // (billing_*, requested_seconds, generate_audio, has_video_input, ...) survive into the SUCCESS settlement.
 var MergeVideoTaskDataWithUpstreamResponseFn func(task *model.Task, responseBody []byte)
 
+// DispatchLyriaAsyncFn is wired by main to the controller. It is called only
+// after channel selection, pricing and pre-charge, before the provider call.
+var DispatchLyriaAsyncFn func(c *gin.Context, info *relaycommon.RelayInfo, requestBody []byte) (*TaskSubmitResult, *dto.TaskError)
+
 type TaskSubmitResult struct {
-	UpstreamTaskID string
-	TaskData       []byte
-	Platform       constant.TaskPlatform
-	Quota          int
+	UpstreamTaskID     string
+	TaskData           []byte
+	Platform           constant.TaskPlatform
+	Quota              int
+	UpstreamStatusCode int
+	// InitialTaskInfo is populated only when a provider completes the task in
+	// the create response. Lyria 3 Vertex interactions are synchronous and do
+	// not support storing/retrieving the interaction with a later provider GET.
+	InitialTaskInfo *relaycommon.TaskInfo
 
 	// 按秒/按量计费标记（提交时不预扣费，轮询成功后由 controller 计费）
 	IsPerSecondBilling       bool
 	IsVideoTokenRatioBilling bool
 	UpstreamBodyBytes        []byte // 上游请求体，供计费解析
+	AsyncDispatched          bool   // 已创建本地异步任务，实际调用由后台 worker 完成
 }
 
 // ResolveOriginTask 处理基于已有任务的提交（remix / continuation）：
@@ -167,7 +178,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if platform == "" {
 		platform = GetTaskPlatform(c)
 	}
-	adaptor := GetTaskAdaptor(platform)
+	requestedModel := strings.TrimSpace(c.GetString("original_model"))
+	if requestedModel == "" {
+		requestedModel = info.OriginModelName
+	}
+	adaptor := GetTaskAdaptorForRequest(platform, requestedModel, info)
 	if adaptor == nil {
 		return nil, service.TaskErrorWrapperLocal(fmt.Errorf("invalid api platform: %s", platform), "invalid_api_platform", http.StatusBadRequest)
 	}
@@ -185,6 +200,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 	if modelName == "" {
 		modelName = service.CoverTaskActionToModelName(platform, info.Action)
+	}
+	if isNativeLyriaRequest(info, modelName) {
+		platform = constant.TaskPlatformLyria
 	}
 	// Re-resolve from the selected channel at task submission time. Task
 	// endpoints can arrive through a locked/retry path where the middleware
@@ -284,16 +302,47 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 
+	// 9. Native Lyria background requests are locally asynchronous. The public
+	// request returns after the local task row is created; the worker invokes
+	// this method again with the same billing session to perform the provider
+	// call and finalize the row.
+	if c.GetBool("native_interactions_async") && !c.GetBool("native_interactions_worker") && isNativeLyriaRequest(info, modelName) {
+		if DispatchLyriaAsyncFn == nil {
+			return nil, service.TaskErrorWrapperLocal(errors.New("lyria async dispatcher is not configured"), "async_dispatch_unavailable", http.StatusServiceUnavailable)
+		}
+		return DispatchLyriaAsyncFn(c, info, upstreamBodyBytes)
+	}
+
 	// 9. 发送请求
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
-	if resp != nil && resp.StatusCode != http.StatusOK {
+	lyriaVertexResponse := isNativeLyriaRequest(info, modelName)
+	responseSucceeded := resp != nil && resp.StatusCode == http.StatusOK
+	if lyriaVertexResponse && resp != nil {
+		responseSucceeded = resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices
+	}
+	if resp != nil && !responseSucceeded {
 		responseBody, _ := io.ReadAll(resp.Body)
 		taskErr := service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
-		if c.GetBool(common.KeySeedanceRawMirror) {
+		if common.IsTaskRawMirror(c) {
 			taskErr.RawBody = responseBody
+		}
+		if lyriaVertexResponse {
+			initial := taskLyria.ParseVertexHTTPFailure(resp.StatusCode, responseBody)
+			if initial.TaskID != "" && info.TaskRelayInfo != nil {
+				info.TaskRelayInfo.PublicTaskID = initial.TaskID
+			}
+			return &TaskSubmitResult{
+				UpstreamTaskID:     initial.TaskID,
+				TaskData:           append([]byte(nil), responseBody...),
+				Platform:           constant.TaskPlatformLyria,
+				Quota:              info.PriceData.Quota,
+				UpstreamStatusCode: resp.StatusCode,
+				InitialTaskInfo:    initial,
+				UpstreamBodyBytes:  upstreamBodyBytes,
+			}, taskErr
 		}
 		return nil, taskErr
 	}
@@ -304,7 +353,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		otherRatios = map[string]float64{}
 	}
 	ratiosJSON, _ := common.Marshal(otherRatios)
-	c.Header("X-New-Api-Other-Ratios", string(ratiosJSON))
+	if !c.GetBool("native_interactions_async") && !c.GetBool("native_interactions_worker") {
+		c.Header("X-New-Api-Other-Ratios", string(ratiosJSON))
+	}
 
 	// 11. 解析响应
 	upstreamTaskID, taskData, taskErr := adaptor.DoResponse(c, resp, info)
@@ -318,7 +369,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	} else if isVideoTokenRatioBilling {
 		taskData = mergeVideoTokenRatioBillingData(c, info, taskData, modelName, info.UsingGroup)
 		taskData = service.AppendGeminiOmniTaskLogMetadata(c, info, taskData)
-	} else {
+	} else if platform != constant.TaskPlatformLyria {
 		taskData = mergeTokenInfoToTaskData(c, info, taskData)
 	}
 
@@ -336,11 +387,31 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 
+	var initialTaskInfo *relaycommon.TaskInfo
+	if platform == constant.TaskPlatformLyria {
+		parsed, parseErr := adaptor.ParseTaskResult(taskData)
+		if parseErr != nil {
+			if lyriaVertexResponse {
+				parsed = &relaycommon.TaskInfo{
+					Status:   model.TaskStatusFailure,
+					Progress: "100%",
+					Reason:   "invalid_response: unable to parse Vertex interaction response: " + parseErr.Error(),
+					Metadata: map[string]any{"http_status": resp.StatusCode},
+				}
+			} else {
+				return nil, service.TaskErrorWrapper(parseErr, "invalid_response", http.StatusBadGateway)
+			}
+		}
+		initialTaskInfo = parsed
+	}
+
 	return &TaskSubmitResult{
 		UpstreamTaskID:           upstreamTaskID,
 		TaskData:                 taskData,
 		Platform:                 platform,
 		Quota:                    finalQuota,
+		UpstreamStatusCode:       resp.StatusCode,
+		InitialTaskInfo:          initialTaskInfo,
 		IsPerSecondBilling:       isPerSecondBilling,
 		IsVideoTokenRatioBilling: isVideoTokenRatioBilling,
 		UpstreamBodyBytes:        upstreamBodyBytes,
@@ -539,7 +610,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 // tryRealtimeFetch 尝试从上游实时拉取视频任务状态。
 // 当非 OpenAI Video API 时，还会构建自定义格式的响应体。
 func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool, rawMirror bool) []byte {
-	if task.Status == model.TaskStatusFailure || (task.Status == model.TaskStatusSuccess && isVideoTaskBillingProcessed(task)) {
+	if shouldSkipRealtimeFetch(task, isOpenAIVideoAPI) {
 		return nil
 	}
 
@@ -675,6 +746,20 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool, rawMirror bool) [
 		Data: out,
 	})
 	return respBody
+}
+
+func shouldSkipRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool) bool {
+	if task == nil {
+		return true
+	}
+	// Lyria's Vertex create call returns the full audio synchronously with
+	// store=false. Its model-specific path rejects stored interactions, so GET
+	// must be served from the task row instead of calling Vertex again.
+	if task.Platform == constant.TaskPlatformLyria {
+		return true
+	}
+	return task.Status == model.TaskStatusFailure ||
+		(task.Status == model.TaskStatusSuccess && isVideoTaskBillingProcessed(task))
 }
 
 func isVideoTaskBillingProcessed(task *model.Task) bool {

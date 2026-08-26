@@ -40,6 +40,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/task/hailuo"
 	taskjimeng "github.com/QuantumNous/new-api/relay/channel/task/jimeng"
 	"github.com/QuantumNous/new-api/relay/channel/task/kling"
+	taskLyria "github.com/QuantumNous/new-api/relay/channel/task/lyria"
 	taskseedancegateway "github.com/QuantumNous/new-api/relay/channel/task/seedancegateway"
 	tasksora "github.com/QuantumNous/new-api/relay/channel/task/sora"
 	"github.com/QuantumNous/new-api/relay/channel/task/suno"
@@ -54,6 +55,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/xunfei"
 	"github.com/QuantumNous/new-api/relay/channel/zhipu"
 	"github.com/QuantumNous/new-api/relay/channel/zhipu_4v"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 )
 
@@ -153,6 +155,8 @@ func GetTaskAdaptor(platform constant.TaskPlatform) channel.TaskAdaptor {
 	//	return &aiproxy.Adaptor{}
 	case constant.TaskPlatformSuno:
 		return &suno.TaskAdaptor{}
+	case constant.TaskPlatformLyria:
+		return &taskLyria.TaskAdaptor{}
 	}
 	if channelType, err := strconv.ParseInt(string(platform), 10, 64); err == nil {
 		switch channelType {
@@ -183,4 +187,22 @@ func GetTaskAdaptor(platform constant.TaskPlatform) channel.TaskAdaptor {
 		}
 	}
 	return nil
+}
+
+// GetTaskAdaptorForRequest selects Lyria only for the native Interactions route
+// on Vertex channels. Existing task routes and non-Vertex channels retain their
+// channel-type adaptor even when a caller supplies the same model string.
+func GetTaskAdaptorForRequest(platform constant.TaskPlatform, modelName string, info *relaycommon.RelayInfo) channel.TaskAdaptor {
+	if isNativeLyriaRequest(info, modelName) {
+		return &taskLyria.TaskAdaptor{}
+	}
+	return GetTaskAdaptor(platform)
+}
+
+func isNativeLyriaRequest(info *relaycommon.RelayInfo, modelName string) bool {
+	return info != nil && info.NativeInteractions && taskLyria.IsLyriaModel(modelName)
+}
+
+func isNativeVertexLyriaRequest(info *relaycommon.RelayInfo, modelName string) bool {
+	return info != nil && info.NativeInteractions && info.ChannelType == constant.ChannelTypeVertexAi && taskLyria.IsLyriaModel(modelName)
 }

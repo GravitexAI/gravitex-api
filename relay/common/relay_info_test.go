@@ -104,6 +104,18 @@ func TestRelayInfoUsageConversionAndRequestFormatConversion(t *testing.T) {
 	assert.False(t, info.HasRequestFormatConversion())
 }
 
+func TestGenBaseRelayInfoPreservesNativeInteractionsMarkerAfterPathRewrite(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/video/generations", nil)
+	c.Set("native_interactions", true)
+
+	info := genBaseRelayInfo(c, nil)
+
+	require.True(t, info.NativeInteractions)
+	require.Equal(t, "/v1/video/generations", info.RequestURLPath)
+}
+
 func TestGenRelayInfoCapturesRequestReasoningEffort(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tests := []struct {

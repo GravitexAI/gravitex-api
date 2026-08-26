@@ -103,6 +103,7 @@ type RelayInfo struct {
 	RelayMode              int
 	OriginModelName        string
 	RequestURLPath         string
+	NativeInteractions     bool
 	RequestHeaders         map[string]string
 	ShouldIncludeUsage     bool
 	DisablePing            bool // 是否禁止向下游发送自定义 Ping
@@ -533,11 +534,12 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		TokenUnlimited: common.GetContextKeyBool(c, constant.ContextKeyTokenUnlimited),
 		TokenGroup:     tokenGroup,
 
-		isFirstResponse: true,
-		RelayMode:       relayconstant.Path2RelayMode(c.Request.URL.Path),
-		RequestURLPath:  c.Request.URL.String(),
-		RequestHeaders:  cloneRequestHeaders(c),
-		IsStream:        isStream,
+		isFirstResponse:    true,
+		RelayMode:          relayconstant.Path2RelayMode(c.Request.URL.Path),
+		RequestURLPath:     c.Request.URL.String(),
+		NativeInteractions: c.GetBool("native_interactions"),
+		RequestHeaders:     cloneRequestHeaders(c),
+		IsStream:           isStream,
 
 		StartTime:         startTime,
 		FirstResponseTime: startTime.Add(-time.Second),
@@ -1187,10 +1189,11 @@ type TaskInfo struct {
 	VideoOutputTokens int `json:"video_output_tokens,omitempty"`
 	TextOutputTokens  int `json:"text_output_tokens,omitempty"`
 	// 实际使用量（由上游 usage 字段提供，优先用于计费）
-	ActualSize     string `json:"actual_size,omitempty"`     // 实际分辨率，如 "1280*720"（阿里 wan2.6）
-	ActualSR       int    `json:"actual_sr,omitempty"`       // 实际 SR（分辨率数值，如 720）
-	ActualDuration int    `json:"actual_duration,omitempty"` // 实际输出时长（秒）
-	Resolution     string `json:"resolution,omitempty"`      // 上游返回的分辨率标识，如 "720p"、"1080p"（用于按分辨率维度计费）
+	ActualSize     string         `json:"actual_size,omitempty"`     // 实际分辨率，如 "1280*720"（阿里 wan2.6）
+	ActualSR       int            `json:"actual_sr,omitempty"`       // 实际 SR（分辨率数值，如 720）
+	ActualDuration int            `json:"actual_duration,omitempty"` // 实际输出时长（秒）
+	Resolution     string         `json:"resolution,omitempty"`      // 上游返回的分辨率标识，如 "720p"、"1080p"（用于按分辨率维度计费）
+	Metadata       map[string]any `json:"metadata,omitempty"`        // 非视频任务的结构化结果元数据
 }
 
 func FailTaskInfo(reason string) *TaskInfo {

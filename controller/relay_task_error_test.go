@@ -51,3 +51,30 @@ func TestRespondTaskError_NonMirror_UsesPlatformShape(t *testing.T) {
 	assert.Contains(t, w.Body.String(), `"code":"fail_to_fetch_task"`)
 	assert.NotContains(t, w.Body.String(), "InvalidParameter")
 }
+
+func TestRespondTaskError_LyriaRawMirror_WritesRawBodyVerbatim(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Set("lyria_raw_mirror", true)
+	raw := `{"error":{"code":"invalid_request","message":"provider error"}}`
+	taskErr := &dto.TaskError{
+		Code:       "fail_to_fetch_task",
+		Message:    raw,
+		StatusCode: http.StatusBadRequest,
+		RawBody:    []byte(raw),
+	}
+
+	respondTaskError(c, taskErr)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.JSONEq(t, raw, w.Body.String())
+}
+
+func TestShouldRetryTaskRelay_LyriaRawMirrorDoesNotRetryProviderResponse(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("lyria_raw_mirror", true)
+	taskErr := &dto.TaskError{StatusCode: http.StatusBadGateway}
+
+	require.False(t, shouldRetryTaskRelay(c, 60, taskErr, 3))
+}

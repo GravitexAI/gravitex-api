@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -44,6 +45,16 @@ func TestVideoFetchByIDRespBodyBuilder_RawMirror_CachedTerminalTask_ReturnsRawDa
 	respBody, taskErr := videoFetchByIDRespBodyBuilder(c)
 	require.Nil(t, taskErr)
 	assert.JSONEq(t, rawUpstreamJSON, string(respBody))
+}
+
+func TestShouldSkipRealtimeFetchForLyriaUsesPersistedCreateResponse(t *testing.T) {
+	task := &model.Task{
+		Platform: constant.TaskPlatformLyria,
+		Status:   model.TaskStatusSuccess,
+		Data:     []byte(`{"id":"interaction-1","status":"completed","outputs":[]}`),
+	}
+
+	require.True(t, shouldSkipRealtimeFetch(task, false))
 }
 
 func setupRelayTaskTestDB(t *testing.T) {

@@ -19,6 +19,7 @@ const nativeOmniModel = "gemini-omni-flash-preview"
 func NativeInteractions() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.Method == http.MethodPost {
+			originalPath := c.Request.URL.Path
 			body, err := common.GetBodyStorage(c)
 			if err != nil {
 				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "code": "invalid_request"}})
@@ -35,13 +36,31 @@ func NativeInteractions() gin.HandlerFunc {
 				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "code": "invalid_request"}})
 				return
 			}
+			if isLyriaInteractionModel(modelName) && !shouldUseLyriaNativeAdapter(originalPath, modelName) {
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{
+					"message": "Lyria 3 is supported only on /v1beta/interactions",
+					"code":    "invalid_request",
+				}})
+				return
+			}
+			if shouldUseLyriaNativeAdapter(originalPath, modelName) {
+				c.Set(common.KeyLyriaRawMirror, true)
+				c.Set(common.KeyLyriaRawRequestBody, append([]byte(nil), raw...))
+				c.Set("native_interactions_original_path", originalPath)
+			}
 			c.Set("native_interactions", true)
 			c.Set("native_interactions_model", modelName)
 			background, hasBackground := requestBool(raw, "background")
 			if !hasBackground {
-				background = true // preserve the gateway's existing async default
+				// Lyria 3 does not support background interactions. Keep the
+				// historical async default for Omni, but do not inject background
+				// into Lyria requests that omitted the field.
+				background = !isLyriaInteractionModel(modelName)
 			}
 			c.Set("native_interactions_background", background)
+			// Only an explicit background=true request is locally asynchronous.
+			// Synchronous Lyria requests must not create a task row.
+			c.Set("native_interactions_async", background && isLyriaInteractionModel(modelName))
 			stream, _ := requestBool(raw, "stream")
 			c.Set("native_interactions_stream", stream && strings.EqualFold(modelName, nativeOmniModel))
 			convertedStorage, err := common.CreateBodyStorage(converted)
@@ -77,6 +96,14 @@ func requestBool(raw []byte, key string) (bool, bool) {
 	return value, ok
 }
 
+func isLyriaInteractionModel(modelName string) bool {
+	return modelName == "lyria-3-pro-preview" || modelName == "lyria-3-clip-preview"
+}
+
+func shouldUseLyriaNativeAdapter(path, modelName string) bool {
+	return path == "/v1beta/interactions" && isLyriaInteractionModel(modelName)
+}
+
 func convertNativeInteractionRequest(raw []byte) ([]byte, string, error) {
 	var request map[string]any
 	if err := common.Unmarshal(raw, &request); err != nil {
@@ -85,6 +112,10 @@ func convertNativeInteractionRequest(raw []byte) ([]byte, string, error) {
 	modelName, _ := request["model"].(string)
 	if strings.TrimSpace(modelName) == "" {
 		return nil, "", fmt.Errorf("field model is required")
+	}
+	if modelName == "lyria-3-pro-preview" || modelName == "lyria-3-clip-preview" {
+		converted, err := convertLyriaInteractionRequest(request)
+		return converted, modelName, err
 	}
 	prompt := nativeInteractionPrompt(request["input"])
 	if strings.TrimSpace(prompt) == "" {
@@ -154,6 +185,38 @@ func convertNativeInteractionRequest(raw []byte) ([]byte, string, error) {
 	converted := map[string]any{"model": modelName, "prompt": prompt, "metadata": metadata}
 	data, err := common.Marshal(converted)
 	return data, modelName, err
+}
+
+func convertLyriaInteractionRequest(request map[string]any) ([]byte, error) {
+	input, exists := request["input"]
+	prompt := nativeInteractionPrompt(input)
+	if strings.TrimSpace(prompt) == "" {
+		// Internal task plumbing requires a prompt, but the original request is
+		// sent to Vertex verbatim. Leave provider-side parameter validation to
+		// Vertex instead of rejecting the public request here.
+		prompt = "Lyria interaction"
+	}
+	metadata := map[string]any{}
+	if exists {
+		metadata["input"] = input
+	}
+	if value, ok := request["response_format"]; ok {
+		metadata["response_format"] = value
+	}
+	if value, ok := request["previous_interaction_id"]; ok {
+		metadata["previous_interaction_id"] = value
+	}
+	if value, exists := request["background"]; exists {
+		metadata["background"] = value
+	}
+	if value, exists := request["store"]; exists {
+		metadata["store"] = value
+	}
+	return common.Marshal(map[string]any{
+		"model":    request["model"],
+		"prompt":   prompt,
+		"metadata": metadata,
+	})
 }
 
 func nativeInteractionResponseFormat(value any) map[string]any {

@@ -23,6 +23,7 @@ import (
 type taskPollingFetchAdaptor struct {
 	mu           sync.Mutex
 	taskIDs      []string
+	channelType  int
 	fetched      chan string
 	blockTaskID  string
 	blockStarted chan struct{}
@@ -30,7 +31,13 @@ type taskPollingFetchAdaptor struct {
 	blockOnce    sync.Once
 }
 
-func (a *taskPollingFetchAdaptor) Init(_ *relaycommon.RelayInfo) {}
+func (a *taskPollingFetchAdaptor) Init(info *relaycommon.RelayInfo) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if info != nil && info.ChannelMeta != nil {
+		a.channelType = info.ChannelType
+	}
+}
 
 func (a *taskPollingFetchAdaptor) FetchTask(_ string, _ string, body map[string]any, _ string) (*http.Response, error) {
 	taskID, _ := body["task_id"].(string)
@@ -91,6 +98,12 @@ func (a *taskPollingFetchAdaptor) fetchedTaskIDs() []string {
 	return append([]string(nil), a.taskIDs...)
 }
 
+func (a *taskPollingFetchAdaptor) initializedChannelType() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.channelType
+}
+
 func seedTaskPollingChannel(t *testing.T, id int, disableSleep bool) {
 	t.Helper()
 	ch := &model.Channel{
@@ -124,6 +137,65 @@ func seedPollingTask(t *testing.T, channelID int, publicID string, upstreamID st
 	}
 	require.NoError(t, model.DB.Create(task).Error)
 	return task
+}
+
+func TestUpdateVideoTasksPassesVertexChannelTypeToLyriaPollingAdaptor(t *testing.T) {
+	truncate(t)
+
+	const channelID = 91
+	channel := &model.Channel{
+		Id:     channelID,
+		Type:   constant.ChannelTypeVertexAi,
+		Name:   "vertex_lyria",
+		Key:    `{"project_id":"demo-project"}`,
+		Status: common.ChannelStatusEnabled,
+	}
+	require.NoError(t, model.DB.Create(channel).Error)
+	task := seedPollingTask(t, channelID, "interaction-1", "interaction-1")
+	task.Platform = constant.TaskPlatformLyria
+	require.NoError(t, model.DB.Save(task).Error)
+
+	adaptor := &taskPollingFetchAdaptor{}
+	previousFactory := GetTaskAdaptorFunc
+	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
+	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
+
+	err := UpdateVideoTasks(context.Background(), constant.TaskPlatformLyria, map[int][]string{
+		channelID: {task.GetUpstreamTaskID()},
+	}, map[string]*model.Task{task.GetUpstreamTaskID(): task})
+
+	require.NoError(t, err)
+	require.Equal(t, constant.ChannelTypeVertexAi, adaptor.initializedChannelType())
+}
+
+func TestLocalLyriaAsyncTaskIsExcludedFromProviderPolling(t *testing.T) {
+	task := &model.Task{
+		Platform:    constant.TaskPlatformLyria,
+		PrivateData: model.TaskPrivateData{LocalAsync: true},
+	}
+	require.True(t, isLocallyDispatchedLyriaTask(task))
+	require.False(t, isLocallyDispatchedLyriaTask(&model.Task{Platform: constant.TaskPlatformLyria}))
+	require.False(t, isLocallyDispatchedLyriaTask(&model.Task{Platform: constant.TaskPlatform("video"), PrivateData: model.TaskPrivateData{LocalAsync: true}}))
+}
+
+func TestUpdateVideoTasksDoesNotChangeChannelTypeInitializationForOtherPlatforms(t *testing.T) {
+	truncate(t)
+
+	const channelID = 92
+	seedTaskPollingChannel(t, channelID, true)
+	task := seedPollingTask(t, channelID, "video-1", "video-1")
+
+	adaptor := &taskPollingFetchAdaptor{}
+	previousFactory := GetTaskAdaptorFunc
+	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
+	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
+
+	err := UpdateVideoTasks(context.Background(), constant.TaskPlatform("kling"), map[int][]string{
+		channelID: {task.GetUpstreamTaskID()},
+	}, map[string]*model.Task{task.GetUpstreamTaskID(): task})
+
+	require.NoError(t, err)
+	require.Zero(t, adaptor.initializedChannelType())
 }
 
 func TestUpdateVideoTasksDefaultSleepWaitsBetweenTasks(t *testing.T) {

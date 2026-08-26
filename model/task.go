@@ -39,8 +39,8 @@ const (
 	TaskStatusFailure               = "FAILURE"
 	TaskStatusSuccess               = "SUCCESS"
 	TaskStatusUnknown               = "UNKNOWN"
-	// TaskStatusCancelled marks a task cancelled via the Seedance official-mirror
-	// DELETE endpoint while it was still queued. Not used by any other flow.
+	// TaskStatusCancelled marks provider-confirmed cancellation (for example,
+	// Seedance DELETE or a Vertex Interaction CANCELLED response).
 	TaskStatusCancelled TaskStatus = "CANCELLED"
 )
 
@@ -124,6 +124,9 @@ type TaskPrivateData struct {
 	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
 	NodeName       string              `json:"node_name,omitempty"`       // 发起任务的节点名，轮询结算阶段据此归属日志而非最后查询节点
 	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	// LocalAsync marks tasks completed by a gateway worker rather than the
+	// generic provider polling loop (currently native Lyria background tasks).
+	LocalAsync bool `json:"local_async,omitempty"`
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。

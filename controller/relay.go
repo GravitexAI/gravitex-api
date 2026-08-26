@@ -394,6 +394,9 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		other := make(map[string]interface{})
 		if c.Request != nil && c.Request.URL != nil {
 			other["request_path"] = c.Request.URL.Path
+			if originalPath := c.GetString("native_interactions_original_path"); originalPath != "" {
+				other["request_path"] = originalPath
+			}
 		}
 		other["error_type"] = err.GetErrorType()
 		other["error_code"] = err.GetErrorCode()
@@ -594,6 +597,7 @@ func RelayTask(c *gin.Context) {
 		}
 
 		addUsedChannel(c, channel.Id)
+		c.Set("native_vertex_lyria_response", isVertexLyriaScope(relayInfo.NativeInteractions, channel.Type, relayInfo.OriginModelName))
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
 			if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {
@@ -635,13 +639,29 @@ func RelayTask(c *gin.Context) {
 
 	// ── 成功：结算 + 日志 + 插入任务 ──
 	if taskErr == nil {
+		// The async dispatcher already pre-charged, inserted IN_PROGRESS and
+		// wrote the immediate Interaction response. The worker owns settlement
+		// and final task persistence.
+		if result != nil && result.AsyncDispatched {
+			return
+		}
 		// 按秒/按量视频计费模型：提交时不预扣费、不记录日志，轮询成功后由 controller.UpdateVideoTaskAll 计费
 		// Keep the legacy billing-route decision unchanged. Cost-discount
 		// snapshots are persisted independently below and must not alter whether
 		// a task uses pre-deduction, per-second, or token-ratio settlement.
 		isPerSecondOrTokenRatio := result.IsPerSecondBilling || result.IsVideoTokenRatioBilling
+		lyriaFailed := isFailedNativeLyriaSubmit(relayInfo.NativeInteractions, relayInfo.OriginModelName, result)
 
-		if !isPerSecondOrTokenRatio {
+		if lyriaFailed {
+			upstreamStatus := result.UpstreamStatusCode
+			if upstreamStatus == 0 {
+				upstreamStatus = http.StatusOK
+			}
+			recordVertexLyriaSubmitFailure(c, relayInfo, result.InitialTaskInfo.Reason, upstreamStatus)
+			if relayInfo.Billing != nil {
+				relayInfo.Billing.Refund(c)
+			}
+		} else if !isPerSecondOrTokenRatio {
 			if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 				common.SysError("settle task billing error: " + settleErr.Error())
 			}
@@ -651,60 +671,156 @@ func RelayTask(c *gin.Context) {
 			relayInfo.Billing = nil
 		}
 
-		task := model.InitTask(result.Platform, relayInfo)
-		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
-		task.PrivateData.BillingSource = relayInfo.BillingSource
-		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
-		task.PrivateData.TokenId = relayInfo.TokenId
-		task.PrivateData.NodeName = common.NodeName
-		billingContext := &model.TaskBillingContext{
-			ModelPrice:      relayInfo.PriceData.ModelPrice,
-			GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
-			ModelRatio:      relayInfo.PriceData.ModelRatio,
-			OtherRatios:     relayInfo.PriceData.OtherRatios(),
-			OriginModelName: relayInfo.OriginModelName,
-			PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
-		}
-		task.PrivateData.BillingContext = billingContext
-
-		// 按秒/按量视频计费模型：task.Quota=0（DB guard，轮询完成后实际计费）
-		if isPerSecondOrTokenRatio {
-			task.Quota = 0
-		} else {
-			task.Quota = result.Quota
-		}
-		task.Data = result.TaskData
-		// Snapshot the effective discount for every newly created async task.
-		// The task endpoint also serves models whose billing route is resolved
-		// only after polling; tying this to isPerSecondOrTokenRatio can therefore
-		// lose the snapshot before settlement. Existing task data is preserved,
-		// and an existing billing_cost_discount is never overwritten.
-		task.Data = ensureAsyncTaskCostDiscountSnapshot(c, billingContext, task.Data)
-		task.Action = relayInfo.Action
-
-		// 按秒计费模型：保存 Properties.RequestedSeconds 供轮询计费使用
-		if result.IsPerSecondBilling {
-			sec := relay.ResolveRequestedSeconds(c, result.UpstreamBodyBytes)
-			task.Properties.RequestedSeconds = sec
-			if task.Properties.RequestedSeconds <= 0 {
-				task.Properties.RequestedSeconds = 4
+		if shouldPersistLyriaTask(relayInfo.NativeInteractions, relayInfo.OriginModelName, c.GetBool("native_interactions_background")) {
+			task := buildSubmittedTask(c, relayInfo, result, isPerSecondOrTokenRatio)
+			if insertErr := task.Insert(); insertErr != nil {
+				common.SysError("insert task error: " + insertErr.Error())
 			}
 		}
-		// 持久化上游请求体（轮询线程不覆盖，计费时从中读取 durationSeconds 等参数）
-		if len(result.UpstreamBodyBytes) > 0 {
-			task.UpstreamRequestBody = []byte(common.TruncateBase64Content(string(result.UpstreamBodyBytes)))
-		}
-		// 令牌信息写入独立列
-		task.TokenName = c.GetString("token_name")
-		task.TokenId = relayInfo.TokenId
-
+	}
+	// Legacy task-backed providers still need a terminal task row for audit and
+	// task-list consistency. Synchronous native Lyria is intentionally excluded;
+	// processChannelError records the error log and the deferred BillingSession
+	// refund remains responsible for the precharge.
+	if taskErr != nil && result != nil && isNativeLyriaScope(relayInfo.NativeInteractions, relayInfo.OriginModelName) &&
+		shouldPersistLyriaTask(relayInfo.NativeInteractions, relayInfo.OriginModelName, c.GetBool("native_interactions_background")) {
+		task := buildSubmittedTask(c, relayInfo, result, false)
 		if insertErr := task.Insert(); insertErr != nil {
-			common.SysError("insert task error: " + insertErr.Error())
+			common.SysError("insert failed lyria task error: " + insertErr.Error())
 		}
 	}
 
 	if taskErr != nil {
 		respondTaskError(c, taskErr)
+	}
+}
+
+func shouldPersistSynchronousLyriaTask(nativeInteractions bool, modelName string) bool {
+	return !(nativeInteractions && (modelName == "lyria-3-pro-preview" || modelName == "lyria-3-clip-preview"))
+}
+
+func shouldPersistLyriaTask(nativeInteractions bool, modelName string, background bool) bool {
+	if nativeInteractions && (modelName == "lyria-3-pro-preview" || modelName == "lyria-3-clip-preview") {
+		return background
+	}
+	return true
+}
+
+func isVertexLyriaScope(nativeInteractions bool, channelType int, modelName string) bool {
+	if !isNativeLyriaScope(nativeInteractions, modelName) || channelType != constant.ChannelTypeVertexAi {
+		return false
+	}
+	return true
+}
+
+func isNativeLyriaScope(nativeInteractions bool, modelName string) bool {
+	return nativeInteractions && (modelName == "lyria-3-pro-preview" || modelName == "lyria-3-clip-preview")
+}
+
+func isFailedNativeLyriaSubmit(nativeInteractions bool, modelName string, result *relay.TaskSubmitResult) bool {
+	if !isNativeLyriaScope(nativeInteractions, modelName) || result == nil ||
+		result.Platform != constant.TaskPlatformLyria || result.InitialTaskInfo == nil {
+		return false
+	}
+	status := model.TaskStatus(result.InitialTaskInfo.Status)
+	return status == model.TaskStatusFailure || status == model.TaskStatusCancelled
+}
+
+func isFailedVertexLyriaSubmit(nativeInteractions bool, channelType int, modelName string, result *relay.TaskSubmitResult) bool {
+	return isVertexLyriaScope(nativeInteractions, channelType, modelName) && isFailedNativeLyriaSubmit(nativeInteractions, modelName, result)
+}
+
+func recordVertexLyriaSubmitFailure(c *gin.Context, info *relaycommon.RelayInfo, reason string, upstreamStatus int) {
+	if !constant.ErrorLogEnabled || info == nil {
+		return
+	}
+	requestPath := c.Request.URL.Path
+	if originalPath := c.GetString("native_interactions_original_path"); originalPath != "" {
+		requestPath = originalPath
+	}
+	other := map[string]interface{}{
+		"is_task":                 true,
+		"request_path":            requestPath,
+		"status_code":             upstreamStatus,
+		"interaction_status":      "failed",
+		"channel_id":              info.ChannelId,
+		"channel_type":            info.ChannelType,
+		"upstream_business_error": true,
+	}
+	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+	model.RecordErrorLog(c, info.UserId, info.ChannelId, info.OriginModelName, c.GetString("token_name"),
+		reason, info.TokenId, int(time.Since(startTime).Seconds()), common.GetContextKeyBool(c, constant.ContextKeyIsStream), info.UsingGroup, other)
+}
+
+func buildSubmittedTask(c *gin.Context, relayInfo *relaycommon.RelayInfo, result *relay.TaskSubmitResult, isPerSecondOrTokenRatio bool) *model.Task {
+	task := model.InitTask(result.Platform, relayInfo)
+	task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
+	task.PrivateData.BillingSource = relayInfo.BillingSource
+	task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
+	task.PrivateData.TokenId = relayInfo.TokenId
+	task.PrivateData.NodeName = common.NodeName
+	billingContext := &model.TaskBillingContext{
+		ModelPrice:      relayInfo.PriceData.ModelPrice,
+		GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
+		ModelRatio:      relayInfo.PriceData.ModelRatio,
+		OtherRatios:     relayInfo.PriceData.OtherRatios(),
+		OriginModelName: relayInfo.OriginModelName,
+		PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
+	}
+	task.PrivateData.BillingContext = billingContext
+	if isPerSecondOrTokenRatio {
+		task.Quota = 0
+	} else {
+		task.Quota = result.Quota
+	}
+	if isNativeLyriaScope(relayInfo.NativeInteractions, relayInfo.OriginModelName) {
+		// Lyria's task row is the audit copy of the provider response. Keep it
+		// byte-for-byte intact; the discount snapshot still lives in private_data.
+		task.Data = append([]byte(nil), result.TaskData...)
+		if discount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount); discount > 0 && discount <= 1 {
+			billingContext.CostDiscount = common.GetPointer(discount)
+		}
+	} else {
+		task.Data = ensureAsyncTaskCostDiscountSnapshot(c, billingContext, result.TaskData)
+	}
+	task.Action = relayInfo.Action
+	applyInitialTaskSubmitResult(task, result, time.Now().Unix())
+	if result.IsPerSecondBilling {
+		task.Properties.RequestedSeconds = relay.ResolveRequestedSeconds(c, result.UpstreamBodyBytes)
+		if task.Properties.RequestedSeconds <= 0 {
+			task.Properties.RequestedSeconds = 4
+		}
+	}
+	if len(result.UpstreamBodyBytes) > 0 {
+		task.UpstreamRequestBody = []byte(common.TruncateBase64Content(string(result.UpstreamBodyBytes)))
+	}
+	task.TokenName = c.GetString("token_name")
+	task.TokenId = relayInfo.TokenId
+	return task
+}
+
+func applyInitialTaskSubmitResult(task *model.Task, result *relay.TaskSubmitResult, now int64) {
+	if task == nil || result == nil || result.InitialTaskInfo == nil || task.Platform != constant.TaskPlatformLyria {
+		return
+	}
+	info := result.InitialTaskInfo
+	status := model.TaskStatus(info.Status)
+	if status != model.TaskStatusSuccess && status != model.TaskStatusFailure && status != model.TaskStatusCancelled {
+		return
+	}
+	task.Status = status
+	task.Progress = info.Progress
+	if task.Progress == "" {
+		task.Progress = "100%"
+	}
+	task.StartTime = task.SubmitTime
+	task.FinishTime = now
+	task.FailReason = info.Reason
+	if info.Url != "" && !strings.HasPrefix(info.Url, "data:") {
+		task.PrivateData.ResultURL = info.Url
 	}
 }
 
@@ -742,7 +858,7 @@ func ensureAsyncTaskCostDiscountSnapshot(c *gin.Context, billingContext *model.T
 
 // respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）
 func respondTaskError(c *gin.Context, taskErr *taskdto.TaskError) {
-	if len(taskErr.RawBody) > 0 && c.GetBool(common.KeySeedanceRawMirror) {
+	if len(taskErr.RawBody) > 0 && common.IsTaskRawMirror(c) {
 		c.Data(taskErr.StatusCode, "application/json", taskErr.RawBody)
 		return
 	}
@@ -754,6 +870,9 @@ func respondTaskError(c *gin.Context, taskErr *taskdto.TaskError) {
 
 func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskError, retryTimes int) bool {
 	if taskErr == nil {
+		return false
+	}
+	if c.GetBool(common.KeyLyriaRawMirror) {
 		return false
 	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {

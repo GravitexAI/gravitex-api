@@ -163,6 +163,7 @@ func main() {
 	relay.CompleteVideoTaskOnUpstreamSuccessFn = controller.CompleteVideoTaskOnUpstreamSuccess
 	// in-progress 轮询时复用同一份 preservedFields 合并规则，保证后续 SUCCESS 扣费链路读得到计费字段
 	relay.MergeVideoTaskDataWithUpstreamResponseFn = controller.MergeVideoTaskDataWithUpstreamResponse
+	relay.DispatchLyriaAsyncFn = controller.DispatchLyriaAsync
 
 	// Register the periodic channel test, upstream model update, and async task
 	// polling (Midjourney / Suno / video) jobs as scheduled system tasks
