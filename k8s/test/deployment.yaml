@@ -4,12 +4,13 @@ metadata:
   name: api-gateway-test
   namespace: test
 spec:
-  replicas: 2 # 固定启动 2 个 Pod 实例
+  replicas: 2
+  progressDeadlineSeconds: 1800
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 0
-      maxSurge: 1
+      maxSurge: 2
   selector:
     matchLabels:
       app: api-gateway-test
@@ -18,7 +19,7 @@ spec:
       labels:
         app: api-gateway-test
     spec:
-      terminationGracePeriodSeconds: 60
+      terminationGracePeriodSeconds: 1020
       initContainers:
       - name: sysctl-init
         image: busybox:1.36
@@ -48,13 +49,15 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
+        - name: SHUTDOWN_TIMEOUT_SECONDS
+          value: "960"
         envFrom:
         - configMapRef:
             name: api-gateway-test-config
         lifecycle:
           preStop:
             exec:
-              command: ["sh", "-c", "sleep 15"]
+              command: ["sh", "-c", "sleep 30"]
         readinessProbe:
           tcpSocket:
             port: 3000
