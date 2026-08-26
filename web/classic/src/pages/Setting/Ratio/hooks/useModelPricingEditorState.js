@@ -732,22 +732,40 @@ const serializeModel = (model, t) => {
       model.rawRatios.completionRatio,
     );
   }
+  // Each ratio field: if the corresponding price is set, compute the ratio
+  // from the price; otherwise fall back to the rawRatios snapshot so backend
+  // values that are locked / not editable from the UI (e.g. seedance 补全倍率
+  // 由后端固定为 5) are preserved instead of disappearing from the diff.
   if (cachePrice !== null) {
     result.CacheRatio = toNormalizedNumber(cachePrice / inputPrice);
+  } else if (hasValue(model.rawRatios.cacheRatio)) {
+    result.CacheRatio = toNormalizedNumber(model.rawRatios.cacheRatio);
   }
   if (createCachePrice !== null) {
     result.CreateCacheRatio = toNormalizedNumber(createCachePrice / inputPrice);
+  } else if (hasValue(model.rawRatios.createCacheRatio)) {
+    result.CreateCacheRatio = toNormalizedNumber(
+      model.rawRatios.createCacheRatio,
+    );
   }
   if (imagePrice !== null) {
     result.ImageRatio = toNormalizedNumber(imagePrice / inputPrice);
+  } else if (hasValue(model.rawRatios.imageRatio)) {
+    result.ImageRatio = toNormalizedNumber(model.rawRatios.imageRatio);
   }
   if (imageCompletionPrice !== null) {
     result.ImageCompletionRatio = toNormalizedNumber(
       imageCompletionPrice / inputPrice,
     );
+  } else if (hasValue(model.rawRatios.imageCompletionRatio)) {
+    result.ImageCompletionRatio = toNormalizedNumber(
+      model.rawRatios.imageCompletionRatio,
+    );
   }
   if (audioInputPrice !== null) {
     result.AudioRatio = toNormalizedNumber(audioInputPrice / inputPrice);
+  } else if (hasValue(model.rawRatios.audioRatio)) {
+    result.AudioRatio = toNormalizedNumber(model.rawRatios.audioRatio);
   }
   if (audioOutputPrice !== null) {
     if (audioInputPrice === null || audioInputPrice === 0) {
@@ -760,13 +778,23 @@ const serializeModel = (model, t) => {
     result.AudioCompletionRatio = toNormalizedNumber(
       audioOutputPrice / audioInputPrice,
     );
+  } else if (hasValue(model.rawRatios.audioCompletionRatio)) {
+    result.AudioCompletionRatio = toNormalizedNumber(
+      model.rawRatios.audioCompletionRatio,
+    );
   }
   if (videoInputPrice !== null) {
     result.VideoRatio = toNormalizedNumber(videoInputPrice / inputPrice);
+  } else if (hasValue(model.rawRatios.videoRatio)) {
+    result.VideoRatio = toNormalizedNumber(model.rawRatios.videoRatio);
   }
   if (videoCompletionPrice !== null) {
     result.VideoCompletionRatio = toNormalizedNumber(
       videoCompletionPrice / inputPrice,
+    );
+  } else if (hasValue(model.rawRatios.videoCompletionRatio)) {
+    result.VideoCompletionRatio = toNormalizedNumber(
+      model.rawRatios.videoCompletionRatio,
     );
   }
 
@@ -1463,25 +1491,33 @@ export function useModelPricingEditorState({
   };
 
   const buildSavePayload = () => {
+    // Each option key is a JSON-encoded map of { modelName: value }.
+    // Seed each output dict from the parsed `options` so that entries for
+    // models the frontend didn't serialize this round are preserved as-is
+    // (e.g. seedance-1-5-pro-251215 with a nested VideoCompletionRatio
+    // object that the UI cannot represent).  Without this base, payloads
+    // for those fields come out as `{}` and the diff falsely reports the
+    // entries as cleared.
+    const seedDict = (key) => ({ ...parseOptionJSON(options[key]) });
     const output = {
-      ModelPrice: {},
-      ModelRatio: {},
-      CompletionRatio: {},
-      CacheRatio: {},
-      CreateCacheRatio: {},
-      ImageRatio: {},
-      ImageCompletionRatio: {},
-      AudioRatio: {},
-      AudioCompletionRatio: {},
-      VideoRatio: {},
-      VideoCompletionRatio: {},
-      ImageModelPricePerImage: {},
-      VideoModelPricePerSecond: {},
+      ModelPrice: seedDict('ModelPrice'),
+      ModelRatio: seedDict('ModelRatio'),
+      CompletionRatio: seedDict('CompletionRatio'),
+      CacheRatio: seedDict('CacheRatio'),
+      CreateCacheRatio: seedDict('CreateCacheRatio'),
+      ImageRatio: seedDict('ImageRatio'),
+      ImageCompletionRatio: seedDict('ImageCompletionRatio'),
+      AudioRatio: seedDict('AudioRatio'),
+      AudioCompletionRatio: seedDict('AudioCompletionRatio'),
+      VideoRatio: seedDict('VideoRatio'),
+      VideoCompletionRatio: seedDict('VideoCompletionRatio'),
+      ImageModelPricePerImage: seedDict('ImageModelPricePerImage'),
+      VideoModelPricePerSecond: seedDict('VideoModelPricePerSecond'),
     };
 
     const tieredOutput = {
-      'billing_setting.billing_mode': {},
-      'billing_setting.billing_expr': {},
+      'billing_setting.billing_mode': seedDict('billing_setting.billing_mode'),
+      'billing_setting.billing_expr': seedDict('billing_setting.billing_expr'),
     };
 
     for (const baseModel of models) {
@@ -1520,12 +1556,33 @@ export function useModelPricingEditorState({
       }
     }
 
+    const normalizeDictValues = (dict) => {
+      // Some fields (ImageModelPricePerImage, VideoModelPricePerSecond) are
+      // already JSON-encoded strings coming from serializeModel.  When the
+      // outer payload is JSON.stringify'd they would be double-encoded
+      // (escaped quotes).  Parse them back to plain values so the final
+      // stringify produces a single layer of encoding.
+      const result = {};
+      Object.entries(dict).forEach(([modelName, value]) => {
+        if (typeof value === 'string') {
+          try {
+            result[modelName] = JSON.parse(value);
+            return;
+          } catch {
+            // not JSON, keep as string
+          }
+        }
+        result[modelName] = value;
+      });
+      return result;
+    };
+
     const payload = {};
     Object.entries(output).forEach(([key, value]) => {
-      payload[key] = JSON.stringify(value, null, 2);
+      payload[key] = JSON.stringify(normalizeDictValues(value), null, 2);
     });
     Object.entries(tieredOutput).forEach(([key, value]) => {
-      payload[key] = JSON.stringify(value, null, 2);
+      payload[key] = JSON.stringify(normalizeDictValues(value), null, 2);
     });
     return payload;
   };

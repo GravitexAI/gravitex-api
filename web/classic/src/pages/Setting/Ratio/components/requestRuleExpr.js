@@ -84,6 +84,7 @@ export function getRequestRuleMatchOptions(source, t) {
       { value: MATCH_EQ, label: t('等于') },
       { value: MATCH_GTE, label: t('大于等于') },
       { value: MATCH_LT, label: t('小于') },
+      { value: MATCH_LTE, label: t('小于等于') },
       { value: MATCH_RANGE, label: t('跨夜范围') },
     ];
   }
@@ -219,7 +220,7 @@ function buildTimeConditionExpr(cond) {
   }
   const v = normalized.value.trim();
   if (!NUMERIC_LITERAL_REGEX.test(v)) return '';
-  const opMap = { [MATCH_EQ]: '==', [MATCH_GTE]: '>=', [MATCH_LT]: '<' };
+  const opMap = { [MATCH_EQ]: '==', [MATCH_GTE]: '>=', [MATCH_LT]: '<', [MATCH_LTE]: '<=' };
   return `${fn} ${opMap[mode] || '=='} ${v}`;
 }
 
@@ -302,10 +303,10 @@ function tryParseTimeCondition(expr) {
   }
   // Simple: hour("tz") op value
   m = expr.match(
-    /^(hour|minute|weekday|month|day)\("([^"]+)"\) (==|>=|<) ([\d.eE+-]+)$/,
+    /^(hour|minute|weekday|month|day)\("([^"]+)"\) (==|>=|<=|<) ([\d.eE+-]+)$/,
   );
   if (m) {
-    const opMap = { '==': MATCH_EQ, '>=': MATCH_GTE, '<': MATCH_LT };
+    const opMap = { '==': MATCH_EQ, '>=': MATCH_GTE, '<=': MATCH_LTE, '<': MATCH_LT };
     return {
       source: SOURCE_TIME, timeFunc: m[1], timezone: m[2],
       mode: opMap[m[3]] || MATCH_EQ, value: m[4], rangeStart: '', rangeEnd: '',
