@@ -4181,6 +4181,7 @@
     "默认补全倍率": "Tỷ lệ hoàn thành mặc định",
     "阶梯计费（表达式解析失败）": "Thanh toán theo bậc (không phân tích được biểu thức)",
     "阶梯计费（未匹配到对应阶梯）": "Thanh toán theo bậc (không tìm thấy bậc phù hợp)",
+    "时段倍率 {{ratio}}x": "Hệ số khung giờ {{ratio}}x",
     "你已合法取得所接入模型 API、账号、密钥和额度的授权；": "You have legally obtained authorization for the connected model APIs, accounts, keys, and quotas.",
     "你承诺仅在已取得上游服务商、模型服务提供方或相关权利方合法授权的范围内使用其 API、账号、密钥、额度及服务能力，不进行未经授权的转售、倒卖、分销或其他违规商业化使用。": "You commit to using upstream APIs, accounts, keys, quotas, and service capabilities only within the scope of lawful authorization obtained from upstream service providers, model service providers, or relevant rights holders, and will not conduct unauthorized resale, trafficking, distribution, or other non-compliant commercialization.",
     "如向中华人民共和国境内公众提供生成式人工智能服务，你将依法履行备案登记、安全评估、内容安全、投诉举报、生成合成内容标识、日志留存、个人信息保护等合规义务；": "If you provide generative AI services to the public in mainland China, you will fulfill legal compliance obligations.",

@@ -1254,6 +1254,28 @@ function getGroupRatioText(groupRatio, user_group_ratio) {
   });
 }
 
+/**
+ * 解析 other.request_rules（时段倍率规则），生成详情列展示片段。
+ * 仅显示命中的规则，没有命中或无数据则不显示。
+ */
+function getTimeRuleSegments(requestRules) {
+  if (!Array.isArray(requestRules) || requestRules.length === 0) {
+    return [];
+  }
+  const segments = [];
+  requestRules.forEach((rule) => {
+    const multiplier = Number(rule?.multiplier);
+    if (rule?.matched !== true || !Number.isFinite(multiplier)) {
+      return;
+    }
+    segments.push({
+      tone: 'primary',
+      text: i18next.t('时段倍率 {{ratio}}x', { ratio: multiplier }),
+    });
+  });
+  return segments;
+}
+
 function formatRatioValue(value, digits = 6) {
   const num = Number(value);
   if (!Number.isFinite(num)) {
@@ -1307,6 +1329,7 @@ function renderPriceSimpleCore({
                                  modelPrice = -1,
                                  groupRatio,
                                  user_group_ratio,
+                                 request_rules: requestRules,
                                  cacheTokens = 0,
                                  cacheRatio = 1.0,
                                  cacheCreationTokens = 0,
@@ -1346,6 +1369,7 @@ function renderPriceSimpleCore({
         tone: 'primary',
         text: getGroupRatioText(groupRatio, user_group_ratio),
       },
+      ...getTimeRuleSegments(requestRules),
     ];
 
     if (modelPrice !== -1) {
@@ -2359,6 +2383,7 @@ export function renderTieredModelPriceSimple(opts) {
     matched_tier: matchedTier,
     group_ratio: groupRatio,
     user_group_ratio,
+    request_rules: requestRules,
     cache_tokens: cacheTokens = 0,
     cache_creation_tokens_5m: cacheCreationTokens5m = 0,
     cache_creation_tokens_1h: cacheCreationTokens1h = 0,
@@ -2382,6 +2407,7 @@ export function renderTieredModelPriceSimple(opts) {
         tone: 'primary',
         text: getGroupRatioText(groupRatio, user_group_ratio),
       },
+      ...getTimeRuleSegments(requestRules),
     ];
 
     if (!tier) {

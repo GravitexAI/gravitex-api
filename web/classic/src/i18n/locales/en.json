@@ -3705,6 +3705,7 @@
     "阶梯计费": "Tiered Billing",
     "阶梯计费（表达式解析失败）": "Tiered Billing (expression parse failed)",
     "阶梯计费（未匹配到对应阶梯）": "Tiered Billing (no matching tier)",
+    "时段倍率 {{ratio}}x": "Time-based ratio {{ratio}}x",
     "输入 Tokens 阶梯": "Input Token Tiers",
     "输出 Tokens 阶梯": "Output Token Tiers",
     "固定阶梯": "Fixed Tier",
