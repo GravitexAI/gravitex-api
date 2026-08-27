@@ -153,7 +153,7 @@ func RebuildToolPriceIndex() {
 		if !isValidToolPrice(v) {
 			continue
 		}
-		merged[k] = v
+		merged[canonicalToolPriceKey(k)] = v
 	}
 
 	idx := &toolPriceIndex{
@@ -185,6 +185,22 @@ func RebuildToolPriceIndex() {
 	}
 
 	currentIndex.Store(idx)
+}
+
+// canonicalToolPriceKey keeps the wire/display spelling googleSearch
+// compatible with the internal billing identifier google_search.
+func canonicalToolPriceKey(key string) string {
+	colonIdx := strings.IndexByte(key, ':')
+	toolName := key
+	modelPart := ""
+	if colonIdx >= 0 {
+		toolName = key[:colonIdx]
+		modelPart = key[colonIdx:]
+	}
+	if strings.EqualFold(toolName, "googleSearch") || strings.EqualFold(toolName, "google_search") {
+		return "google_search" + modelPart
+	}
+	return key
 }
 
 // GetToolPriceForModel returns the price ($/1K calls) for a tool given a model name.

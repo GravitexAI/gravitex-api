@@ -1,12 +1,29 @@
 package dto
 
 import (
+	"encoding/json"
 	"testing"
 
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGeminiChatResponseUnmarshalPreservesGroundingMetadata(t *testing.T) {
+	var response GeminiChatResponse
+	err := json.Unmarshal([]byte(`{
+		"candidates": [{
+			"groundingMetadata": {
+				"webSearchQueries": ["人工智能行业最新动态", "生成式人工智能趋势"]
+			}
+		}],
+		"usageMetadata": {"totalTokenCount": 2}
+	}`), &response)
+	require.NoError(t, err)
+	require.Len(t, response.Candidates, 1)
+	require.NotNil(t, response.Candidates[0].GroundingMetadata)
+	assert.Equal(t, []string{"人工智能行业最新动态", "生成式人工智能趋势"}, response.Candidates[0].GroundingMetadata.WebSearchQueries)
+}
 
 func TestGeminiChatResponseUsageMetadataPresence(t *testing.T) {
 	var missing GeminiChatResponse

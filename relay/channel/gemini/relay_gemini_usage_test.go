@@ -13,8 +13,29 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMarkGeminiGoogleSearchCallOnlyForGroundedResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	markGeminiGoogleSearchCall(ctx, dto.GeminiChatResponse{
+		Candidates: []dto.GeminiChatCandidate{{
+			GroundingMetadata: &dto.GeminiGroundingMetadata{
+				WebSearchQueries: []string{"latest AI news"},
+			},
+		}},
+	})
+	assert.True(t, ctx.GetBool("gemini_google_search_call"))
+
+	ctx2, _ := gin.CreateTestContext(httptest.NewRecorder())
+	markGeminiGoogleSearchCall(ctx2, dto.GeminiChatResponse{
+		Candidates: []dto.GeminiChatCandidate{{Content: dto.GeminiChatContent{}}},
+	})
+	assert.False(t, ctx2.GetBool("gemini_google_search_call"))
+}
 
 func TestGeminiChatHandlerCompletionTokensExcludeToolUsePromptTokens(t *testing.T) {
 	t.Parallel()

@@ -39,6 +39,14 @@ func TestToolPriceHardcodedFallbacksSurviveMissingOperatorConfig(t *testing.T) {
 	assert.Equal(t, 25.0, GetToolPriceForModel("web_search_preview", "gpt-4.1-mini"))
 }
 
+func TestToolPriceGoogleSearchAliasUsesCanonicalPrice(t *testing.T) {
+	preserveToolPrices(t)
+	toolPriceSetting.Prices = map[string]float64{"googleSearch": 21}
+	RebuildToolPriceIndex()
+
+	assert.Equal(t, 21.0, GetToolPriceForModel("google_search", "gemini-3-pro-image"))
+}
+
 func TestToolPriceOperatorOverridePrecedenceAndExplicitZero(t *testing.T) {
 	preserveToolPrices(t)
 	toolPriceSetting.Prices = map[string]float64{

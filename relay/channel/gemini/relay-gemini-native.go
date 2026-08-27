@@ -35,6 +35,7 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	markGeminiGoogleSearchCall(c, geminiResponse)
 	info.UpstreamResponseId = geminiResponse.ResponseId
 	if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
 		info.SetUpstreamResponsesField("usageMetadata", geminiResponse.UsageMetadata)

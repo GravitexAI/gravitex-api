@@ -1497,6 +1497,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			sr.Stop(fmt.Errorf("unmarshal: %w", err))
 			return
 		}
+		markGeminiGoogleSearchCall(c, geminiResponse)
 		if geminiResponse.ResponseId != "" {
 			info.UpstreamResponseId = geminiResponse.ResponseId
 		}
@@ -1707,6 +1708,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	markGeminiGoogleSearchCall(c, geminiResponse)
 	info.UpstreamResponseId = geminiResponse.ResponseId
 	if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
 		info.SetUpstreamResponsesField("usageMetadata", geminiResponse.UsageMetadata)
@@ -2115,6 +2117,7 @@ func GeminiImagineImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if jsonErr := common.Unmarshal(responseBody, &geminiResponse); jsonErr != nil {
 		return nil, types.NewOpenAIError(jsonErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	markGeminiGoogleSearchCall(c, geminiResponse)
 	info.UpstreamResponseId = geminiResponse.ResponseId
 	if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
 		info.SetUpstreamResponsesField("usageMetadata", geminiResponse.UsageMetadata)
