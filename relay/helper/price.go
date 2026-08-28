@@ -78,7 +78,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		estimatedPrice, estimatedUsage := EstimateImagePerImageCost(imagePricing, request)
 		imageUnitPrice := 0.0
 		if estimatedUsage != nil {
-			imageUnitPrice = imagePricing.OutputImage[estimatedUsage.OutputSizeTier]
+			imageUnitPrice = ImageOutputUnitPriceForUsage(imagePricing, estimatedUsage)
 		}
 		preConsumedQuota := int(estimatedPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
 		priceData := hosttypes.PriceData{

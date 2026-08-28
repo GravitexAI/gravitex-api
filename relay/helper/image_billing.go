@@ -12,6 +12,7 @@ import (
 
 const (
 	seedreamOutputPixelThreshold int64 = 2_610_000
+	layerDecompositionMultiplier       = 0.5
 	// Keep the existing configuration keys stable. Their threshold semantics
 	// follow the current upstream 2.61M-pixel boundary.
 	seedreamLessPixelTier        = "pixelLessEqual236W"
@@ -134,6 +135,7 @@ func EstimateImagePerImageCost(config types.ImagePerImagePricing, request *dto.I
 		OutputPixels:         int64(outputWidth) * int64(outputHeight),
 		OutputSizeTier:       outputTierForSize(outputWidth, outputHeight),
 	}
+	applyImageOutputPricing(config, usage, imageOutputPriceMultiplier(request), []string{fmt.Sprintf("%dx%d", outputWidth, outputHeight)})
 	return ImagePerImageCost(config, usage), usage
 }
 
@@ -149,13 +151,35 @@ func ImagePerImageCost(config types.ImagePerImagePricing, usage *types.ImageBill
 		}
 	}
 	if usage.SuccessfulImageCount > 0 {
-		tier := usage.OutputSizeTier
-		if tier == "" && usage.OutputWidth > 0 && usage.OutputHeight > 0 {
-			tier = outputTierForSize(usage.OutputWidth, usage.OutputHeight)
+		if len(usage.OutputTiers) > 0 {
+			cost += usage.OutputPrice
+		} else {
+			tier := usage.OutputSizeTier
+			if tier == "" && usage.OutputWidth > 0 && usage.OutputHeight > 0 {
+				tier = outputTierForSize(usage.OutputWidth, usage.OutputHeight)
+			}
+			multiplier := usage.OutputPriceMultiplier
+			if multiplier <= 0 {
+				multiplier = 1
+			}
+			cost += float64(usage.SuccessfulImageCount) * ImageOutputUnitPrice(config, tier) * multiplier
 		}
-		cost += float64(usage.SuccessfulImageCount) * ImageOutputUnitPrice(config, tier)
 	}
 	return cost
+}
+
+func ImageOutputUnitPriceForUsage(config types.ImagePerImagePricing, usage *types.ImageBillingUsage) float64 {
+	if usage == nil || usage.SuccessfulImageCount <= 0 {
+		return 0
+	}
+	if len(usage.OutputTiers) > 0 {
+		return usage.OutputPrice / float64(usage.SuccessfulImageCount)
+	}
+	multiplier := usage.OutputPriceMultiplier
+	if multiplier <= 0 {
+		multiplier = 1
+	}
+	return ImageOutputUnitPrice(config, usage.OutputSizeTier) * multiplier
 }
 
 // ImageOutputUnitPrice keeps the persisted 236W configuration keys compatible
@@ -198,7 +222,72 @@ func SettleImagePerImageUsage(config types.ImagePerImagePricing, request *dto.Im
 		OutputPixels:         int64(width) * int64(height),
 		OutputSizeTier:       outputTierForSize(width, height),
 	}
+	applyImageOutputPricing(config, billingUsage, imageOutputPriceMultiplier(request), usage.OutputImageSizes)
 	return ImagePerImageCost(config, billingUsage), billingUsage, nil
+}
+
+func imageOutputPriceMultiplier(request *dto.ImageRequest) float64 {
+	if request == nil || len(request.Extra) == 0 {
+		return 1
+	}
+	raw, ok := request.Extra["layer_decomposition"]
+	if !ok {
+		return 1
+	}
+	var enabled bool
+	if err := common.Unmarshal(raw, &enabled); err != nil || !enabled {
+		return 1
+	}
+	return layerDecompositionMultiplier
+}
+
+func applyImageOutputPricing(config types.ImagePerImagePricing, usage *types.ImageBillingUsage, multiplier float64, sizes []string) {
+	if usage == nil || usage.SuccessfulImageCount <= 0 {
+		return
+	}
+	if multiplier <= 0 {
+		multiplier = 1
+	}
+	usage.LayerDecomposition = multiplier == layerDecompositionMultiplier
+	usage.OutputPriceMultiplier = multiplier
+	usage.OutputTiers = nil
+	usage.OutputPrice = 0
+
+	tierIndexes := make(map[string]int)
+	fallbackSize := ""
+	if usage.OutputWidth > 0 && usage.OutputHeight > 0 {
+		fallbackSize = fmt.Sprintf("%dx%d", usage.OutputWidth, usage.OutputHeight)
+	}
+	for index := 0; index < usage.SuccessfulImageCount; index++ {
+		size := fallbackSize
+		if index < len(sizes) && sizes[index] != "" {
+			size = sizes[index]
+		}
+		width, height, ok := resolveOutputDimensions(fallbackSize, size)
+		if !ok {
+			width, height = usage.OutputWidth, usage.OutputHeight
+		}
+		tier := outputTierForSize(width, height)
+		unitPrice := ImageOutputUnitPrice(config, tier) * multiplier
+		if tierIndex, exists := tierIndexes[tier]; exists {
+			usage.OutputTiers[tierIndex].Count++
+			usage.OutputTiers[tierIndex].Subtotal += unitPrice
+		} else {
+			tierIndexes[tier] = len(usage.OutputTiers)
+			usage.OutputTiers = append(usage.OutputTiers, types.ImageOutputTierUsage{
+				Tier:      tier,
+				Count:     1,
+				UnitPrice: unitPrice,
+				Subtotal:  unitPrice,
+			})
+		}
+		usage.OutputPrice += unitPrice
+	}
+	if len(usage.OutputTiers) == 1 {
+		usage.OutputSizeTier = usage.OutputTiers[0].Tier
+	} else {
+		usage.OutputSizeTier = ""
+	}
 }
 
 func requestSize(request *dto.ImageRequest) string {

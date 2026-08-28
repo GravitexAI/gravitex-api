@@ -13,13 +13,24 @@ type ImagePerImagePricing struct {
 	OutputImage          map[string]float64 `json:"outputImage"`
 }
 
+type ImageOutputTierUsage struct {
+	Tier      string  `json:"tier"`
+	Count     int     `json:"count"`
+	UnitPrice float64 `json:"unit_price"`
+	Subtotal  float64 `json:"subtotal"`
+}
+
 type ImageBillingUsage struct {
-	InputImageCount      int    `json:"input_image_count,omitempty"`
-	SuccessfulImageCount int    `json:"successful_image_count,omitempty"`
-	OutputWidth          int    `json:"output_width,omitempty"`
-	OutputHeight         int    `json:"output_height,omitempty"`
-	OutputPixels         int64  `json:"output_pixels,omitempty"`
-	OutputSizeTier       string `json:"output_size_tier,omitempty"`
+	InputImageCount       int                    `json:"input_image_count,omitempty"`
+	SuccessfulImageCount  int                    `json:"successful_image_count,omitempty"`
+	OutputWidth           int                    `json:"output_width,omitempty"`
+	OutputHeight          int                    `json:"output_height,omitempty"`
+	OutputPixels          int64                  `json:"output_pixels,omitempty"`
+	OutputSizeTier        string                 `json:"output_size_tier,omitempty"`
+	LayerDecomposition    bool                   `json:"layer_decomposition,omitempty"`
+	OutputPriceMultiplier float64                `json:"output_price_multiplier,omitempty"`
+	OutputPrice           float64                `json:"output_price,omitempty"`
+	OutputTiers           []ImageOutputTierUsage `json:"output_tiers,omitempty"`
 }
 
 type GroupRatioInfo struct {

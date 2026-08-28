@@ -628,9 +628,14 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 			billingUsage := relayInfo.PriceData.ImageBillingUsage
 			other["image_input_count"] = billingUsage.InputImageCount
 			other["image_output_count"] = billingUsage.SuccessfulImageCount
-			other["image_output_size"] = fmt.Sprintf("%dx%d", billingUsage.OutputWidth, billingUsage.OutputHeight)
-			other["image_output_pixels"] = billingUsage.OutputPixels
-			other["image_output_tier"] = billingUsage.OutputSizeTier
+			if len(billingUsage.OutputTiers) == 1 {
+				other["image_output_size"] = fmt.Sprintf("%dx%d", billingUsage.OutputWidth, billingUsage.OutputHeight)
+				other["image_output_pixels"] = billingUsage.OutputPixels
+				other["image_output_tier"] = billingUsage.OutputSizeTier
+			}
+			other["image_layer_decomposition"] = billingUsage.LayerDecomposition
+			other["image_output_price_multiplier"] = billingUsage.OutputPriceMultiplier
+			other["image_output_tiers"] = billingUsage.OutputTiers
 			other["image_input_price"] = relayInfo.PriceData.ImagePerImagePricing.InputImageFirst
 			other["image_input_first_price"] = relayInfo.PriceData.ImagePerImagePricing.InputImageFirst
 			other["image_input_from_second_price"] = relayInfo.PriceData.ImagePerImagePricing.InputImageFromThe2nd
@@ -643,7 +648,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 				other["image_input_price"] = relayInfo.PriceData.ImagePerImagePricing.InputImageFirst +
 					float64(billingUsage.InputImageCount-1)*relayInfo.PriceData.ImagePerImagePricing.InputImageFromThe2nd
 			}
-			other["image_output_price"] = float64(billingUsage.SuccessfulImageCount) * relayInfo.PriceData.PerImageUnitPrice
+			other["image_output_price"] = billingUsage.OutputPrice
 			other["image_total_price"] = relayInfo.PriceData.ModelPrice
 			other["per_call_price"] = relayInfo.PriceData.PerImageUnitPrice
 		} else {
