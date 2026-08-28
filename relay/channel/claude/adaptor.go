@@ -32,7 +32,6 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 	// (RequestOpenAI2ClaudeMessage) 路径执行，用于屏蔽 OpenAI 客户端不感知的
 	// Claude 限制。直连 /v1/messages 的调用方应自行遵循 Anthropic 协议规范，
 	// 不符合时由上游统一返回 400。
-	stripClaudeRequestFieldsForDroppedBetas(c, info, request)
 	// 渠道类型是 Anthropic，但 anthropic_beta_target 指向 Bedrock/Vertex 兼容
 	// 资源时，image/document 的 URL source 同样需要转 base64（这两个目标硬性
 	// 不支持 URL source），否则会被上游拒绝。直连 Anthropic 场景保持透传。
@@ -42,23 +41,6 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 		}
 	}
 	return request, nil
-}
-
-// stripClaudeRequestFieldsForDroppedBetas 处理"渠道类型是 Anthropic，但实际接的是
-// Bedrock/Vertex 等兼容资源"的场景：渠道会通过 anthropic_beta_target 覆盖白名单过滤
-// 目标（如 "bedrock-converse"）。按最终会发给上游的 anthropic-beta（客户端声明 + admin
-// 在 model_headers_settings 配置的值合并后过滤，与 CommonClaudeHeadersOperation 写请求
-// 头时用的是同一份计算逻辑），把对应 beta 被剔除的顶级 body 字段一并清理，否则这些兼容
-// 资源会返回 "Extra inputs are not permitted"。目标为直连 Anthropic（默认）时不做任何
-// 处理，不会误伤任何字段。
-func stripClaudeRequestFieldsForDroppedBetas(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) {
-	target := ResolveBetaTarget(info.ChannelType, info.ChannelOtherSettings.AnthropicBetaTarget)
-	if target == TargetAnthropicDirect {
-		return
-	}
-	kept := KeptBetaSet(resolveEffectiveBetaFlags(c, info, target))
-	request.ContextManagement = StripContextManagementForDroppedBetas(request.ContextManagement, kept)
-	request.OutputConfig = StripOutputConfigForDroppedBetas(request.OutputConfig, kept)
 }
 
 // resolveEffectiveBetaFlags 复现 CommonClaudeHeadersOperation 里的合并逻辑（客户端声明
@@ -131,8 +113,8 @@ func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relayc
 	// 在 WriteHeaders 之后做白名单过滤：客户端原值 + admin 配置都过同一道闸，
 	// 保证最终发出的 flag 都在目标渠道（Bedrock / Vertex / 直连）的支持列表内。
 	// 否则 admin 在 model_headers_settings 配的 flag 会绕过过滤直达上游。
-	// 与 stripClaudeRequestFieldsForDroppedBetas 共用 resolveEffectiveBetaFlags，
-	// 保证请求头与 body 顶级字段的裁剪判断一致。
+	// anthropic_beta_target 只控制 anthropic-beta 请求头；原生 /v1/messages 的
+	// output_config 等 Body 字段保持透传，由上游负责校验和兼容处理。
 	if req.Get("anthropic-beta") != "" {
 		target := ResolveBetaTarget(info.ChannelType, info.ChannelOtherSettings.AnthropicBetaTarget)
 		filtered := resolveEffectiveBetaFlags(c, info, target)
