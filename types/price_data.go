@@ -126,6 +126,15 @@ func (p *PriceData) ApplyOtherRatiosToDecimal(value decimal.Decimal) decimal.Dec
 	return value
 }
 
+func (p *PriceData) ApplyOtherRatiosToDecimalExcept(value decimal.Decimal, excludedKey string) decimal.Decimal {
+	for key, ratio := range p.otherRatios {
+		if key != excludedKey && isValidOtherRatio(ratio) && ratio != 1.0 {
+			value = value.Mul(decimal.NewFromFloat(ratio))
+		}
+	}
+	return value
+}
+
 func (p *PriceData) RemoveOtherRatiosFromFloat(value float64) float64 {
 	for _, ratio := range p.otherRatios {
 		if isValidOtherRatio(ratio) && ratio != 1.0 {

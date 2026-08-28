@@ -884,6 +884,31 @@ func TestCalculateTextQuotaSummaryFixedPriceAppliesImageCountOnceAndAllowsOverri
 	require.Equal(t, 120000, summary.Quota)
 }
 
+func TestCalculateTextQuotaSummaryStructuredImagePriceDoesNotMultiplyOutputCountTwice(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	priceData := hosttypes.PriceData{
+		ModelPrice: 0.09,
+		UsePrice:   true,
+		ImagePerImagePricing: &hosttypes.ImagePerImagePricing{
+			OutputImage: map[string]float64{"1.5K": 0.045},
+		},
+		GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1},
+	}
+	priceData.AddOtherRatio("n", 4)
+	priceData.AddOtherRatio("provider", 2)
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "dola-seedream-5-0-pro-260628",
+		PriceData:       priceData,
+		StartTime:       time.Now(),
+	}
+	usage := &dto.Usage{PromptTokens: 1, TotalTokens: 1, GeneratedImages: 4}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+
+	require.Equal(t, 90000, summary.Quota)
+}
+
 func TestCalculateTextToolCallSurchargeGeneralizedBuiltInTools(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
