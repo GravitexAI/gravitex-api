@@ -82,6 +82,9 @@ export type LogFilters = CommonLogFilters | DrawingLogFilters | TaskLogFilters
  * Parsed data from the 'other' field in usage logs
  */
 export interface ChannelAffinityInfo {
+  channel_id?: number
+  key_index?: number
+  key_hash?: string
   rule_name?: string
   selected_group?: string
   key_source?: string

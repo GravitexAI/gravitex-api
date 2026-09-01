@@ -426,6 +426,8 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                               '',
                             key_hint: affinity.key_hint || '',
                             key_fp: affinity.key_fp || '',
+                            key_index: affinity.key_index,
+                            key_hash: affinity.key_hash || '',
                           })
                           setAffinityDialogOpen(true)
                         }}
@@ -469,6 +471,16 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                               '-'
                             : '••••'}
                         </p>
+                        {affinity.key_index !== undefined && (
+                          <p>
+                            {t('Credential Key')}: {affinity.key_index}
+                          </p>
+                        )}
+                        {affinity.key_hash && (
+                          <p>
+                            {t('Credential Fingerprint')}: #{affinity.key_hash}
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>

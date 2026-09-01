@@ -95,6 +95,12 @@ function buildChannelAffinityTooltip(affinity, t) {
     `${t('规则')}：${affinity.rule_name || '-'}`,
     `${t('分组')}：${affinity.selected_group || '-'}`,
     `${t('Key')}：${keyText}`,
+    ...(affinity.key_index !== undefined
+      ? [`${t('Credential Key')}：${affinity.key_index}`]
+      : []),
+    ...(affinity.key_hash
+      ? [`${t('Credential Fingerprint')}：#${affinity.key_hash}`]
+      : []),
     ...(keyHint ? [`${t('Key 摘要')}：${keyHint}`] : []),
   ];
 

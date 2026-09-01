@@ -33,6 +33,7 @@ export interface AffinityRule {
   ttl_seconds: number
   fixed_ttl?: boolean
   skip_retry_on_failure: boolean
+  key_affinity_enabled?: boolean
   include_using_group: boolean
   include_model_name: boolean
   include_rule_name: boolean

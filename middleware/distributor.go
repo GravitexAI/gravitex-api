@@ -29,6 +29,145 @@ type ModelRequest struct {
 	Group string `json:"group,omitempty"`
 }
 
+const channelAffinityBindingContextKey = "channel_affinity_binding"
+
+const channelAffinityRetryContextKey = "channel_affinity_retry"
+
+type channelAffinityRetryState struct {
+	ChannelID     int
+	ExcludedHashs map[string]struct{}
+}
+
+// ClearChannelAffinityBindingContext prevents a failed affinity key from
+// being reused by a subsequent retry attempt in the same request.
+func ClearChannelAffinityBindingContext(c *gin.Context) {
+	if c != nil {
+		c.Set(channelAffinityBindingContextKey, service.ChannelAffinityBinding{})
+	}
+}
+
+// MarkChannelAffinityRetryKey remembers the failed credential so the next
+// retry can exhaust other enabled credentials in the same channel first.
+func MarkChannelAffinityRetryKey(c *gin.Context, channelID int) {
+	if c == nil || channelID <= 0 {
+		return
+	}
+	key := common.GetContextKeyString(c, constant.ContextKeyChannelKey)
+	hash, err := service.ChannelAffinityKeyHash(key)
+	if err != nil {
+		return
+	}
+	state := channelAffinityRetryState{ChannelID: channelID, ExcludedHashs: map[string]struct{}{}}
+	if previous, ok := c.Get(channelAffinityRetryContextKey); ok {
+		if value, ok := previous.(channelAffinityRetryState); ok && value.ChannelID == channelID {
+			state = value
+			if state.ExcludedHashs == nil {
+				state.ExcludedHashs = map[string]struct{}{}
+			}
+		}
+	}
+	state.ExcludedHashs[hash] = struct{}{}
+	c.Set(channelAffinityRetryContextKey, state)
+}
+
+// TrySetupContextForAffinityRetry selects an unused enabled credential from
+// the failed channel. It returns false when that channel has no replacement.
+func TrySetupContextForAffinityRetry(c *gin.Context, modelName string) (*model.Channel, bool) {
+	if c == nil {
+		return nil, false
+	}
+	previous, ok := c.Get(channelAffinityRetryContextKey)
+	state, ok := previous.(channelAffinityRetryState)
+	if !ok || state.ChannelID <= 0 {
+		return nil, false
+	}
+	channel, err := model.CacheGetChannel(state.ChannelID)
+	if err != nil || channel == nil {
+		return nil, false
+	}
+	for index, key := range channel.GetKeys() {
+		if channel.ChannelInfo.IsMultiKey && channel.ChannelInfo.MultiKeyStatusList != nil {
+			status, exists := channel.ChannelInfo.MultiKeyStatusList[index]
+			if exists && status != common.ChannelStatusEnabled {
+				continue
+			}
+		}
+		hash, hashErr := service.ChannelAffinityKeyHash(key)
+		if hashErr != nil {
+			continue
+		}
+		if _, used := state.ExcludedHashs[hash]; used {
+			continue
+		}
+		state.ExcludedHashs[hash] = struct{}{}
+		c.Set(channelAffinityRetryContextKey, state)
+		c.Set(channelAffinityBindingContextKey, service.ChannelAffinityBinding{ChannelID: channel.Id, KeyIndex: index, KeyHash: hash})
+		if setupErr := setupContextForSelectedChannel(c, channel, modelName); setupErr != nil {
+			return nil, false
+		}
+		return channel, true
+	}
+	return nil, false
+}
+
+func resolveChannelAffinityKey(channel *model.Channel, binding service.ChannelAffinityBinding) (string, int, string, bool) {
+	if channel == nil || binding.ChannelID != channel.Id {
+		return "", 0, "", false
+	}
+	keys := channel.GetKeys()
+	if len(keys) == 0 {
+		return "", 0, "", false
+	}
+	statusEnabled := func(index int) bool {
+		if !channel.ChannelInfo.IsMultiKey || channel.ChannelInfo.MultiKeyStatusList == nil {
+			return true
+		}
+		return channel.ChannelInfo.MultiKeyStatusList[index] == common.ChannelStatusEnabled ||
+			(channel.ChannelInfo.MultiKeyStatusList[index] == 0)
+	}
+	keyHash := func(index int) (string, bool) {
+		if index < 0 || index >= len(keys) || !statusEnabled(index) {
+			return "", false
+		}
+		hash, err := service.ChannelAffinityKeyHash(keys[index])
+		return hash, err == nil
+	}
+	if binding.KeyHash == "" {
+		return "", 0, "", false
+	}
+	if hash, ok := keyHash(binding.KeyIndex); ok && hash == binding.KeyHash {
+		return keys[binding.KeyIndex], binding.KeyIndex, hash, true
+	}
+	for index := range keys {
+		hash, ok := keyHash(index)
+		if ok && hash == binding.KeyHash {
+			return keys[index], index, hash, true
+		}
+	}
+	return "", 0, "", false
+}
+
+func selectReplacementChannelAffinityKey(channel *model.Channel, excludedHash string) (service.ChannelAffinityBinding, bool) {
+	if channel == nil {
+		return service.ChannelAffinityBinding{}, false
+	}
+	keys := channel.GetKeys()
+	for index, key := range keys {
+		if channel.ChannelInfo.IsMultiKey && channel.ChannelInfo.MultiKeyStatusList != nil {
+			status, exists := channel.ChannelInfo.MultiKeyStatusList[index]
+			if exists && status != common.ChannelStatusEnabled {
+				continue
+			}
+		}
+		hash, err := service.ChannelAffinityKeyHash(key)
+		if err != nil || hash == excludedHash {
+			continue
+		}
+		return service.ChannelAffinityBinding{ChannelID: channel.Id, KeyIndex: index, KeyHash: hash}, true
+	}
+	return service.ChannelAffinityBinding{}, false
+}
+
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
@@ -93,10 +232,45 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 
-				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
+				if preferredBinding, found := service.GetPreferredChannelAffinityBinding(c, modelRequest.Model, usingGroup); found {
+					if !service.IsChannelAffinityKeyEnabled(c) {
+						preferredBinding = service.ChannelAffinityBinding{ChannelID: preferredBinding.ChannelID, Legacy: true}
+					}
+					preferredChannelID := preferredBinding.ChannelID
 					affinityUsable := false
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
+						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
+						if preferredBinding.Legacy {
+							key, index, keyErr := preferred.GetNextEnabledKey()
+							if keyErr != nil {
+								preferred = nil
+							} else if keyHash, hashErr := service.ChannelAffinityKeyHash(key); hashErr != nil {
+								preferred = nil
+							} else {
+								preferredBinding.Legacy = false
+								preferredBinding.KeyIndex = index
+								preferredBinding.KeyHash = keyHash
+								c.Set(channelAffinityBindingContextKey, preferredBinding)
+							}
+						}
+						if preferred != nil && !preferredBinding.Legacy {
+							_, index, keyHash, ok := resolveChannelAffinityKey(preferred, preferredBinding)
+							if !ok {
+								if replacement, replacementOK := selectReplacementChannelAffinityKey(preferred, preferredBinding.KeyHash); replacementOK {
+									preferredBinding = replacement
+									c.Set(channelAffinityBindingContextKey, preferredBinding)
+								} else {
+									preferred = nil
+								}
+							} else {
+								preferredBinding.KeyIndex = index
+								preferredBinding.KeyHash = keyHash
+								c.Set(channelAffinityBindingContextKey, preferredBinding)
+							}
+						}
+					}
+					if preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
 						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
 						if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
@@ -108,6 +282,9 @@ func Distribute() func(c *gin.Context) {
 									channel = preferred
 									affinityUsable = true
 									service.MarkChannelAffinityUsed(c, g, preferred.Id)
+									if !preferredBinding.Legacy {
+										service.SetChannelAffinityKeyInfo(c, preferredBinding.KeyIndex, preferredBinding.KeyHash)
+									}
 									break
 								}
 							}
@@ -116,10 +293,18 @@ func Distribute() func(c *gin.Context) {
 							selectGroup = usingGroup
 							affinityUsable = true
 							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
+							if !preferredBinding.Legacy {
+								service.SetChannelAffinityKeyInfo(c, preferredBinding.KeyIndex, preferredBinding.KeyHash)
+							}
 						}
 					}
 					if !affinityUsable && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
+						service.ClearChannelAffinityHit(c)
+						c.Set(channelAffinityBindingContextKey, service.ChannelAffinityBinding{})
 						service.ClearCurrentChannelAffinityCache(c)
+					} else if !affinityUsable {
+						service.ClearChannelAffinityHit(c)
+						c.Set(channelAffinityBindingContextKey, service.ChannelAffinityBinding{})
 					}
 				}
 
@@ -146,6 +331,7 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 					if channel == nil {
+						c.Set(channelAffinityBindingContextKey, service.ChannelAffinityBinding{})
 						abortWithOpenAiMessage(c, http.StatusNotFound, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)
 						return
 					}
@@ -433,6 +619,10 @@ func getTaskOriginModelName(c *gin.Context) string {
 }
 
 func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
+	return setupContextForSelectedChannel(c, channel, modelName)
+}
+
+func setupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
 	c.Set("original_model", modelName) // for retry
 	if channel == nil {
 		return types.NewError(errors.New("channel is nil"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
@@ -457,9 +647,25 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
-	key, index, newAPIError := channel.GetNextEnabledKey()
-	if newAPIError != nil {
-		return newAPIError
+	var key string
+	var index int
+	if anyBinding, exists := c.Get(channelAffinityBindingContextKey); exists {
+		if binding, ok := anyBinding.(service.ChannelAffinityBinding); ok && binding.ChannelID > 0 {
+			if binding.ChannelID == channel.Id {
+				var resolved bool
+				key, index, _, resolved = resolveChannelAffinityKey(channel, binding)
+				if !resolved {
+					return types.NewError(errors.New("channel affinity key is unavailable"), types.ErrorCodeChannelNoAvailableKey)
+				}
+			}
+		}
+	}
+	if key == "" {
+		var newAPIError *types.NewAPIError
+		key, index, newAPIError = channel.GetNextEnabledKey()
+		if newAPIError != nil {
+			return newAPIError
+		}
 	}
 	if channel.ChannelInfo.IsMultiKey {
 		common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, true)

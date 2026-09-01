@@ -26,6 +26,9 @@ type ChannelAffinityRule struct {
 	ParamOverrideTemplate map[string]interface{} `json:"param_override_template,omitempty"`
 
 	SkipRetryOnFailure bool `json:"skip_retry_on_failure"`
+	// KeyAffinityEnabled controls whether a matched channel binding also pins
+	// the specific credential inside that channel. Omitted values stay false.
+	KeyAffinityEnabled bool `json:"key_affinity_enabled"`
 
 	IncludeUsingGroup bool `json:"include_using_group"`
 	IncludeModelName  bool `json:"include_model_name"`

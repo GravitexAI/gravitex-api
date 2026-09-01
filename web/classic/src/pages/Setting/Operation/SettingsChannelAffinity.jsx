@@ -105,6 +105,7 @@ const RULES_JSON_PLACEHOLDER = `[
       ]
     },
     "skip_retry_on_failure": false,
+    "key_affinity_enabled": false,
     "include_using_group": true,
     "include_model_name": false,
     "include_rule_name": true
@@ -218,6 +219,7 @@ const buildChannelAffinityRulePayload = ({
   include_model_name: !!values?.include_model_name,
   include_rule_name: !!values?.include_rule_name,
   skip_retry_on_failure: !!values?.skip_retry_on_failure,
+  key_affinity_enabled: !!values?.key_affinity_enabled,
   ...(userAgentInclude.length > 0
     ? { user_agent_include: userAgentInclude }
     : {}),
@@ -282,6 +284,7 @@ export default function SettingsChannelAffinity(props) {
       ttl_seconds: Number(r.ttl_seconds || 0),
       fixed_ttl: !!r.fixed_ttl,
       skip_retry_on_failure: !!r.skip_retry_on_failure,
+      key_affinity_enabled: !!r.key_affinity_enabled,
       include_using_group: r.include_using_group ?? true,
       include_model_name: !!r.include_model_name,
       include_rule_name: r.include_rule_name ?? true,
@@ -697,6 +700,7 @@ export default function SettingsChannelAffinity(props) {
       value_regex: '',
       ttl_seconds: 0,
       skip_retry_on_failure: false,
+      key_affinity_enabled: false,
       include_using_group: true,
       include_model_name: false,
       include_rule_name: true,
@@ -926,7 +930,7 @@ export default function SettingsChannelAffinity(props) {
       fullMode={false}
       type='info'
       description={t(
-        '渠道亲和性会基于从请求上下文或 JSON Body 提取的 Key，优先复用上一次成功的渠道。',
+        '渠道亲和性会基于从请求上下文或 JSON Body 提取的 Key，优先复用上一次成功的渠道和渠道密钥；仅记录密钥索引与指纹，不展示密钥内容。',
       )}
     />
   );
@@ -1175,6 +1179,15 @@ export default function SettingsChannelAffinity(props) {
               />
               <Text type='tertiary' size='small'>
                 {t('开启后，若该规则命中且请求失败，将不会切换渠道重试。')}
+              </Text>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Switch
+                field='key_affinity_enabled'
+                label={t('启用渠道 Key 亲和')}
+              />
+              <Text type='tertiary' size='small'>
+                {t('开启后，该规则命中时会同时固定渠道内的具体 Key；默认关闭。')}
               </Text>
             </Col>
           </Row>

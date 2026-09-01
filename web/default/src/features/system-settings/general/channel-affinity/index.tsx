@@ -407,7 +407,7 @@ export function ChannelAffinitySection(props: Props) {
         <Alert>
           <AlertDescription className='text-xs'>
             {t(
-              'Channel affinity reuses the last successful channel based on keys extracted from the request context or JSON body.'
+              'Channel affinity reuses the last successful channel and channel credential based on keys extracted from the request context or JSON body. Only credential index and fingerprint are recorded; credential contents are never shown.'
             )}
           </AlertDescription>
         </Alert>

@@ -241,6 +241,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		willRetry := shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry())
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, willRetry)
+		if willRetry && service.HasChannelAffinityHit(c) {
+			middleware.MarkChannelAffinityRetryKey(c, channel.Id)
+			// Do not force the failed affinity key on the next attempt. The
+			// retry path first exhausts other enabled keys in this channel.
+			service.ClearCurrentChannelAffinityCache(c)
+			middleware.ClearChannelAffinityBindingContext(c)
+		}
 
 		if !willRetry {
 			break
@@ -318,6 +325,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			Name:    c.GetString("channel_name"),
 			AutoBan: &autoBanInt,
 		}, nil
+	}
+	if channel, ok := middleware.TrySetupContextForAffinityRetry(c, info.OriginModelName); ok {
+		return channel, nil
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 	if err != nil {
@@ -581,7 +591,9 @@ func RelayTask(c *gin.Context) {
 		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
 			channel = lockedCh
 			if retryParam.GetRetry() > 0 {
-				if setupErr := middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName); setupErr != nil {
+				if retryChannel, replaced := middleware.TrySetupContextForAffinityRetry(c, relayInfo.OriginModelName); replaced {
+					channel = retryChannel
+				} else if setupErr := middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName); setupErr != nil {
 					taskErr = service.TaskErrorWrapperLocal(setupErr.Err, "setup_locked_channel_failed", http.StatusInternalServerError)
 					break
 				}
@@ -622,7 +634,13 @@ func RelayTask(c *gin.Context) {
 				false)
 		}
 
-		if !shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry()) {
+		willRetry := shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry())
+		if willRetry && service.HasChannelAffinityHit(c) {
+			middleware.MarkChannelAffinityRetryKey(c, channel.Id)
+			service.ClearCurrentChannelAffinityCache(c)
+			middleware.ClearChannelAffinityBindingContext(c)
+		}
+		if !willRetry {
 			break
 		}
 	}

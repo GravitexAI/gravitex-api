@@ -81,6 +81,7 @@ interface RuleFormValues {
   ttl_seconds: number
   fixed_ttl: boolean
   skip_retry_on_failure: boolean
+  key_affinity_enabled: boolean
   include_using_group: boolean
   include_model_name: boolean
   include_rule_name: boolean
@@ -131,6 +132,7 @@ export function RuleEditorDialog(props: Props) {
       ttl_seconds: 0,
       fixed_ttl: false,
       skip_retry_on_failure: false,
+      key_affinity_enabled: false,
       include_using_group: true,
       include_model_name: false,
       include_rule_name: true,
@@ -151,6 +153,7 @@ export function RuleEditorDialog(props: Props) {
       ttl_seconds: r.ttl_seconds || 0,
       fixed_ttl: !!r.fixed_ttl,
       skip_retry_on_failure: !!r.skip_retry_on_failure,
+      key_affinity_enabled: !!r.key_affinity_enabled,
       include_using_group: r.include_using_group ?? true,
       include_model_name: !!r.include_model_name,
       include_rule_name: r.include_rule_name ?? true,
@@ -184,6 +187,7 @@ export function RuleEditorDialog(props: Props) {
         ttl_seconds: 0,
         fixed_ttl: false,
         skip_retry_on_failure: false,
+        key_affinity_enabled: false,
         include_using_group: true,
         include_model_name: false,
         include_rule_name: true,
@@ -239,6 +243,7 @@ export function RuleEditorDialog(props: Props) {
       ttl_seconds: Number(values.ttl_seconds || 0),
       fixed_ttl: values.fixed_ttl,
       skip_retry_on_failure: values.skip_retry_on_failure,
+      key_affinity_enabled: values.key_affinity_enabled,
       include_using_group: values.include_using_group,
       include_model_name: values.include_model_name,
       include_rule_name: values.include_rule_name,
@@ -308,6 +313,12 @@ export function RuleEditorDialog(props: Props) {
           checked={form.watch('skip_retry_on_failure')}
           onCheckedChange={(v) => form.setValue('skip_retry_on_failure', v)}
           label={t('Skip retry on failure')}
+        />
+
+        <SettingsSwitchField
+          checked={form.watch('key_affinity_enabled')}
+          onCheckedChange={(v) => form.setValue('key_affinity_enabled', v)}
+          label={t('Enable channel key affinity')}
         />
 
         <Separator />
