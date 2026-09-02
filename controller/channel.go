@@ -958,6 +958,40 @@ type PatchChannel struct {
 	KeyMode      *string `json:"key_mode"` // 多key模式下密钥覆盖或者追加
 }
 
+// mergeChannelJSON overlays a channel edit's JSON object on top of the
+// persisted object. Channel settings contain fields owned by multiple
+// callers (for example supplier ownership metadata), so replacing the whole
+// JSON string with a frontend-generated subset would silently delete fields
+// that the current form does not render.
+func mergeChannelJSON(existingJSON string, incomingJSON string) (string, error) {
+	var existing map[string]any
+	if strings.TrimSpace(existingJSON) == "" {
+		existing = make(map[string]any)
+	} else if err := common.Unmarshal([]byte(existingJSON), &existing); err != nil || existing == nil {
+		// Do not destroy an existing value we cannot understand. The caller can
+		// still update ordinary channel columns, while the opaque JSON remains
+		// recoverable for a later compatible editor.
+		return existingJSON, nil
+	}
+
+	var incoming map[string]any
+	if err := common.Unmarshal([]byte(incomingJSON), &incoming); err != nil || incoming == nil {
+		return existingJSON, nil
+	}
+	for key, value := range incoming {
+		if value == nil {
+			delete(existing, key)
+			continue
+		}
+		existing[key] = value
+	}
+	merged, err := common.Marshal(existing)
+	if err != nil {
+		return existingJSON, err
+	}
+	return string(merged), nil
+}
+
 type ChannelStatusRequest struct {
 	Status int `json:"status"`
 }
@@ -1005,6 +1039,33 @@ func UpdateChannel(c *gin.Context) {
 			"message": err.Error(),
 		})
 		return
+	}
+
+	// Preserve fields that are not part of this edit request. In particular,
+	// settings may contain metadata written by the Java supplier-management
+	// editor, while the Go form only knows a subset of those keys.
+	if _, provided := requestData["setting"]; provided && channel.Setting != nil {
+		merged, mergeErr := mergeChannelJSON(originStringValue(originChannel.Setting), *channel.Setting)
+		if mergeErr != nil {
+			common.ApiError(c, mergeErr)
+			return
+		}
+		channel.Setting = &merged
+	} else if _, provided := requestData["setting"]; !provided {
+		channel.Setting = originChannel.Setting
+	}
+	if _, provided := requestData["settings"]; provided {
+		merged, mergeErr := mergeChannelJSON(originChannel.OtherSettings, channel.OtherSettings)
+		if mergeErr != nil {
+			common.ApiError(c, mergeErr)
+			return
+		}
+		channel.OtherSettings = merged
+	} else {
+		channel.OtherSettings = originChannel.OtherSettings
+	}
+	if _, provided := requestData["cost_discount"]; !provided {
+		channel.CostDiscount = originChannel.CostDiscount
 	}
 	originProxy := originChannel.GetSetting().Proxy
 	proxyChanged := false
@@ -1152,6 +1213,13 @@ func UpdateChannel(c *gin.Context) {
 		"data":    channel,
 	})
 	return
+}
+
+func originStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func UpdateChannelStatus(c *gin.Context) {

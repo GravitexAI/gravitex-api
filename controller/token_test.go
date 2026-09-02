@@ -35,9 +35,82 @@ type tokenPageResponse struct {
 type tokenResponseItem struct {
 	ID           int    `json:"id"`
 	Name         string `json:"name"`
+	Remake       string `json:"remake"`
 	Key          string `json:"key"`
 	Status       int    `json:"status"`
 	VendorLimits string `json:"vendor_limits"`
+}
+
+func TestTokenRemakeRoundTripThroughAddAndUpdate(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+
+	addBody := map[string]any{
+		"name":            "remark-token",
+		"remake":          "initial note",
+		"expired_time":    -1,
+		"remain_quota":    100,
+		"unlimited_quota": true,
+		"group":           "default",
+	}
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", addBody, 1)
+	AddToken(ctx)
+	require.True(t, decodeAPIResponse(t, recorder).Success)
+
+	var token model.Token
+	require.NoError(t, db.Where("user_id = ? AND name = ?", 1, "remark-token").First(&token).Error)
+	var stored string
+	require.NoError(t, db.Raw("SELECT remake FROM tokens WHERE id = ?", token.Id).Scan(&stored).Error)
+	require.Equal(t, "initial note", stored)
+
+	updateBody := map[string]any{
+		"id":              token.Id,
+		"name":            token.Name,
+		"remake":          "updated note",
+		"expired_time":    -1,
+		"remain_quota":    100,
+		"unlimited_quota": true,
+		"group":           "default",
+	}
+	ctx, recorder = newAuthenticatedContext(t, http.MethodPut, "/api/token/", updateBody, 1)
+	UpdateToken(ctx)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+
+	var detail tokenResponseItem
+	require.NoError(t, common.Unmarshal(response.Data, &detail))
+	require.Equal(t, "updated note", detail.Remake)
+	require.NoError(t, db.Raw("SELECT remake FROM tokens WHERE id = ?", token.Id).Scan(&stored).Error)
+	require.Equal(t, "updated note", stored)
+
+	updateBody = map[string]any{
+		"id":              token.Id,
+		"name":            token.Name,
+		"expired_time":    -1,
+		"remain_quota":    100,
+		"unlimited_quota": true,
+		"group":           "default",
+	}
+	ctx, recorder = newAuthenticatedContext(t, http.MethodPut, "/api/token/", updateBody, 1)
+	UpdateToken(ctx)
+	require.True(t, decodeAPIResponse(t, recorder).Success)
+	require.NoError(t, db.Raw("SELECT remake FROM tokens WHERE id = ?", token.Id).Scan(&stored).Error)
+	require.Equal(t, "updated note", stored)
+}
+
+func TestSearchTokensMatchesRemake(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 1, "ordinary-name", "search-remake-key")
+	require.NoError(t, db.Exec("UPDATE tokens SET remake = ? WHERE id = ?", "search-only note", token.Id).Error)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/search?keyword=search-only%25&p=1&size=10", nil, 1)
+	SearchTokens(ctx)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+
+	var page tokenPageResponse
+	require.NoError(t, common.Unmarshal(response.Data, &page))
+	require.Len(t, page.Items, 1)
+	require.Equal(t, "search-only note", page.Items[0].Remake)
 }
 
 type tokenKeyResponse struct {

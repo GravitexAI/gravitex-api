@@ -384,6 +384,7 @@ func AddToken(c *gin.Context) {
 	cleanToken := model.Token{
 		UserId:              c.GetInt("id"),
 		Name:                token.Name,
+		Remake:              token.Remake,
 		Key:                 key,
 		CreatedTime:         common.GetTimestamp(),
 		AccessedTime:        common.GetTimestamp(),
@@ -448,6 +449,7 @@ func UpdateToken(c *gin.Context) {
 		Id                  common.Int64Flexible `json:"id"`
 		Status              int                  `json:"status"`
 		Name                string               `json:"name"`
+		Remake              *string              `json:"remake"`
 		ExpiredTime         int64                `json:"expired_time"`
 		RemainQuota         int                  `json:"remain_quota"`
 		UnlimitedQuota      bool                 `json:"unlimited_quota"`
@@ -534,6 +536,9 @@ func UpdateToken(c *gin.Context) {
 	} else {
 		// If you add more fields, please also update token.Update()
 		cleanToken.Name = token.Name
+		if req.Remake != nil {
+			cleanToken.Remake = *req.Remake
+		}
 		cleanToken.ExpiredTime = token.ExpiredTime
 		cleanToken.RemainQuota = token.RemainQuota
 		cleanToken.UnlimitedQuota = token.UnlimitedQuota
