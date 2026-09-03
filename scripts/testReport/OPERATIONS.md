@@ -486,7 +486,43 @@ journalctl -u claude-test-service -n 50      # 看有没有启动失败的堆栈
 
 如果 Java 和本服务不同机，还要查 Java 那边的 `base-url` 配置和网络可达性。
 
-### 6.2 服务起不来：`No such file or directory` 但文件明明在
+### 6.2 报「启动测试进程失败：[Errno 2] No such file or directory: '.../.venv/bin/python'」
+
+**服务活着、`/health` 正常，但一提交任务就报这个** —— 说明
+`claude-platform-test/.venv` 被从 macOS 传上来覆盖了，`bin/python` 变成指向
+`/Library/Developer/...` 的断链。**这个坑已经发生三次**（见附 B）。
+
+一条命令确认：
+
+```bash
+ls -l /workplace/py/testReport/claude-platform-test/.venv/bin/python
+# 指向 /Library/... 或 /Users/... = 中招
+```
+
+修复（只重建 venv，代码不动）：
+
+```bash
+cd /workplace/py/testReport/claude-platform-test
+python3 -m venv --clear .venv
+.venv/bin/pip install -r requirements.txt
+systemctl restart claude-test-service
+```
+
+顺手清掉一起被传上来的 macOS 垃圾（通常上千个）：
+
+```bash
+cd /workplace/py/testReport
+rm -rf __MACOSX && find . -name '._*' -delete && find . -name '.DS_Store' -delete
+```
+
+**现在服务会主动提示这个问题**，不用再靠猜：
+- `GET /health` 在 venv 断链时返回 `{"ok": false, "script_python": "..."}`，文案里
+  直接点明"这是 macOS 路径，说明 .venv 是从 Mac 传上来的"，并给出重建命令
+- `POST /run` 返回 **503**（不是 500）+ 同样的可照做提示
+
+**所以排查时先 `curl -s http://127.0.0.1:8900/health`** —— 它会把原因和修复命令一起告诉你。
+
+### 6.2b 服务起不来：`No such file or directory` 但文件明明在
 
 **99% 是 venv 的 shebang 问题**（见 §1）。检查：
 
@@ -789,6 +825,7 @@ openpyxl 3.1.5、requests 2.32.5。
 | 7 | 服务端 pytest 报 `TypeError: the 'package' argument is required` | 传输带上了 macOS 的 `._latency_test.py`，被 pytest 当测试文件收集 | §6.3；tar 加 `COPYFILE_DISABLE=1` |
 | 8 | 改了 `config.py` 但 `/meta` 还返回旧值 | `app.py` 启动时 import config，Python 模块进程级缓存 | §4.1；改完必须重启 |
 | 9 | `deploy.sh` 的"有测试在跑"护栏恒定误报 | `pgrep -f` 匹配到了自己那条命令行 | 模式写成 `[r]un_tests`；`pgrep -c` 无匹配时既打印 0 又返回非零码，改用 `\| wc -l` |
+| 10 | 提交任务报 `Errno 2 ... .venv/bin/python`（**第三次**同一根因） | 又一份 macOS `.venv` 被传上来覆盖，`bin/python` 指向 `/Library/Developer/...` 断链；同批还夹带 1474 个 `._*` | §6.2；已加 `/health` 主动检测 + `/run` 返 503 带修复命令 |
 
 **七条里有五条都跟"传输方式"有关。** 所以 §2.2 那条 tar 命令看着啰嗦，每个参数都是
 拿故障换来的，别图省事换成 `scp -r` 或 zip。
