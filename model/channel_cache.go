@@ -111,6 +111,28 @@ func SyncChannelCache(frequency int) {
 	}
 }
 
+// CacheGetGroupEnabledModels returns enabled models for a group from the
+// in-memory channel cache, falling back to a DB query when the cache is off.
+func CacheGetGroupEnabledModels(group string) []string {
+	if common.MemoryCacheEnabled {
+		channelSyncLock.RLock()
+		cached := group2model2channels
+		channelSyncLock.RUnlock()
+		if cached != nil {
+			model2channels := cached[group]
+			models := make([]string, 0, len(model2channels))
+			for modelName, channels := range model2channels {
+				if len(channels) == 0 {
+					continue
+				}
+				models = append(models, modelName)
+			}
+			return models
+		}
+	}
+	return GetGroupEnabledModels(group)
+}
+
 func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {

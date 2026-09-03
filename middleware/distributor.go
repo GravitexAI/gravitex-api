@@ -177,6 +177,43 @@ func Distribute() func(c *gin.Context) {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
 		}
+		if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
+			playgroundRequest := &dto.PlayGroundRequest{}
+			if err := common.UnmarshalBodyReusable(c, playgroundRequest); err != nil {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidPlayground, map[string]any{"Error": err.Error()}))
+				return
+			}
+			if playgroundRequest.Group != "" {
+				usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+				if !service.GroupInUserUsableGroups(usingGroup, playgroundRequest.Group) && playgroundRequest.Group != usingGroup {
+					abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
+					return
+				}
+				common.SetContextKey(c, constant.ContextKeyUsingGroup, playgroundRequest.Group)
+			}
+		}
+		if service.IsAutoModel(modelRequest.Model) {
+			if !service.IsAutoSupportedPath(c.Request.URL.Path) {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorAutoUnsupportedPath))
+				return
+			}
+			autoName := modelRequest.Model
+			result, resolveErr := service.ResolveAutoModel(c, autoName, service.ReadAutoRequestBody(c), service.CollectAutoAvailableModels(c))
+			if resolveErr != nil {
+				status := http.StatusServiceUnavailable
+				message := i18n.T(c, i18n.MsgDistributorAutoResolveFailed, map[string]any{"Error": resolveErr.Error()})
+				if errors.Is(resolveErr, service.ErrAutoRouterDisabled) {
+					status = http.StatusBadRequest
+					message = i18n.T(c, i18n.MsgDistributorAutoNotEnabled)
+				} else if errors.Is(resolveErr, service.ErrAutoNoAvailable) {
+					message = i18n.T(c, i18n.MsgDistributorAutoNoModel)
+				}
+				abortWithOpenAiMessage(c, status, message)
+				return
+			}
+			service.ApplyAutoResolveTransparency(c, autoName, result)
+			modelRequest.Model = result.Model
+		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
 			if err != nil {
@@ -201,7 +238,13 @@ func Distribute() func(c *gin.Context) {
 			// task is loaded, so there is no request model to validate here.
 			isVideoFetch := c.Request.Method == http.MethodGet && relayMode == relayconstant.RelayModeVideoFetchByID
 			if modelLimitEnable && !isVideoFetch {
-				if !service.IsModelAllowedByToken(c, modelRequest.Model) {
+				allowed := service.IsModelAllowedByToken(c, modelRequest.Model)
+				if !allowed {
+					if autoOriginal := common.GetContextKeyString(c, constant.ContextKeyAutoOriginalModel); autoOriginal != "" {
+						allowed = service.IsAutoModelAllowedByToken(c, autoOriginal, modelRequest.Model)
+					}
+				}
+				if !allowed {
 					abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenModelForbidden, map[string]any{"Model": modelRequest.Model}))
 					return
 				}
@@ -214,23 +257,6 @@ func Distribute() func(c *gin.Context) {
 				}
 				var selectGroup string
 				usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
-				// check path is /pg/chat/completions
-				if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
-					playgroundRequest := &dto.PlayGroundRequest{}
-					err = common.UnmarshalBodyReusable(c, playgroundRequest)
-					if err != nil {
-						abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidPlayground, map[string]any{"Error": err.Error()}))
-						return
-					}
-					if playgroundRequest.Group != "" {
-						if !service.GroupInUserUsableGroups(usingGroup, playgroundRequest.Group) && playgroundRequest.Group != usingGroup {
-							abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
-							return
-						}
-						usingGroup = playgroundRequest.Group
-						common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
-					}
-				}
 
 				if preferredBinding, found := service.GetPreferredChannelAffinityBinding(c, modelRequest.Model, usingGroup); found {
 					if !service.IsChannelAffinityKeyEnabled(c) {
