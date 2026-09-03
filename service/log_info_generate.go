@@ -108,6 +108,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	}
 
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
+	AppendAutoRouterAdminInfo(ctx, adminInfo)
 
 	costDiscount := common.GetContextKeyFloat64(ctx, constant.ContextKeyChannelCostDiscount)
 	if costDiscount > 0 {
@@ -152,6 +153,7 @@ func AppendGeminiOmniTaskLogMetadata(c *gin.Context, relayInfo *relaycommon.Rela
 		adminInfo["local_count_tokens"] = true
 	}
 	AppendChannelAffinityAdminInfo(c, adminInfo)
+	AppendAutoRouterAdminInfo(c, adminInfo)
 	if discount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount); discount > 0 {
 		adminInfo["cost_discount"] = discount
 	}

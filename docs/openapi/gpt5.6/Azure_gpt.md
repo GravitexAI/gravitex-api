@@ -139,3 +139,34 @@ Azure 官方 usage 不包含 cache_write_tokens
 当前平台无法也不应该从 Azure 响应推算 cc
 Responses 未命中需要单独排查路由、部署和 API 版本
 ```
+
+## 补充（2026-08-11）：Azure 官方文档已于 2026-08-07 更新，开始声明支持显式缓存创建
+
+以上结论基于 2026-08-07 之前的 Azure 官方文档实测。之后 Azure 官方文档已经更新，**口径发生变化**，需要重新验证：
+
+**官方文档**：[Prompt caching with Azure OpenAI in Microsoft Foundry Models](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/prompt-caching)（页面标注 Last updated 2026-08-07）
+
+原文关键表述：
+
+> "On GPT-5.6 models and later model families, use explicit cache breakpoints to mark the end of a reusable prompt prefix. Both the Responses API and Chat Completions API support breakpoints."
+
+> "On GPT-5.6 models and later model families, **Standard pay-as-you-go deployments support prompt cache breakpoints and expose `cache_write_tokens`**."
+
+> "On GPT-5.6 models and later model families, cache writes can incur charges in addition to discounted cache reads."
+
+即 Azure 官方现在声称：
+- GPT-5.6 及以后模型，**Standard 按量付费（PAYG）部署**已支持 `prompt_cache_breakpoint`（显式缓存创建）和 `cache_write_tokens`（缓存写入用量字段），与 OpenAI 原生 API 结构一致；
+- 未提及 Provisioned 部署是否支持，需另行确认；
+- 缓存写入会产生额外计费（对齐 OpenAI 官方 1.25× 未缓存输入单价的口径）。
+
+**但实测反馈显示该能力尚未稳定落地**，仅文档先行：
+
+- 微软官方 Q&A：[GPT-5.6 Implicit Prompt Caching and Explicit Prompt Cache API Support](https://learn.microsoft.com/en-in/answers/questions/5942997/gpt-5-6-implicit-prompt-caching-and-explicit-promp) —— 多个用户反馈 GPT-5.6 在 Azure 上 `cached_tokens` 恒为 0；有用户定位到根因：**Azure 的 Responses API（`/openai/v1/responses`）不缓存 GPT-5.6，但 Chat Completions API 会缓存**，同一部署、同一 `prompt_cache_key`，仅端点不同结果完全不同；
+- OpenRouter 上 GPT-5.6 的 Azure 供应商缓存命中率显示为 0%，与其他供应商形成对比；
+- 微软支持方在该帖中未给出具体修复 ETA，仅指向 API 版本生命周期文档。
+
+**对平台的实际影响**：
+
+- 代码侧无需改动 —— 平台 `CacheWriteTokens` / `CacheCreationTokensTotal()` 解析与 `cache_ratio` 计费逻辑已经就绪（见提交 `8c84ed536`），一旦 Azure 上游实际返回 `cache_write_tokens`，会自动按现有比例（1.25×）正确计费，无需额外适配。
+- 如需重新验证 Azure GPT-5.6 缓存创建是否已生效，**优先用 Chat Completions API 测试**（而非 Responses API），因为社区反馈 Responses 路径命中率明显更差。
+- 在 Azure 该能力稳定之前，不应假设 `cache_write_tokens` 会稳定出现；仍需以实际响应为准，不能靠"文档已支持"倒推计费。

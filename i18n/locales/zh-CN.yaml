@@ -276,6 +276,10 @@ distributor.get_channel_failed: "获取分组 {{.Group}} 下模型 {{.Model}} �
 distributor.no_available_channel: "分组 {{.Group}} 下模型 {{.Model}} 无可用渠道（distributor）"
 distributor.invalid_midjourney_request: "无效的midjourney请求，{{.Error}}"
 distributor.invalid_request_parse_model: "无效的请求，无法解析模型"
+distributor.auto_unsupported_path: "auto 模式仅支持 chat/completions、responses 和 messages"
+distributor.auto_not_enabled: "auto 路由未启用"
+distributor.auto_no_model: "auto 候选池中没有可用模型"
+distributor.auto_resolve_failed: "解析 auto 模型失败：{{.Error}}"
 
 # Custom OAuth provider messages
 custom_oauth.not_found: "自定义 OAuth 提供商不存在"

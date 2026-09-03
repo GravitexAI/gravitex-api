@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
@@ -241,6 +242,9 @@ func ListModels(c *gin.Context, modelType int) {
 		}
 		userModelNames = append(userModelNames, modelName)
 	}
+	if service.ShouldExposeAutoModels(c, userModelNames) {
+		userModelNames = append(service.AutoVirtualModelNames(), userModelNames...)
+	}
 
 	ownerByModel := map[string]string{}
 	if len(ownerGroups) > 0 {
@@ -318,6 +322,21 @@ func EnabledListModels(c *gin.Context) {
 
 func RetrieveModel(c *gin.Context, modelType int) {
 	modelId := c.Param("model")
+	if service.IsAutoModel(modelId) && setting.GetAutoRouterSetting().Enabled {
+		aiModel := buildOpenAIModel(modelId, nil)
+		switch modelType {
+		case constant.ChannelTypeAnthropic:
+			c.JSON(200, dto.AnthropicModel{
+				ID:          aiModel.Id,
+				CreatedAt:   time.Unix(int64(aiModel.Created), 0).UTC().Format(time.RFC3339),
+				DisplayName: aiModel.Id,
+				Type:        "model",
+			})
+		default:
+			c.JSON(200, aiModel)
+		}
+		return
+	}
 	if aiModel, ok := openAIModelsMap[modelId]; ok {
 		switch modelType {
 		case constant.ChannelTypeAnthropic:
