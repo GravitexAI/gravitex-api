@@ -21,6 +21,25 @@ import (
 
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
+	if info.RelayMode == relayconstant.RelayModeResponses &&
+		!common.SupportsOpenAIResponsesEndpoint(info.ChannelType) {
+		// Return 404 for a known gateway route that this selected channel
+		// implementation does not expose. Keep this check capability-based so
+		// adding Claude Responses support later only requires updating the
+		// capability registry and adaptor (see TODO there).
+		// This is an expected endpoint-capability miss, not a provider failure:
+		// keep it out of the persistent error logs while retaining the normal
+		// server-side relay error line.
+		return types.WithOpenAIError(types.OpenAIError{
+			Type:    "not_found_error",
+			Code:    "endpoint_not_found",
+			Message: "Requested endpoint /v1/responses is not supported.",
+		},
+			http.StatusNotFound,
+			types.ErrOptionWithSkipRetry(),
+			types.ErrOptionWithNoRecordErrorLog(),
+		)
+	}
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact &&
 		!common.SupportsResponsesCompact(info.ChannelType, info.ApiType) {
 		return types.NewErrorWithStatusCode(

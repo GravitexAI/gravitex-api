@@ -102,3 +102,22 @@ func SupportsResponsesCompact(channelType, apiType int) bool {
 		return false
 	}
 }
+
+// SupportsOpenAIResponsesEndpoint reports whether a channel type may receive
+// the public POST /v1/responses request. This is intentionally a channel
+// capability check, not a model-name check: the same model can be served by
+// different channel implementations with different endpoint support.
+//
+// TODO: when the Claude adaptor implements ConvertOpenAIResponsesRequest,
+// return true for ChannelTypeAnthropic and add EndpointTypeOpenAIResponse to
+// its advertised endpoint types in common/endpoint_type.go.
+func SupportsOpenAIResponsesEndpoint(channelType int) bool {
+	switch channelType {
+	case constant.ChannelTypeAnthropic:
+		return false
+	default:
+		// Keep existing behavior for other adaptors until each one has an
+		// explicit runtime capability declaration.
+		return true
+	}
+}
