@@ -1,0 +1,15 @@
+[Unit]
+Description=Claude 渠道测试报告服务
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/workplace/py/testReport/claude-test-service
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/workplace/py/testReport/claude-test-service/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8900
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+# Python 虚拟环境：绝不入库。
+# venv 里生成的可执行脚本（.venv/bin/uvicorn 等）第一行 shebang 是写死的绝对
+# 路径，跨机器复制或目录改名后立刻失效。必须在目标机器上现建，见 OPERATIONS.md §1。
+.venv/
+
+# Python 运行时产物
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 测试报告产物（Excel）。每次跑测试都会生成，且含被测平台的响应内容，不入库。
+*.xlsx
+
+# 服务运行时的报告输出目录（24 小时自动清理的临时文件）
+claude-test-service/reports/
+
+# 本地打包/副本，不是源码
+*.zip
+claude-platform-test_copy/
+
+# IDE 与系统文件
+.idea/
+.DS_Store
