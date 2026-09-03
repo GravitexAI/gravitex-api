@@ -49,7 +49,7 @@ spec:
           sysctl -w net.ipv4.tcp_keepalive_probes=3
       containers:
       - name: api-gateway
-        image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway:1.0.52
+        image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway:1.0.53
         ports:
         - containerPort: 3000
         env:
@@ -69,19 +69,31 @@ spec:
           preStop:
             exec:
               command: ["sh", "-c", "sleep 30"]
+              
+
+        startupProbe:
+          tcpSocket:
+            port: 3000
+          initialDelaySeconds: 5  # 容器启动5秒后开始第一次探测
+          periodSeconds: 10       # 每 10 秒探测一次
+          failureThreshold: 30    # 最多允许探测失败 30 次
+          
 
         readinessProbe:
           tcpSocket:
             port: 3000
-          initialDelaySeconds: 60
+          initialDelaySeconds: 2  # 启动探针成功后，等待2秒就开始检测是否就绪
           periodSeconds: 5
           failureThreshold: 2
+          
+
         livenessProbe:
           tcpSocket:
             port: 3000
-          initialDelaySeconds: 60
+          initialDelaySeconds: 2
           periodSeconds: 10
           failureThreshold: 3
+
         resources:
           requests:
             cpu: "4000m"

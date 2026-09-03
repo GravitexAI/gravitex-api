@@ -438,6 +438,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   models: '',
   group: ['default'],
   model_mapping: '',
+  cost_discount: null,
   model_cost_discount: '',
   priority: 0,
   weight: 0,
@@ -614,6 +615,7 @@ export function transformChannelToFormDefaults(
     models: channel.models || '',
     group: parseGroups(channel.group || 'default'),
     model_mapping: channel.model_mapping || '',
+    cost_discount: channel.cost_discount ?? null,
     model_cost_discount: modelCostDiscount,
     priority: channel.priority || 0,
     weight: channel.weight || 0,
@@ -699,6 +701,8 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
       console.error('Failed to parse existing settings:', error)
     }
   }
+
+  const originalSettingsKeys = new Set(Object.keys(settingsObj))
 
   // Add vertex_key_type for Vertex AI channels (type 41)
   if (formData.type === 41) {
@@ -826,6 +830,14 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     delete settingsObj.advanced_custom
   }
 
+  // A missing key means "unchanged" to the backend merge. Mark keys removed
+  // by this form explicitly so deliberate UI deletions still take effect.
+  for (const key of originalSettingsKeys) {
+    if (!(key in settingsObj)) {
+      settingsObj[key] = null
+    }
+  }
+
   return JSON.stringify(settingsObj)
 }
 
@@ -855,6 +867,7 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     models: formData.models,
     group: formatGroups(formData.group),
     model_mapping: formData.model_mapping || null,
+    cost_discount: formData.cost_discount ?? null,
     priority: formData.priority || null,
     weight: formData.weight || null,
     test_model: formData.test_model || null,
@@ -903,6 +916,7 @@ export function transformFormDataToUpdatePayload(
     models: formData.models,
     group: formatGroups(formData.group),
     model_mapping: formData.model_mapping || null,
+    cost_discount: formData.cost_discount ?? null,
     priority: formData.priority ?? 0,
     weight: formData.weight ?? 0,
     test_model: formData.test_model || null,
