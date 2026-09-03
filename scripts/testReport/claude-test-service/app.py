@@ -24,7 +24,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from runner import ReportNotReady, Runner, RunnerBusy, TaskParams
+from runner import (PythonBinUnavailable, ReportNotReady, Runner, RunnerBusy,
+                    TaskParams)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,16 @@ class RunRequest(BaseModel):
 
 @app.get("/health")
 def health() -> dict:
+    """健康检查。顺带暴露测试脚本的 Python 环境是否可用。
+
+    单独报出来是因为：服务自己活得好好的，但跑测试的子进程解释器可能是断链
+    （.venv 被从 macOS 传上来时必然如此）。不在这里暴露的话，要等到有人提交
+    任务才发现，而那时候已经在弹窗里看到一句莫名的 Errno 2 了。
+    """
+    broken = RUNNER.check_python_bin()
+    if broken:
+        logger.warning("测试脚本 Python 环境不可用: %s", broken)
+        return {"ok": False, "script_python": broken}
     return {"ok": True}
 
 
@@ -104,6 +115,10 @@ def run(request: RunRequest) -> dict:
     )
     try:
         task_id = RUNNER.submit(params)
+    except PythonBinUnavailable as exc:
+        # 503 而不是 500：这是环境问题、运维照着 detail 里的命令就能修，
+        # 不是代码 bug，也不该让调用方以为是自己参数错了。
+        raise HTTPException(status_code=503, detail=str(exc))
     except RunnerBusy as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     return {"task_id": task_id}

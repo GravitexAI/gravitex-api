@@ -39,6 +39,10 @@ class ReportNotReady(Exception):
     """任务还没成功结束，报告文件不存在。"""
 
 
+class PythonBinUnavailable(Exception):
+    """跑测试用的 Python 解释器不可用（通常是 .venv 被跨机器复制过来了）。"""
+
+
 @dataclass
 class TaskParams:
     """一次测试任务的全部可变配置，逐项映射成 CLAUDE_TEST_* 环境变量。"""
@@ -91,7 +95,43 @@ class Runner:
 
     # ---- 对外接口 ----
 
+    def check_python_bin(self) -> str:
+        """检查跑测试用的 Python 解释器可用。可用返回空串，不可用返回可操作的错误文案。
+
+        为什么要单独检查：这个解释器是 claude-platform-test/.venv/bin/python，而
+        venv 里的软链和脚本 shebang 都是写死的绝对路径。只要有人把 macOS 上的
+        .venv 传到服务器（zip/Finder/SFTP 都会带上它），这个软链就会指向
+        /Library/Developer/... 变成断链。此时 Popen 只会抛一句
+        "[Errno 2] No such file or directory: '.../.venv/bin/python'"——
+        文件明明"在"（是个软链），报错却说找不到，排查起来很费时间。
+        这个坑在本项目上已经发生三次，所以把它变成一条能照着做的提示。
+        """
+        path = self.python_bin
+        if path.exists() and os.access(str(path), os.X_OK):
+            return ""
+
+        if path.is_symlink():
+            target = os.readlink(str(path))
+            reason = f"{path} 是断链，指向不存在的 {target}"
+            if "/Library/" in target or "/Users/" in target:
+                reason += "（这是 macOS 路径，说明 .venv 是从 Mac 传上来的）"
+        elif not path.exists():
+            reason = f"{path} 不存在"
+        else:
+            reason = f"{path} 存在但不可执行"
+
+        return (
+            f"测试脚本的 Python 环境不可用：{reason}。"
+            f"venv 不能跨机器复制（里面全是绝对路径），必须在本机重建："
+            f"cd {self.script_dir} && python3 -m venv --clear .venv "
+            f"&& .venv/bin/pip install -r requirements.txt"
+        )
+
     def submit(self, params: TaskParams) -> str:
+        broken = self.check_python_bin()
+        if broken:
+            raise PythonBinUnavailable(broken)
+
         with self._lock:
             if self._running_id is not None:
                 # 刻意不回显 task_id：本服务的 /tasks/{id} 和 /tasks/{id}/report

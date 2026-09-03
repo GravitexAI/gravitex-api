@@ -15,7 +15,8 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import app as app_module
-from runner import ReportNotReady, RunnerBusy, TaskState
+from runner import (PythonBinUnavailable, ReportNotReady, RunnerBusy,
+                    TaskState)
 
 
 class FakeRunner:
@@ -25,10 +26,16 @@ class FakeRunner:
         self.report = tmp_path / "t1.xlsx"
         self.report.write_bytes(b"FAKE-XLSX")
         self.last_params = None
+        self.python_bin_error = ""
         self.cleanup_error = None
         self.cleanup_result = 0
 
+    def check_python_bin(self):
+        return self.python_bin_error
+
     def submit(self, params):
+        if self.python_bin_error:
+            raise PythonBinUnavailable(self.python_bin_error)
         if self.busy:
             raise RunnerBusy("已有测试任务 t0 在执行中，请等它结束")
         self.last_params = params
@@ -223,3 +230,26 @@ def test_cleanup_once_removes_orphan_files_by_mtime(client):
 
     assert not old_file.exists()
     assert new_file.exists()
+
+
+def test_health_reports_broken_script_python(client):
+    """脚本 venv 断链时 /health 要主动报出来，而不是等提交任务才暴露。"""
+    client.fake.python_bin_error = "python 是断链，指向不存在的 /Library/xxx"
+    body = client.get("/health").json()
+    assert body["ok"] is False
+    assert "断链" in body["script_python"]
+
+
+def test_run_returns_503_when_script_python_broken(client):
+    """venv 不可用是环境问题：返回 503 + 可照做的修复命令，不是 500。"""
+    client.fake.python_bin_error = (
+        "测试脚本的 Python 环境不可用：xxx。必须在本机重建："
+        "cd /x && python3 -m venv --clear .venv"
+    )
+    response = client.post("/run", json={
+        "platform_name": "t", "base_url": "https://gw.example.com",
+        "api_key": "k", "report_base_url": "",
+        "models": ["claude-opus-5"], "categories": [],
+    })
+    assert response.status_code == 503
+    assert "venv" in response.json()["detail"]
