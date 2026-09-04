@@ -421,7 +421,14 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			adminInfo["is_multi_key"] = true
 			adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 		}
-		service.AppendChannelAffinityAdminInfo(c, adminInfo)
+		adminInfoLog := model.NewLogOther()
+		adminInfoLog = model.NewLogOtherFromMap(map[string]interface{}{"admin_info": adminInfo})
+		service.AppendChannelAffinityAdminInfo(c, adminInfoLog)
+		if snapshot := adminInfoLog.Snapshot(); snapshot != nil {
+			if snapshotAdmin, ok := snapshot["admin_info"].(map[string]interface{}); ok {
+				adminInfo = snapshotAdmin
+			}
+		}
 		service.AppendAutoRouterAdminInfo(c, adminInfo)
 		costDiscount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
 		if costDiscount > 0 {

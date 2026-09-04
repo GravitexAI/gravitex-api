@@ -96,6 +96,14 @@ func parseSubmittedTaskResult(a channel.TaskAdaptor, body []byte) (*relaycommon.
 	return nil, fmt.Errorf("task adaptor does not support submit parsing")
 }
 
+func FetchTaskForPolling(a channel.TaskAdaptor, base, key string, task *model.Task, body map[string]any, proxy string) (*http.Response, error) {
+	return fetchTaskForPolling(a, base, key, task, body, proxy)
+}
+
+func ParseTaskForPolling(a channel.TaskAdaptor, task *model.Task, resp *http.Response, body []byte) (*relaycommon.TaskInfo, error) {
+	return parseTaskForPolling(a, task, resp, body)
+}
+
 // ResolveOriginTask 处理基于已有任务的提交（remix / continuation）：
 // 查找原始任务、从中提取模型名称、将渠道锁定到原始任务的渠道
 // （通过 info.LockedChannel，重试时复用同一渠道并轮换 key），

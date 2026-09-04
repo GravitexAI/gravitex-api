@@ -157,11 +157,7 @@ func main() {
 	// Must run before the system task runner starts: the async_task_poll handler
 	// calls service.RunTaskPollingOnce, which needs this factory set.
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
-		a := relay.GetTaskAdaptor(platform)
-		if a == nil {
-			return nil
-		}
-		return a
+		return relay.GetTaskPollingAdaptor(platform)
 	}
 
 	// GET /v1/videos 收到上游终态时落库并计费（与轮询一致），避免 Vertex 轮询仅返回 {"name":"..."} 时任务永不完成

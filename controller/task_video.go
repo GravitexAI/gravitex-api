@@ -110,7 +110,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 		logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] key_selected: task=%s channel=%d keySource=%s projectID=%s multiKeyIndex=%d hasPrivateKey=%v",
 			taskId, channel.Id, keySource, task.Properties.ProjectID, multiKeyIdx, privateData.Key != ""))
 	}
-	resp, err := adaptor.FetchTask(baseURL, key, map[string]any{
+	resp, err := relay.FetchTaskForPolling(adaptor, baseURL, key, task, map[string]any{
 		"task_id": taskId,
 		"action":  task.Action,
 	}, proxy)
@@ -326,7 +326,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 				}
 			}
 			task.Data = mergeBillingFieldsIntoTaskData(task.Data, t.Data)
-		} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
+		} else if taskResult, err = relay.ParseTaskForPolling(adaptor, task, resp, responseBody); err != nil {
 			return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
 		} else {
 			logger.LogInfo(ctx, fmt.Sprintf("[TaskPoll] task=%s branch=parseResult", taskId))
