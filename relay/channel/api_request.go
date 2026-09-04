@@ -630,7 +630,12 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	return resp, nil
 }
 
-func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
+type TaskRequestBuilder interface {
+	BuildRequestURL(*common.RelayInfo) (string, error)
+	BuildRequestHeader(*gin.Context, *http.Request, *common.RelayInfo) error
+}
+
+func DoTaskApiRequest(a TaskRequestBuilder, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	if info == nil {
 		return nil, errors.New("relay info is nil")
 	}

@@ -178,6 +178,15 @@ func GetTaskForProtocolObservation(ctx context.Context, userID int, platform con
 	return &task, true, nil
 }
 
+func GetByTaskIdsForPlatforms(userID int, platforms []constant.TaskPlatform, taskIDs []string) ([]*Task, error) {
+	if len(platforms) == 0 || len(taskIDs) == 0 {
+		return nil, nil
+	}
+	var tasks []*Task
+	err := DB.Where("user_id = ? AND platform IN ? AND task_id IN ?", userID, platforms, taskIDs).Find(&tasks).Error
+	return tasks, err
+}
+
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）
 // 旧数据没有 UpstreamTaskID 时，TaskID 本身就是上游 ID
 func (t *Task) GetUpstreamTaskID() string {

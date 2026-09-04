@@ -24,6 +24,10 @@ func TrimEffortSuffixWithSuffixes(modelName string, suffixes []string) (string, 
 	return strings.TrimSuffix(modelName, suffix), strings.TrimPrefix(suffix, "-"), true
 }
 
+func TrimEffortSuffix(modelName string) (string, string, bool) {
+	return TrimEffortSuffixWithSuffixes(modelName, OpenAIEffortSuffixes)
+}
+
 // ParseOpenAIReasoningEffortFromModelSuffix extracts an OpenAI effort tail
 // such as -high or -none. preserveEffortTail, when non-nil, keeps real model
 // IDs whose names already end in those tokens (for example qwen-max).

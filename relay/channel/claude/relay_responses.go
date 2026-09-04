@@ -115,8 +115,7 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 		if claudeResponse.Type == "message_start" && claudeResponse.Message != nil {
 			info.UpstreamModelName = claudeResponse.Message.Model
 		}
-		FormatClaudeResponseInfo(&claudeResponse, nil, claudeInfo)
-		countClaudeStreamBillableTools(c, info, &claudeResponse)
+		FormatClaudeResponseInfo(info, &claudeResponse, nil, claudeInfo)
 		hostedEvents, consumed, err := hostedBridge.Convert(&claudeResponse, state)
 		if err != nil {
 			if failResponsesStream(err) {
