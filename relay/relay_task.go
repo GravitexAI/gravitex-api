@@ -41,6 +41,8 @@ var MergeVideoTaskDataWithUpstreamResponseFn func(task *model.Task, responseBody
 var DispatchLyriaAsyncFn func(c *gin.Context, info *relaycommon.RelayInfo, requestBody []byte) (*TaskSubmitResult, *dto.TaskError)
 
 type TaskSubmitResult struct {
+	ClientResponse     any
+	Immediate          *relaycommon.TaskInfo
 	UpstreamTaskID     string
 	TaskData           []byte
 	Platform           constant.TaskPlatform
@@ -56,6 +58,42 @@ type TaskSubmitResult struct {
 	IsVideoTokenRatioBilling bool
 	UpstreamBodyBytes        []byte // 上游请求体，供计费解析
 	AsyncDispatched          bool   // 已创建本地异步任务，实际调用由后台 worker 完成
+}
+
+type nativeTaskPolling interface {
+	FetchTask(string, string, map[string]any, string) (*http.Response, error)
+	ParseTaskResult([]byte) (*relaycommon.TaskInfo, error)
+}
+type pluginTaskPolling interface {
+	FetchTask(string, string, *model.Task, string) (*http.Response, error)
+	ParseTaskResult(*model.Task, *http.Response, []byte) (*relaycommon.TaskInfo, error)
+}
+
+func fetchTaskForPolling(a channel.TaskAdaptor, base, key string, task *model.Task, body map[string]any, proxy string) (*http.Response, error) {
+	if p, ok := a.(pluginTaskPolling); ok {
+		return p.FetchTask(base, key, task, proxy)
+	}
+	if n, ok := a.(nativeTaskPolling); ok {
+		return n.FetchTask(base, key, body, proxy)
+	}
+	return nil, fmt.Errorf("task adaptor does not support polling")
+}
+func parseTaskForPolling(a channel.TaskAdaptor, task *model.Task, resp *http.Response, body []byte) (*relaycommon.TaskInfo, error) {
+	if p, ok := a.(pluginTaskPolling); ok {
+		return p.ParseTaskResult(task, resp, body)
+	}
+	if n, ok := a.(nativeTaskPolling); ok {
+		return n.ParseTaskResult(body)
+	}
+	return nil, fmt.Errorf("task adaptor does not support polling")
+}
+func parseSubmittedTaskResult(a channel.TaskAdaptor, body []byte) (*relaycommon.TaskInfo, error) {
+	if n, ok := a.(interface {
+		ParseTaskResult([]byte) (*relaycommon.TaskInfo, error)
+	}); ok {
+		return n.ParseTaskResult(body)
+	}
+	return nil, fmt.Errorf("task adaptor does not support submit parsing")
 }
 
 // ResolveOriginTask 处理基于已有任务的提交（remix / continuation）：
@@ -389,7 +427,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	var initialTaskInfo *relaycommon.TaskInfo
 	if platform == constant.TaskPlatformLyria {
-		parsed, parseErr := adaptor.ParseTaskResult(taskData)
+		parsed, parseErr := parseSubmittedTaskResult(adaptor, taskData)
 		if parseErr != nil {
 			if lyriaVertexResponse {
 				parsed = &relaycommon.TaskInfo{
@@ -629,7 +667,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool, rawMirror bool) [
 		return nil
 	}
 
-	resp, err := adaptor.FetchTask(baseURL, channelModel.Key, map[string]any{
+	resp, err := fetchTaskForPolling(adaptor, baseURL, channelModel.Key, task, map[string]any{
 		"task_id": task.GetUpstreamTaskID(),
 		"action":  task.Action,
 	}, proxy)
@@ -642,7 +680,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool, rawMirror bool) [
 		return nil
 	}
 
-	ti, err := adaptor.ParseTaskResult(body)
+	ti, err := parseTaskForPolling(adaptor, task, resp, body)
 	if err != nil || ti == nil {
 		return nil
 	}

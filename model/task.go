@@ -177,6 +177,19 @@ func GetTaskForProtocolObservation(ctx context.Context, userID int, platform con
 	}
 	return &task, true, nil
 }
+func GetUniqueByOnlyTaskId(taskID string) (*Task, bool, error) {
+	var tasks []*Task
+	if taskID == "" {
+		return nil, false, nil
+	}
+	if err := DB.Where("task_id = ?", taskID).Limit(2).Find(&tasks).Error; err != nil {
+		return nil, false, err
+	}
+	if len(tasks) != 1 {
+		return nil, false, nil
+	}
+	return tasks[0], true, nil
+}
 
 func GetByTaskIdsForPlatforms(userID int, platforms []constant.TaskPlatform, taskIDs []string) ([]*Task, error) {
 	if len(platforms) == 0 || len(taskIDs) == 0 {
