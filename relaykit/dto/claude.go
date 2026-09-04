@@ -15,6 +15,8 @@ type ClaudeMetadata struct {
 }
 
 type ClaudeMediaMessage struct {
+	Citations    json.RawMessage      `json:"citations,omitempty"`
+	Citation     json.RawMessage      `json:"citation,omitempty"`
 	Type         string               `json:"type,omitempty"`
 	Text         *string              `json:"text,omitempty"`
 	Model        string               `json:"model,omitempty"`
@@ -27,12 +29,21 @@ type ClaudeMediaMessage struct {
 	Signature    string               `json:"signature,omitempty"`
 	Delta        string               `json:"delta,omitempty"`
 	CacheControl json.RawMessage      `json:"cache_control,omitempty"`
+	ServerName   string               `json:"server_name,omitempty"`
+	Caller       json.RawMessage      `json:"caller,omitempty"`
+	IsError      *bool                `json:"is_error,omitempty"`
+	ErrorCode    string               `json:"error_code,omitempty"`
 	// tool_calls
 	Id        string `json:"id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Input     any    `json:"input,omitempty"`
 	Content   any    `json:"content,omitempty"`
 	ToolUseId string `json:"tool_use_id,omitempty"`
+}
+
+type ClaudeDelta struct {
+	Type        string  `json:"type,omitempty"`
+	PartialJson *string `json:"partial_json,omitempty"`
 }
 
 func (c *ClaudeMediaMessage) SetText(s string) {
@@ -173,6 +184,7 @@ type Tool struct {
 	Name         string                 `json:"name"`
 	Description  string                 `json:"description,omitempty"`
 	InputSchema  map[string]interface{} `json:"input_schema"`
+	Strict       *bool                  `json:"strict,omitempty"`
 	CacheControl json.RawMessage        `json:"cache_control,omitempty"`
 }
 
@@ -621,5 +633,8 @@ func (u *ClaudeUsage) GetCacheCreationTotalTokens() int {
 }
 
 type ClaudeServerToolUse struct {
-	WebSearchRequests int `json:"web_search_requests"`
+	WebSearchRequests     int `json:"web_search_requests"`
+	WebFetchRequests      int `json:"web_fetch_requests,omitempty"`
+	CodeExecutionRequests int `json:"code_execution_requests,omitempty"`
+	ToolSearchRequests    int `json:"tool_search_requests,omitempty"`
 }

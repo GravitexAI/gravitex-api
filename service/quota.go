@@ -3,7 +3,6 @@ package service
 import (
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"strings"
 	"time"
@@ -81,7 +80,7 @@ func cachedAudioTokensEstimate(usage *dto.RealtimeUsage) int {
 	if total == 0 || usage.InputTokenDetails.AudioTokens == 0 {
 		return 0
 	}
-	return int(float64(usage.InputTokenDetails.CachedTokens) * float64(usage.InputTokenDetails.AudioTokens) / float64(total))
+	return common.QuotaFromFloat(float64(usage.InputTokenDetails.CachedTokens) * float64(usage.InputTokenDetails.AudioTokens) / float64(total))
 }
 
 func calculateAudioQuota(info QuotaInfo) (int, *common.QuotaClamp) {
@@ -345,7 +344,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	// 将系统生成的 request_id 存入 other，request_id 字段改存上游返回的 ID
 	systemRequestId := ctx.GetString(common.RequestIdKey)
 	if systemRequestId != "" {
-		other["system_request_id"] = systemRequestId
+		other.SetPublic("system_request_id", systemRequestId)
 	}
 
 	attachQuotaSaturation(ctx, relayInfo, other)
@@ -383,11 +382,16 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 	completionTokens := float64(usage.CompletionTokens)
 	promptCacheReadTokens := float64(usage.PromptTokensDetails.CachedTokens)
 
-	return int(math.Round((cost -
+	value := (cost -
 		totalPromptTokens*quotaPrice +
 		promptCacheReadTokens*(quotaPrice-promptCacheReadPrice) -
 		completionTokens*completionPrice) /
-		(promptCacheCreatePrice - quotaPrice)))
+		(promptCacheCreatePrice - quotaPrice)
+	quota, clamp := common.QuotaRoundChecked(value)
+	if clamp != nil {
+		return -1
+	}
+	return quota
 }
 
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) {
@@ -410,9 +414,10 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	audioOutTokens := usage.CompletionTokenDetails.AudioTokens
 
 	tokenName := ctx.GetString("token_name")
-	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(relayInfo.OriginModelName))
-	audioRatioF := ratio_setting.GetAudioRatio(relayInfo.OriginModelName)
-	audioCompletionRatioF := ratio_setting.GetAudioCompletionRatio(relayInfo.OriginModelName)
+	billingModelName := relayInfo.GetBillingModelName()
+	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(billingModelName))
+	audioRatioF := ratio_setting.GetAudioRatio(billingModelName)
+	audioCompletionRatioF := ratio_setting.GetAudioCompletionRatio(billingModelName)
 	if audioCompletionRatioF <= 0 {
 		audioCompletionRatioF = 1.0
 	}
@@ -436,7 +441,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 			TextTokens:  textOutTokens,
 			AudioTokens: audioOutTokens,
 		},
-		ModelName:  relayInfo.OriginModelName,
+		ModelName:  billingModelName,
 		UsePrice:   usePrice,
 		ModelRatio: modelRatio,
 		GroupRatio: groupRatio,
@@ -468,7 +473,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		quota = 0
 		logContent += "（可能是上游超时）"
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
-			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, relayInfo.OriginModelName, relayInfo.FinalPreConsumedQuota))
+			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, billingModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
 		// 有 BillingSession 时：
 		//   - 钱包用户：ConsumeUserQuotaSettle 一次 UPDATE 完成 quota 扣减 + used_quota + request_count
@@ -489,7 +494,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
 
-	logModel := relayInfo.OriginModelName
+	logModel := billingModelName
 	if extraContent != "" {
 		logContent += ", " + extraContent
 	}
@@ -502,7 +507,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	// 将系统生成的 request_id 存入 other，request_id 字段改存上游返回的 ID
 	systemRequestId := ctx.GetString(common.RequestIdKey)
 	if systemRequestId != "" {
-		other["system_request_id"] = systemRequestId
+		other.SetPublic("system_request_id", systemRequestId)
 	}
 
 	attachQuotaSaturation(ctx, relayInfo, other)

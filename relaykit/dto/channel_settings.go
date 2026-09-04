@@ -67,6 +67,7 @@ const (
 )
 
 type ChannelOtherSettings struct {
+	ToolLossPolicy string `json:"tool_loss_policy,omitempty"`
 	// ModelCostDiscount is a channel cost override by the original client model.
 	// It must not be used for user pricing, group ratios, or quota deduction.
 	ModelCostDiscount           map[string]float64 `json:"model_cost_discount,omitempty"`

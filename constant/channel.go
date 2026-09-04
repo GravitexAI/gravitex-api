@@ -63,11 +63,19 @@ const (
 	// 官方在 59/60 定义了 Sub2API/NewAPI，但 main-alpha 早已占用 59(Uptoken)/60(AdvancedCustom)，
 	// 且这些号存在生产 channels.type 列里不可变更，故官方新渠道顺延到 63/64。
 	// ⚠️ 以后吸收官方新渠道类型一律往 63+ 顺延，不要跟官方号段。
-	ChannelTypeSub2API = 63
-	ChannelTypeNewAPI  = 64
-	ChannelTypeDummy   // this one is only for count, do not add any channel after this
+	ChannelTypeSub2API    = 63
+	ChannelTypeNewAPI     = 64
+	ChannelTypeTaskPlugin = 65
+	ChannelTypeDummy      // this one is only for count, do not add any channel after this
 
 )
+
+func GetChannelBaseURL(channelType int) string {
+	if channelType < 0 || channelType >= len(ChannelBaseURLs) {
+		return ""
+	}
+	return ChannelBaseURLs[channelType]
+}
 
 var ChannelBaseURLs = []string{
 	"",                                    // 0

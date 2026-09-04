@@ -9,6 +9,22 @@ const (
 )
 
 const (
+	TaskActionImageToVideo     = "image_to_video"
+	TaskActionTextToVideo      = "text_to_video"
+	TaskActionFirstTailToVideo = "first_tail_to_video"
+	TaskActionReferenceToVideo = "reference_to_video"
+)
+
+var legacyTaskActionAliases = map[string]string{"generate": TaskActionImageToVideo, "textGenerate": TaskActionTextToVideo, "firstTailGenerate": TaskActionFirstTailToVideo, "referenceGenerate": TaskActionReferenceToVideo, "remixGenerate": TaskActionRemix}
+
+func NormalizeTaskAction(action string) string {
+	if v, ok := legacyTaskActionAliases[action]; ok {
+		return v
+	}
+	return action
+}
+
+const (
 	SunoActionMusic  = "MUSIC"
 	SunoActionLyrics = "LYRICS"
 

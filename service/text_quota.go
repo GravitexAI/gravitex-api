@@ -31,11 +31,11 @@ type ToolSurchargeItem struct {
 	Price float64 `json:"price"`
 }
 
-func appendToolSurchargeLogInfo(other map[string]interface{}, items []ToolSurchargeItem) {
+func appendToolSurchargeLogInfo(other *model.LogOther, items []ToolSurchargeItem) {
 	if len(items) == 0 {
 		return
 	}
-	other["tool_surcharges"] = items
+	other.SetPublic("tool_surcharges", items)
 }
 
 type textQuotaSummary struct {
@@ -231,8 +231,8 @@ func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaS
 	}
 
 	// Saturate the final sum, not just the surcharge: tieredQuota can be near
-	// MaxQuota and adding the surcharge could push the total past the int32
-	// quota policy bound (persisted quota columns are 32-bit).
+	// MaxQuota and adding the surcharge could push the total past the
+	// single-request quota policy bound.
 	total, clamp := common.QuotaFromDecimalChecked(
 		decimal.NewFromInt(int64(tieredQuota)).Add(summary.ToolCallSurchargeQuota),
 	)
@@ -245,7 +245,7 @@ func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaS
 // the result with tiered billing, affinity observation and logging.
 func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage) textQuotaSummary {
 	summary := textQuotaSummary{
-		ModelName:            relayInfo.OriginModelName,
+		ModelName:            relayInfo.GetBillingModelName(),
 		TokenName:            ctx.GetString("token_name"),
 		UseTimeSeconds:       time.Now().Unix() - relayInfo.StartTime.Unix(),
 		CompletionRatio:      relayInfo.PriceData.CompletionRatio,
@@ -560,7 +560,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	logContent := strings.Join(extraContent, ", ")
-	var other map[string]interface{}
+	var other *model.LogOther
 	if summary.IsClaudeUsageSemantic {
 		other = GenerateClaudeOtherInfo(ctx, relayInfo,
 			summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio,
@@ -569,58 +569,58 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 			summary.CacheCreationTokens5m, summary.CacheCreationRatio5m,
 			summary.CacheCreationTokens1h, summary.CacheCreationRatio1h,
 			summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
-		other["usage_semantic"] = "anthropic"
+		other.SetPublic("usage_semantic", "anthropic")
 	} else {
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	}
 	appendUsageBillingPathForLog(other, common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens), originUsage)
 	if adminRejectReason != "" {
-		other["reject_reason"] = adminRejectReason
+		other.SetAdmin("reject_reason", adminRejectReason)
 	}
 	if summary.ImageTokens != 0 {
-		other["image"] = true
-		other["image_ratio"] = summary.ImageRatio
-		other["image_output"] = summary.ImageTokens
+		other.SetPublic("image", true)
+		other.SetPublic("image_ratio", summary.ImageRatio)
+		other.SetPublic("image_output", summary.ImageTokens)
 		// 写入 input_text_tokens 和 input_image_tokens，供前端图像 Token 计价展示
-		other["input_image_tokens"] = summary.ImageTokens
+		other.SetPublic("input_image_tokens", summary.ImageTokens)
 		inputTextTokens := summary.PromptTokens - summary.ImageTokens - summary.CacheTokens
 		if inputTextTokens < 0 {
 			inputTextTokens = 0
 		}
-		other["input_text_tokens"] = inputTextTokens
+		other.SetPublic("input_text_tokens", inputTextTokens)
 		// 写入绝对价格（$/1M tokens），前端直接使用，无需再次计算
 		inputTextPriceUSD := summary.ModelRatio * 2.0
-		other["input_text_price"] = inputTextPriceUSD
-		other["input_image_price"] = inputTextPriceUSD * summary.ImageRatio
+		other.SetPublic("input_text_price", inputTextPriceUSD)
+		other.SetPublic("input_image_price", inputTextPriceUSD*summary.ImageRatio)
 	}
 	appendToolSurchargeLogInfo(other, summary.ToolSurchargeItems)
 	if summary.AudioInputPrice > 0 && summary.AudioTokens > 0 {
-		other["audio_input_seperate_price"] = true
-		other["audio_input_token_count"] = summary.AudioTokens
-		other["audio_input_price"] = summary.AudioInputPrice
+		other.SetPublic("audio_input_seperate_price", true)
+		other.SetPublic("audio_input_token_count", summary.AudioTokens)
+		other.SetPublic("audio_input_price", summary.AudioInputPrice)
 	}
 	if summary.AudioTokens > 0 {
-		other["audio_input"] = summary.AudioTokens
-		other["audio_tokens"] = summary.AudioTokens
+		other.SetPublic("audio_input", summary.AudioTokens)
+		other.SetPublic("audio_tokens", summary.AudioTokens)
 	}
 	if summary.VideoTokens > 0 {
-		other["video_input_tokens"] = summary.VideoTokens
+		other.SetPublic("video_input_tokens", summary.VideoTokens)
 		if summary.VideoRatio > 0 {
-			other["video_input_ratio"] = summary.VideoRatio
-			other["video_input_price"] = summary.ModelRatio * 2.0 * summary.VideoRatio
-			other["video_input_price_source"] = "VideoRatio"
+			other.SetPublic("video_input_ratio", summary.VideoRatio)
+			other.SetPublic("video_input_price", summary.ModelRatio*2.0*summary.VideoRatio)
+			other.SetPublic("video_input_price_source", "VideoRatio")
 			videoInputQuota := decimal.NewFromInt(int64(summary.VideoTokens)).
 				Mul(decimal.NewFromFloat(summary.VideoRatio)).
 				Mul(decimal.NewFromFloat(summary.ModelRatio)).
 				Mul(decimal.NewFromFloat(summary.GroupRatio))
-			other["video_input_quota"] = videoInputQuota.IntPart()
+			other.SetPublic("video_input_quota", common.QuotaFromDecimal(videoInputQuota.Truncate(0)))
 		} else {
-			other["video_input_price_source"] = "ModelRatio"
+			other.SetPublic("video_input_price_source", "ModelRatio")
 		}
 	}
 	if summary.ImageGenerationCallPrice > 0 {
-		other["image_generation_call"] = true
-		other["image_generation_call_price"] = summary.ImageGenerationCallPrice
+		other.SetPublic("image_generation_call", true)
+		other.SetPublic("image_generation_call_price", summary.ImageGenerationCallPrice)
 	}
 	// 按张计费（per_image）：写入 per_call_price / per_call_image_multiplier 供下游
 	// （Java 后端 BillingDetailService / 前端 LogsExpense 页面）识别为按张计费并正确渲染。
@@ -634,70 +634,69 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		}
 		if relayInfo.PriceData.ImagePerImagePricing != nil && relayInfo.PriceData.ImageBillingUsage != nil {
 			billingUsage := relayInfo.PriceData.ImageBillingUsage
-			other["image_input_count"] = billingUsage.InputImageCount
-			other["image_output_count"] = billingUsage.SuccessfulImageCount
+			other.SetPublic("image_input_count", billingUsage.InputImageCount)
+			other.SetPublic("image_output_count", billingUsage.SuccessfulImageCount)
 			if len(billingUsage.OutputTiers) == 1 {
-				other["image_output_size"] = fmt.Sprintf("%dx%d", billingUsage.OutputWidth, billingUsage.OutputHeight)
-				other["image_output_pixels"] = billingUsage.OutputPixels
-				other["image_output_tier"] = billingUsage.OutputSizeTier
+				other.SetPublic("image_output_size", fmt.Sprintf("%dx%d", billingUsage.OutputWidth, billingUsage.OutputHeight))
+				other.SetPublic("image_output_pixels", billingUsage.OutputPixels)
+				other.SetPublic("image_output_tier", billingUsage.OutputSizeTier)
 			}
-			other["image_layer_decomposition"] = billingUsage.LayerDecomposition
-			other["image_output_price_multiplier"] = billingUsage.OutputPriceMultiplier
-			other["image_output_tiers"] = billingUsage.OutputTiers
-			other["image_input_price"] = relayInfo.PriceData.ImagePerImagePricing.InputImageFirst
-			other["image_input_first_price"] = relayInfo.PriceData.ImagePerImagePricing.InputImageFirst
-			other["image_input_from_second_price"] = relayInfo.PriceData.ImagePerImagePricing.InputImageFromThe2nd
+			other.SetPublic("image_layer_decomposition", billingUsage.LayerDecomposition)
+			other.SetPublic("image_output_price_multiplier", billingUsage.OutputPriceMultiplier)
+			other.SetPublic("image_output_tiers", billingUsage.OutputTiers)
+			other.SetPublic("image_input_price", relayInfo.PriceData.ImagePerImagePricing.InputImageFirst)
+			other.SetPublic("image_input_first_price", relayInfo.PriceData.ImagePerImagePricing.InputImageFirst)
+			other.SetPublic("image_input_from_second_price", relayInfo.PriceData.ImagePerImagePricing.InputImageFromThe2nd)
 			if billingUsage.InputImageCount > 0 && relayInfo.PriceData.ImagePerImagePricing.InputImageFirst == 0 {
-				other["image_input_free_count"] = 1
+				other.SetPublic("image_input_free_count", 1)
 			} else {
-				other["image_input_free_count"] = 0
+				other.SetPublic("image_input_free_count", 0)
 			}
 			if billingUsage.InputImageCount > 1 {
-				other["image_input_price"] = relayInfo.PriceData.ImagePerImagePricing.InputImageFirst +
-					float64(billingUsage.InputImageCount-1)*relayInfo.PriceData.ImagePerImagePricing.InputImageFromThe2nd
+				other.SetPublic("image_input_price", relayInfo.PriceData.ImagePerImagePricing.InputImageFirst+float64(billingUsage.InputImageCount-1)*relayInfo.PriceData.ImagePerImagePricing.InputImageFromThe2nd)
 			}
-			other["image_output_price"] = billingUsage.OutputPrice
-			other["image_total_price"] = relayInfo.PriceData.ModelPrice
-			other["per_call_price"] = relayInfo.PriceData.PerImageUnitPrice
+			other.SetPublic("image_output_price", billingUsage.OutputPrice)
+			other.SetPublic("image_total_price", relayInfo.PriceData.ModelPrice)
+			other.SetPublic("per_call_price", relayInfo.PriceData.PerImageUnitPrice)
 		} else {
-			other["per_call_price"] = relayInfo.PriceData.ModelPrice
+			other.SetPublic("per_call_price", relayInfo.PriceData.ModelPrice)
 		}
-		other["per_call_image_multiplier"] = imageCount
+		other.SetPublic("per_call_image_multiplier", imageCount)
 	}
 	if summary.CacheCreationTokens > 0 {
-		other["cache_creation_tokens"] = summary.CacheCreationTokens
-		other["cache_creation_ratio"] = summary.CacheCreationRatio
+		other.SetPublic("cache_creation_tokens", summary.CacheCreationTokens)
+		other.SetPublic("cache_creation_ratio", summary.CacheCreationRatio)
 	}
 	if summary.CacheCreationTokens5m > 0 {
-		other["cache_creation_tokens_5m"] = summary.CacheCreationTokens5m
-		other["cache_creation_ratio_5m"] = summary.CacheCreationRatio5m
+		other.SetPublic("cache_creation_tokens_5m", summary.CacheCreationTokens5m)
+		other.SetPublic("cache_creation_ratio_5m", summary.CacheCreationRatio5m)
 	}
 	if summary.CacheCreationTokens1h > 0 {
-		other["cache_creation_tokens_1h"] = summary.CacheCreationTokens1h
-		other["cache_creation_ratio_1h"] = summary.CacheCreationRatio1h
+		other.SetPublic("cache_creation_tokens_1h", summary.CacheCreationTokens1h)
+		other.SetPublic("cache_creation_ratio_1h", summary.CacheCreationRatio1h)
 	}
 	cacheWriteTokens := cacheWriteTokensTotal(summary)
 	if cacheWriteTokens > 0 {
 		// cache_write_tokens: normalized cache creation total for UI display.
 		// If split 5m/1h values are present, this is their sum; otherwise it falls back
 		// to cache_creation_tokens.
-		other["cache_write_tokens"] = cacheWriteTokens
+		other.SetPublic("cache_write_tokens", cacheWriteTokens)
 	}
 	// Gemini image/text output split: record for admin UI and billing audit
 	if summary.GeminiImageOutputTokens > 0 || summary.GeminiTextOutputTokens > 0 || summary.ReasoningTokens > 0 {
-		other["image_output_tokens"] = summary.GeminiImageOutputTokens
-		other["text_output_tokens"] = summary.GeminiTextOutputTokens
-		other["reasoning_tokens"] = summary.ReasoningTokens
+		other.SetPublic("image_output_tokens", summary.GeminiImageOutputTokens)
+		other.SetPublic("text_output_tokens", summary.GeminiTextOutputTokens)
+		other.SetPublic("reasoning_tokens", summary.ReasoningTokens)
 		if summary.EffectiveImageOutputRatio > 0 {
-			other["image_completion_ratio"] = summary.EffectiveImageOutputRatio
-			other["effective_image_output_ratio"] = summary.EffectiveImageOutputRatio
+			other.SetPublic("image_completion_ratio", summary.EffectiveImageOutputRatio)
+			other.SetPublic("effective_image_output_ratio", summary.EffectiveImageOutputRatio)
 			// 图片输出绝对价格（$/1M tokens），含 modelRatio，与 input_image_price 模式一致
-			other["output_image_price"] = summary.ModelRatio * 2.0 * summary.EffectiveImageOutputRatio
+			other.SetPublic("output_image_price", summary.ModelRatio*2.0*summary.EffectiveImageOutputRatio)
 			if summary.GeminiImageOutputTokens > 0 {
 				if summary.ImageRatio > 0 {
-					other["image_output_ratio_source"] = "image_input"
+					other.SetPublic("image_output_ratio_source", "image_input")
 				} else {
-					other["image_output_ratio_source"] = "text_input"
+					other.SetPublic("image_output_ratio_source", "text_input")
 				}
 			}
 		}
@@ -707,7 +706,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		// Only write this field when upstream/current conversion has already provided a
 		// reliable total input value and tagged the usage source. Do not infer it from
 		// prompt/cache fields here, otherwise old upstream payloads may be double-counted.
-		other["input_tokens_total"] = billingUsage.InputTokens
+		other.SetPublic("input_tokens_total", billingUsage.InputTokens)
 	}
 	if tieredBillingApplied {
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
@@ -716,7 +715,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	// 将系统生成的 request_id 存入 other，request_id 字段改存上游返回的 ID
 	systemRequestId := ctx.GetString(common.RequestIdKey)
 	if systemRequestId != "" {
-		other["system_request_id"] = systemRequestId
+		other.SetPublic("system_request_id", systemRequestId)
 	}
 
 	attachQuotaSaturation(ctx, relayInfo, other)

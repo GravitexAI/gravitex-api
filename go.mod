@@ -83,7 +83,10 @@ require (
 require github.com/waffo-com/waffo-pancake-sdk-go v0.3.1
 
 require (
+	github.com/dlclark/regexp2/v2 v2.2.2 // indirect
+	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/goccy/go-yaml v1.19.2 // indirect
+	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e // indirect
 	github.com/gorilla/context v1.1.2 // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/gorilla/sessions v1.4.0 // indirect
@@ -98,6 +101,7 @@ require github.com/Azure/go-ntlmssp v0.1.1
 require (
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/gin-contrib/sessions v1.1.0
+	github.com/grafana/sobek v0.0.0-20260708062710-267a0e055bb4
 )
 
 require (
@@ -161,7 +165,7 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/samber/go-singleflightx v0.3.2 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
-	github.com/tidwall/pretty v1.2.0 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
@@ -178,6 +182,9 @@ require (
 	modernc.org/sqlite v1.40.1 // indirect
 )
 
-require github.com/QuantumNous/new-api/relaykit v0.0.0
+require (
+	github.com/QuantumNous/new-api/relaykit v0.0.0
+	github.com/openai/openai-go v1.12.0
+)
 
 replace github.com/QuantumNous/new-api/relaykit => ./relaykit
