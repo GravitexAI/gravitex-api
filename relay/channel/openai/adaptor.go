@@ -473,7 +473,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		request.ResponseFormat = ""
 		request.Style = nil
 		request.ExtraFields = nil
-		request.Background = nil
+		//request.Background = nil
 		request.Moderation = nil
 		request.OutputFormat = nil
 		request.OutputCompression = nil
