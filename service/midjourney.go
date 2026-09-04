@@ -128,7 +128,7 @@ func RefundMidjourneyQuota(ctx context.Context, task *model.Midjourney, reason s
 		ModelName: CovertMjpActionToModelName(task.Action),
 		Quota:     quota,
 		TokenId:   task.TokenId,
-		Other:     other,
+		Other:     other.Snapshot(),
 	})
 
 	task.Quota = 0

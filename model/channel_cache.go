@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	rootdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -133,22 +134,23 @@ func CacheGetGroupEnabledModels(group string) []string {
 	return GetGroupEnabledModels(group)
 }
 
-func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath any) (*Channel, error) {
+	path, _ := requestPath.(string)
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, requestPath)
+		return GetChannel(group, model, retry, []rootdto.ChannelFilter{{RequestPath: path}})
 	}
 
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
 	// First, try to find channels with the exact model name.
-	channels := filterChannelsByRequestPathAndModel(group2model2channels[group][model], requestPath, model)
+	channels := filterChannelsByRequestPathAndModel(group2model2channels[group][model], path, model)
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
-		channels = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], requestPath, model)
+		channels = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], path, model)
 	}
 
 	if len(channels) == 0 {

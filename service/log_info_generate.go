@@ -23,11 +23,22 @@ import (
 // admin-only for free, since model.formatUserLogs strips the whole admin_info
 // object for non-admin viewers. Creates admin_info if absent. No-op when the
 // clamp is nil (the common case: no saturation happened).
-func attachQuotaSaturationToOther(other *model.LogOther, clamp *common.QuotaClamp) {
-	if clamp == nil || other == nil {
+func attachQuotaSaturationToOther(other any, clamp *common.QuotaClamp) {
+	if legacy, ok := other.(map[string]interface{}); ok {
+		if clamp != nil {
+			legacy["quota_saturation"] = clamp.AuditMap()
+		}
 		return
 	}
-	other.SetAdmin("quota_saturation", clamp.AuditMap())
+	otherTyped, ok := other.(*model.LogOther)
+	if !ok {
+		return
+	}
+	other = otherTyped
+	if clamp == nil || otherTyped == nil {
+		return
+	}
+	otherTyped.SetAdmin("quota_saturation", clamp.AuditMap())
 }
 
 // attachQuotaSaturation records the request's quota clamp (if any) onto the

@@ -28,6 +28,7 @@ type ClaudeMediaMessage struct {
 	Thinking     *string              `json:"thinking,omitempty"`
 	Signature    string               `json:"signature,omitempty"`
 	Delta        string               `json:"delta,omitempty"`
+	Data         string               `json:"data,omitempty"`
 	CacheControl json.RawMessage      `json:"cache_control,omitempty"`
 	ServerName   string               `json:"server_name,omitempty"`
 	Caller       json.RawMessage      `json:"caller,omitempty"`
@@ -41,10 +42,7 @@ type ClaudeMediaMessage struct {
 	ToolUseId string `json:"tool_use_id,omitempty"`
 }
 
-type ClaudeDelta struct {
-	Type        string  `json:"type,omitempty"`
-	PartialJson *string `json:"partial_json,omitempty"`
-}
+type ClaudeDelta = ClaudeMediaMessage
 
 func (c *ClaudeMediaMessage) SetText(s string) {
 	c.Text = &s

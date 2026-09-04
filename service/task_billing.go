@@ -58,7 +58,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		other["system_request_id"] = systemRequestId
 	}
 
-	attachQuotaSaturation(c, info, other)
+	attachQuotaSaturationToOther(other, info.QuotaClamp)
 	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
 		RequestId: info.UpstreamResponseId,
 		ChannelId: info.ChannelId,
@@ -135,8 +135,11 @@ func TaskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
 }
 
 // taskBillingOther 从 task 的 BillingContext 构建日志 Other 字段。
-func taskBillingOther(task *model.Task) map[string]interface{} {
-	other := make(map[string]interface{})
+type taskBillingOtherMap map[string]interface{}
+
+func (m taskBillingOtherMap) Snapshot() map[string]interface{} { return map[string]interface{}(m) }
+func taskBillingOther(task *model.Task) taskBillingOtherMap {
+	other := make(taskBillingOtherMap)
 	if task == nil {
 		return other
 	}
@@ -537,7 +540,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 		Quota:            logQuota,
 		TokenId:          task.PrivateData.TokenId,
 		Group:            task.Group,
-		Other:            other,
+		Other:            other.Snapshot(),
 		NodeName:         task.PrivateData.NodeName,
 		PromptTokens:     int(taskDataNumber(other, "input_text_tokens")),
 		CompletionTokens: int(taskDataNumber(other, "text_output_tokens") + taskDataNumber(other, "video_output_tokens")),

@@ -2,12 +2,14 @@ package model
 
 import (
 	"bytes"
+	"context"
 	"database/sql/driver"
 	"encoding/json"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 )
@@ -115,9 +117,13 @@ func (m Properties) Value() (driver.Value, error) {
 }
 
 type TaskPrivateData struct {
-	Key            string `json:"key,omitempty"`
-	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
-	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
+	Execution           *TaskExecutionSnapshot `json:"execution,omitempty"`
+	ResponsesBackground bool                   `json:"responses_background,omitempty"`
+	PluginState         json.RawMessage        `json:"plugin_state,omitempty"`
+	PollFailures        int                    `json:"poll_failures,omitempty"`
+	Key                 string                 `json:"key,omitempty"`
+	UpstreamTaskID      string                 `json:"upstream_task_id,omitempty"` // 上游真实 task ID
+	ResultURL           string                 `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
 	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
 	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
@@ -129,18 +135,47 @@ type TaskPrivateData struct {
 	LocalAsync bool `json:"local_async,omitempty"`
 }
 
+type TaskExecutionSnapshot struct {
+	RequestID   string              `json:"request_id,omitempty"`
+	RequestPath string              `json:"request_path,omitempty"`
+	TaskPlugin  *TaskPluginSnapshot `json:"task_plugin,omitempty"`
+}
+type TaskPluginSnapshot struct {
+	Key        string                    `json:"key"`
+	Name       string                    `json:"name"`
+	Version    string                    `json:"version"`
+	Author     *TaskPluginAuthorSnapshot `json:"author,omitempty"`
+	APIVersion int                       `json:"api_version"`
+	Generation uint64                    `json:"generation"`
+}
+type TaskPluginAuthorSnapshot struct {
+	Name string `json:"name"`
+	URL  string `json:"url,omitempty"`
+}
+
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {
-	ModelPrice      float64            `json:"model_price,omitempty"`       // 模型单价
-	GroupRatio      float64            `json:"group_ratio,omitempty"`       // 分组倍率
-	ModelRatio      float64            `json:"model_ratio,omitempty"`       // 模型倍率
-	OtherRatios     map[string]float64 `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
-	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
-	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
+	TieredSnapshot  *billingexpr.BillingSnapshot `json:"tiered_snapshot,omitempty"`
+	ModelPrice      float64                      `json:"model_price,omitempty"`       // 模型单价
+	GroupRatio      float64                      `json:"group_ratio,omitempty"`       // 分组倍率
+	ModelRatio      float64                      `json:"model_ratio,omitempty"`       // 模型倍率
+	OtherRatios     map[string]float64           `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
+	OriginModelName string                       `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
+	PerCallBilling  bool                         `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
 	// CostDiscount snapshots the effective channel cost discount selected at
 	// submission time. Keep this optional so historical and unconfigured tasks
 	// retain their original serialized shape and settlement behavior.
 	CostDiscount *float64 `json:"cost_discount,omitempty"`
+}
+
+func GetTaskForProtocolObservation(ctx context.Context, userID int, platform constant.TaskPlatform, taskID string) (*Task, bool, error) {
+	var task Task
+	err := DB.WithContext(ctx).Where("user_id = ? AND platform = ? AND task_id = ?", userID, platform, taskID).First(&task).Error
+	exists, err := RecordExist(err)
+	if err != nil || !exists {
+		return nil, exists, err
+	}
+	return &task, true, nil
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）
@@ -185,7 +220,7 @@ func (p *TaskPrivateData) Scan(val interface{}) error {
 }
 
 func (p TaskPrivateData) Value() (driver.Value, error) {
-	if (p == TaskPrivateData{}) {
+	if p.Key == "" && p.UpstreamTaskID == "" && p.ResultURL == "" && p.Execution == nil && p.BillingContext == nil && len(p.PluginState) == 0 && !p.LocalAsync && !p.ResponsesBackground && p.PollFailures == 0 {
 		return nil, nil
 	}
 	return common.Marshal(p)
@@ -369,7 +404,7 @@ func repairTaskPrivateData(tasks []*Task) {
 		return
 	}
 	for _, t := range tasks {
-		if (t.PrivateData == TaskPrivateData{}) {
+		if value, err := t.PrivateData.Value(); err == nil && value == nil {
 			// Re-read using First — proven to invoke custom Scanner correctly
 			var fresh Task
 			if err := DB.First(&fresh, t.ID).Error; err == nil {

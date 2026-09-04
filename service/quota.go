@@ -363,7 +363,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		UseTimeSeconds:   int(useTimeSeconds),
 		IsStream:         relayInfo.IsStream,
 		Group:            relayInfo.UsingGroup,
-		Other:            other,
+		Other:            other.Snapshot(),
 		PriceChain:       priceChain,
 	})
 }
@@ -526,7 +526,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		UseTimeSeconds:   int(useTimeSeconds),
 		IsStream:         relayInfo.IsStream,
 		Group:            relayInfo.UsingGroup,
-		Other:            other,
+		Other:            other.Snapshot(),
 		PriceChain:       priceChain,
 	})
 	gopool.Go(func() {

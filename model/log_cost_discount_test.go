@@ -21,7 +21,7 @@ func TestRecordConsumeLogAddsContextCostDiscountAsFallback(t *testing.T) {
 		ChannelId: 81,
 		ModelName: "seedance-2-0-fast",
 		Quota:     100,
-		Other:     NewLogOtherFromMap(map[string]interface{}{"group_ratio": 1.0}),
+		Other:     map[string]interface{}{"group_ratio": 1.0},
 	})
 
 	var log Log
@@ -42,9 +42,9 @@ func TestRecordConsumeLogPreservesExistingCostDiscount(t *testing.T) {
 	RecordConsumeLog(c, 1, RecordConsumeLogParams{
 		ChannelId: 81,
 		ModelName: "seedance-2-0-fast",
-		Other: NewLogOtherFromMap(map[string]interface{}{
+		Other: map[string]interface{}{
 			"admin_info": map[string]interface{}{"cost_discount": 0.8},
-		}),
+		},
 	})
 
 	var log Log
@@ -64,7 +64,7 @@ func TestRecordConsumeLogTreatsNilAdminInfoAsAbsent(t *testing.T) {
 	RecordConsumeLog(c, 1, RecordConsumeLogParams{
 		ChannelId: 81,
 		ModelName: "seedance-2-0-fast",
-		Other:     NewLogOtherFromMap(map[string]interface{}{"admin_info": nil}),
+		Other:     map[string]interface{}{"admin_info": nil},
 	})
 
 	var log Log
