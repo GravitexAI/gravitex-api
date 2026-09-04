@@ -14,6 +14,25 @@
 
 ---
 
+## 零、当前核对基线（2026-09-04）
+
+以 **`main-alpha` 的实际行为为准**，本次在 `main-alpha-merge` 更新文档。业务代码基线为 `662c3b203`，对照 `main` 为 `3a9f41ee8`，共同祖先为 `2d8e50bf3`。
+
+| 核对项 | 结果 / 口径 |
+|---|---|
+| `main-alpha-merge` 与 `main-alpha` | 本次文档编辑前同为 `662c3b203`，已包含 main-alpha 更新 |
+| `main-alpha` 独有历史提交 | 5800 个（Git 可达提交差，不等于 5800 个独有功能） |
+| `main` 尚未进入 main-alpha 的提交 | 44 个，**尚未合入 main-alpha-merge** |
+| 两个分支当前代码直接对比 | `git diff main main-alpha --shortstat`：2616 个文件，+514593 / -88271 行 |
+| main-alpha 相对共同祖先的单侧改动 | `git diff main...main-alpha --shortstat`：2186 个文件，+505878 / -14152 行；不包含 main 新增的 44 个提交的改动 |
+| 本次补记范围 | 上次文档提交 `cdc97eb38` 至 `662c3b203`，共 29 个提交（26 个非 merge 提交），结合当前源码核对 |
+
+**清单性质**：既包含 fork 独有功能，也包含必须保留的定制行为和已吸收的官方功能。阶梯计费、工具计费、渠道亲和性本身并非全部由 fork 独创；下面记录的是 main-alpha 的实现差异及合并保护点。旧章节中的提交、行号、模型数量和验证结果是历史快照，不能替代本次代码核对或真机验证。
+
+本次新增条目见 **1.6 / 1.7 / 2.5 / 3.7 / 3.8 / 4.4 / 七点十二**，过程与差异说明见 [20260904/main-alpha更新核对.md](20260904/main-alpha更新核对.md)。本次只核对文档、提交和相关源码，没有重跑历史测试或进行上线验证。
+
+---
+
 ## 一、渠道相关
 
 ### 1.1 豆包视频渠道 BytePlus 素材库 AK/SK 配置
@@ -72,6 +91,22 @@ main-alpha 比官方早占用了 58/59/60 三个号，导致 `ChannelTypeAdvance
 - **位置**：`dto/channel_settings.go`
 - **字段**：`AllowInferenceGeo`（数据驻留）、`AllowSpeed`（推理速度模式）、`AllowSafetyIdentifier`、`DisableStore`、`AllowIncludeObfuscation`
 
+### 1.6 多 key 渠道亲和性（2026-08-31）
+- **commit**：`c83aeca47`，设计记录 `f1ca428e6`。
+- **位置**：`setting/operation_setting/channel_affinity_setting.go`、`service/channel_affinity.go`、`middleware/distributor.go`、`controller/relay.go`。
+- **行为**：在渠道亲和性规则上新增 `key_affinity_enabled`（默认关闭）；开启后绑定渠道及其选中 key 的 `key_index` / `key_hash`，兼容历史只存渠道 ID 的绑定。
+- **必须保留**：key 列表重排时按指纹重新定位；已禁用或失效 key 不继续命中；替换选择避开失败 key；失败重试清理绑定上下文。Vertex 凭据的指纹使用稳定身份字段，不能只依赖 JSON 字符串格式。
+- **前端**：classic `pages/Setting/Operation/SettingsChannelAffinity.jsx` 与 default `features/system-settings/general/channel-affinity/` 都有开关；两套日志列同步展示 key 亲和信息。
+- **已有回归文件**：`service/channel_affinity_binding_test.go`、`middleware/channel_key_affinity_test.go`。合并时需重新验证，不能只保留开关而丢掉 distributor 的选 key 逻辑。
+
+### 1.7 渠道局部编辑保留未知 JSON 字段与成本折扣（2026-09-02）
+- **commit**：`c6218074f`（标题是 Token 备注，但同时包含本项渠道修复）。
+- **位置**：`controller/channel.go` 的 `mergeChannelJSON` / `UpdateChannel`；default `features/channels/lib/channel-form.ts`。
+- **行为**：`setting` / `settings` 按 JSON 对象顶层键合并；未提交的键保留，显式 `null` 删除对应键。无法解析的 JSON 保留旧值。整个字段未提交时保留原值，`cost_discount` 未提交也保留原值。
+- **前端契约**：default 回填并提交 `cost_discount`；表单主动删除的 settings 键用 `null` 标记，使后端区分“未编辑”和“删除”。
+- **用途**：防止 Go 表单保存时覆盖 Java 供应商管理等调用方写入的元数据。这里不是递归深合并，不能写成“任意嵌套字段都自动保留”。
+- **已有回归文件**：`controller/channel_json_preservation_test.go`，覆盖保留未知键、无效输入保留旧值、显式 null 删除。
+
 ---
 
 ## 二、用户 ID / Snowflake 精度处理
@@ -103,6 +138,13 @@ main-alpha 比官方早占用了 58/59/60 三个号，导致 `ChannelTypeAdvance
 - **相关测试**：`model/sum_used_quota_test.go` — 回归保护
 
 ---
+
+### 2.5 Token 备注 `remake`（2026-09-02）
+- **commit**：`c6218074f`。
+- **位置**：`model/token.go` 的 `Token.Remake`、`SearchUserTokens`、`Token.Update`；`controller/token.go` 的新增和更新入口。
+- **数据契约**：JSON / 数据库字段名沿用 **`remake`**，数据库为 text；不要擅自改成 `remark`。新增可写入备注，关键词查询同时匹配 name 与 remake。
+- **更新语义**：请求使用 `*string` 区分缺省与空字符串；省略保留旧备注，显式空字符串清空；`Token.Update` 的 Select 列表必须包含 remake。
+- **已有回归**：`controller/token_test.go` 的 `TestTokenRemakeRoundTripThroughAddAndUpdate`、`TestSearchTokensMatchesRemake`。本次只核对 Go 仓库，不据此宣称 Java / CLI 同步完成或生产数据库已迁移。
 
 ## 三、计费系统（按量 / 按秒 / 阶梯）
 
@@ -144,6 +186,21 @@ main-alpha 比官方早占用了 58/59/60 三个号，导致 `ChannelTypeAdvance
 
 ---
 
+### 3.7 Seedream 拆图与逐张尺寸分档计费（2026-08-28 / 29）
+- **commit**：`f39bcce21`、`f6068c5d9`。
+- **位置**：`relay/helper/image_billing.go`、`relay/image_handler.go`、`types/price_data.go`、`service/text_quota.go`。
+- **行为**：结构化按张定价结算根据成功输出的各张尺寸分档累计；`layer_decomposition=true` 时输出价格乘 **0.5**，记录 `OutputTiers`、`OutputPrice`、`OutputPriceMultiplier`。这是当前实现口径，不代表实时供应商官方报价。
+- **必须保留**：结构化按张价格已经累计张数，最终 `calculateTextQuotaSummary` 用 `ApplyOtherRatiosToDecimalExcept(..., "n")` 排除再次乘 n；其他倍率继续生效，避免多张输出重复计数。
+- **日志**：保留 `image_layer_decomposition`、`image_output_price_multiplier`、`image_output_tiers`；混合尺寸档位不能强写成单一输出档位。
+- **已有回归文件**：`relay/helper/image_billing_test.go`、`service/text_quota_test.go`。
+
+### 3.8 Gemini Google Search 成功调用识别与配置别名（2026-08-27）
+- **commit**：`71977a443`。
+- **位置**：`relay/channel/gemini/relay_gemini_grounding.go`、`relay-gemini.go`、`relay-gemini-native.go`、`setting/operation_setting/tools.go`。
+- **行为**：响应 candidate 的 `groundingMetadata.webSearchQueries` 非空才标记 `gemini_google_search_call`；请求仅声明工具不代表实际执行。该标记供 `service/text_quota.go` 的附加费路径读取。
+- **配置契约**：`googleSearch` / `google_search` 工具名（包括模型覆盖键）统一到内部 `google_search`，保留模型后缀；不是按搜索词数量直接累计调用次数。
+- **合并时注意**：新 main 的 hosted-tool / BillingUsage 重构也涉及 Gemini 搜索计费，要核对计数与附加费出口，避免保留两条计费路径后重复收费。
+
 ## 四、classic 前端定价设置界面
 
 ### 4.1 /console/setting?tab=ratio 模型定价手动编辑字段
@@ -181,6 +238,12 @@ main-alpha 比官方早占用了 58/59/60 三个号，导致 `ChannelTypeAdvance
 - Log 表的 render 用字符串 id 作为 React Table rowKey
 
 ---
+
+### 4.4 classic 可视化模型定价与时段倍率展示（2026-08-25 至 27）
+- **commit**：`981aa3328`、`1c1c434a9`、`c458817be`。
+- **位置**：`web/classic/src/pages/Setting/Ratio/components/ModelPricingEditor.jsx`、`hooks/useModelPricingEditorState.js`、`components/requestRuleExpr.js`、`web/classic/src/helpers/render.jsx`。
+- **行为**：补全 classic 模型定价可视化编辑及保存处理，规则条件支持小于等于，用量日志展示时段倍率。
+- **边界**：本项是 classic 的界面补齐，不应据此将官方已有的阶梯 / 条件倍率引擎整体标成 fork 独有，也不代表 default 的功能迁移全部完成。
 
 ## 四点五、web/ 双前端 workspace 结构（🔴 拒绝官方摊平，主人 2026-08-05 定）
 
@@ -981,6 +1044,40 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
 
 ---
 
+## 七点十二、2026-09-04 补记的路由、协议与运维功能
+
+### 7.12.1 虚拟模型 Auto 路由
+- **commit**：`7180b4f06`。
+- **位置**：`setting/auto_router.go`、`service/auto_router.go`、`middleware/distributor.go`、`model/channel_cache.go`、`model/option.go`、`controller/model.go` / `user.go`、`service/log_info_generate.go`。
+- **入口**：`auto`、`auto:low`、`auto:medium`、`auto:high`、`auto:max`；支持 Chat Completions、Responses、Messages 和 `/pg/chat/completions` 路径。配置存于 Option `AutoRouter`，默认关闭。
+- **行为**：按成本档位（含 `X-Cost-Tier`）、请求任务偏好、tools / vision / JSON 能力提示和权重选具体模型；候选池须与分组启用模型及 Token 权限取交集；会话粘性缓存命中仍要求模型在当前候选池中。
+- **前端**：classic `components/settings/AutoRouterSetting.jsx`、`pages/Setting/AutoRouter/SettingsAutoRouter.jsx`、`pages/Setting/index.jsx`。本次未发现 default 对应配置页，不标为双前端已完成。
+- **合并时注意**：它是“虚拟模型选具体模型”，与 `UsingGroup=auto` 的自动分组不是同一功能。保留解析结果响应头、日志及模型列表暴露规则；不能只保留 service 文件。
+- **已有回归文件**：`service/auto_router_test.go`、`setting/auto_router_test.go`。
+
+### 7.12.2 Lyria 3 原生 Interactions 与本地异步任务
+- **commit**：`d3c730e46`。
+- **位置**：`relay/channel/task/lyria/adaptor.go`、`middleware/native_interactions.go`、`controller/native_interactions.go` / `lyria_async.go`、`relay/relay_adaptor.go` / `relay_task.go`、`service/task_polling.go`、`main.go`。
+- **模型**：`lyria-3-pro-preview` / `lyria-3-clip-preview`。处理 `/v1beta/interactions`，包含 Google AI 与 Vertex 凭据 / URL / 请求内容的适配。
+- **行为**：Lyria 不默认注入 background；同步请求不创建任务行；异步兼容路径在完成正常定价与额度预检查后先创建本地任务，再后台执行并更新终态。必须连同任务平台、轮询和计费生命周期保留。
+- **已有回归文件**：`controller/lyria_task_state_test.go`、`relay/channel/task/lyria/adaptor_test.go` / `adaptor_vertex_test.go`、`middleware/native_interactions_test.go`。
+- **与新 main 的差异**：新 main 将多家任务适配器迁到 JS 插件，不能因目录被替换就删除这条 fork 的本地异步链路。
+
+### 7.12.3 Claude 原生 body 保留与 Responses 能力限制
+- **commit**：`225998c31`、`525af5ab9`。
+- **原生 Messages**：`relay/channel/claude/adaptor.go` 的 `ConvertClaudeRequest` 保留 body 参数；`anthropic_beta_target` 控制 beta header 白名单，不能因为 header 过滤而清除 `output_config` / `context_management`。兼容目标所需的媒体 URL 转 base64 仍保留（与 1.3 联动）。
+- **当前 Responses 策略**：`common.SupportsOpenAIResponsesEndpoint` 按渠道类型判断；选中 `ChannelTypeAnthropic` 时，`relay/responses_handler.go` 返回 404 / `endpoint_not_found`，跳过重试且不写持久化错误日志。不是按模型名中是否含 claude 判断。
+- **与新 main 的差异**：`main@3a9f41ee8` 的 Claude adaptor 已实现 `ConvertOpenAIResponsesRequest`。后续是否启用需一起核对转换、端点声明和上述 404 门禁；本次以 main-alpha 现状记录，未改变策略。
+- **已有回归文件**：`relay/channel/claude/adaptor_passthrough_test.go`、`relay/responses_handler_test.go`。
+
+### 7.12.4 Claude 渠道测试报告与测试服务
+- **commit**：`325f79243`、`ad8209b75`、`662c3b203`。
+- **位置**：`scripts/testReport/claude-platform-test/`、`scripts/testReport/claude-test-service/`、`scripts/testReport/deploy.sh`、`scripts/testReport/OPERATIONS.md`。
+- **行为**：提供参数、缓存、工具、媒体、流式、延迟等用例和报告生成；配套测试服务负责调度，并检查脚本 venv 是否可用、给出修复提示。
+- **合并时注意**：属于 fork 运维工具链，脚本、服务、部署入口和运维说明要一起保留。目录存在不证明用例已执行，也不代表目标渠道实测通过。
+
+---
+
 ## 八、依赖包
 
 | 依赖 | 版本 | 用途 |
@@ -993,6 +1090,20 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
 ---
 
 ## 九、合并 main 时的检查清单（每次必做）
+
+**2026-09-04 新增核对项（当前未执行 main 合并，以下不预先勾选）：**
+
+- [ ] Auto 虚拟模型解析、分组 / Token 过滤、粘性与 classic 配置入口均保留（7.12.1）。
+- [ ] 多 key 亲和性开关、旧绑定兼容、重排 / 禁用 / 替换处理和两套前端均保留（1.6）。
+- [ ] Token `remake` 新增、缺省保留 / 空串清空、关键词搜索及更新列白名单均保留（2.5）。
+- [ ] 渠道 `setting` / `settings` 合并与 null 删除语义、缺省成本折扣保留均保留（1.7）。
+- [ ] Seedream 逐张分档、拆图输出折扣及排除重复 n 倍率均保留（3.7）。
+- [ ] Gemini grounding 成功识别与 googleSearch 配价别名保留，核对新旧工具计费不会叠加（3.8）。
+- [ ] Lyria 同步不建任务、本地异步创建 / 终态 / 计费链路保留（7.12.2）。
+- [ ] Claude body 保留策略与 Responses 能力门禁成套处理（7.12.3）。
+- [ ] classic 定价 / 日志补齐、Claude 测试服务与运维说明保留（4.4 / 7.12.4）。
+
+**历史检查项（旧路径、数量阈值按本次 main-alpha 基线复核）：**
 
 - [ ] `model/user.go` 的 `MarshalJSON` 还在，Id 输出为 string
 - [ ] `model/log.go` 的 `MarshalJSON` 还在，Id + UserId 都输出为 string
