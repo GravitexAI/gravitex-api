@@ -164,6 +164,9 @@ type RelayInfo struct {
 	// It is shaped as {"usage": {...}} or {"usageMetadata": {...}} and is only
 	// attached to log.other when the corresponding option is enabled.
 	UpstreamResponses map[string]any
+	// RawUpstreamUsage preserves the exact usage JSON bytes returned by the
+	// upstream image endpoint for the explicitly audited Seedream models.
+	RawUpstreamUsage []byte
 	// UsageConversion stores the exact usage object emitted to a client after a
 	// protocol conversion. It is persisted to log.other only when enabled.
 	UsageConversion any
@@ -938,6 +941,13 @@ func (info *RelayInfo) SetUpstreamResponsesField(field string, payload any) {
 	info.UpstreamResponses = map[string]any{
 		field: decoded,
 	}
+}
+
+func (info *RelayInfo) SetRawUpstreamUsage(raw []byte) {
+	if info == nil || len(raw) == 0 {
+		return
+	}
+	info.RawUpstreamUsage = append(info.RawUpstreamUsage[:0], raw...)
 }
 
 func (info *RelayInfo) SetUsageConversion(payload any) {
