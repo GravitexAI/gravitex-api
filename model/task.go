@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -503,9 +504,25 @@ func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
 }
 
 func (Task *Task) Insert() error {
+	Task.dropInvalidJSONColumns()
 	var err error
 	err = DB.Create(Task).Error
 	return err
+}
+
+// dropInvalidJSONColumns 清空 data / upstream_request_body 里非法的 JSON 字节。
+// 这两列存的是上游原始报文（还经过 base64 截断），而 MySQL 的 json 列会做严格
+// 语法校验：一旦不合法就以 Error 3140 拒绝整条 INSERT，任务行连带丢失，用户拿到
+// 的 task id 在平台永远查不到、也永远不会计费。诊断字段绝不能阻塞任务落库。
+func (Task *Task) dropInvalidJSONColumns() {
+	if len(Task.Data) > 0 && !common.IsValidJson(Task.Data) {
+		common.SysError(fmt.Sprintf("[Task] dropped invalid json in data column, task=%s channel=%d", Task.TaskID, Task.ChannelId))
+		Task.Data = nil
+	}
+	if len(Task.UpstreamRequestBody) > 0 && !common.IsValidJson(Task.UpstreamRequestBody) {
+		common.SysError(fmt.Sprintf("[Task] dropped invalid json in upstream_request_body column, task=%s channel=%d", Task.TaskID, Task.ChannelId))
+		Task.UpstreamRequestBody = nil
+	}
 }
 
 type taskSnapshot struct {

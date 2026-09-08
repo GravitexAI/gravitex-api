@@ -35,10 +35,6 @@ const (
 	LastMessageTypeText     = convmeta.LastMessageTypeText
 	LastMessageTypeTools    = convmeta.LastMessageTypeTools
 	LastMessageTypeThinking = convmeta.LastMessageTypeThinking
-
-	// TaskSubmitDelayResponse：任务提交时设为 true，DoResponse 不直接写响应，由 RelayTaskSubmit 在 task.Insert() 成功后写入，避免重试时响应体被写两次导致前端 JSON 解析错误
-	TaskSubmitDelayResponse = "task_submit_delay_response"
-	TaskSubmitResponseBody  = "task_submit_response_body"
 )
 
 // ClaudeConvertInfo now lives with the converters (convmeta); the alias keeps

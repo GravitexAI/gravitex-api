@@ -184,13 +184,6 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	ov.CreatedAt = time.Now().Unix()
 	ov.Model = info.OriginModelName
 
-	// 延迟写入响应：等 task.Insert() 成功后再写，避免重试时响应体被写两次
-	if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
-		if body, err := common.Marshal(ov); err == nil {
-			c.Set(relaycommon.TaskSubmitResponseBody, body)
-		}
-		return dResp.ID, responseBody, nil
-	}
 	c.JSON(http.StatusOK, ov)
 	return dResp.ID, responseBody, nil
 }

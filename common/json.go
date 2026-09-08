@@ -22,6 +22,14 @@ func Marshal(v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
+// IsValidJson reports whether data is syntactically valid JSON. Use it before
+// writing raw bytes into a MySQL `json` column: an invalid value makes the
+// server reject the whole statement, so the caller must be able to drop that
+// single column instead of losing the entire row.
+func IsValidJson(data []byte) bool {
+	return json.Valid(data)
+}
+
 func IndentJson(data []byte) ([]byte, error) {
 	var buffer bytes.Buffer
 	if err := json.Indent(&buffer, data, "", "  "); err != nil {

@@ -3,7 +3,49 @@ package common
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
+
+// indexJSONStringEnd 返回 JSON 字符串字面量内容中第一个「未被转义」的双引号下标，
+// 找不到返回 -1。裸扫描会把值内部的 \" 当成结束引号，截断时就会提前闭合字符串，
+// 让后面的原文裸露在 JSON 结构外（复盘见 docs/故障复盘/2026-09-08_seedance2任务丢失_upstream_request_body非法JSON.md）。
+func indexJSONStringEnd(s string) int {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++ // 跳过被转义的那个字符
+		case '"':
+			return i
+		}
+	}
+	return -1
+}
+
+// truncateJSONStringPrefix 返回 s 不超过 max 字节的前缀，并保证不会切断 JSON 转义
+// 序列（\" \\ \uXXXX）或多字节 UTF-8 字符 —— 这两种半截字节都会让结果变成非法 JSON。
+func truncateJSONStringPrefix(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	i := 0
+	for i < len(s) {
+		width := 1
+		switch {
+		case s[i] == '\\':
+			width = 2
+			if i+1 < len(s) && s[i+1] == 'u' {
+				width = 6
+			}
+		case s[i] >= utf8.RuneSelf:
+			_, width = utf8.DecodeRuneInString(s[i:])
+		}
+		if i+width > max {
+			break
+		}
+		i += width
+	}
+	return s[:i]
+}
 
 // TruncateBase64Content 截断JSON字符串中的base64内容，保留其他信息
 // 支持多种格式：
@@ -75,7 +117,7 @@ func truncateInlineDataBase64(content string, maxLength int) string {
 		quoteStartIndex += colonIndex + 1
 
 		// 查找引号结束位置
-		quoteEndIndex := strings.Index(content[quoteStartIndex:], "\"")
+		quoteEndIndex := indexJSONStringEnd(content[quoteStartIndex:])
 		if quoteEndIndex == -1 {
 			result.WriteString(content[inlineDataIndex:])
 			break
@@ -98,7 +140,7 @@ func truncateInlineDataBase64(content string, maxLength int) string {
 			if base64DataLength > maxLength {
 				// 保留前缀和部分 base64 数据
 				result.WriteString(content[inlineDataIndex:quoteStartIndex])
-				result.WriteString(content[quoteStartIndex : quoteStartIndex+maxLength])
+				result.WriteString(truncateJSONStringPrefix(content[quoteStartIndex:quoteEndIndex], maxLength))
 				result.WriteString("...[base64数据已截断，长度:")
 				result.WriteString(fmt.Sprintf("%d", base64DataLength))
 				result.WriteString("]\"")
@@ -135,7 +177,7 @@ func truncateDataUrlBase64(content string, inlineDataIndex, quoteStartIndex, quo
 	if base64DataLength > maxLength {
 		// 保留前缀和部分 base64 数据
 		result.WriteString(content[inlineDataIndex:base64StartIndex])
-		result.WriteString(content[base64StartIndex : base64StartIndex+maxLength])
+		result.WriteString(truncateJSONStringPrefix(content[base64StartIndex:quoteEndIndex], maxLength))
 		result.WriteString("...[base64数据已截断，长度:")
 		result.WriteString(fmt.Sprintf("%d", base64DataLength))
 		result.WriteString("]\"")
@@ -188,8 +230,8 @@ func truncateDataImageBase64(content string, maxLength int) string {
 		markerIndex += base64Index
 		base64StartIndex := markerIndex + len(base64Marker)
 
-		// 查找base64数据的结束位置（下一个双引号或字符串末尾）
-		base64EndIndex := strings.Index(content[base64StartIndex:], "\"")
+		// 查找base64数据的结束位置（下一个未转义双引号或字符串末尾）
+		base64EndIndex := indexJSONStringEnd(content[base64StartIndex:])
 		if base64EndIndex == -1 {
 			// 没找到结束引号，base64数据一直到字符串末尾
 			base64EndIndex = len(content)
@@ -204,7 +246,7 @@ func truncateDataImageBase64(content string, maxLength int) string {
 		if base64DataLength > maxLength {
 			// 保留前缀和部分base64数据
 			result.WriteString(content[base64Index:base64StartIndex])
-			result.WriteString(content[base64StartIndex : base64StartIndex+maxLength])
+			result.WriteString(truncateJSONStringPrefix(content[base64StartIndex:base64EndIndex], maxLength))
 			result.WriteString("...[base64数据已截断，长度:")
 			result.WriteString(fmt.Sprintf("%d", base64DataLength))
 			result.WriteString("]")
@@ -253,8 +295,8 @@ func truncateRawBase64Content(content string) string {
 		// 添加引号前的内容
 		result.WriteString(content[startIndex : quoteIndex+1])
 
-		// 查找下一个引号
-		nextQuoteIndex := strings.Index(content[quoteIndex+1:], "\"")
+		// 查找字符串真正的结束引号（跳过值内部的 \"）
+		nextQuoteIndex := indexJSONStringEnd(content[quoteIndex+1:])
 		if nextQuoteIndex == -1 {
 			// 没找到结束引号，保持原样
 			result.WriteString(content[quoteIndex+1:])
@@ -269,7 +311,7 @@ func truncateRawBase64Content(content string) string {
 		if len(quotedContent) > minBase64Length && isBase64String(quotedContent) {
 			// 这是base64数据，需要截断
 			if len(quotedContent) > maxBase64Length {
-				result.WriteString(quotedContent[:maxBase64Length])
+				result.WriteString(truncateJSONStringPrefix(quotedContent, maxBase64Length))
 				result.WriteString("...[base64数据已截断，长度:")
 				result.WriteString(fmt.Sprintf("%d", len(quotedContent)))
 				result.WriteString("]")
@@ -291,6 +333,12 @@ func truncateRawBase64Content(content string) string {
 // isBase64String 检查字符串是否可能是base64数据
 func isBase64String(s string) bool {
 	if len(s) == 0 {
+		return false
+	}
+
+	// 真实 base64 载荷不含空白字符。长英文散文里空格约占 15%、其余字符几乎全在
+	// base64 字母表内，只按字符占比判断会把提示词误判成 base64 并去截断它。
+	if strings.ContainsAny(s, " \t\r\n") {
 		return false
 	}
 

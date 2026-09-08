@@ -390,12 +390,6 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		dResp.Metadata = meta
 	}
 
-	if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
-		if body, err := common.Marshal(dResp); err == nil {
-			c.Set(relaycommon.TaskSubmitResponseBody, body)
-		}
-		return upstreamTaskID, responseBody, nil
-	}
 	c.JSON(http.StatusOK, dResp)
 	return upstreamTaskID, responseBody, nil
 }

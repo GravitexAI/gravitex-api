@@ -310,6 +310,12 @@ func (w *nativeResponseWriter) WriteString(value string) (int, error) {
 	return w.Write([]byte(value))
 }
 
+// reset 丢弃已缓冲的响应，让调用方改写成另一个状态码/响应体。
+func (w *nativeResponseWriter) reset() {
+	w.status = 0
+	w.body.Reset()
+}
+
 func nativeInteractionResponse(raw []byte, fallbackModel string) ([]byte, error) {
 	if fallbackModel == "lyria-3-pro-preview" || fallbackModel == "lyria-3-clip-preview" {
 		return append([]byte(nil), raw...), nil

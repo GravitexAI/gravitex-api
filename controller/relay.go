@@ -557,6 +557,26 @@ func RelayTaskFetch(c *gin.Context) {
 }
 
 func RelayTask(c *gin.Context) {
+	// 任务提交必须「先入库再回响应」。上游建任务成功后，如果本地 tasks 行没落库，
+	// 用户手上的 task id 在平台永远查不到，异步轮询也看不到它 → 既不结算也不退款。
+	// 各 adaptor 的 DoResponse 是直接往 c.Writer 写的，这里统一把响应缓冲下来，
+	// 等 task.Insert() 成功后才真正发给客户端。
+	var buffered nativeResponseWriter
+	buffered.ResponseWriter = c.Writer
+	c.Writer = &buffered
+	defer func() {
+		c.Writer = buffered.ResponseWriter
+		if buffered.status == 0 && buffered.body.Len() == 0 {
+			return
+		}
+		status := buffered.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		c.Status(status)
+		_, _ = c.Writer.Write(buffered.body.Bytes())
+	}()
+
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatTask, nil, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, &taskdto.TaskError{
@@ -663,7 +683,8 @@ func RelayTask(c *gin.Context) {
 		}
 	}
 
-	// ── 成功：结算 + 日志 + 插入任务 ──
+	// ── 成功：插入任务 + 结算 + 日志 ──
+	persistFailed := false
 	if taskErr == nil {
 		// The async dispatcher already pre-charged, inserted IN_PROGRESS and
 		// wrote the immediate Interaction response. The worker owns settlement
@@ -678,7 +699,25 @@ func RelayTask(c *gin.Context) {
 		isPerSecondOrTokenRatio := result.IsPerSecondBilling || result.IsVideoTokenRatioBilling
 		lyriaFailed := isFailedNativeLyriaSubmit(relayInfo.NativeInteractions, relayInfo.OriginModelName, result)
 
-		if lyriaFailed {
+		// 落库先于结算和响应：入库失败时预扣费还没结算，交给顶部 defer 的
+		// Billing.Refund 原样退回，上游任务同步取消，客户端收到 500 后可以安全重试。
+		if shouldPersistLyriaTask(relayInfo.NativeInteractions, relayInfo.OriginModelName, c.GetBool("native_interactions_background")) {
+			task := buildSubmittedTask(c, relayInfo, result, isPerSecondOrTokenRatio)
+			if insertErr := task.Insert(); insertErr != nil {
+				persistFailed = true
+				handleTaskPersistFailure(c, relayInfo, task, insertErr)
+				// 丢弃 DoResponse 已缓冲的 200 + task id，客户端只应看到 500
+				buffered.reset()
+				taskErr = service.TaskErrorWrapperLocal(
+					fmt.Errorf("task was created upstream but could not be saved locally, please retry: %v", insertErr),
+					"task_persist_failed", http.StatusInternalServerError)
+			}
+		}
+
+		switch {
+		case persistFailed:
+			// 保留 relayInfo.Billing，由顶部 defer 退回预扣费
+		case lyriaFailed:
 			upstreamStatus := result.UpstreamStatusCode
 			if upstreamStatus == 0 {
 				upstreamStatus = http.StatusOK
@@ -687,28 +726,21 @@ func RelayTask(c *gin.Context) {
 			if relayInfo.Billing != nil {
 				relayInfo.Billing.Refund(c)
 			}
-		} else if !isPerSecondOrTokenRatio {
+		case !isPerSecondOrTokenRatio:
 			if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 				common.SysError("settle task billing error: " + settleErr.Error())
 			}
 			service.LogTaskConsumption(c, relayInfo)
-		} else {
+		default:
 			// 按秒/按量计费不做 Settle（未预扣），仅清理 Billing 引用防止 defer Refund
 			relayInfo.Billing = nil
-		}
-
-		if shouldPersistLyriaTask(relayInfo.NativeInteractions, relayInfo.OriginModelName, c.GetBool("native_interactions_background")) {
-			task := buildSubmittedTask(c, relayInfo, result, isPerSecondOrTokenRatio)
-			if insertErr := task.Insert(); insertErr != nil {
-				common.SysError("insert task error: " + insertErr.Error())
-			}
 		}
 	}
 	// Legacy task-backed providers still need a terminal task row for audit and
 	// task-list consistency. Synchronous native Lyria is intentionally excluded;
 	// processChannelError records the error log and the deferred BillingSession
 	// refund remains responsible for the precharge.
-	if taskErr != nil && result != nil && isNativeLyriaScope(relayInfo.NativeInteractions, relayInfo.OriginModelName) &&
+	if taskErr != nil && !persistFailed && result != nil && isNativeLyriaScope(relayInfo.NativeInteractions, relayInfo.OriginModelName) &&
 		shouldPersistLyriaTask(relayInfo.NativeInteractions, relayInfo.OriginModelName, c.GetBool("native_interactions_background")) {
 		task := buildSubmittedTask(c, relayInfo, result, false)
 		if insertErr := task.Insert(); insertErr != nil {

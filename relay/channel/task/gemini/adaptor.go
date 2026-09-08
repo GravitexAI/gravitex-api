@@ -304,12 +304,6 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		video := dto.NewOpenAIVideo()
 		video.ID, video.TaskID, video.Model = interaction.ID, interaction.ID, info.OriginModelName
 		video.CreatedAt = time.Now().Unix()
-		if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
-			if body, err := common.Marshal(video); err == nil {
-				c.Set(relaycommon.TaskSubmitResponseBody, body)
-			}
-			return interaction.ID, responseBody, nil
-		}
 		c.JSON(http.StatusOK, video)
 		taskID = markOmniTaskID(interaction.ID)
 		return taskID, responseBody, nil
@@ -332,12 +326,6 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	ov.TaskID = info.PublicTaskID
 	ov.CreatedAt = time.Now().Unix()
 	ov.Model = info.OriginModelName
-	if delay, _ := c.Get(relaycommon.TaskSubmitDelayResponse); delay == true {
-		if body, err := common.Marshal(ov); err == nil {
-			c.Set(relaycommon.TaskSubmitResponseBody, body)
-		}
-		return taskID, responseBody, nil
-	}
 	c.JSON(http.StatusOK, ov)
 	return taskID, responseBody, nil
 }
