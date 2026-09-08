@@ -88,7 +88,8 @@ MODELS = _env_list("MODELS", [
     "claude-haiku-4-5-20251001",
     "claude-opus-4-8",
     "claude-sonnet-5",
-    "claude-opus-5"
+    "claude-opus-5",
+    "claude-sonnet-4-6"
 ])
 
 _DEFAULT_THINKING = "adaptive"
@@ -115,6 +116,11 @@ def _derive_family(model: str) -> str:
 MODEL_OVERRIDES = {
     "claude-haiku-4-5-20251001": {
         "thinking": "manual",
+        "sampling_parameters": "supported_without_thinking",
+    },
+    # Sonnet 4.6 是上面注释描述的那一代：thinking 已经支持 adaptive（默认值即正确，
+    # 无需覆盖），但 temperature/top_p/top_k 尚未移除，不启用 thinking 时预期 2xx。
+    "claude-sonnet-4-6": {
         "sampling_parameters": "supported_without_thinking",
     },
 }
