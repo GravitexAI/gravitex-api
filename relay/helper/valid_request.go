@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -180,6 +181,82 @@ func GetAndValidateResponsesCompactionRequest(c *gin.Context) (*dto.OpenAIRespon
 	return request, nil
 }
 
+// formImageValues 收集图生图表单里的图片文本字段（URL 或 base64），覆盖 OpenAI
+// 允许的 image、image[]、image[N] 三种命名，按 image → image[] → image[N] 的顺序拼接。
+func formImageValues(formData url.Values) []string {
+	values := make([]string, 0, len(formData))
+	values = append(values, formData["image"]...)
+	values = append(values, formData["image[]"]...)
+
+	indexedKeys := make([]string, 0, len(formData))
+	for key := range formData {
+		if key != "image[]" && strings.HasPrefix(key, "image[") {
+			indexedKeys = append(indexedKeys, key)
+		}
+	}
+	sort.Strings(indexedKeys)
+	for _, key := range indexedKeys {
+		values = append(values, formData[key]...)
+	}
+
+	return lo.Filter(values, func(value string, _ int) bool {
+		return strings.TrimSpace(value) != ""
+	})
+}
+
+// imageEditParsedFormFields 列出 multipart 图生图里已经显式解析进 ImageRequest 的表单
+// 字段。不在其中的字段会原样进 Extra，避免 form-data 请求悄悄丢掉渠道专有参数。
+var imageEditParsedFormFields = map[string]bool{
+	"model": true, "prompt": true, "n": true, "size": true, "quality": true,
+	"stream": true, "image": true, "input_fidelity": true, "watermark": true,
+	"response_format": true,
+}
+
+// formExtraValues 收集表单里网关没有显式解析的字段；同名多值收敛成数组。
+func formExtraValues(formData url.Values) map[string]json.RawMessage {
+	extra := make(map[string]json.RawMessage, len(formData))
+	for key, values := range formData {
+		if len(values) == 0 || imageEditParsedFormFields[key] || strings.HasPrefix(key, "image[") {
+			continue
+		}
+		if len(values) == 1 {
+			if encoded := formValueToJSON(values[0]); encoded != nil {
+				extra[key] = encoded
+			}
+			continue
+		}
+		items := make([]json.RawMessage, 0, len(values))
+		for _, value := range values {
+			if encoded := formValueToJSON(value); encoded != nil {
+				items = append(items, encoded)
+			}
+		}
+		if encoded, err := common.Marshal(items); err == nil {
+			extra[key] = encoded
+		}
+	}
+	if len(extra) == 0 {
+		return nil
+	}
+	return extra
+}
+
+// formValueToJSON 把表单文本值还原成 JSON 值。表单只能传字符串，但上游要的是原始类型，
+// 所以合法 JSON 字面量（数字、布尔、对象、数组）原样保留，其余按字符串编码。
+func formValueToJSON(value string) json.RawMessage {
+	if trimmed := strings.TrimSpace(value); trimmed != "" {
+		var probe any
+		if common.Unmarshal([]byte(trimmed), &probe) == nil {
+			return json.RawMessage(trimmed)
+		}
+	}
+	encoded, err := common.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	return encoded
+}
+
 func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageRequest, error) {
 	imageRequest := &dto.ImageRequest{}
 
@@ -211,13 +288,22 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 				}
 				imageRequest.Stream = common.GetPointer(stream)
 			}
-			if imageValue := formData.Get("image"); imageValue != "" {
-				imageRequest.Image, _ = common.Marshal(imageValue)
+			// 与 OpenAI 官方 /v1/images/edits 对齐：image 允许重复出现，也允许写成
+			// image[] / image[N]。多张时序列化为数组，单张仍是字符串；此前只取
+			// formData.Get("image") 会把多图请求静默截断成第一张。
+			if imageValues := formImageValues(formData); len(imageValues) == 1 {
+				imageRequest.Image, _ = common.Marshal(imageValues[0])
+			} else if len(imageValues) > 1 {
+				imageRequest.Image, _ = common.Marshal(imageValues)
 			}
+			imageRequest.ResponseFormat = formData.Get("response_format")
 			// 解析 input_fidelity (图生图保真度)
 			if fidelity := formData.Get("input_fidelity"); fidelity != "" {
 				imageRequest.InputFidelity = &fidelity
 			}
+			// 表单里其余字段进 Extra 透传给上游，让 form-data 与 JSON 的参数能力一致
+			// （如 seed、sequential_image_generation 等渠道专有参数）。
+			imageRequest.Extra = formExtraValues(formData)
 
 			if strings.HasPrefix(imageRequest.Model, "gpt-image") {
 				// 质量默认值: gpt-image-1-mini → medium, 其他 → high

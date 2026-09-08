@@ -158,3 +158,114 @@ func TestGetAndValidOpenAIImageRequestNBounds(t *testing.T) {
 		require.Contains(t, err.Error(), boundErr)
 	})
 }
+
+// TestGetAndValidOpenAIImageRequestMultipartImageValues 锁定 multipart 图生图的多图约定：
+// image 可重复出现，也可写成 image[] / image[N]，多张必须完整保留成数组而不是只取第一张。
+func TestGetAndValidOpenAIImageRequestMultipartImageValues(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	newContext := func(t *testing.T, fields [][2]string) *gin.Context {
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		require.NoError(t, writer.WriteField("model", "doubao-seedream-4-0-250828"))
+		require.NoError(t, writer.WriteField("prompt", "edit this image"))
+		for _, field := range fields {
+			require.NoError(t, writer.WriteField(field[0], field[1]))
+		}
+		require.NoError(t, writer.Close())
+
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", &body)
+		c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+		return c
+	}
+
+	tests := []struct {
+		name      string
+		fields    [][2]string
+		wantImage string
+		wantCount int
+	}{
+		{
+			name:      "single image stays a string",
+			fields:    [][2]string{{"image", "https://example.com/1.png"}},
+			wantImage: `"https://example.com/1.png"`,
+			wantCount: 1,
+		},
+		{
+			name: "repeated image fields become an array",
+			fields: [][2]string{
+				{"image", "https://example.com/1.png"},
+				{"image", "https://example.com/2.png"},
+			},
+			wantImage: `["https://example.com/1.png","https://example.com/2.png"]`,
+			wantCount: 2,
+		},
+		{
+			name: "image[] fields become an array",
+			fields: [][2]string{
+				{"image[]", "https://example.com/1.png"},
+				{"image[]", "https://example.com/2.png"},
+			},
+			wantImage: `["https://example.com/1.png","https://example.com/2.png"]`,
+			wantCount: 2,
+		},
+		{
+			name: "indexed image[N] fields keep index order",
+			fields: [][2]string{
+				{"image[1]", "https://example.com/2.png"},
+				{"image[0]", "https://example.com/1.png"},
+			},
+			wantImage: `["https://example.com/1.png","https://example.com/2.png"]`,
+			wantCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := GetAndValidOpenAIImageRequest(newContext(t, tt.fields), relayconstant.RelayModeImagesEdits)
+			require.NoError(t, err)
+			require.JSONEq(t, tt.wantImage, string(req.Image))
+			// 输入图数量直接决定按张计费里的输入图费用，必须跟着一起对上。
+			require.Equal(t, tt.wantCount, CountImageInputs(req))
+		})
+	}
+}
+
+// TestGetAndValidOpenAIImageRequestMultipartExtraParams 锁定 form-data 与 JSON 的参数能力
+// 一致：response_format 解析成已知字段，渠道专有参数进 Extra 并保留原始 JSON 类型，
+// 已显式解析的字段不得重复出现在 Extra 里（否则会覆盖模型重定向后的 model 等字段）。
+func TestGetAndValidOpenAIImageRequestMultipartExtraParams(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("model", "doubao-seedream-4-0-250828"))
+	require.NoError(t, writer.WriteField("prompt", "edit this image"))
+	require.NoError(t, writer.WriteField("size", "2048x2048"))
+	require.NoError(t, writer.WriteField("response_format", "b64_json"))
+	require.NoError(t, writer.WriteField("seed", "42"))
+	require.NoError(t, writer.WriteField("sequential_image_generation", "auto"))
+	require.NoError(t, writer.WriteField("sequential_image_generation_options", `{"max_images":4}`))
+	require.NoError(t, writer.WriteField("disable_safety_checker", "true"))
+	require.NoError(t, writer.WriteField("image[]", "https://example.com/1.png"))
+	require.NoError(t, writer.Close())
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", &body)
+	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+
+	req, err := GetAndValidOpenAIImageRequest(c, relayconstant.RelayModeImagesEdits)
+	require.NoError(t, err)
+	require.Equal(t, "b64_json", req.ResponseFormat)
+
+	// 表单只能传字符串，但上游要的是原始类型，数字/布尔/对象必须还原。
+	require.JSONEq(t, `42`, string(req.Extra["seed"]))
+	require.JSONEq(t, `"auto"`, string(req.Extra["sequential_image_generation"]))
+	require.JSONEq(t, `{"max_images":4}`, string(req.Extra["sequential_image_generation_options"]))
+	require.JSONEq(t, `true`, string(req.Extra["disable_safety_checker"]))
+
+	for _, key := range []string{"model", "prompt", "size", "response_format", "image", "image[]"} {
+		require.NotContains(t, req.Extra, key, "已显式解析的字段不应再进 Extra")
+	}
+}

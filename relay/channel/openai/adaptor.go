@@ -617,8 +617,12 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		// 注意：不能用 c.GetHeader("Content-Type") 判断，因为重试时 Header 可能已被上一轮修改为 multipart
 		// 改用 request.Image 是否有数据来判断：JSON 请求解析后 Image/Extra 中有图片数据，
 		// 而原生 multipart 请求中图片在 form files 里，Image 字段为空
-		hasImageInDTO := (request.Image != nil && len(request.Image) > 0) ||
-			(request.Extra != nil && (request.Extra["image"] != nil || request.Extra["images"] != nil))
+		// 表单里已经上传了图片文件时必须走下面的 multipart 分支：只有那条分支会转发 mask
+		// 与 background/output_format 等其余表单字段，JSON 分支会把它们丢掉。
+		hasImageFilesInForm := c.Request.MultipartForm != nil && len(c.Request.MultipartForm.File) > 0
+		hasImageInDTO := !hasImageFilesInForm &&
+			((request.Image != nil && len(request.Image) > 0) ||
+				(request.Extra != nil && (request.Extra["image"] != nil || request.Extra["images"] != nil)))
 
 		if hasImageInDTO {
 			// JSON 格式：从 Image 或 Extra 中提取图片，转为 multipart 文件
