@@ -25,6 +25,8 @@ For commercial licensing, please contact support@quantumnous.com
 // 故官方新渠道顺延到 63/64，须与 constant/channel.go 保持一致。
 export const CHANNEL_TYPE_NEW_API = 64
 export const CHANNEL_TYPE_SUB2API = 63
+// 61/62/63/64 均已占用，任务插件渠道使用后端预留的 65。
+export const CHANNEL_TYPE_TASK_PLUGIN = 65
 
 export const CHANNEL_TYPES = {
   0: 'Unknown',
@@ -88,12 +90,13 @@ export const CHANNEL_TYPES = {
   62: 'SeedanceGateway',
   63: 'Sub2API',
   64: 'New API',
+  65: 'Task Plugin',
 } as const
 
 const CHANNEL_TYPE_DISPLAY_ORDER: number[] = [
-  1, 14, 33, 24, 43, 3, 41, 48, 64, 60, 42, 34, 20, 4, 40, 27, 25, 17, 26, 15,
-  46, 23, 61, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 63, 22, 21, 44,
-  2, 5, 36, 50, 51, 52, 53, 54, 55, 56, 62,
+  1, 14, 33, 24, 43, 3, 41, 48, 64, 60, 65, 42, 34, 20, 4, 40, 27, 25, 17, 26,
+  15, 46, 23, 61, 18, 45, 31, 35, 49, 19, 47, 37, 38, 39, 11, 8, 57, 63, 22, 21,
+  44, 2, 5, 36, 50, 51, 52, 53, 54, 55, 56, 62,
 ]
 
 // 不再允许新建的渠道类型：仍保留在 CHANNEL_TYPES 里，让存量渠道能正常显示和编辑，
@@ -118,6 +121,17 @@ export const CHANNEL_TYPE_OPTIONS: { value: number; label: string }[] = (() => {
   }
   return ordered
 })()
+
+export function channelTypeOptionsForTaskPluginBind(
+  canBindTaskPlugin: boolean
+): { value: number; label: string }[] {
+  if (canBindTaskPlugin) {
+    return CHANNEL_TYPE_OPTIONS
+  }
+  return CHANNEL_TYPE_OPTIONS.filter(
+    (option) => option.value !== CHANNEL_TYPE_TASK_PLUGIN
+  )
+}
 
 // ============================================================================
 // Channel Status (label values are i18n keys; use t(config.label) in components)

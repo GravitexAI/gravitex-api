@@ -25,6 +25,10 @@ import {
 } from '../../constants'
 
 describe('channel type options for task plugin bind', () => {
+  test('uses the task plugin channel type reserved by the backend', () => {
+    expect(CHANNEL_TYPE_TASK_PLUGIN).toBe(65)
+  })
+
   test('hides the task plugin type when the caller cannot bind', () => {
     const options = channelTypeOptionsForTaskPluginBind(false)
 
