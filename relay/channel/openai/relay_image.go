@@ -48,7 +48,9 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	if oaiError := usageResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	captureRawImageUsage(info, responseBody)
 	applyImageResponseMetadata(responseBody, &usageResp.Usage)
+	normalizeOpenAIUsage(&usageResp.Usage)
 	if service.ValidUsage(&usageResp.Usage) {
 		info.SetUpstreamResponsesField("usage", usageResp.Usage)
 	}
@@ -58,7 +60,6 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
-	normalizeOpenAIUsage(&usageResp.Usage)
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
 	return &usageResp.Usage, nil
 }
@@ -154,6 +155,7 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 			Usage dto.Usage `json:"usage"`
 		}
 		if err := common.Unmarshal(raw, &chunk); err == nil {
+			captureRawImageUsage(info, raw)
 			normalizeOpenAIUsage(&chunk.Usage)
 			if service.ValidUsage(&chunk.Usage) {
 				// main-alpha：把上游 usage 存进 responses 字段，供计费链路读取
@@ -277,6 +279,7 @@ func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 	if err := common.Unmarshal(responseBody, &usageResp); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	captureRawImageUsage(info, responseBody)
 	if oaiError := usageResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
@@ -361,6 +364,16 @@ func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 	}
 	return &usageResp.Usage, nil
+}
+
+func captureRawImageUsage(info *relaycommon.RelayInfo, responseBody []byte) {
+	if !service.ShouldPersistSeedreamImageUsage(info) {
+		return
+	}
+	rawUsage := gjson.GetBytes(responseBody, "usage")
+	if rawUsage.Exists() && rawUsage.Type == gjson.JSON {
+		info.SetRawUpstreamUsage([]byte(rawUsage.Raw))
+	}
 }
 
 func writeOpenaiImageStreamDone(c *gin.Context) error {

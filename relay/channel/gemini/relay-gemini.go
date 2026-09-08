@@ -145,7 +145,7 @@ func ThinkingAdaptor(geminiRequest *dto.GeminiChatRequest, info *relaycommon.Rel
 					clampedBudget := clampThinkingBudget(modelName, budgetTokens)
 					geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
 						ThinkingBudget:  common.GetPointer(clampedBudget),
-						IncludeThoughts: true,
+						IncludeThoughts: common.GetPointer(true),
 					}
 				}
 			}
@@ -164,11 +164,11 @@ func ThinkingAdaptor(geminiRequest *dto.GeminiChatRequest, info *relaycommon.Rel
 
 			if isUnsupported {
 				geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-					IncludeThoughts: true,
+					IncludeThoughts: common.GetPointer(true),
 				}
 			} else {
 				geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-					IncludeThoughts: true,
+					IncludeThoughts: common.GetPointer(true),
 				}
 				if geminiRequest.GenerationConfig.MaxOutputTokens != nil && *geminiRequest.GenerationConfig.MaxOutputTokens > 0 {
 					budgetTokens := model_setting.GetGeminiSettings().ThinkingAdapterBudgetTokensPercentage * float64(*geminiRequest.GenerationConfig.MaxOutputTokens)
@@ -189,7 +189,7 @@ func ThinkingAdaptor(geminiRequest *dto.GeminiChatRequest, info *relaycommon.Rel
 			}
 		} else if _, level, ok := reasoning.TrimEffortSuffix(info.UpstreamModelName); ok && level != "" {
 			geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-				IncludeThoughts: true,
+				IncludeThoughts: common.GetPointer(true),
 				ThinkingLevel:   level,
 			}
 			info.ReasoningEffort = level
@@ -198,7 +198,7 @@ func ThinkingAdaptor(geminiRequest *dto.GeminiChatRequest, info *relaycommon.Rel
 			// 必须显式设置 IncludeThoughts=true，否则上游（Gemini/Vertex）只在 usage 中计费
 			// thoughtsTokenCount，却不会回传思考摘要，导致 reasoning_tokens 有值但 reasoning_content 为空。
 			effort := oaiRequest[0].ReasoningEffort
-			thinkingConfig := &dto.GeminiThinkingConfig{IncludeThoughts: true}
+			thinkingConfig := &dto.GeminiThinkingConfig{IncludeThoughts: common.GetPointer(true)}
 			if strings.HasPrefix(modelName, "gemini-3") {
 				// Gemini 3.x 使用 thinkingLevel（low/high），不再使用 thinkingBudget
 				thinkingConfig.ThinkingLevel = mapEffortToGeminiThinkingLevel(effort)
@@ -214,7 +214,7 @@ func ThinkingAdaptor(geminiRequest *dto.GeminiChatRequest, info *relaycommon.Rel
 			// 若客户端想关闭，可通过 extra_body.google.thinking_config.include_thoughts=false 显式禁用
 			// （该路径会跳过 ThinkingAdaptor，不会进入此分支）。
 			geminiRequest.GenerationConfig.ThinkingConfig = &dto.GeminiThinkingConfig{
-				IncludeThoughts: true,
+				IncludeThoughts: common.GetPointer(true),
 			}
 		}
 	}
@@ -371,14 +371,14 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 						if v, ok := thinkingBudget.(float64); ok {
 							budgetInt := int(v)
 							tempThinkingConfig.ThinkingBudget = common.GetPointer(budgetInt)
-							tempThinkingConfig.IncludeThoughts = budgetInt > 0
+							tempThinkingConfig.IncludeThoughts = common.GetPointer(budgetInt > 0)
 							hasThinkingConfig = true
 						}
 					}
 
 					if includeThoughts, exists := thinkingConfig["include_thoughts"]; exists {
 						if v, ok := includeThoughts.(bool); ok {
-							tempThinkingConfig.IncludeThoughts = v
+							tempThinkingConfig.IncludeThoughts = common.GetPointer(v)
 							hasThinkingConfig = true
 						}
 					}

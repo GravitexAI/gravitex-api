@@ -25,6 +25,8 @@ const (
 	ContextKeyTokenVendorLimit        ContextKey = "token_vendor_limit"
 	ContextKeyTokenCrossGroupRetry    ContextKey = "token_cross_group_retry"
 	ContextKeyTokenAutoGroups         ContextKey = "token_auto_groups"
+	ContextKeyOriginTasks             ContextKey = "origin_tasks"
+	ContextKeyChannelConstraints      ContextKey = "channel_constraints"
 
 	/* channel related keys */
 	ContextKeyChannelId                ContextKey = "channel_id"

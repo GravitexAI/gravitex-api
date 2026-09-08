@@ -4,7 +4,7 @@
 
 ---
 
-## 零、合并前必读（3 条铁律）
+## 零、合并前必读（4 条铁律）
 
 1. **🔴 RuoYi JWT SSO 不能碰** —— `middleware/auth.go` + `middleware/ruoyi_auth.go` 一律取 ours。官方 `31d70fca3` 会删掉整段 RuoYi 鉴权，删了就 Java 跳转全线 401。详见[防丢清单 5.3](main-alpha_独有功能清单.md)
 2. **🔴 双前端结构不能摊平** —— `web/` 是 workspace 根（`default/` + `classic/`）。官方要把 `web/default/*` 挪到 `web/` 并删 classic，一律拒绝。`main.go` 4 处 embed、`Dockerfile` 两个 builder stage、`router/web-router.go` 主题切换、`setting/system_setting/theme.go` 全部取 ours。详见[防丢清单 4.5](main-alpha_独有功能清单.md)
@@ -169,6 +169,16 @@ touch web/classic/dist/index.html web/default/dist/index.html
 | 2026-08-04 → 2026-08-06 | 103（分 4 阶段合到 `origin/main` 最新，**官方已全部合完**） | 三次大重构：计费会话 BillingSession / auth 无状态 token（❌拒绝，保 RuoYi）/ relaykit 协议转换独立模块。修掉 OpenAI 缓存写入**重复计费**真 bug。新增 TokenHub、Sub2API、New API 渠道（❌改号 63/64）、工具调用配价、未设价模型页 | [20260806/](20260806/) |
 | 2026-08-21 | 47（`0ab020206`→`f11641428`，合并提交 `2d61328c1`） | 并发防覆盖 UpdateWithTx（❌去 auth_version）/ user-quota Redis 预留（CacheSchema 门禁+同步水合适配 fork 异步缓存）/ MJ task 计费（防双扣）/ replay body 重试 / channel test worker 池 / access-token 限流。❌拒绝 AuthVersion 会话机制。移除官方已删的 compact 后缀 | [20260821/](20260821/) |
 
-### ⚠️ 官方合并未完成 —— 见 [官方合并待办追踪.md](官方合并待办追踪.md)
+### 当前核对状态（2026-09-04）
 
-官方 main 还有 **110 个 commit 待合**，因为官方做了 3 次破坏性重构（删 `controller/task_video.go`、删整个 `web/classic/`、`dto/` → `relaykit/dto/`）。已按阶段拆好计划，同时列出了 web/classic → 官方新 `web/` 前端的迁移清单。**每次继续合并前先读那份文档。**
+历史索引补充：`9cf7c9d5d` 已将官方 `2d8e50bf3` 合入，两个 parent 为 `b9229ca60` 与 `2d8e50bf3`。这是本次对比 main-alpha 与 main 的共同祖先。
+
+| 分支 / 事项 | 本次核对结果 |
+|---|---|
+| main-alpha | `662c3b203`，本次文档的业务行为依据 |
+| main-alpha-merge | 文档编辑前与 main-alpha 相同，已包含其最新改动 |
+| main / origin/main / upstream/main | 本次已知引用为 `3a9f41ee8`；fork main 已同步上游，不等于 main-alpha 已吸收 |
+| 待吸收的官方更新 | **44 个提交**（`main-alpha..main`），尚未合入 main-alpha-merge |
+| 本次文档更新 | [main-alpha 更新核对](20260904/main-alpha更新核对.md)，补记 `cdc97eb38..662c3b203` 的功能和保护点 |
+
+原“110 个 commit 待合”属于 2026-08-04 的历史阶段，已由后续分阶段合并完成；当前不能继续沿用该数字。最新待办见 [官方合并待办追踪.md](官方合并待办追踪.md)，业务保护点见 [main-alpha 独有功能清单](main-alpha_独有功能清单.md)。日期目录中的本次文件是**合并前核对记录**，不是官方 44 个提交的合并完成归档。

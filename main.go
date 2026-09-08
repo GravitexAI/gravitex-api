@@ -23,6 +23,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
+	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
@@ -54,6 +55,9 @@ var classicBuildFS embed.FS
 var classicIndexPage []byte
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "plugin" {
+		os.Exit(jsplugin.RunCLI(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	startTime := time.Now()
 	kitutil.SetLogging(common.SysLog, func(message string) {
 		logger.LogError(nil, message)
@@ -115,6 +119,7 @@ func main() {
 
 	// 热更新配置
 	go model.SyncOptions(common.SyncFrequency)
+	go controller.SyncTaskPlugins()
 
 	// 周期性重载授权策略，保证多节点/多 master 部署下权限变更能传播到每个实例
 	go authz.StartPolicySync(common.SyncFrequency)
@@ -152,11 +157,7 @@ func main() {
 	// Must run before the system task runner starts: the async_task_poll handler
 	// calls service.RunTaskPollingOnce, which needs this factory set.
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
-		a := relay.GetTaskAdaptor(platform)
-		if a == nil {
-			return nil
-		}
-		return a
+		return relay.GetTaskPollingAdaptor(platform)
 	}
 
 	// GET /v1/videos 收到上游终态时落库并计费（与轮询一致），避免 Vertex 轮询仅返回 {"name":"..."} 时任务永不完成
@@ -347,6 +348,12 @@ func InitResources() error {
 	if err = authz.Init(model.DB); err != nil {
 		common.FatalLog("failed to initialize authorization: " + err.Error())
 		return err
+	}
+	if common.PasswordLoginEncryptionEnabled {
+		if err = model.InitPasswordEncryption(); err != nil {
+			common.FatalLog("failed to initialize password encryption: " + err.Error())
+			return err
+		}
 	}
 
 	model.CheckSetup()

@@ -12,6 +12,7 @@ import (
 )
 
 type ChannelSettings struct {
+	TaskPluginKey          string `json:"task_plugin_key,omitempty"`
 	ForceFormat            bool   `json:"force_format,omitempty"`
 	ThinkingToContent      bool   `json:"thinking_to_content,omitempty"`
 	Proxy                  string `json:"proxy"`
@@ -67,6 +68,7 @@ const (
 )
 
 type ChannelOtherSettings struct {
+	ToolLossPolicy string `json:"tool_loss_policy,omitempty"`
 	// ModelCostDiscount is a channel cost override by the original client model.
 	// It must not be used for user pricing, group ratios, or quota deduction.
 	ModelCostDiscount           map[string]float64 `json:"model_cost_discount,omitempty"`

@@ -208,6 +208,23 @@ func formatUserLogs(logs []*Log, startIdx int) {
 	assignDisplayLogIds(logs, startIdx)
 }
 
+func FormatAdminLogs(logs []*Log) {
+	for _, log := range logs {
+		if log == nil {
+			continue
+		}
+		log.Other = formatLogOtherJSON(log.Other, logOtherVisibilityAdmin)
+	}
+}
+func FormatRootLogs(logs []*Log) {
+	for _, log := range logs {
+		if log == nil {
+			continue
+		}
+		log.Other = formatLogOtherJSON(log.Other, logOtherVisibilityRoot)
+	}
+}
+
 // applyModelNameLike 按日志库方言追加 model_name 模糊匹配条件。
 // MySQL/SQLite/PG 使用 sanitizeLikePattern 产出的 ! 转义 + ESCAPE '!'；
 // ClickHouse/ByteHouse 的 LIKE 固定以反斜杠为转义符且不支持自定义 ESCAPE 子句，需转换为反斜杠转义。
