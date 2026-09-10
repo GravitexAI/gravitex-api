@@ -4,6 +4,8 @@
     "1000": "1000",
     "10000": "10000",
     "_copy": "_copy",
+    "body_prefix_hash: hashes the stable request prefix (system and the first messages) into a per-conversation key. Prefer it over tenant-wide fallbacks such as context_int:id, which bind every request of an account to a single channel.": "body_prefix_hash: hashes the stable request prefix (system and the first messages) into a per-conversation key. Prefer it over tenant-wide fallbacks such as context_int:id, which bind every request of an account to a single channel.",
+    "Leave empty for system,messages.0,messages.1": "Leave empty for system,messages.0,messages.1",
     "，": ", ",
     ", and": ", and",
     "，and ": ", and ",

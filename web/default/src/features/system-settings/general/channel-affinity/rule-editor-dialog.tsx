@@ -56,7 +56,14 @@ const KEY_SOURCE_TYPES = [
   'context_string',
   'request_header',
   'gjson',
+  'body_prefix_hash',
 ] as const
+
+// 这些来源填的是 JSON path，其余来源填的是上下文/请求头的 Key 名。
+const PATH_KEY_SOURCE_TYPES: ReadonlySet<string> = new Set([
+  'gjson',
+  'body_prefix_hash',
+])
 
 const CONTEXT_KEY_PRESETS = [
   'id',
@@ -95,9 +102,28 @@ function normalizeStringList(text: string): string[] {
     .filter((s) => s.length > 0)
 }
 
+// body_prefix_hash 的 path 可留空，留空时后端使用默认的会话前缀路径；
+// 其余来源必须填出 path 或 Key，否则这条来源在后端只会取到空值。
+function isCompleteKeySource(src: KeySource): boolean {
+  if (!src.type) return false
+  if (src.type === 'body_prefix_hash') return true
+  if (PATH_KEY_SOURCE_TYPES.has(src.type)) return !!src.path
+  return !!src.key
+}
+
+function keySourceValueHint(type: KeySource['type']): string {
+  if (type === 'body_prefix_hash') {
+    return 'Leave empty for system,messages.0,messages.1'
+  }
+  if (type === 'gjson') return 'metadata.conversation_id'
+  return 'user_id'
+}
+
 function normalizeKeySource(src: Partial<KeySource>): KeySource {
   const type = (src?.type || 'gjson') as KeySource['type']
-  if (type === 'gjson') return { type, key: '', path: src?.path || '' }
+  if (PATH_KEY_SOURCE_TYPES.has(type)) {
+    return { type, key: '', path: src?.path || '' }
+  }
   return { type, key: src?.key || '', path: '' }
 }
 
@@ -207,7 +233,7 @@ export function RuleEditorDialog(props: Props) {
 
     const validKeySources = keySources
       .map(normalizeKeySource)
-      .filter((s) => s.type && (s.type === 'gjson' ? s.path : s.key))
+      .filter(isCompleteKeySource)
     if (validKeySources.length === 0) {
       toast.error(t('At least one valid key source is required'))
       return
@@ -342,6 +368,11 @@ export function RuleEditorDialog(props: Props) {
           <p className='text-muted-foreground mb-2 text-xs'>
             {t('Common Keys')}: {CONTEXT_KEY_PRESETS.join(', ')}
           </p>
+          <p className='text-muted-foreground mb-2 text-xs'>
+            {t(
+              'body_prefix_hash: hashes the stable request prefix (system and the first messages) into a per-conversation key. Prefer it over tenant-wide fallbacks such as context_int:id, which bind every request of an account to a single channel.'
+            )}
+          </p>
           <div className='space-y-2'>
             {keySources.map((src, idx) => (
               <div
@@ -379,15 +410,15 @@ export function RuleEditorDialog(props: Props) {
                 </Select>
                 <Input
                   className='min-w-0 flex-1'
-                  placeholder={
-                    src.type === 'gjson'
-                      ? 'metadata.conversation_id'
-                      : 'user_id'
+                  placeholder={t(keySourceValueHint(src.type))}
+                  value={
+                    PATH_KEY_SOURCE_TYPES.has(src.type)
+                      ? src.path || ''
+                      : src.key || ''
                   }
-                  value={src.type === 'gjson' ? src.path || '' : src.key || ''}
                   onChange={(e) => {
                     const next = [...keySources]
-                    if (src.type === 'gjson') {
+                    if (PATH_KEY_SOURCE_TYPES.has(src.type)) {
                       next[idx] = { ...src, path: e.target.value }
                     } else {
                       next[idx] = { ...src, key: e.target.value }

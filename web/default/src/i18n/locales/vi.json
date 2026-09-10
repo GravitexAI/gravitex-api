@@ -4,6 +4,8 @@
     "1000": "1000",
     "10000": "10000",
     "_copy": "_bản sao",
+    "body_prefix_hash: hashes the stable request prefix (system and the first messages) into a per-conversation key. Prefer it over tenant-wide fallbacks such as context_int:id, which bind every request of an account to a single channel.": "body_prefix_hash: băm phần tiền tố ổn định của yêu cầu (system và các messages đầu tiên) thành khóa theo từng hội thoại. Nên dùng thay cho các phương án dự phòng cấp tenant như context_int:id, vốn gắn mọi yêu cầu của một tài khoản vào một kênh duy nhất.",
+    "Leave empty for system,messages.0,messages.1": "Để trống để dùng system,messages.0,messages.1",
     "，": ", ",
     ", and": ", và",
     "，and ": " và ",

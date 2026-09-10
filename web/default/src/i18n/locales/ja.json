@@ -4,6 +4,8 @@
     "1000": "1000",
     "10000": "10000",
     "_copy": "_copy",
+    "body_prefix_hash: hashes the stable request prefix (system and the first messages) into a per-conversation key. Prefer it over tenant-wide fallbacks such as context_int:id, which bind every request of an account to a single channel.": "body_prefix_hash: リクエストの安定した前置き（system と最初の messages）をハッシュ化し、会話単位のキーを生成します。アカウント全体を 1 チャネルに固定してしまう context_int:id などのテナント単位のフォールバックより優先してください。",
+    "Leave empty for system,messages.0,messages.1": "空欄の場合は system,messages.0,messages.1 を使用",
     "，": "、",
     ", and": "、および",
     "，and ": "、",

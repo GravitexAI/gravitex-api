@@ -4,6 +4,8 @@
     "1000": "1000",
     "10000": "10000",
     "_copy": "_копировать",
+    "body_prefix_hash: hashes the stable request prefix (system and the first messages) into a per-conversation key. Prefer it over tenant-wide fallbacks such as context_int:id, which bind every request of an account to a single channel.": "body_prefix_hash: хэширует стабильный префикс запроса (system и первые messages) в ключ уровня диалога. Предпочтительнее общих для арендатора запасных вариантов вроде context_int:id, которые привязывают все запросы аккаунта к одному каналу.",
+    "Leave empty for system,messages.0,messages.1": "Оставьте пустым для system,messages.0,messages.1",
     "，": ", ",
     ", and": ", и",
     "，and ": " и ",
