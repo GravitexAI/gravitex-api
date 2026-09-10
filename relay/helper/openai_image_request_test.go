@@ -88,10 +88,11 @@ func TestGetAndValidOpenAIImageRequestNBounds(t *testing.T) {
 	boundErr := fmt.Sprintf("n must be an integer between 1 and %d", dto.MaxImageN)
 
 	tests := []struct {
-		name    string
-		body    string
-		wantErr string
-		wantN   uint
+		name     string
+		body     string
+		wantErr  string
+		wantN    uint
+		wantNilN bool
 	}{
 		{
 			name:    "overflowed uint64 n is rejected",
@@ -114,14 +115,15 @@ func TestGetAndValidOpenAIImageRequestNBounds(t *testing.T) {
 			wantN: 3,
 		},
 		{
-			name:  "zero n defaults to 1",
+			// n 原样透传给上游（不再被改写成 1），但计费张数仍必须兜底为 1。
+			name:  "zero n is passed through and billed as 1",
 			body:  `{"model":"gpt-image-1","prompt":"a cat","n":0}`,
-			wantN: 1,
+			wantN: 0,
 		},
 		{
-			name:  "absent n defaults to 1",
-			body:  `{"model":"gpt-image-1","prompt":"a cat"}`,
-			wantN: 1,
+			name:     "absent n stays absent and is billed as 1",
+			body:     `{"model":"gpt-image-1","prompt":"a cat"}`,
+			wantNilN: true,
 		},
 	}
 
@@ -135,9 +137,18 @@ func TestGetAndValidOpenAIImageRequestNBounds(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.NotNil(t, req.N)
-			require.Equal(t, tt.wantN, *req.N)
-			require.Equal(t, float64(tt.wantN), req.GetTokenCountMeta().BillingRatios["n"])
+			if tt.wantNilN {
+				require.Nil(t, req.N, "用户没传 n 时网关不得补默认值")
+			} else {
+				require.NotNil(t, req.N)
+				require.Equal(t, tt.wantN, *req.N)
+			}
+			// 计费张数与透传值解耦：n 缺失或为 0 时，计费乘数必须兜底为 1。
+			wantBillingN := float64(tt.wantN)
+			if tt.wantNilN || tt.wantN == 0 {
+				wantBillingN = 1
+			}
+			require.Equal(t, wantBillingN, req.GetTokenCountMeta().BillingRatios["n"])
 		})
 	}
 
@@ -267,5 +278,107 @@ func TestGetAndValidOpenAIImageRequestMultipartExtraParams(t *testing.T) {
 
 	for _, key := range []string{"model", "prompt", "size", "response_format", "image", "image[]"} {
 		require.NotContains(t, req.Extra, key, "已显式解析的字段不应再进 Extra")
+	}
+}
+
+// TestGetAndValidOpenAIImageRequestMultipartBracketSyntax 锁定 OpenAI SDK 的 multipart
+// 序列化约定：SDK 会把嵌套对象/数组展平成 querystring 括号语法，网关必须还原回嵌套结构，
+// 否则上游会收到 "sequential_image_generation_options[max_images]" 这种字面量字段名。
+func TestGetAndValidOpenAIImageRequestMultipartBracketSyntax(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("model", "doubao-seedream-4-0-250828"))
+	require.NoError(t, writer.WriteField("prompt", "edit this image"))
+	// openai-python 对 extra_body={"sequential_image_generation_options": {"max_images": 4}}
+	// 实际发出的就是下面这个字段名。
+	require.NoError(t, writer.WriteField("sequential_image_generation_options[max_images]", "4"))
+	require.NoError(t, writer.WriteField("nested[a][b]", "deep"))
+	require.NoError(t, writer.WriteField("tags[]", "x"))
+	require.NoError(t, writer.WriteField("tags[]", "y"))
+	require.NoError(t, writer.WriteField("broken[unclosed", "raw"))
+	part, err := writer.CreateFormFile("image[]", "a.png")
+	require.NoError(t, err)
+	_, err = part.Write([]byte("fake"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", &body)
+	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+
+	req, err := GetAndValidOpenAIImageRequest(c, relayconstant.RelayModeImagesEdits)
+	require.NoError(t, err)
+
+	require.JSONEq(t, `{"max_images":4}`, string(req.Extra["sequential_image_generation_options"]))
+	require.JSONEq(t, `{"a":{"b":"deep"}}`, string(req.Extra["nested"]))
+	require.JSONEq(t, `["x","y"]`, string(req.Extra["tags"]))
+	// 非法括号语法保持字面量，不能静默丢弃。
+	require.JSONEq(t, `"raw"`, string(req.Extra["broken[unclosed"]))
+	// image[] 是参考图，不能混进 Extra。
+	require.NotContains(t, req.Extra, "image")
+}
+
+// TestGetAndValidOpenAIImageRequestKeepsGptImageQuality 锁定 gpt-image 的 quality 原样透传：
+// 旧白名单只认 low/medium/high，会把 gpt-image-2.5 专属的 xhigh/max 静默改写成 medium，
+// 用户按 max 付费却拿到低档图。取值合法性由上游判断，网关不做二次校验。
+func TestGetAndValidOpenAIImageRequestKeepsGptImageQuality(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, quality := range []string{"xhigh", "max", "auto"} {
+		t.Run("multipart/"+quality, func(t *testing.T) {
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			require.NoError(t, writer.WriteField("model", "gpt-image-2.5-flare"))
+			require.NoError(t, writer.WriteField("prompt", "edit this image"))
+			require.NoError(t, writer.WriteField("quality", quality))
+			require.NoError(t, writer.WriteField("image", "https://example.com/1.png"))
+			require.NoError(t, writer.Close())
+
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", &body)
+			c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+
+			req, err := GetAndValidOpenAIImageRequest(c, relayconstant.RelayModeImagesEdits)
+			require.NoError(t, err)
+			require.Equal(t, quality, req.Quality)
+		})
+
+		t.Run("json/"+quality, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations",
+				bytes.NewBufferString(`{"model":"gpt-image-2.5-sunburst","prompt":"a cat","quality":"`+quality+`"}`))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			req, err := GetAndValidOpenAIImageRequest(c, relayconstant.RelayModeImagesGenerations)
+			require.NoError(t, err)
+			require.Equal(t, quality, req.Quality)
+		})
+	}
+}
+
+// TestGetAndValidOpenAIImageRequestKeepsCustomSize 锁定自定义尺寸不被网关拦下：
+// gpt-image-2 / 2.5 支持任意 16 倍数分辨率（最高 3840x2160），dall-e 的固定尺寸白名单
+// 也已交给上游，网关只在用户没传时补默认值。
+func TestGetAndValidOpenAIImageRequestKeepsCustomSize(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct{ model, size string }{
+		{"gpt-image-2.5-flare", "2160x3840"},
+		{"gpt-image-2.5-sunburst", "1536x864"},
+		{"dall-e-2", "1024x1536"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.model+"/"+tc.size, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations",
+				bytes.NewBufferString(`{"model":"`+tc.model+`","prompt":"a cat","size":"`+tc.size+`"}`))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			req, err := GetAndValidOpenAIImageRequest(c, relayconstant.RelayModeImagesGenerations)
+			require.NoError(t, err)
+			require.Equal(t, tc.size, req.Size)
+		})
 	}
 }
