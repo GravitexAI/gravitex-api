@@ -216,7 +216,11 @@ func DispatchPlatformUpdate(ctx context.Context, platform constant.TaskPlatform,
 	case constant.TaskPlatformSuno:
 		_ = UpdateSunoTasks(ctx, taskChannelM, taskM)
 	default:
-		if err := UpdateVideoTasks(ctx, platform, taskChannelM, taskM); err != nil {
+		updateFn := UpdateVideoTasksFn
+		if updateFn == nil {
+			updateFn = UpdateVideoTasks
+		}
+		if err := updateFn(ctx, platform, taskChannelM, taskM); err != nil {
 			common.SysLog(fmt.Sprintf("UpdateVideoTasks fail: %s", err))
 		}
 	}

@@ -160,6 +160,10 @@ func main() {
 		return relay.GetTaskPollingAdaptor(platform)
 	}
 
+	// 视频任务轮询使用 controller 层的完整计费引擎（按秒/按量/分辨率分档/音频分档/CostDiscount/原子锁防重复扣费）。
+	// 缺失这行会让轮询只把任务置为 SUCCESS 而不扣费、不写消费日志，未主动查询结果的客户端等于白嫖。
+	service.UpdateVideoTasksFn = controller.UpdateVideoTaskAll
+
 	// GET /v1/videos 收到上游终态时落库并计费（与轮询一致），避免 Vertex 轮询仅返回 {"name":"..."} 时任务永不完成
 	relay.CompleteVideoTaskOnUpstreamSuccessFn = controller.CompleteVideoTaskOnUpstreamSuccess
 	// in-progress 轮询时复用同一份 preservedFields 合并规则，保证后续 SUCCESS 扣费链路读得到计费字段

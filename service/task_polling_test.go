@@ -404,3 +404,53 @@ func TestUpdateVideoTasksMixedChannelSleepSettings(t *testing.T) {
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.ElementsMatch(t, []string{"upstream_sleepy_1", "upstream_fast_1", "upstream_fast_2"}, adaptor.fetchedTaskIDs())
 }
+
+// TestDispatchPlatformUpdateUsesInjectedVideoUpdater guards the wiring that
+// routes video-task polling through the controller-layer billing engine
+// (controller.UpdateVideoTaskAll, injected as UpdateVideoTasksFn). When this
+// injection is ignored, polling still flips tasks to SUCCESS but never charges
+// quota and never writes a consume log, so completed videos become free.
+func TestDispatchPlatformUpdateUsesInjectedVideoUpdater(t *testing.T) {
+	previous := UpdateVideoTasksFn
+	t.Cleanup(func() { UpdateVideoTasksFn = previous })
+
+	var gotPlatform constant.TaskPlatform
+	var gotChannels map[int][]string
+	called := 0
+	UpdateVideoTasksFn = func(_ context.Context, platform constant.TaskPlatform, taskChannelM map[int][]string, _ map[string]*model.Task) error {
+		called++
+		gotPlatform = platform
+		gotChannels = taskChannelM
+		return nil
+	}
+
+	DispatchPlatformUpdate(context.Background(), constant.TaskPlatform("doubao_video"),
+		map[int][]string{81: {"cgt-1"}}, map[string]*model.Task{"cgt-1": {TaskID: "cgt-1"}})
+
+	require.Equal(t, 1, called, "injected video updater must own video polling")
+	assert.Equal(t, constant.TaskPlatform("doubao_video"), gotPlatform)
+	assert.Equal(t, map[int][]string{81: {"cgt-1"}}, gotChannels)
+}
+
+// TestDispatchPlatformUpdateFallsBackWhenNoVideoUpdaterInjected keeps the
+// service package usable on its own (tests, tooling) when main has not wired
+// the controller engine.
+func TestDispatchPlatformUpdateFallsBackWhenNoVideoUpdaterInjected(t *testing.T) {
+	previousFn := UpdateVideoTasksFn
+	previousFactory := GetTaskAdaptorFunc
+	t.Cleanup(func() {
+		UpdateVideoTasksFn = previousFn
+		GetTaskAdaptorFunc = previousFactory
+	})
+	UpdateVideoTasksFn = nil
+
+	adaptor := &taskPollingFetchAdaptor{}
+	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
+
+	// Unknown channel id: the built-in updater bails out at CacheGetChannel, which
+	// is enough to prove the fallback branch ran without needing DB fixtures.
+	DispatchPlatformUpdate(context.Background(), constant.TaskPlatform("doubao_video"),
+		map[int][]string{}, map[string]*model.Task{})
+
+	assert.Empty(t, adaptor.fetchedTaskIDs())
+}
