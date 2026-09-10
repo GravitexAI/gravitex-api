@@ -73,6 +73,7 @@ const KEY_SOURCE_TYPES = [
   { label: 'context_string', value: 'context_string' },
   { label: 'request_header', value: 'request_header' },
   { label: 'gjson', value: 'gjson' },
+  { label: 'body_prefix_hash', value: 'body_prefix_hash' },
 ];
 
 const CONTEXT_KEY_PRESETS = [
@@ -144,12 +145,25 @@ const rulesToJson = (rules) => {
   return stringifyPretty(payload);
 };
 
+// 这些来源填的是 JSON path，其余来源填的是上下文/请求头的 Key 名。
+const PATH_KEY_SOURCE_TYPES = ['gjson', 'body_prefix_hash'];
+
+const isPathKeySource = (type) => PATH_KEY_SOURCE_TYPES.includes(type);
+
+const keySourceValueHint = (type, t) => {
+  if (type === 'body_prefix_hash') {
+    return t('留空则使用 system,messages.0,messages.1');
+  }
+  if (type === 'gjson') return 'metadata.conversation_id';
+  return 'X-Affinity-Key';
+};
+
 const normalizeKeySource = (src) => {
   const type = (src?.type || '').trim();
   const key = (src?.key || '').trim();
   const path = (src?.path || '').trim();
 
-  if (type === 'gjson') {
+  if (isPathKeySource(type)) {
     return { type, key: '', path };
   }
 
@@ -564,7 +578,7 @@ export default function SettingsChannelAffinity(props) {
         if (xs.length === 0) return '-';
         return xs.slice(0, 3).map((src, idx) => {
           const s = normalizeKeySource(src);
-          const detail = s.type === 'gjson' ? s.path : s.key;
+          const detail = isPathKeySource(s.type) ? s.path : s.key;
           return (
             <Tag key={`${s.type}-${idx}`} style={{ marginRight: 4 }}>
               {s.type}:{detail}
@@ -683,7 +697,8 @@ export default function SettingsChannelAffinity(props) {
         if (!x.key) return { ok: false, message: 'Key 不能为空' };
       } else if (x.type === 'gjson') {
         if (!x.path) return { ok: false, message: 'Path 不能为空' };
-      } else {
+      } else if (x.type !== 'body_prefix_hash') {
+        // body_prefix_hash 的 path 可留空，留空时后端使用默认的会话前缀路径。
         return { ok: false, message: 'Key 来源类型不合法' };
       }
     }
@@ -1385,6 +1400,12 @@ export default function SettingsChannelAffinity(props) {
               'context_int/context_string 从请求上下文读取；request_header 从用户请求头读取；gjson 从入口请求的 JSON body 按 gjson path 读取。',
             )}
           </Text>
+          <br />
+          <Text type='tertiary' size='small'>
+            {t(
+              'body_prefix_hash 对请求中稳定的前缀（system 与前几条 messages）做哈希，得到会话级 Key；优先用它，不要用 context_int:id 这类租户级兜底，那会把一个账号的全部请求绑到同一个渠道。',
+            )}
+          </Text>
           <div style={{ marginTop: 8, marginBottom: 8 }}>
             <Text type='tertiary' size='small'>
               {t('常用上下文 Key（用于 context_*）')}：
@@ -1420,18 +1441,16 @@ export default function SettingsChannelAffinity(props) {
                   const src = normalizeKeySource(
                     editingRule?.key_sources?.[idx],
                   );
-                  const isGjson = src.type === 'gjson';
+                  const isPath = isPathKeySource(src.type);
                   return (
                     <Input
-                      placeholder={
-                        isGjson ? 'metadata.conversation_id' : 'X-Affinity-Key'
-                      }
+                      placeholder={keySourceValueHint(src.type, t)}
                       aria-label={t('Key 或 Path')}
-                      value={isGjson ? src.path : src.key}
+                      value={isPath ? src.path : src.key}
                       onChange={(value) =>
                         updateKeySource(
                           idx,
-                          isGjson ? { path: value } : { key: value },
+                          isPath ? { path: value } : { key: value },
                         )
                       }
                     />

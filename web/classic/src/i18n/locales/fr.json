@@ -11,6 +11,8 @@
     " 吗？": " ?",
     " 秒": "s",
     " 秒。": " secondes.",
+    "body_prefix_hash 对请求中稳定的前缀（system 与前几条 messages）做哈希，得到会话级 Key；优先用它，不要用 context_int:id 这类租户级兜底，那会把一个账号的全部请求绑到同一个渠道。": "body_prefix_hash hache le préfixe stable de la requête (system et les premiers messages) en une clé par conversation. À préférer aux replis à l'échelle du locataire comme context_int:id, qui lient toutes les requêtes d'un compte à un seul canal.",
+    "留空则使用 system,messages.0,messages.1": "Laisser vide pour system,messages.0,messages.1",
     "，当前无生效订阅，将自动使用钱包": ", aucun abonnement actif, le portefeuille sera utilisé automatiquement.",
     "，时间：": ", time:",
     "，点击更新": ", cliquez sur Mettre à jour",
