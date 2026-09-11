@@ -4,6 +4,8 @@
     "1000": "1000",
     "10000": "10000",
     "_copy": "_複製",
+    "body_prefix_hash: hashes the stable request prefix (system and the first messages) into a per-conversation key. Prefer it over tenant-wide fallbacks such as context_int:id, which bind every request of an account to a single channel.": "body_prefix_hash：對請求中穩定的前綴（system 與前幾條 messages）做雜湊，得到會話級 Key。優先使用它，不要用 context_int:id 這類租戶級兜底——那會把一個帳號的全部請求綁到同一個渠道。",
+    "Leave empty for system,messages.0,messages.1": "留空則使用 system,messages.0,messages.1",
     "，": "，",
     ", and": "，和",
     "，and ": "，並",

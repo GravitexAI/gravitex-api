@@ -7,6 +7,8 @@
     " 吗？": " 吗？",
     " 秒": " 秒",
     " 秒。": " 秒。",
+    "body_prefix_hash 对请求中稳定的前缀（system 与前几条 messages）做哈希，得到会话级 Key；优先用它，不要用 context_int:id 这类租户级兜底，那会把一个账号的全部请求绑到同一个渠道。": "body_prefix_hash 对请求中稳定的前缀（system 与前几条 messages）做哈希，得到会话级 Key；优先用它，不要用 context_int:id 这类租户级兜底，那会把一个账号的全部请求绑到同一个渠道。",
+    "留空则使用 system,messages.0,messages.1": "留空则使用 system,messages.0,messages.1",
     "，当前无生效订阅，将自动使用钱包": "，当前无生效订阅，将自动使用钱包",
     "，时间：": "，时间：",
     "，点击更新": "，点击更新",

@@ -177,6 +177,63 @@ func TestConvertImageEditRequestJSONForGPTImage(t *testing.T) {
 		assert.Equal(t, "low", fields["input_fidelity"])
 	})
 
+	// 回归：JSON→multipart 转换曾经只写 model/prompt/size/quality/n/input_fidelity，
+	// background、output_format 等参数被静默丢弃，用户传了 transparent 却拿到实底图、
+	// 传了 jpeg 却拿到 png。这些参数的合法性交给上游判断，网关必须原样转发。
+	t.Run("gpt-image JSON edits forwards optional params and channel extras", func(t *testing.T) {
+		req := dto.ImageRequest{
+			Model:             "gpt-image-2.5-flare",
+			Prompt:            "换个背景颜色",
+			Quality:           "max",
+			Background:        json.RawMessage(`"transparent"`),
+			OutputFormat:      json.RawMessage(`"webp"`),
+			OutputCompression: json.RawMessage(`90`),
+			Moderation:        json.RawMessage(`"low"`),
+			PartialImages:     json.RawMessage(`2`),
+			ResponseFormat:    "b64_json",
+			Stream:            common.GetPointer(true),
+			Image:             json.RawMessage(`"data:image/png;base64,` + tinyPNG + `"`),
+			Mask:              json.RawMessage(`"data:image/png;base64,` + tinyPNG + `"`),
+			Extra: map[string]json.RawMessage{
+				"seed": json.RawMessage(`42`),
+			},
+		}
+		c := newJSONContext(t, "{}")
+		converted, err := (&Adaptor{}).ConvertImageRequest(c, info, req)
+		require.NoError(t, err)
+		buf, ok := converted.(*bytes.Buffer)
+		require.True(t, ok)
+
+		_, params, err := mime.ParseMediaType(c.Request.Header.Get("Content-Type"))
+		require.NoError(t, err)
+		fields := parseMultipartFields(t, buf.Bytes(), params["boundary"])
+		assert.Equal(t, "max", fields["quality"], "xhigh/max 不得被网关改写")
+		assert.Equal(t, "transparent", fields["background"])
+		assert.Equal(t, "webp", fields["output_format"])
+		assert.Equal(t, "90", fields["output_compression"])
+		assert.Equal(t, "low", fields["moderation"])
+		assert.Equal(t, "2", fields["partial_images"])
+		assert.Equal(t, "true", fields["stream"])
+		assert.Equal(t, "b64_json", fields["response_format"], "response_format 不再被网关清空")
+		assert.Equal(t, "42", fields["seed"], "渠道专有参数应透传，不做白名单过滤")
+
+		// mask 必须作为文件部件转发，JSON 请求此前会整个丢掉，局部重绘等于没带 mask。
+		reader := multipart.NewReader(bytes.NewReader(buf.Bytes()), params["boundary"])
+		maskFiles := 0
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+			if part.FormName() == "mask" && part.FileName() != "" {
+				maskFiles++
+			}
+			_ = part.Close()
+		}
+		assert.Equal(t, 1, maskFiles, "mask 应作为文件部件转发")
+	})
+
 	t.Run("non-gpt-image JSON model still passes through", func(t *testing.T) {
 		req := dto.ImageRequest{
 			Model: "dall-e-3",

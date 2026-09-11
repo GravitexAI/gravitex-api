@@ -300,6 +300,15 @@ func ListModels(c *gin.Context, modelType int) {
 			"nextPageToken": nil,
 		})
 	default:
+		// Codex 客户端刷新模型选择器时会带上 client_version，并且要的是 Codex 方言的
+		// 模型目录（顶层 models 数组 + slug/context_window），而不是 OpenAI 的
+		// object/data 信封。信封不对会让它整段反序列化失败，拿不到上下文窗口，
+		// 会话直接起不来。只有其他客户端不会带的 client_version 才切方言，
+		// 避免影响现有 OpenAI 客户端。
+		if c.Query("client_version") != "" {
+			c.JSON(200, service.BuildCodexCatalog(userModelNames, model.GetModelExtensions()))
+			return
+		}
 		c.JSON(200, gin.H{
 			"success": true,
 			"data":    userOpenAiModels,

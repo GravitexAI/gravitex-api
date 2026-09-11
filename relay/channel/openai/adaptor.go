@@ -396,8 +396,8 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 
 	}
 	isOModel := dto.IsOpenAIReasoningOModel(info.UpstreamModelName)
-	isGPT5Model := dto.IsOpenAIGPT5Model(info.UpstreamModelName)
-	if isOModel || isGPT5Model {
+	isGPT5OrNewerModel := dto.IsOpenAIGPT5OrNewerModel(info.UpstreamModelName)
+	if isOModel || isGPT5OrNewerModel {
 		if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
 			request.MaxCompletionTokens = request.MaxTokens
 			request.MaxTokens = nil
@@ -407,8 +407,8 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.Temperature = nil
 		}
 
-		// gpt-5系列模型适配 归零不再支持的参数
-		if isGPT5Model {
+		// gpt-5 及之后世代适配 归零不再支持的参数
+		if isGPT5OrNewerModel {
 			request.Temperature = nil
 			request.TopP = nil
 			request.LogProbs = nil
@@ -548,36 +548,7 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
-	// gpt-image 系列：白名单过滤，只保留支持的参数
-	if strings.HasPrefix(request.Model, "gpt-image") {
-		request.ResponseFormat = ""
-		request.Style = nil
-		request.ExtraFields = nil
-		//request.Background = nil
-		request.Moderation = nil
-		request.OutputFormat = nil
-		request.OutputCompression = nil
-		request.PartialImages = nil
-		request.Watermark = nil
-		request.User = nil
-		request.WatermarkEnabled = nil
-		request.UserId = nil
-
-		// Extra 中只保留白名单参数
-		if request.Extra != nil {
-			allowedParams := map[string]bool{
-				"model": true, "prompt": true, "n": true,
-				"size": true, "quality": true, "input_fidelity": true,
-				"image": true, "images": true,
-			}
-			for key := range request.Extra {
-				if !allowedParams[key] {
-					delete(request.Extra, key)
-				}
-			}
-		}
-	}
-
+	// 生图参数一律原样透传，网关不做白名单、不改写、不补默认值，取值合法性交给上游判断。
 	switch info.RelayMode {
 	case relayconstant.RelayModeImagesEdits:
 		// 图生图：统一转为 multipart/form-data 格式（Azure OpenAI 要求）
@@ -625,6 +596,47 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 				(request.Extra != nil && (request.Extra["image"] != nil || request.Extra["images"] != nil)))
 
 		if hasImageInDTO {
+			// JSON 请求的其余生图参数同样要写进表单：原生 multipart 请求靠下面的
+			// mf.Value 循环整体转发，JSON 请求没有这一步，不显式写就会被静默丢掉
+			// （background=transparent、output_format=jpeg 都属于这种情况）。
+			for _, field := range []struct {
+				name  string
+				value json.RawMessage
+			}{
+				{"background", request.Background},
+				{"moderation", request.Moderation},
+				{"output_format", request.OutputFormat},
+				{"output_compression", request.OutputCompression},
+				{"partial_images", request.PartialImages},
+				{"style", request.Style},
+				{"user", request.User},
+				{"extra_fields", request.ExtraFields},
+				{"watermark_enabled", request.WatermarkEnabled},
+				{"user_id", request.UserId},
+			} {
+				if len(field.value) > 0 {
+					// 表单只能传字符串，JSON 字符串要去掉引号，数字/布尔原样写入。
+					writer.WriteField(field.name, strings.Trim(string(field.value), `"`))
+				}
+			}
+			if request.ResponseFormat != "" {
+				writer.WriteField("response_format", request.ResponseFormat)
+			}
+			if request.Stream != nil {
+				writer.WriteField("stream", fmt.Sprintf("%t", *request.Stream))
+			}
+			if request.Watermark != nil {
+				writer.WriteField("watermark", fmt.Sprintf("%t", *request.Watermark))
+			}
+			// 渠道专有参数（seed、sequential_image_generation 等）一并透传，
+			// 是否合法交给上游判断，不在网关这层做白名单。
+			for key, value := range request.Extra {
+				if key == "image" || key == "images" || key == "mask" {
+					continue
+				}
+				writer.WriteField(key, strings.Trim(string(value), `"`))
+			}
+
 			// JSON 格式：从 Image 或 Extra 中提取图片，转为 multipart 文件
 			var imageStrings []string
 
@@ -707,6 +719,29 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 					return nil, fmt.Errorf("failed to write image data %d: %w", i, err)
 				}
 				logger.LogInfo(c.Request.Context(), fmt.Sprintf("gpt-image edits image[%d] written: filename=%s, mime=%s, size=%d bytes", i, filename, mimeType, len(imageBytes)))
+			}
+
+			// mask 同样是用户显式传的参考图，JSON 请求里此前会被整个丢掉，
+			// 局部重绘请求发上去等于没带 mask。
+			if len(request.Mask) > 0 {
+				var maskStr string
+				if err := common.Unmarshal(request.Mask, &maskStr); err != nil || maskStr == "" {
+					return nil, errors.New("mask must be a URL or base64 data URI string")
+				}
+				maskBytes, mimeType, err := downloadOrDecodeImage(maskStr)
+				if err != nil {
+					return nil, fmt.Errorf("failed to process mask: %w", err)
+				}
+				h := make(textproto.MIMEHeader)
+				h.Set("Content-Disposition", `form-data; name="mask"; filename="mask.png"`)
+				h.Set("Content-Type", mimeType)
+				part, err := writer.CreatePart(h)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create mask part: %w", err)
+				}
+				if _, err := part.Write(maskBytes); err != nil {
+					return nil, fmt.Errorf("failed to write mask data: %w", err)
+				}
 			}
 		} else {
 			// multipart/form-data 格式：使用已解析的 multipart 表单

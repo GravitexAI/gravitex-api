@@ -212,26 +212,29 @@ var imageEditParsedFormFields = map[string]bool{
 	"response_format": true,
 }
 
-// formExtraValues 收集表单里网关没有显式解析的字段；同名多值收敛成数组。
+// formExtraValues 收集表单里网关没有显式解析的字段。OpenAI SDK 走 multipart 时会把嵌套
+// 结构展平成括号语法（sequential_image_generation_options[max_images]=4、tags[]=a），
+// 这里按同样的规则还原回嵌套对象与数组，再透传给上游。
 func formExtraValues(formData url.Values) map[string]json.RawMessage {
-	extra := make(map[string]json.RawMessage, len(formData))
+	root := make(map[string]any, len(formData))
 	for key, values := range formData {
-		if len(values) == 0 || imageEditParsedFormFields[key] || strings.HasPrefix(key, "image[") {
+		if len(values) == 0 {
 			continue
 		}
-		if len(values) == 1 {
-			if encoded := formValueToJSON(values[0]); encoded != nil {
-				extra[key] = encoded
-			}
+		segments := parseBracketFormKey(key)
+		// image 及其 image[] / image[N] 变体已经作为参考图解析过，不要再进 Extra。
+		if imageEditParsedFormFields[segments[0]] || segments[0] == "image" {
 			continue
 		}
-		items := make([]json.RawMessage, 0, len(values))
-		for _, value := range values {
-			if encoded := formValueToJSON(value); encoded != nil {
-				items = append(items, encoded)
-			}
+		if !setNestedFormValue(root, segments, values) {
+			// 还原不了的括号形态按字面量字段名透传，宁可让上游拒绝也不静默丢弃。
+			root[key] = formValuesToJSON(values, false)
 		}
-		if encoded, err := common.Marshal(items); err == nil {
+	}
+
+	extra := make(map[string]json.RawMessage, len(root))
+	for key, value := range root {
+		if encoded, err := common.Marshal(value); err == nil {
 			extra[key] = encoded
 		}
 	}
@@ -239,6 +242,78 @@ func formExtraValues(formData url.Values) map[string]json.RawMessage {
 		return nil
 	}
 	return extra
+}
+
+// parseBracketFormKey 把 a[b][] 这样的表单字段名拆成 ["a", "b", ""]，
+// 非法括号语法原样返回单段，交给调用方按字面量处理。
+func parseBracketFormKey(key string) []string {
+	start := strings.IndexByte(key, '[')
+	if start <= 0 || !strings.HasSuffix(key, "]") {
+		return []string{key}
+	}
+	segments := []string{key[:start]}
+	for _, segment := range strings.Split(key[start:], "[") {
+		if segment == "" {
+			continue
+		}
+		if !strings.HasSuffix(segment, "]") {
+			return []string{key}
+		}
+		segments = append(segments, strings.TrimSuffix(segment, "]"))
+	}
+	return segments
+}
+
+// setNestedFormValue 按解析出的路径把表单值写进嵌套结构，末段为空表示该字段是数组。
+// 返回 false 表示这种路径形态无法还原（例如数组元素再嵌套）。
+func setNestedFormValue(root map[string]any, segments []string, values []string) bool {
+	leaf, path := segments[len(segments)-1], segments[:len(segments)-1]
+	isArray := leaf == ""
+	if isArray {
+		if len(path) == 0 {
+			return false
+		}
+		leaf, path = path[len(path)-1], path[:len(path)-1]
+	}
+
+	node := root
+	for _, segment := range path {
+		if segment == "" {
+			return false
+		}
+		child, ok := node[segment].(map[string]any)
+		if !ok {
+			if _, exists := node[segment]; exists {
+				return false
+			}
+			child = make(map[string]any)
+			node[segment] = child
+		}
+		node = child
+	}
+	if _, exists := node[leaf]; exists {
+		return false
+	}
+	node[leaf] = formValuesToJSON(values, isArray)
+	return true
+}
+
+// formValuesToJSON 把同一字段的表单值编码成 JSON：数组语法或同名多值收敛成数组。
+func formValuesToJSON(values []string, forceArray bool) json.RawMessage {
+	if !forceArray && len(values) == 1 {
+		return formValueToJSON(values[0])
+	}
+	items := make([]json.RawMessage, 0, len(values))
+	for _, value := range values {
+		if encoded := formValueToJSON(value); encoded != nil {
+			items = append(items, encoded)
+		}
+	}
+	encoded, err := common.Marshal(items)
+	if err != nil {
+		return nil
+	}
+	return encoded
 }
 
 // formValueToJSON 把表单文本值还原成 JSON 值。表单只能传字符串，但上游要的是原始类型，
@@ -305,25 +380,6 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			// （如 seed、sequential_image_generation 等渠道专有参数）。
 			imageRequest.Extra = formExtraValues(formData)
 
-			if strings.HasPrefix(imageRequest.Model, "gpt-image") {
-				// 质量默认值: gpt-image-1-mini → medium, 其他 → high
-				if imageRequest.Quality == "" {
-					if imageRequest.Model == "gpt-image-1-mini" {
-						imageRequest.Quality = "medium"
-					} else {
-						imageRequest.Quality = "high"
-					}
-				}
-				// 验证质量参数值
-				validQualities := map[string]bool{"low": true, "medium": true, "high": true}
-				if !validQualities[imageRequest.Quality] {
-					imageRequest.Quality = "medium"
-				}
-			}
-			if imageRequest.N == nil || *imageRequest.N == 0 {
-				imageRequest.N = common.GetPointer(uint(1))
-			}
-
 			hasWatermark := formData.Has("watermark")
 			if hasWatermark {
 				watermark := formData.Get("watermark") == "true"
@@ -343,94 +399,15 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			return nil, errors.New("model is required")
 		}
 
-		if strings.Contains(imageRequest.Size, "×") {
-			return nil, errors.New("size an unexpected error occurred in the parameter, please use 'x' instead of the multiplication sign '×'")
-		}
-
+		// n 是计费乘数，必须有上限：超大值或回绕成的巨大无符号数会让配额计算溢出成负扣费。
+		// 这是唯一保留的取值校验，其余生图参数一律原样透传，合法性交给上游判断。
 		if imageRequest.N != nil && *imageRequest.N > dto.MaxImageN {
 			return nil, fmt.Errorf("n must be an integer between 1 and %d", dto.MaxImageN)
 		}
 
-		// Not "256x256", "512x512", or "1024x1024"
-		if imageRequest.Model == "dall-e-2" || imageRequest.Model == "dall-e" {
-			if imageRequest.Size != "" && imageRequest.Size != "256x256" && imageRequest.Size != "512x512" && imageRequest.Size != "1024x1024" {
-				return nil, errors.New("size must be one of 256x256, 512x512, or 1024x1024 for dall-e-2 or dall-e")
-			}
-			if imageRequest.Size == "" {
-				imageRequest.Size = "1024x1024"
-			}
-		} else if imageRequest.Model == "dall-e-3" {
-			if imageRequest.Size != "" && imageRequest.Size != "1024x1024" && imageRequest.Size != "1024x1792" && imageRequest.Size != "1792x1024" {
-				return nil, errors.New("size must be one of 1024x1024, 1024x1792 or 1792x1024 for dall-e-3")
-			}
-			if imageRequest.Quality == "" {
-				imageRequest.Quality = "standard"
-			}
-			if imageRequest.Size == "" {
-				imageRequest.Size = "1024x1024"
-			}
-		} else if strings.HasPrefix(imageRequest.Model, "gpt-image") {
-			if imageRequest.Model == "gpt-image-2" {
-				// gpt-image-2 支持 4K 及自定义尺寸（像素须为 16 倍数，总像素 655360~8294400）
-				// 预设尺寸: 4K(2880x2880), 1024x1024, 1024x1536, 1536x1024
-				// 自定义尺寸由上游校验，此处仅设默认值
-				if imageRequest.Size == "" {
-					imageRequest.Size = "1024x1024"
-				}
-			} else {
-				// gpt-image-1/1-mini/1.5 尺寸校验交给上游，此处仅设默认值
-				// gpt-image-1/1-mini/1.5 仅支持 3 个固定尺寸
-				// if imageRequest.Size != "" && imageRequest.Size != "1024x1024" && imageRequest.Size != "1024x1536" && imageRequest.Size != "1536x1024" {
-				// 	return nil, errors.New("size must be one of 1024x1024, 1024x1536 or 1536x1024 for gpt-image-1")
-				// }
-				if imageRequest.Size == "" {
-					imageRequest.Size = "1024x1024"
-				}
-			}
-
-			// 质量默认值: gpt-image-1-mini → medium, 其他 → high
-			if imageRequest.Quality == "" {
-				if imageRequest.Model == "gpt-image-1-mini" {
-					imageRequest.Quality = "medium"
-				} else {
-					imageRequest.Quality = "high"
-				}
-			}
-			// 质量取值校验交给上游（OpenAI 支持 low/medium/high/auto，且会自行拒绝非法值）
-			// validQualities := map[string]bool{"low": true, "medium": true, "high": true}
-			// if !validQualities[imageRequest.Quality] {
-			// 	return nil, errors.New("quality must be one of low, medium, or high for gpt-image models")
-			// }
-
-			// gpt-image 只支持 b64_json 格式输出（Azure 不支持 response_format 参数）
-			// response_format 取值校验交给上游，此处仍统一清空以兼容 Azure
-			// if imageRequest.ResponseFormat != "" && imageRequest.ResponseFormat != "b64_json" {
-			// 	return nil, errors.New("gpt-image models only support response_format: b64_json")
-			// }
-			imageRequest.ResponseFormat = ""
-
-			// n 数量校验交给上游
-			// gpt-image 支持 1-10 张图片
-			// if imageRequest.N != nil && *imageRequest.N > 10 {
-			// 	return nil, errors.New("n must be between 1 and 10 for gpt-image models")
-			// }
-
-			// input_fidelity 取值校验交给上游
-			// if imageRequest.InputFidelity != nil {
-			// 	validFidelities := map[string]bool{"low": true, "medium": true, "high": true}
-			// 	if !validFidelities[*imageRequest.InputFidelity] {
-			// 		return nil, errors.New("input_fidelity must be one of low, medium, or high")
-			// 	}
-			// }
-		}
-
-		//if imageRequest.Prompt == "" {
-		//	return nil, errors.New("prompt is required")
-		//}
-
-		if imageRequest.N == nil || *imageRequest.N == 0 {
-			imageRequest.N = common.GetPointer(uint(1))
-		}
+		// size / quality / response_format / n 等参数不再补默认值也不再改写：
+		// 网关补的默认值会覆盖上游自己的默认（例如 OpenAI 的 size=auto、quality=auto），
+		// 用户没传的字段就该让上游按自己的规则决定。
 	}
 
 	return imageRequest, nil

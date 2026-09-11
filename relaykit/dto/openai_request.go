@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
@@ -237,8 +238,22 @@ func IsOpenAIReasoningOModel(modelName string) bool {
 		strings.HasPrefix(modelName, "o4")
 }
 
-func IsOpenAIGPT5Model(modelName string) bool {
-	return strings.HasPrefix(modelName, "gpt-5")
+// IsOpenAIGPT5OrNewerModel 判断模型是否属于 GPT-5 及之后的世代。
+// OpenAI 从 GPT-5 起改变了 Chat Completions 的参数契约，并在 GPT-6 沿用：
+// max_tokens 被 max_completion_tokens 取代，temperature/top_p/logprobs 不再支持，
+// system 角色改用 developer。按世代号判定，避免每出一代都要补一个前缀。
+func IsOpenAIGPT5OrNewerModel(modelName string) bool {
+	rest, ok := strings.CutPrefix(modelName, "gpt-")
+	if !ok {
+		return false
+	}
+	// 取主版本号：gpt-5 -> "5"，gpt-5.6-sol -> "5"，gpt-6-astra -> "6"
+	major := rest
+	if idx := strings.IndexAny(rest, ".-"); idx >= 0 {
+		major = rest[:idx]
+	}
+	generation, err := strconv.Atoi(major)
+	return err == nil && generation >= 5
 }
 
 func IsQwenThinkingBudgetModel(modelName string) bool {
@@ -254,7 +269,7 @@ func (r *GeneralOpenAIRequest) GetSystemRoleName() string {
 		if !strings.HasPrefix(r.Model, "o1-mini") && !strings.HasPrefix(r.Model, "o1-preview") {
 			return "developer"
 		}
-	} else if IsOpenAIGPT5Model(r.Model) {
+	} else if IsOpenAIGPT5OrNewerModel(r.Model) {
 		return "developer"
 	}
 	return "system"
@@ -385,6 +400,7 @@ func (m *MediaContent) GetFile() *MessageFile {
 				FileName: kitutil.Interface2String(itemMap["file_name"]),
 				FileData: kitutil.Interface2String(itemMap["file_data"]),
 				FileId:   kitutil.Interface2String(itemMap["file_id"]),
+				MimeType: kitutil.Interface2String(itemMap["mime_type"]),
 			}
 			return out
 		}
@@ -399,7 +415,8 @@ func (m *MediaContent) GetVideoUrl() *MessageVideoUrl {
 		}
 		if itemMap, ok := m.VideoUrl.(map[string]any); ok {
 			out := &MessageVideoUrl{
-				Url: kitutil.Interface2String(itemMap["url"]),
+				Url:      kitutil.Interface2String(itemMap["url"]),
+				MimeType: kitutil.Interface2String(itemMap["mime_type"]),
 			}
 			return out
 		}
@@ -460,10 +477,12 @@ type MessageFile struct {
 	FileName string `json:"filename,omitempty"`
 	FileData string `json:"file_data,omitempty"`
 	FileId   string `json:"file_id,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
 }
 
 type MessageVideoUrl struct {
-	Url string `json:"url"`
+	Url      string `json:"url"`
+	MimeType string `json:"mime_type,omitempty"`
 }
 
 const (

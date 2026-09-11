@@ -36,7 +36,15 @@ const (
 
 	channelAffinityCacheNamespace           = "new-api:channel_affinity:v1"
 	channelAffinityUsageCacheStatsNamespace = "new-api:channel_affinity_usage_cache_stats:v1"
+
+	// bodyPrefixHashMaxBytesPerPath 限制单个路径参与哈希的字节数。
+	bodyPrefixHashMaxBytesPerPath = 2048
+	// bodyPrefixHashHexLen 是会话指纹保留的十六进制字符数。
+	bodyPrefixHashHexLen = 32
 )
+
+// defaultBodyPrefixPaths 是 body_prefix_hash 未配置 path 时的默认取值路径。
+var defaultBodyPrefixPaths = []string{"system", "messages.0", "messages.1"}
 
 var (
 	channelAffinityCacheOnce sync.Once
@@ -418,9 +426,63 @@ func extractChannelAffinityValue(c *gin.Context, src operation_setting.ChannelAf
 		default:
 			return strings.TrimSpace(res.Raw)
 		}
+	case "body_prefix_hash":
+		return bodyPrefixHash(c, src.Path)
 	default:
 		return ""
 	}
+}
+
+// bodyPrefixHash 用请求体中「一轮会话内不变」的前缀字段算出会话身份指纹。
+// 取的正好是上游 prompt cache 可复用的那段前缀：后续轮次只往 messages 尾部追加，
+// 不会改变指纹，因此同一个会话会稳定地粘在同一个上游渠道上。
+//
+// paths 为空时使用 defaultBodyPrefixPaths，它同时覆盖两种体裁：
+// Claude Messages 的 system 在顶层、messages.0 是首条 user 消息；
+// OpenAI Chat 没有顶层 system、messages.0 是 system、messages.1 是首条 user 消息。
+// 不存在的路径直接跳过，所以一条规则不必为体裁拆分。
+func bodyPrefixHash(c *gin.Context, paths string) string {
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return ""
+	}
+	body, err := storage.Bytes()
+	if err != nil || len(body) == 0 {
+		return ""
+	}
+
+	selected := defaultBodyPrefixPaths
+	if strings.TrimSpace(paths) != "" {
+		selected = strings.Split(paths, ",")
+	}
+
+	hasher := sha256.New()
+	matched := false
+	for _, path := range selected {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		res := gjson.GetBytes(body, path)
+		if !res.Exists() {
+			continue
+		}
+		matched = true
+		// 每个路径只取前若干字节：既给哈希成本封顶，也让 system 尾部的易变内容
+		// （当前时间、git 状态等）不至于把同一个会话的指纹逐请求打散。
+		raw := res.Raw
+		if len(raw) > bodyPrefixHashMaxBytesPerPath {
+			raw = raw[:bodyPrefixHashMaxBytesPerPath]
+		}
+		hasher.Write([]byte(path))
+		hasher.Write([]byte{0})
+		hasher.Write([]byte(raw))
+		hasher.Write([]byte{0})
+	}
+	if !matched {
+		return ""
+	}
+	return hex.EncodeToString(hasher.Sum(nil))[:bodyPrefixHashHexLen]
 }
 
 func buildChannelAffinityCacheKeySuffix(rule operation_setting.ChannelAffinityRule, modelName string, usingGroup string, affinityValue string) string {
