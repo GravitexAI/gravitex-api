@@ -69,6 +69,7 @@ import JSONEditor from '../../../common/ui/JSONEditor';
 import SecureVerificationModal from '../../../common/modals/SecureVerificationModal';
 import StatusCodeRiskGuardModal from './StatusCodeRiskGuardModal';
 import ChannelKeyDisplay from '../../../common/ui/ChannelKeyDisplay';
+import { getStoredChannelKeyMode, setStoredChannelKeyMode } from './channelKeyModeStorage';
 import { useSecureVerification } from '../../../../hooks/common/useSecureVerification';
 import { parseChannelConnectionString } from '../../../../helpers/token';
 import { createApiCalls } from '../../../../services/secureVerification';
@@ -950,8 +951,9 @@ const EditChannelModal = (props) => {
         const modeVal = chInfo.multi_key_mode || 'random';
         setMultiKeyMode(modeVal);
         data.multi_key_mode = modeVal;
-        setKeyMode('append');
-        data.key_mode = 'append';
+        const storedKeyMode = getStoredChannelKeyMode(channelId);
+        setKeyMode(storedKeyMode);
+        data.key_mode = storedKeyMode;
       } else {
         setBatch(false);
         setMultiToSingle(false);
@@ -2081,6 +2083,9 @@ const EditChannelModal = (props) => {
     const { success, message } = res.data;
     if (success) {
       if (isEdit) {
+        if (isMultiKeyChannel) {
+          setStoredChannelKeyMode(channelId, keyMode);
+        }
         showSuccess(t('渠道更新成功！'));
       } else {
         showSuccess(t('渠道创建成功！'));
