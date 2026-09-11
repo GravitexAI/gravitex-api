@@ -385,6 +385,7 @@ func (m *MediaContent) GetFile() *MessageFile {
 				FileName: kitutil.Interface2String(itemMap["file_name"]),
 				FileData: kitutil.Interface2String(itemMap["file_data"]),
 				FileId:   kitutil.Interface2String(itemMap["file_id"]),
+				MimeType: kitutil.Interface2String(itemMap["mime_type"]),
 			}
 			return out
 		}
@@ -399,7 +400,8 @@ func (m *MediaContent) GetVideoUrl() *MessageVideoUrl {
 		}
 		if itemMap, ok := m.VideoUrl.(map[string]any); ok {
 			out := &MessageVideoUrl{
-				Url: kitutil.Interface2String(itemMap["url"]),
+				Url:      kitutil.Interface2String(itemMap["url"]),
+				MimeType: kitutil.Interface2String(itemMap["mime_type"]),
 			}
 			return out
 		}
@@ -460,10 +462,12 @@ type MessageFile struct {
 	FileName string `json:"filename,omitempty"`
 	FileData string `json:"file_data,omitempty"`
 	FileId   string `json:"file_id,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
 }
 
 type MessageVideoUrl struct {
-	Url string `json:"url"`
+	Url      string `json:"url"`
+	MimeType string `json:"mime_type,omitempty"`
 }
 
 const (

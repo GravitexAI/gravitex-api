@@ -662,6 +662,33 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 					})
 				}
 			} else {
+				// CHZ-PATCH(gemini-video-gcs-uri): Vertex AI 的 generateContent 原生支持通过
+				// fileData.fileUri 直接引用 Cloud Storage 对象（gs://bucket/object），且要求该
+				// 对象公开可读或与发起请求的 Vertex 项目同属一个 GCP 项目：
+				// https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/models/inference
+				// 这条 fileUri 直传只对 Vertex 生效——Gemini 开发者版 API（原生 Gemini 渠道）不认裸
+				// gs:// URI，必须先调 Files API 的 register_files 单独注册（另一套机制，未实现），直接
+				// 传 gs:// 会被上游拒绝（400 Invalid or unsupported file uri）。因此这里按渠道类型收窄，
+				// 非 Vertex 渠道直接报错，避免比旧的 base64 解码失败更隐蔽地把错误请求发给上游。
+				if gcsUri, mimeType, isGCS := extractGCSMediaPart(part); isGCS {
+					if info.ChannelType != constant.ChannelTypeVertexAi {
+						return nil, fmt.Errorf("Cloud Storage (gs://) media input is only supported on a Vertex AI channel, got '%s'", gcsUri)
+					}
+					if mimeType == "" {
+						return nil, fmt.Errorf("cannot determine mime type for Cloud Storage URI '%s', please specify mime_type explicitly", gcsUri)
+					}
+					if _, ok := geminiSupportedMimeTypes[strings.ToLower(mimeType)]; !ok {
+						return nil, fmt.Errorf("mime type is not supported by Gemini: '%s', url: '%s', supported types are: %v", mimeType, gcsUri, getSupportedMimeTypesList())
+					}
+					parts = append(parts, dto.GeminiPart{
+						FileData: &dto.GeminiFileData{
+							FileUri:  gcsUri,
+							MimeType: mimeType,
+						},
+					})
+					continue
+				}
+
 				source := part.ToFileSource()
 				if source == nil {
 					continue
@@ -841,6 +868,73 @@ func getSupportedMimeTypesList() []string {
 		keys = append(keys, k)
 	}
 	return keys
+}
+
+// CHZ-PATCH(gemini-video-gcs-uri): 识别 image_url/video_url 中的 Cloud Storage URI
+// （gs://bucket/object），返回其 URI 及 MIME 类型，供上层直接构造 fileData part。
+// mime type 优先取客户端显式传入的值，缺省时按 URI 扩展名猜测。
+func extractGCSMediaPart(part dto.MediaContent) (uri string, mimeType string, ok bool) {
+	switch part.Type {
+	case dto.ContentTypeImageURL:
+		img := part.GetImageMedia()
+		if img == nil || !strings.HasPrefix(img.Url, "gs://") {
+			return "", "", false
+		}
+		mimeType = img.MimeType
+		if mimeType == "" {
+			mimeType = guessMimeTypeFromGCSUri(img.Url)
+		}
+		return img.Url, mimeType, true
+	case dto.ContentTypeVideoUrl:
+		video := part.GetVideoUrl()
+		if video == nil || !strings.HasPrefix(video.Url, "gs://") {
+			return "", "", false
+		}
+		mimeType = video.MimeType
+		if mimeType == "" {
+			mimeType = guessMimeTypeFromGCSUri(video.Url)
+		}
+		return video.Url, mimeType, true
+	case dto.ContentTypeFile:
+		// 音频/PDF/文本等非图片、非视频文件目前通过 file 内容块的 file_data 承载 gs:// 引用
+		// （input_audio 协议只接受 base64 data，没有 URL 字段）。
+		file := part.GetFile()
+		if file == nil || !strings.HasPrefix(file.FileData, "gs://") {
+			return "", "", false
+		}
+		mimeType = file.MimeType
+		if mimeType == "" {
+			mimeType = guessMimeTypeFromGCSUri(file.FileData)
+		}
+		if mimeType == "" && file.FileName != "" {
+			mimeType = guessMimeTypeFromGCSUri(file.FileName)
+		}
+		return file.FileData, mimeType, true
+	}
+	return "", "", false
+}
+
+// guessMimeTypeFromGCSUri 从 gs:// URI 的对象名后缀猜测 MIME 类型；无法识别时返回空字符串
+// （gs:// 对象无法像 http(s) 那样下载探测 Content-Type，只能靠扩展名或客户端显式指定）。
+func guessMimeTypeFromGCSUri(uri string) string {
+	clean := uri
+	if q := strings.Index(clean, "?"); q != -1 {
+		clean = clean[:q]
+	}
+	// 取最后一段路径作为文件名；不含 "/" 时（例如直接传裸文件名做兜底）整段就是文件名。
+	name := clean
+	if slash := strings.LastIndex(clean, "/"); slash != -1 {
+		name = clean[slash+1:]
+	}
+	dot := strings.LastIndex(name, ".")
+	if dot == -1 || dot+1 >= len(name) {
+		return ""
+	}
+	ext := strings.ToLower(name[dot+1:])
+	if mt := service.GetMimeTypeByExtension(ext); mt != "application/octet-stream" {
+		return mt
+	}
+	return ""
 }
 
 var geminiOpenAPISchemaAllowedFields = map[string]struct{}{
