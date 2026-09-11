@@ -37,7 +37,8 @@ func newImageEditContext(t *testing.T, filenames []string, fieldName func(int) s
 	require.NoError(t, writer.WriteField("response_format", "b64_json"))
 	require.NoError(t, writer.WriteField("seed", "42"))
 	require.NoError(t, writer.WriteField("sequential_image_generation", "auto"))
-	require.NoError(t, writer.WriteField("sequential_image_generation_options", `{"max_images":4}`))
+	// OpenAI SDK 走 multipart 时把嵌套对象展平成括号语法，这里按 SDK 的真实报文写。
+	require.NoError(t, writer.WriteField("sequential_image_generation_options[max_images]", "4"))
 	for i, filename := range filenames {
 		part, err := writer.CreateFormFile(fieldName(i), filename)
 		require.NoError(t, err)
