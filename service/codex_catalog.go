@@ -51,6 +51,15 @@ var codexReasoningLevels = []dto.CodexReasoningLevel{
 // 模型误填（库里存在 480、1024、3072 这类值），真喂给 Codex 会导致每轮都 auto-compact。
 const codexMinContextWindow = 8192
 
+// codexBaseInstructions 是目录里每个条目必须提供的系统提示词。
+// Codex 0.154 会校验每个条目至少有 base_instructions 或 model_messages.instructions_template，
+// 缺了就整份目录解析失败。官方给自家模型配的是一整套 model_messages，
+// 第三方模型给一段通用的编码 agent 指令即可。
+const codexBaseInstructions = "You are Codex, a coding agent running in the user's workspace. " +
+	"Help the user understand, modify, test, and improve the code in the current project. " +
+	"Prefer reading files before editing them, make minimal focused changes, " +
+	"and verify your work by running the project's own tests or build commands when available."
+
 // BuildCodexCatalog 把一批模型名转成 Codex 模型目录。
 //
 // modelNames 应当是调用方已经按用户分组、令牌模型限制筛过的可用模型集合，
@@ -113,8 +122,11 @@ func buildCodexModel(modelName string, info model.ModelExtensionInfo) (dto.Codex
 		MaxContextWindow:      window.MaxContextWindow,
 		AutoCompactTokenLimit: nil, // null 表示让 Codex 自己按窗口推导
 
-		SupportedReasoningLevels:          nil,
+		// 必须是空数组而不是 null：Codex 0.154 实测把它当 sequence 解析，
+		// 发 null 会报「invalid type: null, expected a sequence」并让整份目录失效。
+		SupportedReasoningLevels:          []dto.CodexReasoningLevel{},
 		DefaultReasoningSummary:           "none",
+		BaseInstructions:                  codexBaseInstructions,
 		SupportsReasoningSummaries:        false,
 		SupportsReasoningSummaryParameter: false,
 

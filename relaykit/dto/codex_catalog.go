@@ -91,10 +91,17 @@ type CodexModel struct {
 	AvailabilityNux      *string `json:"availability_nux"`
 	Upgrade              *string `json:"upgrade"`
 
+	// base_instructions 是模型的系统提示词。Codex 0.154 实测：目录里每个条目
+	// 必须提供 base_instructions 或 model_messages.instructions_template，
+	// 两个都没有会直接报
+	// 「model `x` is missing both `base_instructions` and `model_messages.instructions_template`」
+	// 并且整份目录解析失败。这里用 base_instructions，因为 model_messages
+	// 是一整套嵌套结构（tools/approvals/multi_agent/...），我们没有能力提供等价内容。
+	BaseInstructions string `json:"base_instructions"`
+
 	// available_in_plans 是 Codex 按 ChatGPT 套餐做的展示门控。第三方 API Key
 	// 没有套餐概念，发一个对不上的列表反而会让模型被过滤掉，所以整个键省略，
-	// 让 Codex 走「不做套餐门控」的默认分支。model_messages 同理：它会覆盖
-	// Codex 内置的 instructions 模板，我们没有能力提供等价内容，省略更安全。
+	// 让 Codex 走「不做套餐门控」的默认分支。
 	AvailableInPlans []string            `json:"available_in_plans,omitempty"`
 	ModelMessages    *CodexModelMessages `json:"model_messages,omitempty"`
 

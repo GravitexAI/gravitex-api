@@ -64,6 +64,42 @@ func TestBuildCodexCatalogUsesCodexEnvelopeAndSlug(t *testing.T) {
 	}
 }
 
+// Codex 0.154 实测出来的两条硬约束，违反任意一条都会让**整份目录**解析失败，
+// 客户端直接起不来：
+//   - supported_reasoning_levels 当 sequence 解析，发 null 报
+//     「invalid type: null, expected a sequence」
+//   - 每个条目必须有 base_instructions（或 model_messages.instructions_template），
+//     缺了报「model `x` is missing both ...」
+func TestBuildCodexCatalogSatisfiesCodexSchemaHardRequirements(t *testing.T) {
+	extensions := map[string]model.ModelExtensionInfo{
+		// chat 模型走非推理分支，最容易漏掉这两个字段
+		"claude-opus-4-7": chatExtension("claude-opus-4-7", 1000000, []string{"openai-response"}, []string{"text", "image"}),
+		"gpt-6-astra": reasoningLikeExtension("gpt-6-astra", "reasoning", 1050000,
+			[]string{"openai-response"}, []string{"text", "image"}),
+	}
+
+	catalog := BuildCodexCatalog([]string{"claude-opus-4-7", "gpt-6-astra"}, extensions)
+	require.Len(t, catalog.Models, 2)
+
+	raw, err := common.Marshal(catalog)
+	require.NoError(t, err)
+	var decoded struct {
+		Models []map[string]any `json:"models"`
+	}
+	require.NoError(t, common.Unmarshal(raw, &decoded))
+
+	for _, entry := range decoded.Models {
+		slug := entry["slug"]
+		require.NotNil(t, entry["supported_reasoning_levels"],
+			"%v 的 supported_reasoning_levels 不能是 null，Codex 按数组解析", slug)
+		assert.IsType(t, []any{}, entry["supported_reasoning_levels"], slug)
+
+		instructions, ok := entry["base_instructions"].(string)
+		require.True(t, ok, "%v 缺 base_instructions", slug)
+		assert.NotEmpty(t, instructions, slug)
+	}
+}
+
 // Codex 目录里的 context_window 是「会话窗口」，和模型在 OpenAI API 侧标称的窗口
 // 不是一回事：gpt-6-astra API 标称 1,050,000，Codex 目录是 272,000 / 872,000。
 // 照搬库里的 API 窗口会让客户端塞超上游能接受的量并拿到 400。

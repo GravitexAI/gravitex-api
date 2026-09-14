@@ -41,6 +41,15 @@ DEFAULT_CLIENT_VERSION = "0.153.0"
 # 与其让 Codex 拿不到值直接失败，不如给一个保守值先把会话跑起来。
 FALLBACK_CONTEXT_WINDOW = 128000
 
+# Codex 0.154 会校验目录里每个条目至少有 base_instructions 或
+# model_messages.instructions_template，两个都缺会让整份目录解析失败。
+BASE_INSTRUCTIONS = (
+    "You are Codex, a coding agent running in the user's workspace. "
+    "Help the user understand, modify, test, and improve the code in the current project. "
+    "Prefer reading files before editing them, make minimal focused changes, "
+    "and verify your work by running the project's own tests or build commands when available."
+)
+
 REASONING_LEVELS = [
     {"effort": "low", "description": "Fast responses with lighter reasoning"},
     {"effort": "medium", "description": "Balances speed and reasoning depth for everyday tasks"},
@@ -88,7 +97,9 @@ def convert_openai_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "max_context_window": FALLBACK_CONTEXT_WINDOW,
                 "auto_compact_token_limit": None,
                 "default_reasoning_level": None,
+                # 必须是数组而不是 null，Codex 把它当 sequence 解析
                 "supported_reasoning_levels": [],
+                "base_instructions": BASE_INSTRUCTIONS,
                 "default_reasoning_summary": "none",
                 "supports_reasoning_summaries": False,
                 "supports_reasoning_summary_parameter": False,
@@ -142,6 +153,19 @@ def build_catalog(base_url: str, api_key: str, client_version: str) -> tuple[lis
     return convert_openai_payload(payload), False
 
 
+def pick_default_model(slugs: list[str]) -> str:
+    """挑一个适合当 Codex 默认模型的 slug。
+
+    目录是按上下文窗口排序的，直接取第一个会挑中窗口最大但未必适合写代码的模型
+    （例如 claude-opus-4-7）。这里按 Codex 生态的习惯偏好依次匹配。
+    """
+    for prefix in ("gpt-6", "gpt-5.6", "gpt-5.5", "gpt-5"):
+        for slug in slugs:
+            if slug.startswith(prefix):
+                return slug
+    return slugs[0]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="生成 Codex model_catalog_json")
     parser.add_argument("--base-url", required=True, help="Gravitex 接口地址，以 /v1 结尾，例如 https://host/v1")
@@ -149,6 +173,7 @@ def main() -> int:
     parser.add_argument("--client-version", default=DEFAULT_CLIENT_VERSION, help="上报的 Codex 客户端版本")
     parser.add_argument("--output", default=str(Path.home() / ".codex" / "gravitex-codex-catalog.json"))
     parser.add_argument("--provider-name", default="gravitex", help="写进 config.toml 的 provider 名")
+    parser.add_argument("--model", default="", help="写进 config.toml 的默认模型，缺省时挑一个编码向的")
     args = parser.parse_args()
 
     if not args.api_key:
@@ -170,10 +195,18 @@ def main() -> int:
             "    这个值不准会导致 Codex 过早压缩上下文或请求超限，请让网关升级到支持 Codex 方言的版本。"
         )
 
+    slugs = [m["slug"] for m in models]
+    default_model = args.model or pick_default_model(slugs)
+    if args.model and args.model not in slugs:
+        print(f"⚠️  --model 指定的 {args.model} 不在目录里，Codex 会报 model not found。可选：{', '.join(slugs)}")
+
     print("\n把下面这段贴进 ~/.codex/config.toml（必须是用户级，项目里的 .codex/ 不生效）：\n")
-    print(f'model = "{models[0]["slug"]}"')
+    print(f'model = "{default_model}"')
     print(f'model_provider = "{args.provider_name}"')
     print(f'model_catalog_json = "{output_path}"')
+    # review_model 不写会让 /review 和 auto-review 回落到 Codex 内置默认模型，
+    # 那个模型多半不在我们的目录里，就会出现「配了 A 却打到 B」。
+    print(f'review_model = "{default_model}"')
     print()
     print(f"[model_providers.{args.provider_name}]")
     print(f'name = "{args.provider_name}"')
