@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -329,6 +330,7 @@ func (r *GeneralOpenAIRequest) ParseInput() []string {
 type Message struct {
 	Role             string          `json:"role"`
 	Content          any             `json:"content"`
+	Tools            json.RawMessage `json:"tools,omitempty"`
 	Name             *string         `json:"name,omitempty"`
 	Prefix           *bool           `json:"prefix,omitempty"`
 	ReasoningContent *string         `json:"reasoning_content,omitempty"`
@@ -342,6 +344,42 @@ type Message struct {
 	CacheControl  json.RawMessage `json:"cache_control,omitempty"`
 	parsedContent []MediaContent
 	//parsedStringContent *string
+}
+
+func (m Message) MarshalJSON() ([]byte, error) {
+	type messageAlias Message
+	toolPayload := bytes.TrimSpace(m.Tools)
+	if m.Content != nil || len(toolPayload) == 0 || !strings.EqualFold(m.Role, "system") {
+		return kitutil.Marshal(messageAlias(m))
+	}
+
+	// Kimi dynamic tool loading uses a system message that has tools but no
+	// content field. Keep content omitted for this message instead of emitting
+	// the null value introduced by the generic OpenAI DTO.
+	type dynamicToolMessage struct {
+		Role             string          `json:"role"`
+		Name             *string         `json:"name,omitempty"`
+		Prefix           *bool           `json:"prefix,omitempty"`
+		ReasoningContent *string         `json:"reasoning_content,omitempty"`
+		Reasoning        *string         `json:"reasoning,omitempty"`
+		ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
+		ToolCallId       string          `json:"tool_call_id,omitempty"`
+		Annotations      json.RawMessage `json:"annotations,omitempty"`
+		CacheControl     json.RawMessage `json:"cache_control,omitempty"`
+		Tools            json.RawMessage `json:"tools,omitempty"`
+	}
+	return kitutil.Marshal(dynamicToolMessage{
+		Role:             m.Role,
+		Name:             m.Name,
+		Prefix:           m.Prefix,
+		ReasoningContent: m.ReasoningContent,
+		Reasoning:        m.Reasoning,
+		ToolCalls:        m.ToolCalls,
+		ToolCallId:       m.ToolCallId,
+		Annotations:      m.Annotations,
+		CacheControl:     m.CacheControl,
+		Tools:            m.Tools,
+	})
 }
 
 type MediaContent struct {
