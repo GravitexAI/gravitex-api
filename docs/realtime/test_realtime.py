@@ -29,7 +29,9 @@ import websockets
 BASE_URL = "wss://api.gravitex.ai/v1/realtime"
 API_KEY  = "sk-uzK3kA0iYAN9g5xxxxxxxxxx"
 # MODEL    = "gpt-realtime-2"
-MODEL    = "gpt-realtime-1.5"
+# MODEL    = "gpt-realtime-1.5"
+# MODEL    = "gpt-realtime-2.1"
+MODEL    = "gpt-realtime-2.1-mini"
 
 # 图片文件（OSS URL 或本地绝对路径，留空则不使用图片）
 # ⚠️  注意：Azure OpenAI Realtime API 目前不支持图片输入！

@@ -347,6 +347,9 @@ type Message struct {
 	//parsedStringContent *string
 }
 
+// MarshalJSON is promoted to any struct that embeds Message, which would make
+// that struct serialize as a bare message. Every such struct must declare its
+// own MarshalJSON (see OpenAITextResponseChoice).
 func (m Message) MarshalJSON() ([]byte, error) {
 	type messageAlias Message
 	toolPayload := bytes.TrimSpace(m.Tools)

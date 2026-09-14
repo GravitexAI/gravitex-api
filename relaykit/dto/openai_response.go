@@ -38,6 +38,24 @@ type OpenAITextResponseChoice struct {
 	FinishReason string `json:"finish_reason"`
 }
 
+// MarshalJSON must stay explicit: the embedded Message declares its own
+// MarshalJSON, and Go promotes that method to this struct. Without an override
+// the whole choice would be serialized as a bare message object, dropping
+// index/message/finish_reason and breaking the non-stream chat.completion
+// contract for every format converted to OpenAI.
+func (c OpenAITextResponseChoice) MarshalJSON() ([]byte, error) {
+	type openAITextResponseChoiceJSON struct {
+		Index        int     `json:"index"`
+		Message      Message `json:"message"`
+		FinishReason string  `json:"finish_reason"`
+	}
+	return kitutil.Marshal(openAITextResponseChoiceJSON{
+		Index:        c.Index,
+		Message:      c.Message,
+		FinishReason: c.FinishReason,
+	})
+}
+
 type OpenAITextResponse struct {
 	Id      string                     `json:"id"`
 	Model   string                     `json:"model"`
@@ -226,12 +244,12 @@ type CompletionsStreamResponse struct {
 }
 
 type Usage struct {
-	PromptTokens         int           `json:"prompt_tokens"`
-	CompletionTokens     int           `json:"completion_tokens"`
-	TotalTokens          int           `json:"total_tokens"`
-	PromptCacheHitTokens int           `json:"prompt_cache_hit_tokens,omitempty"`
-	UsageSemantic        string        `json:"usage_semantic,omitempty"`
-	UsageSource          string        `json:"usage_source,omitempty"`
+	PromptTokens         int    `json:"prompt_tokens"`
+	CompletionTokens     int    `json:"completion_tokens"`
+	TotalTokens          int    `json:"total_tokens"`
+	PromptCacheHitTokens int    `json:"prompt_cache_hit_tokens,omitempty"`
+	UsageSemantic        string `json:"usage_semantic,omitempty"`
+	UsageSource          string `json:"usage_source,omitempty"`
 	// BillingUsage 只在进程内传递上游原始用量给计费链路，绝不下发给客户端。
 	BillingUsage *BillingUsage `json:"-"`
 
