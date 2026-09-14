@@ -331,6 +331,7 @@ type Message struct {
 	Role             string          `json:"role"`
 	Content          any             `json:"content"`
 	Tools            json.RawMessage `json:"tools,omitempty"`
+	Partial          *bool           `json:"partial,omitempty"`
 	Name             *string         `json:"name,omitempty"`
 	Prefix           *bool           `json:"prefix,omitempty"`
 	ReasoningContent *string         `json:"reasoning_content,omitempty"`
@@ -359,6 +360,7 @@ func (m Message) MarshalJSON() ([]byte, error) {
 	type dynamicToolMessage struct {
 		Role             string          `json:"role"`
 		Name             *string         `json:"name,omitempty"`
+		Partial          *bool           `json:"partial,omitempty"`
 		Prefix           *bool           `json:"prefix,omitempty"`
 		ReasoningContent *string         `json:"reasoning_content,omitempty"`
 		Reasoning        *string         `json:"reasoning,omitempty"`
@@ -371,6 +373,7 @@ func (m Message) MarshalJSON() ([]byte, error) {
 	return kitutil.Marshal(dynamicToolMessage{
 		Role:             m.Role,
 		Name:             m.Name,
+		Partial:          m.Partial,
 		Prefix:           m.Prefix,
 		ReasoningContent: m.ReasoningContent,
 		Reasoning:        m.Reasoning,
