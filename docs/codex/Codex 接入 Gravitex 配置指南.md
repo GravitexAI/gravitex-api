@@ -269,7 +269,7 @@ Authorization = "Bearer sk-xxxx"
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `model` | string | ✅ | 默认模型的 slug，必须与模型目录里的 `slug` 和 Gravitex 的模型名**完全一致**。<br>⚠️ **【实测】Desktop 的模型选择器会把选中的模型回写到这一行**，见 [8.1](#81-desktop-会回写-model) |
+| `model` | string | ✅ | 默认模型的 slug，必须与模型目录里的 `slug` 和 Gravitex 的模型名**完全一致**。<br>⚠️ **【实测】Desktop 的模型选择器会把选中的模型回写到这一行**，见 [8.3](#83-desktop-会回写-model) |
 | `review_model` | string | 建议填 | `/review` 命令和 auto-review 用的模型。**【文档】** [openai/codex#8809](https://github.com/openai/codex/issues/8809) 确认 review 不走 `model`，走这个。<br>不填 → 回落到 Codex 内置默认模型 → 出现「配了 A 却打到 B」 |
 | `model_provider` | string | ✅ | 指向下面 `[model_providers.X]` 的 X。名字随便起，只要两边一致 |
 | `model_reasoning_effort` | string | 否 | 推理强度：`none` / `low` / `medium` / `high` / `xhigh`。**必须是目标模型 `supported_reasoning_levels` 里有的值**，否则上游会 400。<br>非推理模型（chat 类）填 `none` |
@@ -464,7 +464,8 @@ codex        # 进交互界面后输入
 | 每次请求 404 | `base_url` 少了 `/v1`，或 `wire_api` 不是 `responses` | 见 [1.2](#12-base-url-必须带-v1) |
 | 每次请求 401 | Key 没存 / 存错 / 已过期 | `codex login status` 确认；重跑 `codex login --with-api-key` |
 | 启动警告「provider 被忽略」 | provider 定义在项目级 `.codex/config.toml` | 挪到 `~/.codex/config.toml` |
-| **配了 A 却打到 B** | 见 [8.1](#81-desktop-会回写-model) / [8.2](#82-review-走的是-review_model) / [8.3](#83-内置目录的门控) | 三条都查一遍 |
+| **账单里一直多一个 `gpt-5.6-luna`** | Codex Desktop 的标题生成硬编码调这个模型，官方已知问题 | 见 [8.1](#81-标题生成硬编码-gpt-56-luna官方已知问题)。**不是配置问题，保留该模型在目录里即可** |
+| **配了 A 却打到 B** | 见 [8.3](#83-desktop-会回写-model) / [8.4](#84-review-走的是-review_model) / [8.5](#85-内置目录的门控) | 三条都查一遍，先 `head -5 ~/.codex/config.toml` 看 `model` 当前值 |
 | CLI 能列模型，Desktop 列不出 | **Codex 官方 bug** [#19694](https://github.com/openai/codex/issues/19694)（至今 Open），Desktop 的 picker 有额外过滤 | 无解。用 `model = "xxx"` 内联写死绕过，picker 会显示「Custom」但请求正常 |
 | 模型列表是旧的 | `models_cache.json` 没刷新 | `rm ~/.codex/models_cache.json` 后完全重启 |
 | 请求 400、提到 tool / web_search | 官方插件往请求里塞了上游不支持的内置工具 | 关掉 `[features]` 里的 plugins / apps，或逐个禁用 `[plugins.*]` |
@@ -473,7 +474,58 @@ codex        # 进交互界面后输入
 
 ## 八、已知坑位速查
 
-### 8.1 Desktop 会回写 `model`
+> **「账单里为什么有两个模型 / 为什么一直有 `gpt-5.6-luna`」** —— 直接看 [8.1](#81-标题生成硬编码-gpt-56-luna官方已知问题)。
+> 这一节按「出现频率」排序，8.1 是常驻的，8.2/8.3 是触发式的，8.4 起才是配置问题。
+
+### 8.1 标题生成硬编码 `gpt-5.6-luna`（官方已知问题）
+
+**这是「主对话是 A、账单里却多出一个 B」最常见、且唯一「一直存在」的原因。**
+
+Codex Desktop 的**会话标题生成**功能硬编码请求 `gpt-5.6-luna`，**既不走 `model`，也不走 `review_model`**，界面上也没有任何提示。
+
+**【文档】** 官方 issue [openai/codex#45127](https://github.com/openai/codex/issues/45127)（2026-09-12 提交，**仍 Open**）原文：
+
+> Codex Desktop's automatic thread-title generation requests the **hard-coded `gpt-5.6-luna`** model with `feature=thread_title` and `reasoningEffort=low`.
+> This causes a **background feature to ignore the user-selected model** and may result in unexpected model usage and cost. **The fallback is not visible in the UI and no warning is shown.**
+
+对方贴出的 Desktop 日志：
+
+```
+feature=thread_title
+model=gpt-5.6-luna
+reasoningEffort=low
+inputTokens=13502  outputTokens=115  cachedTokens=13440
+```
+
+**【实测】** 在 `/Applications/ChatGPT.app/Contents/Resources/codex` 二进制里，字符串 `gpt-5.6-luna` 出现 12 次，其中两处是功能性的：
+
+| 相邻字符串 | 用途 |
+|---|---|
+| `tui/src/app/thread_title.rs` · `failed to start title-generation thread` | **会话标题生成** |
+| `guardian_classifier_source` · `codex.guardian_v2.*` | **Guardian 安全审查分类器**（见 [8.2](#82-guardian-分类器也用-luna)） |
+
+#### ⚠️ 不要把 `gpt-5.6-luna` 从目录里删掉
+
+按 issue 里的实测，**luna 不可用时 Codex 不会跳过标题生成，而是静默改用另一个模型**（对方回落到了 `deepseek-v4-pro`）。
+
+我们生成的目录按上下文窗口倒序排，第一个是 `claude-opus-4-7`（1,000,000）。**删掉 luna 反而可能让这个后台调用打到最贵的模型。**
+
+> ✅ **保留 `gpt-5.6-luna` 在目录里**，让它老实落在最便宜的模型上——这本来就是 OpenAI 的设计意图（Luna 定位就是分类 / 提取 / 路由这类轻量高并发活）。
+> 成本可忽略：单次 `outputTokens=115`，`inputTokens` 虽然上万但基本全部命中缓存。
+
+#### 给客户的话术
+
+> 这是 Codex 客户端自身的已知问题（OpenAI 官方 issue #45127，尚未修复）：Codex Desktop 的会话标题生成硬编码调用 `gpt-5.6-luna`，不受 `model` 配置控制，界面也不提示。这不是网关或配置问题。该调用单次输出仅约 115 tokens 且输入基本全部命中缓存，成本可忽略。建议保留该模型在目录中——移除后 Codex 不会跳过，而是静默改用其他模型，反而可能落到更贵的模型上。
+
+### 8.2 Guardian 分类器也用 luna
+
+**【实测】** 二进制里 `gpt-5.6-luna` 紧邻 `guardian_classifier_source` / `codex.guardian_v2.connection.duration_ms` 以及提示词 *"Trusted synchronous Guardian reviews supplied by Codex"*。
+
+Guardian 是 Codex 的同步安全审查分类器，触发审查时会额外发一次请求，同样用 luna。与 8.1 不同的是它**不是每轮都跑**，只在有需要审查的动作时触发。
+
+二进制里能看到相关配置项（`free_guardian`、`thread_context`、`persist_scores`、`classifier_instructions`、`review_threshold`、`review_scope` 等），但**官方没有公开文档说明如何关闭**，不建议瞎改。
+
+### 8.3 Desktop 会回写 `model`
 
 **【实测】** Codex Desktop 的模型选择器会把选中的模型**写回 `config.toml` 的 `model` 字段**。
 
@@ -483,20 +535,29 @@ codex        # 进交互界面后输入
 gpt-6-astra  →  gpt-5.6-sol  →  seed-1-8-251228
 ```
 
-**这是「配了 gpt-6 却打到 gpt-5.6」最常见的原因。**
+二进制里能看到对应的模块 `tui/src/app/config_persistence.rs`，证实这是设计行为而非 bug。
+
+**这是「偶发地配了 A 却打到 B」最常见的原因。**
+注意它和 [8.1](#81-标题生成硬编码-gpt-56-luna官方已知问题) 的区别：
+
+| | 8.1 标题生成 | 8.3 picker 回写 |
+|---|---|---|
+| 频率 | **一直有**，每开新会话一次 | **偶发**，点过 picker 才有 |
+| 表现 | 主对话模型正常，额外多一个 `gpt-5.6-luna` | 主对话模型本身就变了 |
+| `config.toml` 的 `model` | 不变 | **被改掉** |
 
 > ✅ 正确做法：改完 `config.toml` **还要在 Desktop 的 picker 里选中同一个模型**，否则下次启动又被覆盖。
-> 排查时先 `cat ~/.codex/config.toml | head -5` 看 `model` 现在到底是什么。
+> 排查时先 `head -5 ~/.codex/config.toml` 看 `model` 现在到底是什么。
 
-### 8.2 review 走的是 `review_model`
+### 8.4 review 走的是 `review_model`
 
 **【文档】** `/review` 命令和 auto-review **不用** `model`，用 `review_model`。不配就回落到 Codex 内置默认模型。
 
-### 8.3 内置目录的门控
+### 8.5 内置目录的门控
 
 没配 `model_catalog_json` 时，内置目录的 `minimal_client_version` 和 `available_in_plans` 会过滤掉模型，Codex 静默回落到门槛更低的模型。`gpt-6-astra` 门槛（`0.153.0`）恰好比 `gpt-5.6-*`（`0.144.0`）高一档，所以回落目标经常就是 5.6。
 
-### 8.4 目录级的 `upgrade` 自动改模型
+### 8.6 目录级的 `upgrade` 自动改模型
 
 **【实测】** 官方内置目录里，退役模型会带 `upgrade` 字段做静默重定向。例如 `gpt-5.4`：
 
@@ -510,11 +571,11 @@ gpt-6-astra  →  gpt-5.6-sol  →  seed-1-8-251228
 
 我们生成的目录里 `upgrade` 恒为 `null`，不受影响。
 
-### 8.5 子 agent 会派生额外调用
+### 8.7 子 agent 会派生额外调用
 
 Codex 的 multi-agent 机制（`spawn_agent` / `followup_task`）会让子 agent 各自发起模型调用。排查账单异常时要考虑这部分。建议接第三方网关时先 `features.multi_agent = false`。
 
-### 8.6 Key 安全
+### 8.8 Key 安全
 
 - 方式 C 的 Key 明文落盘，**不要把 `config.toml` 提交进 git**
 - 排查问题时如果把配置贴给别人，**记得先脱敏并事后换 Key**
