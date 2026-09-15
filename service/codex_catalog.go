@@ -133,7 +133,6 @@ func buildCodexModel(modelName string, info model.ModelExtensionInfo) (dto.Codex
 		InputModalities:             codexInputModalities(info),
 		SupportsImageDetailOriginal: false,
 
-		ApplyPatchToolType: "freeform",
 		WebSearchToolType:  "text",
 		SupportsSearchTool: info.Capabilities.SupportsWebSearch,
 		// unified_exec 是官方新模型用的形态，对第三方上游未必稳；shell_command 是
@@ -172,6 +171,13 @@ func buildCodexModel(modelName string, info model.ModelExtensionInfo) (dto.Codex
 		AvailabilityNux:      nil,
 		Upgrade:              nil,
 		CompHash:             "",
+	}
+
+	// 只有 OpenAI 原生模型的上游认 freeform apply_patch 用的自定义工具类型。
+	// 判据复用 codexOfficialWindows：能出现在官方 Codex 目录里的就是 OpenAI 原生模型。
+	if _, official := codexOfficialWindows[modelName]; official {
+		freeform := "freeform"
+		entry.ApplyPatchToolType = &freeform
 	}
 
 	if isReasoning {

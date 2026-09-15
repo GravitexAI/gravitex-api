@@ -300,8 +300,10 @@ Authorization = "Bearer sk-xxxx"
 ### 4.4 建议关闭的功能（接第三方网关时）
 
 ```toml
+web_search = "disabled"   # 合法值：disabled / cached / indexed / live
+
 [features]
-multi_agent = false     # 子 agent 会派生额外的模型调用
+multi_agent = false       # 子 agent 会派生额外的模型调用
 apps = false
 plugins = false
 ```
@@ -309,6 +311,32 @@ plugins = false
 官方插件（`browser` / `computer-use` / `documents` / `pdf` / `spreadsheets` / `presentations` / `visualize`）会往 `/v1/responses` 请求里塞 OpenAI 内置工具定义，上游不支持会直接 400。
 
 建议**先全关跑通，再一个个开回来**定位。
+
+### 4.5 用非 OpenAI 模型时必须关掉的三项 ⚠️
+
+**【实测】** Codex 默认会往请求里塞三类**只有 OpenAI 原生 Responses 实现才认**的工具。
+用 `grok-4.6` / `claude-*` / `deepseek-*` 这类模型时，不关就是连续三个 4xx：
+
+| 工具 | 报错 | 关掉的办法 |
+|---|---|---|
+| `"type": "custom"`（freeform 的 `apply_patch`） | `422 tools[N].type: unknown variant `custom`, expected one of `function`, `web_search`, `x_search`, ...` | 目录里**省略** `apply_patch_tool_type`（网关生成的目录已自动处理） |
+| `"type": "namespace"`（`multi_agent_v1`） | `422 tools[N].type: unknown variant `namespace`` | `[features] multi_agent = false` |
+| `"type": "web_search"` | `400 Argument not supported: external_web_access` | `web_search = "disabled"` |
+
+**【实测】** 打开代理抓包对比（同一份配置，只换模型）：
+
+```
+grok-4.6      7 个工具，全是 function        → ✅ 通
+gpt-6-astra   8 个工具，含 custom/apply_patch → ✅ 通（OpenAI 上游认 custom）
+```
+
+> ⚠️ 关掉 `apply_patch` 的代价：Codex 不能直接打补丁改文件，只能通过 `exec_command`
+> 走 shell 写文件（heredoc、`sed` 等）。**功能降级但可用**，这是非 OpenAI 模型接 Codex 的固有限制。
+>
+> `apply_patch_tool_type` 在 Codex 0.154 **只接受 `"freeform"`**——填 `"function"` 会报
+> ``unknown variant `function`, expected `freeform``` 让整份目录失效。所以只能整个省略，不能改值。
+
+网关生成目录时已经按模型自动区分：在官方 Codex 目录里的模型（`gpt-6-astra` / `gpt-5.6-*` / `gpt-5.5` / `gpt-5.4`）保留 `freeform`，其余一律省略。另外两项**必须自己在 `config.toml` 里关**。
 
 ---
 
@@ -469,6 +497,9 @@ codex        # 进交互界面后输入
 | CLI 能列模型，Desktop 列不出 | **Codex 官方 bug** [#19694](https://github.com/openai/codex/issues/19694)（至今 Open），Desktop 的 picker 有额外过滤 | 无解。用 `model = "xxx"` 内联写死绕过，picker 会显示「Custom」但请求正常 |
 | 模型列表是旧的 | `models_cache.json` 没刷新 | `rm ~/.codex/models_cache.json` 后完全重启 |
 | 请求 400、提到 tool / web_search | 官方插件往请求里塞了上游不支持的内置工具 | 关掉 `[features]` 里的 plugins / apps，或逐个禁用 `[plugins.*]` |
+| `422 unknown variant `custom`` | freeform `apply_patch` 发的是 OpenAI 自定义工具，非 OpenAI 上游不认 | 重新生成目录（新版已自动省略该键），见 [4.5](#45-用非-openai-模型时必须关掉的三项-) |
+| `422 unknown variant `namespace`` | multi-agent 的 `multi_agent_v1` 工具 | `[features] multi_agent = false` |
+| `400 Argument not supported: external_web_access` | `web_search` 工具 | `web_search = "disabled"` |
 
 ---
 
@@ -605,6 +636,7 @@ model_catalog_json = "/Users/你的用户名/.codex/gravitex-codex-catalog.json"
 
 # ============ 第三方网关建议项 ============
 disable_response_storage = true
+web_search = "disabled"   # 用非 OpenAI 模型时必须关，否则 400，见 4.5
 
 [model_providers.gravitex]
 name = "Gravitex"
@@ -613,7 +645,7 @@ wire_api = "responses"                     # 只能是 responses
 requires_openai_auth = true                # Key 走 codex login 存储，不写进本文件
 
 [features]
-multi_agent = false
+multi_agent = false   # 用非 OpenAI 模型时必须关，否则 422 unknown variant `namespace`，见 4.5
 apps = false
 plugins = false
 ```

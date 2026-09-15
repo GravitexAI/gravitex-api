@@ -105,7 +105,9 @@ def convert_openai_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "supports_reasoning_summary_parameter": False,
                 "input_modalities": ["text"],
                 "supports_image_detail_original": False,
-                "apply_patch_tool_type": "freeform",
+                # 不下发 apply_patch_tool_type：它只能是 "freeform"，而 freeform 的
+                # apply_patch 会以 "type": "custom" 的自定义工具发给上游，非 OpenAI 原生
+                # 实现（xAI 等）会 422。省略后 Codex 不下发 apply_patch，改文件走 exec_command。
                 "web_search_tool_type": "text",
                 "supports_search_tool": False,
                 "shell_type": "shell_command",

@@ -47,8 +47,14 @@ type CodexModel struct {
 	InputModalities             []string `json:"input_modalities"`
 	SupportsImageDetailOriginal bool     `json:"supports_image_detail_original"`
 
-	// 工具与 shell
-	ApplyPatchToolType         string                `json:"apply_patch_tool_type"`
+	// apply_patch_tool_type 在 Codex 0.154 只接受 "freeform"（填 "function" 会报
+	// 「unknown variant `function`, expected `freeform`」整份目录失效）。而 freeform 的
+	// apply_patch 会以 OpenAI 自定义工具（`"type": "custom"`）的形式发给上游，
+	// 只有 OpenAI 原生的 Responses 实现认这个类型。xAI 等第三方实现会直接 422：
+	//   tools[N].type: unknown variant `custom`, expected one of `function`, `web_search`, ...
+	// 所以这里用指针 + omitempty：非 OpenAI 原生模型整个省略该键，Codex 就不会下发
+	// apply_patch 工具（改文件退化为走 exec_command 的 shell 命令，功能降级但不报错）。
+	ApplyPatchToolType         *string               `json:"apply_patch_tool_type,omitempty"`
 	WebSearchToolType          string                `json:"web_search_tool_type"`
 	SupportsSearchTool         bool                  `json:"supports_search_tool"`
 	ShellType                  string                `json:"shell_type"`

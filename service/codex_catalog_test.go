@@ -5,6 +5,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -119,6 +120,48 @@ func TestBuildCodexCatalogPrefersOfficialWindowOverDatabaseValue(t *testing.T) {
 	assert.Equal(t, []string{"text", "image"}, entry.InputModalities)
 	require.NotNil(t, entry.DefaultReasoningLevel)
 	assert.Equal(t, "medium", *entry.DefaultReasoningLevel)
+}
+
+// apply_patch_tool_type 只能是 "freeform"，而 freeform 的 apply_patch 会以 OpenAI
+// 自定义工具（"type":"custom"）的形式发给上游。只有 OpenAI 原生的 Responses 实现认它，
+// xAI 这类第三方实现会直接 422：
+//
+//	tools[N].type: unknown variant `custom`, expected one of `function`, `web_search`, `x_search`, ...
+//
+// 所以非 OpenAI 原生模型必须整个省略这个键，Codex 才不会下发 apply_patch。
+func TestBuildCodexCatalogOnlyOffersFreeformApplyPatchToOpenAIModels(t *testing.T) {
+	extensions := map[string]model.ModelExtensionInfo{
+		"gpt-6-astra": reasoningLikeExtension("gpt-6-astra", "reasoning", 1050000,
+			[]string{"openai-response"}, []string{"text", "image"}),
+		"grok-4.6": chatExtension("grok-4.6", 500000, []string{"openai-response"}, []string{"text", "image"}),
+	}
+
+	catalog := BuildCodexCatalog([]string{"gpt-6-astra", "grok-4.6"}, extensions)
+	require.Len(t, catalog.Models, 2)
+
+	bySlug := map[string]dto.CodexModel{}
+	for _, entry := range catalog.Models {
+		bySlug[entry.Slug] = entry
+	}
+
+	require.NotNil(t, bySlug["gpt-6-astra"].ApplyPatchToolType, "OpenAI 原生模型应保留 freeform apply_patch")
+	assert.Equal(t, "freeform", *bySlug["gpt-6-astra"].ApplyPatchToolType)
+	assert.Nil(t, bySlug["grok-4.6"].ApplyPatchToolType, "非 OpenAI 模型不能带 apply_patch_tool_type")
+
+	// 序列化后非 OpenAI 模型必须完全没有这个键，而不是发 null
+	raw, err := common.Marshal(catalog)
+	require.NoError(t, err)
+	var decoded struct {
+		Models []map[string]any `json:"models"`
+	}
+	require.NoError(t, common.Unmarshal(raw, &decoded))
+	for _, entry := range decoded.Models {
+		if entry["slug"] == "grok-4.6" {
+			assert.NotContains(t, entry, "apply_patch_tool_type")
+		} else {
+			assert.Equal(t, "freeform", entry["apply_patch_tool_type"])
+		}
+	}
 }
 
 func TestBuildCodexCatalogFiltersUnusableModels(t *testing.T) {
