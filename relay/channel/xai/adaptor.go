@@ -272,7 +272,8 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 // when pass-through is enabled, so this adapter-level guard is required to keep
 // unsupported Codex tools from reaching xAI in that mode.
 func prepareGrok46OutboundRequestBody(info *relaycommon.RelayInfo, requestBody io.Reader) (io.Reader, error) {
-	if !isXaiGrok46(info) || requestBody == nil {
+	if !isXaiGrok46(info) || requestBody == nil ||
+		(info.RelayMode != constant.RelayModeResponses && info.RelayMode != constant.RelayModeResponsesCompact) {
 		return requestBody, nil
 	}
 

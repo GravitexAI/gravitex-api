@@ -24,6 +24,7 @@ func grokResponsesRelayInfo(channelType int, upstreamModel string) *relaycommon.
 			ChannelType:       channelType,
 			UpstreamModelName: upstreamModel,
 		},
+		RelayMode: relayconstant.RelayModeResponses,
 	}
 }
 
@@ -254,6 +255,30 @@ func TestPrepareGrok46OutboundRequestBodyNormalizesNullReasoningInputContent(t *
 func TestPrepareGrok46OutboundRequestBodyLeavesNonGrokBytesUntouched(t *testing.T) {
 	rawBody := []byte(`{"tools":[{"type":"namespace","name":"keep"}],"input":[{"type":"reasoning","content":null}]}`)
 	prepared, err := prepareGrok46OutboundRequestBody(grokResponsesRelayInfo(constant.ChannelTypeXai, "grok-4.1"), bytes.NewReader(rawBody))
+	require.NoError(t, err)
+	got, err := io.ReadAll(prepared)
+	require.NoError(t, err)
+	assert.Equal(t, rawBody, got)
+}
+
+func TestPrepareGrok46OutboundRequestBodyLeavesChatCompletionsBytesUntouched(t *testing.T) {
+	rawBody := []byte(`{"model":"grok-4.6","messages":[{"role":"user","content":"hello"}],"max_tokens":100,"search_parameters":{"mode":"auto"}}`)
+	info := grokResponsesRelayInfo(constant.ChannelTypeXai, "grok-4.6")
+	info.RelayMode = relayconstant.RelayModeChatCompletions
+
+	prepared, err := prepareGrok46OutboundRequestBody(info, bytes.NewReader(rawBody))
+	require.NoError(t, err)
+	got, err := io.ReadAll(prepared)
+	require.NoError(t, err)
+	assert.Equal(t, rawBody, got)
+}
+
+func TestPrepareGrok46OutboundRequestBodyLeavesNonJSONAudioBytesUntouched(t *testing.T) {
+	rawBody := []byte("--multipart-boundary\r\nContent-Disposition: form-data; name=\"file\"\r\n\r\naudio\r\n--multipart-boundary--\r\n")
+	info := grokResponsesRelayInfo(constant.ChannelTypeXai, "grok-4.6")
+	info.RelayMode = relayconstant.RelayModeAudioTranscription
+
+	prepared, err := prepareGrok46OutboundRequestBody(info, bytes.NewReader(rawBody))
 	require.NoError(t, err)
 	got, err := io.ReadAll(prepared)
 	require.NoError(t, err)
