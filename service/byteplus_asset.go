@@ -40,11 +40,32 @@ func newByteplusSession(cfg ByteplusAssetConfig) (*session.Session, error) {
 	return session.NewSession(config)
 }
 
+// scopeRequestToChannelProject returns a copy of body whose ProjectName is the
+// channel's configured project, regardless of what the caller supplied.
+//
+// BytePlus scopes every asset resource by project: a group or asset created
+// under project A is invisible to any call issued under project B, and an
+// omitted ProjectName falls back to "default" upstream. Since the asset must
+// live in the same project as the channel's API key for video generation to
+// resolve `asset://` references, the channel config is the only correct value —
+// a per-call ProjectName (e.g. from an official-mirror client) is dropped.
+func scopeRequestToChannelProject(cfg ByteplusAssetConfig, body map[string]interface{}) map[string]interface{} {
+	scoped := make(map[string]interface{}, len(body)+1)
+	for k, v := range body {
+		scoped[k] = v
+	}
+	if cfg.ProjectName != "" {
+		scoped["ProjectName"] = cfg.ProjectName
+	}
+	return scoped
+}
+
 func byteplusCall(cfg ByteplusAssetConfig, action string, body map[string]interface{}) (*map[string]interface{}, error) {
 	sess, err := newByteplusSession(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create byteplus session: %w", err)
 	}
+	req := scopeRequestToChannelProject(cfg, body)
 	resp, err := universal.New(sess).DoCall(
 		universal.RequestUniversal{
 			ServiceName: "ark",
@@ -53,7 +74,7 @@ func byteplusCall(cfg ByteplusAssetConfig, action string, body map[string]interf
 			HttpMethod:  universal.POST,
 			ContentType: universal.ApplicationJSON,
 		},
-		&body,
+		&req,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("byteplus %s: %w", action, err)
@@ -66,9 +87,10 @@ func byteplusCall(cfg ByteplusAssetConfig, action string, body map[string]interf
 // genuine ResponseMetadata BytePlus returns), for callers that need the
 // official response shape verbatim — e.g. the Seedance asset-library
 // official-mirror endpoint. Unlike the ByteplusXxx wrapper functions in this
-// file, it does not narrow the request to named parameters, so
-// SortBy/SortOrder/per-call ProjectName and any other officially-supported
-// field are preserved.
+// file, it does not narrow the request to named parameters, so SortBy/SortOrder
+// and any other officially-supported field are preserved. ProjectName is the
+// one exception: byteplusCall always rewrites it to the channel's configured
+// project (see scopeRequestToChannelProject).
 func ByteplusRawAction(cfg ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
 	resp, err := byteplusCall(cfg, action, body)
 	if err != nil {

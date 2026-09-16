@@ -225,7 +225,7 @@ POST https://api.gravitex.ai/ark/seedance/v3?Action=CreateAssetGroup&Version=202
 | `Name`        | string | 是              | 素材组名称                                                                                                          |
 | `Description` | string | 否              | 描述                                                                                                             |
 | `GroupType`   | string | 否              | **无论传什么，平台都会强制改写为** `AIGC`——真人素材组（`LivenessFace`）只能走专属的 H5 真人核验流程（`/v1/visual-validate/session`，见第四节），本接口不支持创建 |
-| `ProjectName` | string | 否，默认 `default` | 火山项目名                                                                                                          |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 
 **请求示例**：
@@ -264,7 +264,7 @@ POST https://api.gravitex.ai/ark/seedance/v3?Action=CreateAsset&Version=2024-01-
 | `AssetType`   | string | 是              | `Image` / `Video` / `Audio`                                                                                               |
 | `Name`        | string | 否              | 素材名称，仅用于 `ListAssets` 模糊搜索，**不会**参与模型推理（引用素材时用 `asset://<ID>` 或 prompt 里的"图片 N"/"视频 N"，不要用 Name）                          |
 | `Moderation`  | object | 否              | 内容预审核策略，`{"Strategy": "Default"｜"Skip"}`；`Default`（不传本字段时的默认行为）= 预审核开启，`Skip` = 跳过大部分非基线内容安全审核策略（需要先在火山控制台关闭 Secure Mode） |
-| `ProjectName` | string | 否，默认 `default` | 火山项目名                                                                                                                     |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 
 > **不支持 Base64/本地文件**：`URL` 必须是公网可访问地址，图片/视频/音频素材只支持 URL 上传。
@@ -324,7 +324,7 @@ POST https://api.gravitex.ai/ark/seedance/v3?Action=ListAssetGroups&Version=2024
 | `PageSize`         | integer | 否                 | 每页数量，最多 100                 |
 | `SortBy`           | string  | 否，默认 `CreateTime` | `CreateTime` / `UpdateTime` |
 | `SortOrder`        | string  | 否，默认 `Desc`       | `Asc` / `Desc`              |
-| `ProjectName`      | string  | 否，默认 `default`    | 火山项目名                       |
+| `ProjectName`      | string  | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 
 **请求示例**：
@@ -382,7 +382,7 @@ POST https://api.gravitex.ai/ark/seedance/v3?Action=ListAssets&Version=2024-01-0
 | `PageSize`         | integer | 是                 | 每页数量，最多 100                             |
 | `SortBy`           | string  | 否，默认 `CreateTime` | `CreateTime` / `UpdateTime` / `GroupId` |
 | `SortOrder`        | string  | 否，默认 `Desc`       | `Asc` / `Desc`                          |
-| `ProjectName`      | string  | 否，默认 `default`    | 火山项目名                                   |
+| `ProjectName`      | string  | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 
 **请求示例**：
@@ -441,7 +441,7 @@ POST https://api.gravitex.ai/ark/seedance/v3?Action=GetAsset&Version=2024-01-01
 | 字段            | 类型     | 必填             | 说明    |
 | ------------- | ------ | -------------- | ----- |
 | `Id`          | string | 是              | 素材 ID |
-| `ProjectName` | string | 否，默认 `default` | 火山项目名 |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 
 **响应**：
@@ -480,7 +480,7 @@ POST https://api.gravitex.ai/ark/seedance/v3?Action=GetAssetGroup&Version=2024-0
 | 字段            | 类型     | 必填             | 说明     |
 | ------------- | ------ | -------------- | ------ |
 | `Id`          | string | 是              | 素材组 ID |
-| `ProjectName` | string | 否，默认 `default` | 火山项目名  |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 
 **响应**：
@@ -517,7 +517,7 @@ POST https://api.gravitex.ai/ark/seedance/v3?Action=UpdateAsset&Version=2024-01-
 | ------------- | ------ | -------------- | ----- |
 | `Id`          | string | 是              | 素材 ID |
 | `Name`        | string | 否              | 新名称   |
-| `ProjectName` | string | 否，默认 `default` | 火山项目名 |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 
 **响应**：
@@ -547,7 +547,7 @@ POST https://api.gravitex.ai/ark/seedance/v3?Action=UpdateAssetGroup&Version=202
 | `Id`          | string | 是              | 素材组 ID |
 | `Name`        | string | 否              | 新名称    |
 | `Description` | string | 否              | 新描述    |
-| `ProjectName` | string | 否，默认 `default` | 火山项目名  |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 
 **响应**：
@@ -573,7 +573,7 @@ POST https://api.gravitex.ai/ark/seedance/v3?Action=DeleteAsset&Version=2024-01-
 | 字段            | 类型     | 必填             | 说明    |
 | ------------- | ------ | -------------- | ----- |
 | `Id`          | string | 是              | 素材 ID |
-| `ProjectName` | string | 否，默认 `default` | 火山项目名 |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 
 **响应**（无业务返回参数）：
@@ -603,7 +603,7 @@ POST https://api.gravitex.ai/ark/seedance/v3?Action=DeleteAssetGroup&Version=202
 | 字段            | 类型     | 必填             | 说明     |
 | ------------- | ------ | -------------- | ------ |
 | `Id`          | string | 是              | 素材组 ID |
-| `ProjectName` | string | 否，默认 `default` | 火山项目名  |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 
 **响应**（无业务返回参数）：

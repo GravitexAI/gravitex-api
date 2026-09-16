@@ -264,7 +264,7 @@ Content-Type: application/json
 | `Name` | string | **是** | 素材组名称 |
 | `Description` | string | 否 | 描述 |
 | `GroupType` | string | 否 | **无论传什么，平台都会强制改写为 `AIGC`**——真人素材组（`LivenessFace`）只能走专属的真人核验流程（见[真人素材库](#真人素材库real-human-portrait-library)），本接口不支持创建 |
-| `ProjectName` | string | 否 | 默认 `default`，火山项目名 |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 > **配额限制**：超出每用户素材组数量上限会返回 `403`，`ResponseMetadata.Error.Code = "QuotaExceeded"`，不会调用火山。
 
@@ -299,7 +299,7 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=CreateAssetGroup&Ve
 | `AssetType` | string | **是** | `Image` / `Video` / `Audio` |
 | `Name` | string | 否 | 素材名称，仅用于 `ListAssets` 模糊搜索，**不参与模型推理** |
 | `Moderation` | object | 否 | 内容预审核策略，`{"Strategy": "Default"｜"Skip"}`；`Default`（默认）= 预审核开启，`Skip` = 跳过大部分非基线内容安全审核策略（需先在火山控制台关闭 Secure Mode） |
-| `ProjectName` | string | 否 | 默认 `default`，火山项目名 |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 > **不支持 Base64/本地文件**：`URL` 必须是公网可访问地址，图片/视频/音频素材只支持 URL 上传。
 
@@ -347,7 +347,7 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=CreateAsset&Version
 | `PageSize` | integer | 否 | 每页数量，最多 100 |
 | `SortBy` | string | 否 | 默认 `CreateTime`：`CreateTime` / `UpdateTime` |
 | `SortOrder` | string | 否 | 默认 `Desc`：`Asc` / `Desc` |
-| `ProjectName` | string | 否 | 默认 `default`，火山项目名 |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 ```bash
 curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssetGroups&Version=2024-01-01" \
@@ -399,7 +399,7 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssetGroups&Ver
 | `PageSize` | integer | **是** | 每页数量，最多 100 |
 | `SortBy` | string | 否 | 默认 `CreateTime`：`CreateTime` / `UpdateTime` / `GroupId` |
 | `SortOrder` | string | 否 | 默认 `Desc`：`Asc` / `Desc` |
-| `ProjectName` | string | 否 | 默认 `default`，火山项目名 |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 ```bash
 curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=2024-01-01" \
@@ -452,7 +452,7 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `Id` | string | **是** | 素材 ID |
-| `ProjectName` | string | 否 | 默认 `default`，火山项目名 |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 响应：
 
@@ -487,7 +487,7 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `Id` | string | **是** | 素材组 ID |
-| `ProjectName` | string | 否 | 默认 `default`，火山项目名 |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 响应：
 
@@ -518,7 +518,7 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 | --- | --- | --- | --- |
 | `Id` | string | **是** | 素材 ID |
 | `Name` | string | 否 | 新名称 |
-| `ProjectName` | string | 否 | 默认 `default`，火山项目名 |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 响应：
 
@@ -542,7 +542,7 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 | `Id` | string | **是** | 素材组 ID |
 | `Name` | string | 否 | 新名称 |
 | `Description` | string | 否 | 新描述 |
-| `ProjectName` | string | 否 | 默认 `default`，火山项目名 |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 响应：
 
@@ -564,7 +564,7 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `Id` | string | **是** | 素材 ID |
-| `ProjectName` | string | 否 | 默认 `default`，火山项目名 |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 响应（无业务返回参数）：
 
@@ -590,7 +590,7 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `Id` | string | **是** | 素材组 ID |
-| `ProjectName` | string | 否 | 默认 `default`，火山项目名 |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 响应（无业务返回参数）：
 
@@ -626,7 +626,7 @@ curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=ListAssets&Version=
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `CallbackURL` | string | 否 | **无论传什么，平台都会强制改写为本平台自己的回调页地址**——防止跳转到调用方指定的任意地址。`GetVisualValidateResult` 走的是带 Bearer 鉴权的同一个 API，不依赖回调页传递任何上下文，所以强制改写不影响核验换 `GroupId` 的能力 |
-| `ProjectName` | string | 否 | 默认 `default`，火山项目名 |
+| `ProjectName` | string | 否（忽略） | 传了也无效——平台强制使用渠道配置的火山项目名 |
 
 ```bash
 curl -X POST "https://api.gravitex.ai/api/v3/seedance?Action=CreateVisualValidateSession&Version=2024-01-01" \
