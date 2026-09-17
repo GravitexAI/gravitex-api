@@ -848,8 +848,9 @@ type Stat struct {
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
 	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota")
 
-	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
+	// 为rpm和tpm创建单独的查询。TPM 补充项在相同过滤条件下独立聚合，
+	// 使缓存等上游特有 token 不会污染日志的两个历史基础字段。
+	rpmTpmQuery := LOG_DB.Table("logs")
 
 	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
 		return stat, err
@@ -890,6 +891,14 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
 
+	tpmSupplement, err := sumLogTpmSupplements(rpmTpmQuery, defaultLogTpmSupplements)
+	if err != nil {
+		common.SysError("failed to query tpm supplements: " + err.Error())
+		return stat, errors.New("查询统计数据失败")
+	}
+
+	rpmTpmQuery = rpmTpmQuery.Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
+
 	// 执行查询：用 Row().Scan() 按 SQL select 列顺序直接赋值给 int64 临时变量，
 	// 不依赖 GORM 的 column name → struct field 映射。
 	// 这样无论 sqlite/mysql/postgres/bytehouse 哪种数据库，行为都一致可预期。
@@ -907,7 +916,7 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		return stat, errors.New("查询统计数据失败")
 	}
 	stat.Rpm = int(rpm)
-	stat.Tpm = int(tpm)
+	stat.Tpm = int(tpm + tpmSupplement)
 
 	return stat, nil
 }
