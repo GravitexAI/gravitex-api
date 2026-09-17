@@ -1,5 +1,10 @@
 package model
 
+import (
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+)
+
 // UserAsset maps gateway users to upstream asset library resources (UpToken, VolcEngine, etc.).
 // Each asset is bound to a specific channel instance via ChannelId, because different upstream
 // accounts have isolated asset stores.
@@ -18,8 +23,8 @@ type UserAsset struct {
 	// AssetType mirrors BytePlus's `AssetType` ("Image" / "Video" / "Audio").
 	// Stored locally so the asset list can render type-specific UI without an
 	// upstream round-trip per asset.
-	AssetType string `json:"asset_type" gorm:"type:varchar(16);default:'Image';index"`
-	SizeBytes int64  `json:"size_bytes"`
+	AssetType      string `json:"asset_type" gorm:"type:varchar(16);default:'Image';index"`
+	SizeBytes      int64  `json:"size_bytes"`
 	Status         string `json:"status" gorm:"type:varchar(20);default:'pending'"`
 	ErrorMsg       string `json:"error_msg" gorm:"type:text"`
 	SkipModeration bool   `json:"skip_moderation" gorm:"default:false"`
@@ -202,30 +207,19 @@ func UpdateUserAssetFilename(virtualId, filename string) error {
 	return DB.Model(&UserAsset{}).Where("virtual_id = ?", virtualId).Update("filename", filename).Error
 }
 
-// AssetModelPrefix is the model name prefix used to identify channels that support the asset API.
-// Only channels with at least one model matching this prefix (via abilities table) are considered.
-const AssetModelPrefix = "seedance-2-0"
-
-// GetAssetSupportedChannelsByGroup returns enabled channels that have seedance-2-0 models
-// configured and are accessible by the specified group. Uses the same in-memory channel cache
-// as Distribute() (with DB fallback), so priority/weight/enabled filtering is consistent.
-// Returns channels sorted by priority DESC.
+// GetAssetSupportedChannelsByGroup returns enabled DoubaoVideo (type 54) channels
+// accessible by the specified group, ordered by priority DESC and id ASC.
+// Asset support does not depend on configured model names.
 func GetAssetSupportedChannelsByGroup(group string) ([]*Channel, error) {
-	return GetChannelsByGroupAndModelPrefix(group, AssetModelPrefix)
+	return GetChannelsByGroupAndType(group, constant.ChannelTypeDoubaoVideo)
 }
 
-// IsAssetSupportedChannel checks if a channel has any seedance-2-0 model configured
-// and the channel is present in the in-memory cache (i.e., enabled).
+// IsAssetSupportedChannel checks the channel type and enabled status. The channel
+// cache includes disabled channels, so presence alone does not imply support.
 func IsAssetSupportedChannel(channelId int) bool {
 	ch, err := CacheGetChannel(channelId)
 	if err != nil || ch == nil {
 		return false
 	}
-	// Check if channel has any seedance-2-0 model in its Models CSV
-	for _, m := range ch.GetModels() {
-		if len(m) >= len(AssetModelPrefix) && m[:len(AssetModelPrefix)] == AssetModelPrefix {
-			return true
-		}
-	}
-	return false
+	return ch.Type == constant.ChannelTypeDoubaoVideo && ch.Status == common.ChannelStatusEnabled
 }

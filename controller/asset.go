@@ -51,20 +51,20 @@ type assetListItem struct {
 // ---------- helpers ----------
 
 // getAssetChannelById loads a channel by ID and verifies it supports the asset API
-// (i.e., has seedance-2-0 models configured and is enabled in channel cache).
+// (i.e., is an enabled DoubaoVideo channel with type 54).
 func getAssetChannelById(channelId int) (*model.Channel, error) {
 	ch, err := model.CacheGetChannel(channelId)
 	if err != nil {
 		return nil, fmt.Errorf("channel %d not found: %w", channelId, err)
 	}
 	if !model.IsAssetSupportedChannel(channelId) {
-		return nil, fmt.Errorf("channel %d does not have seedance-2-0 models configured", channelId)
+		return nil, fmt.Errorf("channel %d is not an enabled type 54 asset channel", channelId)
 	}
 	return ch, nil
 }
 
-// getAssetSupportedChannels returns all enabled channels with seedance-2-0 models accessible by the token's group.
-// Uses the same channel cache and priority/weight ordering as Distribute().
+// getAssetSupportedChannels returns enabled type 54 channels accessible by the
+// token's group, ordered by priority DESC and id ASC.
 //
 // When the token group is "auto", this expands to the user's actual auto groups
 // (matching the Distributor middleware behavior) and aggregates channels across
@@ -215,11 +215,11 @@ type createAssetModerationRequest struct {
 }
 
 type createAssetRequest struct {
-	URL        string                         `json:"url" binding:"required"`
-	GroupId    string                         `json:"group_id" binding:"required"`
-	AssetType  string                         `json:"asset_type"` // "Image" | "Video" | "Audio"; case-insensitive; defaults to "Image"
-	Name       string                         `json:"name"`
-	Moderation *createAssetModerationRequest  `json:"moderation,omitempty"`
+	URL        string                        `json:"url" binding:"required"`
+	GroupId    string                        `json:"group_id" binding:"required"`
+	AssetType  string                        `json:"asset_type"` // "Image" | "Video" | "Audio"; case-insensitive; defaults to "Image"
+	Name       string                        `json:"name"`
+	Moderation *createAssetModerationRequest `json:"moderation,omitempty"`
 }
 
 // normalizeAssetType maps user-supplied / inferred asset type to one of the

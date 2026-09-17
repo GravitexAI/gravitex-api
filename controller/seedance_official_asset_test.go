@@ -215,6 +215,10 @@ func TestSeedanceOfficialAssetDispatch_ListAssetGroups_NoLocalGroups_ReturnsEmpt
 func TestSeedanceOfficialAssetDispatch_CreateAssetGroup_PersistsLocally(t *testing.T) {
 	setupSeedanceAssetTestDB(t)
 	newSeedanceAssetChannel(t, 1)
+	// A type 54 channel must remain eligible without any seedance-2-0 model.
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", 1).
+		Update("models", "seedance-2-5").Error)
+	model.InitChannelCache()
 
 	original := seedanceAssetRawAction
 	seedanceAssetRawAction = func(cfg service.ByteplusAssetConfig, action string, body map[string]interface{}) (map[string]interface{}, error) {
@@ -239,6 +243,31 @@ func TestSeedanceOfficialAssetDispatch_CreateAssetGroup_PersistsLocally(t *testi
 	require.NoError(t, err)
 	assert.Equal(t, "角色A", group.Name)
 	assert.Equal(t, "aigc", group.GroupType)
+	assert.Equal(t, 1, group.ChannelId)
+}
+
+func TestByteplusAssetChannelsRequireBothCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		settings string
+		count    int
+	}{
+		{"both", `{"byteplus_asset_ak":"test-ak","byteplus_asset_sk":"test-sk"}`, 1},
+		{"missing-ak", `{"byteplus_asset_sk":"test-sk"}`, 0},
+		{"missing-sk", `{"byteplus_asset_ak":"test-ak"}`, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setupSeedanceAssetTestDB(t)
+			newSeedanceAssetChannel(t, 1)
+			require.NoError(t, model.DB.Model(&model.Channel{}).Where("id = ?", 1).
+				Updates(map[string]any{"models": "seedance-2-5", "settings": tc.settings}).Error)
+			model.InitChannelCache()
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			channels, err := getByteplusEnabledChannels(c, seedanceAssetTestGroup)
+			require.NoError(t, err)
+			assert.Len(t, channels, tc.count)
+		})
+	}
 }
 
 func TestSeedanceOfficialAssetDispatch_CreateAsset_PersistsLocallyAndUsableByCheckUserOwnsAssets(t *testing.T) {
