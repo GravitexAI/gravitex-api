@@ -4,14 +4,14 @@ metadata:
   name: api-gateway
   namespace: prod
 spec:
-  replicas: 4          
+  replicas: 4
   progressDeadlineSeconds: 1800
   minReadySeconds: 15
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 0
-      maxSurge: 4
+      maxSurge: 1
   selector:
     matchLabels:
       app: api-gateway
@@ -28,7 +28,8 @@ spec:
           matchLabels:
             app: api-gateway
 
-      terminationGracePeriodSeconds: 1020
+
+      terminationGracePeriodSeconds: 600
 
       initContainers:
       - name: sysctl-init
@@ -55,12 +56,13 @@ spec:
         env:
         - name: TZ
           value: "Asia/Shanghai"
+        # 变量名改为 NODE_NAME 名副其实,绑 spec.nodeName(不是 Pod 名)
         - name: NODE_NAME
           valueFrom:
             fieldRef:
-              fieldPath: metadata.name
+              fieldPath: spec.nodeName
         - name: SHUTDOWN_TIMEOUT_SECONDS
-          value: "960"
+          value: "90"
         envFrom:
         - configMapRef:
             name: api-gateway-config
@@ -69,23 +71,20 @@ spec:
           preStop:
             exec:
               command: ["sh", "-c", "sleep 30"]
-              
 
         startupProbe:
           tcpSocket:
             port: 3000
-          initialDelaySeconds: 5  # 容器启动5秒后开始第一次探测
-          periodSeconds: 10       # 每 10 秒探测一次
-          failureThreshold: 30    # 最多允许探测失败 30 次
-          
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 30
 
         readinessProbe:
           tcpSocket:
             port: 3000
-          initialDelaySeconds: 2  # 启动探针成功后，等待2秒就开始检测是否就绪
+          initialDelaySeconds: 2
           periodSeconds: 5
           failureThreshold: 2
-          
 
         livenessProbe:
           tcpSocket:
@@ -100,7 +99,7 @@ spec:
             memory: "8Gi"
           limits:
             cpu: "8000m"
-            memory: "16Gi"
+            memory: "12Gi"
         volumeMounts:
         - name: api-gateway-stg
           mountPath: /data/logs
