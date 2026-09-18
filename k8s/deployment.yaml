@@ -4,14 +4,13 @@ metadata:
   name: api-gateway
   namespace: prod
 spec:
-  replicas: 4
   progressDeadlineSeconds: 1800
   minReadySeconds: 15
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 0
-      maxSurge: 2
+      maxSurge: 1
   selector:
     matchLabels:
       app: api-gateway
@@ -23,7 +22,7 @@ spec:
       topologySpreadConstraints:
       - maxSkew: 1
         topologyKey: kubernetes.io/hostname
-        whenUnsatisfiable: ScheduleAnyway
+        whenUnsatisfiable: DoNotSchedule
         labelSelector:
           matchLabels:
             app: api-gateway
@@ -94,10 +93,10 @@ spec:
         resources:
           requests:
             cpu: "4000m"
-            memory: "8Gi"
+            memory: "20Gi"
           limits:
             cpu: "8000m"
-            memory: "12Gi"
+            memory: "20Gi"
         volumeMounts:
         - name: api-gateway-stg
           mountPath: /data/logs
