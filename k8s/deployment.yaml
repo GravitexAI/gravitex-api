@@ -28,7 +28,6 @@ spec:
           matchLabels:
             app: api-gateway
 
-
       terminationGracePeriodSeconds: 600
 
       initContainers:
@@ -56,13 +55,12 @@ spec:
         env:
         - name: TZ
           value: "Asia/Shanghai"
-        # 变量名改为 NODE_NAME 名副其实,绑 spec.nodeName(不是 Pod 名)
         - name: NODE_NAME
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
         - name: SHUTDOWN_TIMEOUT_SECONDS
-          value: "90"
+          value: "540"
         envFrom:
         - configMapRef:
             name: api-gateway-config
@@ -123,3 +121,7 @@ spec:
     port: 3000
     targetPort: 3000
   type: ClusterIP
+#   2) 日志是否在内存缓冲堆积(已写 PVC,确认无内存侧 buffer)
+#   3) pprof:port-forward 高内存 Pod,拉 /debug/pprof/heap 看谁在涨
+#   在此之前靠 12Gi limit + 定期 rollout restart 兜底。
+# ============================================================
