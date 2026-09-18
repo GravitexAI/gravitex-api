@@ -121,7 +121,3 @@ spec:
     port: 3000
     targetPort: 3000
   type: ClusterIP
-#   2) 日志是否在内存缓冲堆积(已写 PVC,确认无内存侧 buffer)
-#   3) pprof:port-forward 高内存 Pod,拉 /debug/pprof/heap 看谁在涨
-#   在此之前靠 12Gi limit + 定期 rollout restart 兜底。
-# ============================================================
