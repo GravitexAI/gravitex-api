@@ -1796,7 +1796,11 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	service.CloseResponseBodyGracefully(resp)
-	logger.LogDebug(c, "Gemini response body: %s", responseBody)
+	if resp.StatusCode >= http.StatusBadRequest {
+		logger.LogError(c, fmt.Sprintf("Gemini response body: %s", responseBody))
+	} else {
+		logger.LogDebug(c, "Gemini response body: %s", responseBody)
+	}
 	var geminiResponse dto.GeminiChatResponse
 	err = common.Unmarshal(responseBody, &geminiResponse)
 	if err != nil {

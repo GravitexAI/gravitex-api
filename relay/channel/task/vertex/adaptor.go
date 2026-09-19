@@ -292,7 +292,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, err
 	}
-	logger.LogInfo(c, fmt.Sprintf("[vertex] upstream request body: %s", common.TruncateJsonValues(string(data))))
+	logger.LogDebug(c, "[vertex] upstream request body: %s", common.TruncateJsonValues(string(data)))
 	if len(req.Metadata) > 0 {
 		if metaBytes, err := common.Marshal(req.Metadata); err == nil {
 			logger.LogInfo(c, fmt.Sprintf("[vertex] client metadata: %s", common.TruncateJsonValues(string(metaBytes))))

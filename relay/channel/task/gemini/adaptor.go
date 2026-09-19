@@ -256,7 +256,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, err
 	}
-	logger.LogInfo(c, fmt.Sprintf("[gemini] upstream request body: %s", common.TruncateJsonValues(string(data))))
+	logger.LogDebug(c, "[gemini] upstream request body: %s", common.TruncateJsonValues(string(data)))
 	if len(req.Metadata) > 0 {
 		if metaBytes, err := common.Marshal(req.Metadata); err == nil {
 			logger.LogInfo(c, fmt.Sprintf("[gemini] client metadata: %s", common.TruncateJsonValues(string(metaBytes))))

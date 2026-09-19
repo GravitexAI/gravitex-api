@@ -1,6 +1,7 @@
 package common_handler
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 
@@ -22,7 +23,11 @@ func RerankHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 	service.CloseResponseBodyGracefully(resp)
-	logger.LogDebug(c, "reranker response body: %s", responseBody)
+	if resp.StatusCode >= http.StatusBadRequest {
+		logger.LogError(c, fmt.Sprintf("reranker response body: %s", responseBody))
+	} else {
+		logger.LogDebug(c, "reranker response body: %s", responseBody)
+	}
 	var jinaResp dto.RerankResponse
 	if info.ChannelType == constant.ChannelTypeXinference {
 		var xinRerankResponse xinference.XinRerankResponse

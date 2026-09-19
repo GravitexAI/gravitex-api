@@ -129,7 +129,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, err
 	}
-	logger.LogInfo(c, fmt.Sprintf("[seedance-gateway] upstream request body: %s", common.TruncateJsonValues(string(data))))
+	logger.LogDebug(c, "[seedance-gateway] upstream request body: %s", common.TruncateJsonValues(string(data)))
 	return bytes.NewReader(data), nil
 }
 

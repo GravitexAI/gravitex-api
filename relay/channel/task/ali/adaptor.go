@@ -169,7 +169,7 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 		c.Set("video_billing_resolution", BillingResolutionKeyFromParams(aliReq.Parameters))
 	}
 	if bodyBytes, err := common.Marshal(aliReq); err == nil {
-		logger.LogInfo(c, fmt.Sprintf("[ali] converted request body: %s", common.TruncateJsonValues(string(bodyBytes))))
+		logger.LogDebug(c, "[ali] converted request body: %s", common.TruncateJsonValues(string(bodyBytes)))
 	}
 	if len(taskReq.Metadata) > 0 {
 		if metaBytes, err := common.Marshal(taskReq.Metadata); err == nil {

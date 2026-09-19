@@ -148,7 +148,7 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return nil, err
 	}
-	logger.LogInfo(c, fmt.Sprintf("[uptoken] upstream request body: %s", common.TruncateJsonValues(string(data))))
+	logger.LogDebug(c, "[uptoken] upstream request body: %s", common.TruncateJsonValues(string(data)))
 	return bytes.NewReader(data), nil
 }
 

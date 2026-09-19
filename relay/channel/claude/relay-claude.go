@@ -1430,6 +1430,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 }
 
 func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
+	info.OutputDegeneration = common.DetectOutputDegeneration(claudeInfo.ResponseText.String())
 	if claudeInfo.Usage.PromptTokens == 0 {
 		//上游出错
 	}
@@ -1554,7 +1555,11 @@ func ClaudeHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}
-	logger.LogDebug(c, "responseBody: %s", responseBody)
+	if resp.StatusCode >= http.StatusBadRequest {
+		logger.LogError(c, fmt.Sprintf("responseBody: %s", responseBody))
+	} else {
+		logger.LogDebug(c, "responseBody: %s", responseBody)
+	}
 	var claudeResponse dto.ClaudeResponse
 	err = common.Unmarshal(responseBody, &claudeResponse)
 	if err != nil {

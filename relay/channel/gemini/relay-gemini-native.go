@@ -27,7 +27,11 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
-	logger.LogDebug(c, "Gemini native response body: %s", responseBody)
+	if resp.StatusCode >= http.StatusBadRequest {
+		logger.LogError(c, fmt.Sprintf("Gemini native response body: %s", responseBody))
+	} else {
+		logger.LogDebug(c, "Gemini native response body: %s", responseBody)
+	}
 
 	// 解析为 Gemini 原生响应格式
 	var geminiResponse dto.GeminiChatResponse
@@ -81,7 +85,11 @@ func NativeGeminiEmbeddingHandler(c *gin.Context, resp *http.Response, info *rel
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
-	logger.LogDebug(c, "Gemini native embedding response body: %s", responseBody)
+	if resp.StatusCode >= http.StatusBadRequest {
+		logger.LogError(c, fmt.Sprintf("Gemini native embedding response body: %s", responseBody))
+	} else {
+		logger.LogDebug(c, "Gemini native embedding response body: %s", responseBody)
+	}
 
 	usage := service.ResponseText2Usage(c, "", info.UpstreamModelName, info.GetEstimatePromptTokens())
 

@@ -140,7 +140,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		}
 		// 透传模式下直接记录原始请求体，排查"用户传了什么"与"上游收到了什么"是否一致。
 		if bodyBytes, err := storage.Bytes(); err == nil {
-			logger.LogInfo(c, fmt.Sprintf("image upstream request body(size=%d): %s", len(bodyBytes), truncateImageLogBody(bodyBytes)))
+			logger.LogDebug(c, "image upstream request body(size=%d): %s", len(bodyBytes), truncateImageLogBody(bodyBytes))
 		}
 		requestBody = common.NewReplayableBodyReader(storage)
 	} else {
@@ -152,9 +152,9 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 		switch convertedRequest.(type) {
 		case *bytes.Buffer:
-			bodyBytes := convertedRequest.(*bytes.Buffer).Bytes()
 			// multipart / buffer 形式的上游请求在这里记录最终内容，方便定位转换后的差异。
-			logger.LogInfo(c, fmt.Sprintf("image upstream request body(size=%d): %s", len(bodyBytes), truncateImageLogBody(bodyBytes)))
+			bodyBytes := convertedRequest.(*bytes.Buffer).Bytes()
+			logger.LogDebug(c, "image upstream request body(size=%d): %s", len(bodyBytes), truncateImageLogBody(bodyBytes))
 			requestBody = convertedRequest.(io.Reader)
 		default:
 			jsonData, err := common.Marshal(convertedRequest)
@@ -170,9 +170,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 				}
 			}
 			// JSON 形式的上游请求在应用参数覆盖后记录，确保日志反映最终发送结果。
-			logger.LogInfo(c, fmt.Sprintf("image upstream request body(size=%d): %s", len(jsonData), truncateImageLogBody(jsonData)))
-
-			logger.LogDebug(c, "image request body: %s", jsonData)
+			logger.LogDebug(c, "image upstream request body(size=%d): %s", len(jsonData), truncateImageLogBody(jsonData))
 			body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 			if err != nil {
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
