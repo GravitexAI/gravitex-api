@@ -33,7 +33,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 
 	// 打印用户请求头
 	if c.Request != nil {
-		logger.LogDebug(c, fmt.Sprintf("[claude] client request headers: %v", c.Request.Header))
+		//logger.LogDebug(c, fmt.Sprintf("[claude] client request headers: %v", c.Request.Header))
 	}
 	claudeReq, ok := info.Request.(*dto.ClaudeRequest)
 
