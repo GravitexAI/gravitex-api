@@ -1430,7 +1430,6 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 }
 
 func HandleStreamFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, claudeInfo *ClaudeResponseInfo) {
-	info.OutputDegeneration = common.DetectOutputDegeneration(claudeInfo.ResponseText.String())
 	if claudeInfo.Usage.PromptTokens == 0 {
 		//上游出错
 	}
