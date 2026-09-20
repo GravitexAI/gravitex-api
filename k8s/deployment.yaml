@@ -57,7 +57,7 @@ spec:
         - name: NODE_NAME
           valueFrom:
             fieldRef:
-              fieldPath: spec.nodeName
+              fieldPath: metadata.name
         - name: SHUTDOWN_TIMEOUT_SECONDS
           value: "540"
         envFrom:
