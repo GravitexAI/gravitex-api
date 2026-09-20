@@ -45,18 +45,28 @@ ssh root@<服务器> 'mkdir -p /workplace/py/testReport'
 
 ### 1.3 传代码
 
-用你习惯的方式（scp / SFTP / zip 解压）把这两个目录传到 `/workplace/py/testReport/` 下：
+用你习惯的方式（scp / SFTP / zip 解压）把这三个目录传到 `/workplace/py/testReport/` 下：
 
 ```
 /workplace/py/testReport/
-├── claude-platform-test/     ← 测试脚本
-└── claude-test-service/      ← 常驻服务
+├── claude-platform-test/     ← 渠道测试脚本
+├── claude-test-service/      ← 常驻服务（同时提供渠道测试和错误诊断接口）
+└── error-diagnosis/          ← 错误账单诊断工具
 ```
 
-> **两个目录必须同级**，服务靠相对路径 `../claude-platform-test` 找脚本。
+> **三个目录必须同级**，服务靠相对路径 `../claude-platform-test`、`../error-diagnosis` 找脚本。
 >
 > **`.venv` 带不带都行** —— 带上来了下一步会自动重建（Mac 的 venv 在 Linux 上必坏），
 > 不带更快（能省 20+MB 和上千个文件）。
+>
+> **`error-diagnosis` 不需要 venv**，它只用标准库，跑的时候直接借服务自己的解释器。
+>
+> ⚠️ **别把本地的 `error-diagnosis/.env` 覆盖上去** —— 里面是占位值，会把线上配好的
+> AI 默认地址和模型冲掉（密钥不受影响，那个是管理员在弹窗里现填的）。脚本检测到
+> 占位值会提醒你。
+>
+> `error-diagnosis/output/` 和 `claude-test-service/diagnosis/` 是服务端的运行产物目录，
+> 本地那份不用传。
 
 ### 1.4 在服务器上执行
 
@@ -75,9 +85,13 @@ bash /workplace/py/testReport/after-upload.sh
     开机自启: enabled
     健康检查: {"ok":true}
     模型/分类: 6 模型 / 12 分类 / 37 用例 / 缓存轮数 20
+    错误诊断: 可用（默认模型 glm-5.3-flash）
 
 ✅ 全部就绪，可以去管理端用了
 ```
+
+> `错误诊断: 不可用 — ...` 不影响渠道测试，只是管理端账单日志页的「错误诊断」按钮用不了，
+> 后面那句话会直接说明缺什么。
 
 ### 1.6 最后一步：Java 侧配置
 
@@ -92,6 +106,9 @@ gravitex:
 
 ⚠️ **`platform-base-url` 必须和管理端渠道列表的来源是同一个平台**，否则会出现
 "渠道 ID 是这个平台的、测试请求打到另一个平台"的错位。详见文末「排障」T10。
+
+> **错误诊断不需要额外配置** —— 它复用上面这个 `base-url`（同一个服务进程的
+> `/diagnosis/*` 接口），Java 侧没有新增配置项。
 
 ---
 
@@ -196,18 +213,25 @@ journalctl -u claude-test-service -f      # 实时看日志
 服务配了 `Restart=always`、`RestartSec=5`，进程崩了 5 秒后自动拉起
 （已实测：`kill -9` 后会自己起来）。
 
-### ⚠️ 重启会杀掉正在跑的测试
+### ⚠️ 重启会杀掉正在跑的任务
 
-`systemctl stop/restart` 会带走整个 cgroup，包括正在跑测试的子进程。表现是那次任务
-直接消失，管理端轮询拿到失败。**已消耗的额度不退。**
+`systemctl stop/restart` 会带走整个 cgroup，包括正在跑测试或诊断的子进程。表现是那次
+任务直接消失，管理端轮询拿到失败。**渠道测试已消耗的额度不退。**
 
-重启前确认没人在跑：
+**`after-upload.sh` 会自己挡住这种情况**，检测到有任务在跑就直接退出并提示你等一等。
+确认要强制继续（比如那个任务已经卡死了）：
 
 ```bash
-pgrep -f '[r]un_tests\.py' | wc -l      # 输出 0 = 没有测试在跑
+FORCE=1 bash /workplace/py/testReport/after-upload.sh
 ```
 
-`after-upload.sh` 会重启服务，所以跑它之前最好先确认这条输出是 0。
+想自己先看一眼在跑什么：
+
+```bash
+pgrep -af '[r]un_tests\.py|[e]rror_diagnosis\.py|[a]i_analysis\.py'   # 无输出 = 没任务在跑
+```
+
+> 手动 `systemctl restart` 没有这道保护，重启前自己确认。
 
 ---
 
@@ -215,8 +239,9 @@ pgrep -f '[r]un_tests\.py' | wc -l      # 输出 0 = 没有测试在跑
 
 | 脚本 | 在哪跑 | 干什么 |
 |---|---|---|
-| `after-upload.sh` | **服务器** | 传完代码后跑这条。清 macOS 垃圾、修/建 venv、装依赖、装 systemd、重启、验收。**幂等**，跑多少次都安全 |
+| `after-upload.sh` | **服务器** | 传完代码后跑这条。挡住在跑的任务、清 macOS 垃圾、修/建 venv、装依赖、自检诊断工具、装 systemd、重启、验收。**幂等**，跑多少次都安全 |
 | `run_tests.py --validate-config` | 服务器 | 只校验配置，**不发任何网络请求、不花钱**。想确认配置对不对就跑它 |
+| `error_diagnosis.py --help` | 服务器 | 诊断工具能不能跑起来。`after-upload.sh` 已经帮你跑过了 |
 
 ## 附：一定不要做的两件事
 
@@ -557,6 +582,55 @@ tests/test_run_tests_cli.py::test_progress_json_emits_start_event_on_validate
 > 断言。`config.py` 的设计初衷是"换平台时只改这里"，结果一次正常的换平台就让测试
 > 变红了。现在改成只校验**机制**（环境变量覆盖是否生效、回落是否正确）和**类型**，
 > 不校验业务取值。
+
+### T12 管理端「错误诊断」按钮点了没反应 / 报服务不可用
+
+先看服务怎么说，它会直接给出原因：
+
+```bash
+curl -s http://127.0.0.1:8900/diagnosis/meta
+```
+
+| 返回 | 含义 | 怎么办 |
+|---|---|---|
+| `"available":true` | 服务这边正常 | 问题在 Java 或前端，看下一条 |
+| `"unavailable_reason":"诊断脚本不存在：..."` | `error-diagnosis` 目录没传上来 | 传上去，跑 `after-upload.sh` |
+| `"unavailable_reason":"诊断网页模板缺失：..."` | 传漏了 `diagnostics/dashboard.html` | 整个目录重传一次 |
+| 404 | 服务是旧版本，还没有这组接口 | 传新的 `claude-test-service`，跑 `after-upload.sh` |
+
+`available:true` 但管理端还是不行，多半是 Java 侧：确认 `gravitex.channel-test.base-url`
+指向 `http://127.0.0.1:8900`（错误诊断复用同一个配置），以及 Java 已经更新到含
+`ErrorDiagnosisController` 的版本。
+
+### T13 诊断提交后立刻报「超过单次诊断上限」
+
+Java 侧有 50 万行的硬上限（`ErrorDiagnosisService.MAX_ROWS`）。缩小时间范围，或者加
+用户名/模型/渠道条件。弹窗里的「预检行数」可以提前看到命中多少条，不用等提交才知道。
+
+> 为什么要有这个上限：35 万行产出的 HTML 已经 3 MB 左右，再往上网页本身就大到打不开了。
+> 与其让人等十几分钟拿到一个卡死的看板，不如在提交前挡住。
+
+### T14 诊断跑完了，但看板里一条数据都没有
+
+CSV 列头对不上。Java 端 `ErrorDiagnosisService.CSV_HEADER` 写的八个列名，必须能被
+`error-diagnosis/diagnostics/ingest.py` 的 `ALIASES` 认出来；对不上时诊断会正常跑完、
+正常出网页，**只是什么都没统计到，不报错**。
+
+两边各有一个测试钉住这个契约，改了任意一端都要同步：
+
+```bash
+# 服务端
+cd /workplace/py/testReport/claude-test-service
+.venv/bin/python -m pytest tests/test_diagnosis.py -k csv_header -q
+```
+
+### T15 看板出来了，但没有 AI 分析报告
+
+任务状态里的 `ai_error` 会说明原因（管理端也会弹一条黄色提示）。**这是刻意设计的**：
+AI 接口挂了不影响本地统计，看板照样可用，不会因为 AI 失败就把整个任务判失败。
+
+常见原因：密钥填错、模型名不存在、接口地址不通。看板本身不需要 AI，重跑时不勾
+「生成 AI 分析报告」就行。
 
 ---
 

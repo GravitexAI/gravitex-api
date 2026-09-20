@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>错误诊断 · __PERIOD__</title>
+<style>
+:root{--ink:#203950;--muted:#607389;--line:#dbe4ed;--blue:#19528c}*{box-sizing:border-box}body{margin:0;background:#f3f6fa;color:var(--ink);font:14px/1.6 "Microsoft YaHei",system-ui,sans-serif}main{max-width:1600px;margin:auto;padding:28px 30px 48px}h1{font-size:27px;margin:0}h2{font-size:17px;margin:0}h3{font-size:14px;margin:0 0 8px}p{margin:7px 0}.muted,small{color:var(--muted)}small{font-size:11px}.head,.section-head,.tools,.pager{display:flex;justify-content:space-between;gap:14px;align-items:center;flex-wrap:wrap}.badge{color:var(--blue);background:#e6eef7;padding:5px 10px;border-radius:5px;font-size:12px}.panel{background:#fff;border:1px solid var(--line);border-radius:9px;margin-top:18px;padding:18px}.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:14px 0}.kpi strong{display:block;color:var(--blue);font-size:27px}.kpi span{color:var(--muted);font-size:12px}.ranks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.rank{background:#f5f8fc;border-radius:6px;padding:12px}.rank button{display:block;text-align:left;width:100%;border:0;background:none;padding:7px 0;white-space:normal;overflow-wrap:anywhere}.rank strong,.rank span{display:block}.track{height:4px;background:#e1eaf4;margin-top:4px}.track i{height:100%;background:#4482bd;display:block}.filters{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin:20px 0 12px}label{display:flex;flex-direction:column;font-size:12px;color:var(--muted);gap:5px;min-width:0}input,select,button{font:inherit;border:1px solid #bdccdb;border-radius:5px;background:#fff;color:var(--ink);padding:8px 10px;min-height:38px;min-width:0}button{cursor:pointer}button:hover{background:#eaf2fb}button:disabled{opacity:.45;cursor:default}input,select{width:100%}.tools{justify-content:flex-start;align-items:end}.tools label{width:145px}.tools .search{flex:1;min-width:220px}.tools .check{width:auto;display:flex;flex-direction:row;align-items:center;min-height:38px}.check input{width:auto}#notice{font-size:12px;color:#88602c;background:#fff7e7;border-radius:5px;padding:9px 12px;margin-top:12px}.chart{display:flex;align-items:end;gap:6px;height:110px;overflow-x:auto}.chart button{flex:1;min-width:32px;border:0;background:transparent;padding:0;height:100%;display:flex;flex-direction:column;justify-content:end;align-items:center;gap:4px}.chart .bar{background:#4a82b9;width:65%;max-width:55px}.chart button[aria-pressed=true]{background:#e3edf8}.chart small{white-space:nowrap}.chart#hourChart button{min-width:16px}.charts{display:grid;grid-template-columns:1fr 1.4fr;gap:24px;margin-top:14px}.section-head{margin-bottom:10px}.table-wrap{overflow:auto;margin-top:10px}table{border-collapse:collapse;width:100%;min-width:1000px;table-layout:fixed;font-size:12px}th{text-align:left;background:#eaf0f6;padding:11px}td{padding:13px 10px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}th:nth-child(1){width:14%}th:nth-child(2){width:11%}th:nth-child(3){width:27%}th:nth-child(4){width:17%}th:nth-child(5){width:31%}.count{font-size:18px;color:var(--blue);font-weight:600}.scope{margin-bottom:7px;padding-bottom:7px;border-bottom:1px solid #edf1f6}.code{white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.6 Consolas,"Microsoft YaHei",monospace;background:#f3f6fa;border-left:2px solid #9ab2c9;padding:8px}.source{font-size:11px;color:var(--muted)}summary{cursor:pointer;color:var(--blue);font-size:12px}details{margin:8px 0}.pager{margin-top:14px;font-size:12px}.pager div{display:flex;gap:8px;align-items:center}.note{font-size:12px;color:var(--muted)}.empty{text-align:center;padding:28px}.busy{color:#aa6c1b}#error{display:none;color:#a22626;background:#fff0f0;padding:16px;border-radius:8px}
+.charts>div,.rank{min-width:0}
+@media(max-width:900px){main{padding:20px 16px}.filters{grid-template-columns:repeat(2,minmax(0,1fr))}.ranks{grid-template-columns:1fr}.charts{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.tools .search{flex-basis:100%}.panel{padding:14px}h1{font-size:23px}}
+@media print{.filters,.tools,.pager,button{display:none}.table-wrap{overflow:visible}table{min-width:0}.panel{break-inside:avoid}}
+</style></head>
+<body><main>
+<div class="head"><div><h1>用户模型错误诊断</h1><p class="muted">__PERIOD__ · UTC+8 · 错误记录统计</p></div><span class="badge">离线工具 · 本地规则分析</span></div>
+<div id="error" role="alert"></div>
+<section class="panel" aria-live="polite"><div class="section-head"><h2>错误概览</h2><small id="status" class="busy">正在建立筛选索引…</small></div><p id="verdict"></p><div id="kpis" class="kpis"></div><div class="ranks" id="ranks"></div><p class="note">占比以当前筛选错误总数为分母，非失败率。点击 TOP5 可筛选。</p></section>
+<div class="filters" id="filters"></div>
+<div class="tools">
+<label>开始日期<input id="from" type="date"></label><label>结束日期（含）<input id="to" type="date"></label>
+<label>每日开始小时<select id="hourFrom"></select></label><label>每日结束小时（不含）<select id="hourTo"></select></label>
+<label class="check"><input id="unknown" type="checkbox" checked>含未知日期</label>
+<label class="search">搜索用户 / 模型 / 分组 / 渠道 / 类别<input id="search" type="search" placeholder="输入维度关键词"></label><button id="reset">重置</button>
+</div>
+<p class="note">下拉项相互联动；候选较多时先输入关键词，最多展示 200 项。证据样本不参与关键词计数筛选。</p>
+<div id="notice"></div>
+<section class="panel"><div class="section-head"><h2>错误时间分布</h2><small>点击日期或小时筛选，再次点击恢复</small></div><div class="charts"><div><div id="dailyChart" class="chart"></div></div><div><div id="hourChart" class="chart"></div></div></div></section>
+<section class="panel"><div class="section-head"><h2>归一化报错明细</h2><label>排序<select id="sort"><option value="count">错误数从高到低</option><option value="first">首次出现时间</option></select></label></div>
+<div class="table-wrap"><table><thead><tr><th>报错类别</th><th>错误数 / 占比</th><th>实际渠道 / 模型</th><th>观测首末时间</th><th>归一化证据样本</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div class="pager"><span id="pageInfo"></span><div><button id="prev">上一页</button><span id="pageNum"></span><button id="next">下一页</button></div></div></section>
+<details class="panel note"><summary>字段映射、数据质量与统计口径</summary><div id="quality"></div><p>类别由版本化规则匹配，不是已确认根因。计数、时间和维度聚合不采样；仅证据文本限量保留，未保留样本的错误数会明确标注。重复记录保留，未计算独立请求数。资源分组不能代替实际渠道。</p><p>本网页不连接 AI，不保存 API 密钥。AI 建议由独立脚本按配置生成到 Markdown 报告。</p></details>
+<noscript>此离线网页需要启用 JavaScript。</noscript>
+</main>
+<script id="report-data" type="application/json">__DATA__</script>
+<script id="analysis-data" type="application/json">__SUMMARY__</script>
+<script>
+'use strict';
+const D=JSON.parse(document.getElementById('report-data').textContent),$=id=>document.getElementById(id);
+const e=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const f=n=>n.toLocaleString('zh-CN'),pct=(n,total)=>total?(100*n/total).toFixed(2)+'%':'—';
+const names=['用户','模型','资源分组','渠道','报错类别'],selected=Array(5).fill(-1);
+let facets=Array.from({length:5},()=>[]),state=null,page=1,sequence=0,timer;
+const timeText=t=>t?new Date(t*1000).toLocaleString('sv-SE',{timeZone:'Asia/Shanghai',hour12:false}):'未提供';
+function workerMain(){
+ let records,labels,index;
+ function initialize(data){records=data.records;labels=data.labels;index=Array.from({length:5},()=>new Map());
+ records.forEach((r,i)=>{for(let j=0;j<5;j++){if(!index[j].has(r[j]))index[j].set(r[j],[]);index[j].get(r[j]).push(i);}});}
+ function candidates(filters,skip=-1){let smallest=null;for(let i=0;i<5;i++)if(i!==skip&&filters[i]>=0){const arr=index[i].get(filters[i])||[];if(smallest===null||arr.length<smallest.length)smallest=arr;}return smallest;}
+ function inScope(r,q,skip=-1){
+  for(let j=0;j<5;j++)if(j!==skip&&q.filters[j]>=0&&r[j]!==q.filters[j])return false;
+  if(!r[5]){if(!q.unknown)return false;}else if((q.from&&r[5]<q.from)||(q.to&&r[5]>q.to))return false;
+  if(r[6]<0){if(q.hourFrom!==0||q.hourTo!==24)return false;}else if(r[6]<q.hourFrom||r[6]>=q.hourTo)return false;
+  return !q.search||r.slice(0,5).some((v,i)=>labels[i][v].toLowerCase().includes(q.search));
+ }
+ function scan(q,skip,fn){const list=candidates(q.filters,skip);if(list===null){for(const r of records)if(inScope(r,q,skip))fn(r);}else for(const i of list){const r=records[i];if(inScope(r,q,skip))fn(r);}}
+ const inc=(map,key,n)=>map.set(key,(map.get(key)||0)+n),rank=map=>[...map].sort((a,b)=>b[1]-a[1]);
+ onmessage=event=>{
+  const msg=event.data;if(msg.type==='init'){initialize(msg.data);postMessage({type:'ready'});return;}
+  const q=msg.query,started=performance.now(),facets=[];
+  for(let j=0;j<5;j++){const values=new Map();scan(q,j,r=>inc(values,r[j],r[7]));facets.push(rank(values));}
+  const users=new Map(),pairs=new Map(),cats=new Map(),days=new Map(),hours=Array(24).fill(0);let total=0,unknown=0,unrepresented=0;
+  scan(q,-1,r=>{
+   const n=r[7],pair=r[3]+':'+r[1];total+=n;inc(users,r[0],n);inc(pairs,pair,n);inc(days,r[5]||'未知日期',n);if(r[6]>=0)hours[r[6]]+=n;else unknown+=n;
+   let c=cats.get(r[4]);if(!c){c={id:r[4],count:0,first:0,last:0,pairs:new Map(),samples:new Map(),represented:0};cats.set(r[4],c);}
+   c.count+=n;if(r[8])c.first=c.first?Math.min(c.first,r[8]):r[8];c.last=Math.max(c.last,r[9]);inc(c.pairs,pair,n);
+   for(const [sid,count,source,row] of r[10]){c.represented+=count;const item=c.samples.get(sid);if(item)item.count+=count;else c.samples.set(sid,{id:sid,count,source,row});}
+  });
+  const rows=[...cats.values()].map(c=>({...c,pairs:rank(c.pairs).slice(0,20),pairCount:c.pairs.size,samples:[...c.samples.values()].sort((a,b)=>b.count-a.count).slice(0,5)}));
+  rows.sort((a,b)=>q.sort==='first'?(a.first||Infinity)-(b.first||Infinity)||b.count-a.count:b.count-a.count);
+  postMessage({type:'result',id:msg.id,total,unknown,facets,users:rank(users).slice(0,5),userCount:users.size,pairs:rank(pairs).slice(0,5),pairCount:pairs.size,rows,days:[...days].sort((a,b)=>a[0].localeCompare(b[0])),hours,milliseconds:performance.now()-started});
+ };
+}
+let worker;
+try{
+ const url=URL.createObjectURL(new Blob(['('+workerMain.toString()+')()'],{type:'text/javascript'}));worker=new Worker(url);URL.revokeObjectURL(url);
+ worker.onerror=()=>{$('error').style.display='block';$('error').textContent='后台计算线程启动失败。请使用支持 Web Worker 的桌面浏览器打开。';};
+ worker.onmessage=event=>{const msg=event.data;if(msg.type==='ready'){query();return;}if(msg.id!==sequence)return;state=msg;window.__reportState=msg;facets=msg.facets;for(let i=0;i<5;i++)fillOptions(i);render();};
+}catch(err){$('error').style.display='block';$('error').textContent='浏览器无法启动离线后台计算：'+err.message;}
+$('filters').innerHTML=names.map((n,i)=>`<label>${n}<input id="f${i}" list="opts${i}" placeholder="全部${n}" autocomplete="off"><datalist id="opts${i}"></datalist></label>`).join('');
+function fillOptions(i){
+ const text=$('f'+i).value.toLowerCase(),values=facets[i].filter(([id])=>!text||D.labels[i][id].toLowerCase().includes(text));
+ $('opts'+i).innerHTML=values.slice(0,200).map(([id,n])=>`<option value="${e(D.labels[i][id])}">${f(n)} 条</option>`).join('');
+}
+for(let i=0;i<5;i++){
+ $('f'+i).addEventListener('input',()=>{$('f'+i).setCustomValidity('');fillOptions(i);if(!$('f'+i).value){selected[i]=-1;page=1;query();}});
+ $('f'+i).addEventListener('change',()=>{
+  const value=$('f'+i).value,id=D.labels[i].indexOf(value);
+  if(value&&(id<0||!facets[i].some(([v])=>v===id))){$('f'+i).setCustomValidity('请选择当前条件下存在的候选值，或清空');$('f'+i).reportValidity();return;}
+  selected[i]=value?id:-1;page=1;query();
+ });
+}
+$('hourFrom').innerHTML=Array.from({length:24},(_,i)=>`<option value="${i}">${String(i).padStart(2,'0')}:00</option>`).join('');
+$('hourTo').innerHTML=Array.from({length:24},(_,i)=>`<option value="${i+1}">${String(i+1).padStart(2,'0')}:00</option>`).join('');$('hourTo').value='24';
+$('from').min=$('to').min=D.start;$('from').max=$('to').max=D.end;
+function query(){
+ if(!worker)return;
+ $('status').textContent='正在计算…';$('status').className='busy';
+ worker.postMessage({type:'query',id:++sequence,query:{filters:[...selected],from:$('from').value,to:$('to').value,unknown:$('unknown').checked,hourFrom:+$('hourFrom').value,hourTo:+$('hourTo').value,search:$('search').value.trim().toLowerCase(),sort:$('sort').value}});
+}
+function choose(i,id){selected[i]=id;$('f'+i).value=D.labels[i][id];page=1;query();}
+function pairLabel(key){const [c,m]=key.split(':').map(Number);return D.labels[3][c]+' / '+D.labels[1][m];}
+function render(){
+ const s=state;$('status').textContent=`后台计算 ${Math.round(s.milliseconds)} ms`;$('status').className='muted';
+ $('verdict').innerHTML=s.pairs.length?`最多错误：<strong>${e(pairLabel(s.pairs[0][0]))}</strong> · ${f(s.pairs[0][1])} 条 · ${pct(s.pairs[0][1],s.total)}`:'当前条件没有错误记录';
+ $('kpis').innerHTML=[[s.total,'条错误'],[s.rows.length,'类报错'],[s.userCount,D.missing['用户']?'用户分组（含未提供）':'名用户'],[s.pairCount,(D.missing['渠道']||D.missing['模型'])?'渠道 / 模型组合（含未提供）':'个渠道 / 模型组合']].map(([n,label])=>`<div class="kpi"><strong>${f(n)}</strong><span>${label}</span></div>`).join('');
+ const ranks=[['渠道 / 模型 TOP5',s.pairs,'pair'],['错误类别 TOP5',[...s.rows].sort((a,b)=>b.count-a.count).slice(0,5).map(c=>[c.id,c.count]),4],['用户 TOP5',s.users,0]];
+ $('ranks').innerHTML=ranks.map(([title,items,dim])=>`<div class="rank"><h3>${title}</h3>${items.map(([id,n])=>`<button data-dim="${dim}" data-value="${id}"><strong>${e(dim==='pair'?pairLabel(id):D.labels[dim][id])}</strong><span>${f(n)} 条 · ${pct(n,s.total)}</span><div class="track"><i style="width:${s.total?n/s.total*100:0}%"></i></div></button>`).join('')||'<small>暂无数据</small>'}</div>`).join('');
+ $('ranks').querySelectorAll('button').forEach(b=>b.onclick=()=>{if(b.dataset.dim==='pair'){const [c,m]=b.dataset.value.split(':').map(Number);selected[3]=c;selected[1]=m;$('f3').value=D.labels[3][c];$('f1').value=D.labels[1][m];page=1;query();}else choose(+b.dataset.dim,+b.dataset.value);});
+ const messages=[];
+ if(s.unknown)messages.push(`当前 ${f(s.unknown)} 条记录时刻未知`);
+ const omitted=s.rows.reduce((n,c)=>n+c.count-c.samples.reduce((a,v)=>a+v.count,0),0);
+ if(omitted)messages.push(`当前 ${f(omitted)} 条未在前 5 个证据样本中展示，已计入统计`);
+ const excluded=(D.quality['非错误记录已排除']||0)+(D.quality['错误次数无效的行已排除']||0);
+ if(excluded)messages.push(`导入时排除 ${f(excluded)} 行，详见数据质量`);
+ $('notice').textContent=messages.join('；')||'计数完整。证据按样本展示，可按源文件与行号回查。';
+ chart('dailyChart',s.days,false);chart('hourChart',s.hours.map((n,h)=>[h,n]),true);renderRows();
+}
+function chart(id,values,hourly){
+ const max=Math.max(1,...values.map(v=>v[1]));
+ $(id).innerHTML=values.map(([v,n])=>`<button data-value="${e(v)}" title="${e(v)}：${f(n)} 条" aria-pressed="${hourly?(+$('hourFrom').value===v&&+$('hourTo').value===v+1):($('from').value===v&&$('to').value===v)}"><span class="bar" style="height:${n/max*80}px"></span><small>${hourly?String(v).padStart(2,'0'):e(v==='未知日期'?v:v.slice(5))}</small></button>`).join('');
+ $(id).querySelectorAll('button').forEach(b=>b.onclick=()=>{if(hourly){const h=+b.dataset.value,on=+$('hourFrom').value===h&&+$('hourTo').value===h+1;$('hourFrom').value=on?'0':String(h);$('hourTo').value=on?'24':String(h+1);}else if(b.dataset.value!=='未知日期'){const on=$('from').value===b.dataset.value&&$('to').value===b.dataset.value;$('from').value=$('to').value=on?'':b.dataset.value;$('unknown').checked=on;}page=1;query();});
+}
+function renderRows(){
+ const size=10,pages=Math.max(1,Math.ceil(state.rows.length/size));page=Math.min(page,pages);
+ $('rows').innerHTML=state.rows.slice((page-1)*size,page*size).map(c=>{
+ const scope=items=>items.map(([key,n])=>`<div class="scope"><strong>${e(pairLabel(key))}</strong><br>${f(n)} 条 · 本类 ${pct(n,c.count)}</div>`).join('');
+ const sample=v=>{const text=D.samples[v.id],source=D.sources[v.source];return `<div class="source">E${v.id+1} · 保留桶内 ${f(v.count)} 条 · ${e(source.name)} / ${e(source.sheet)} 第 ${v.row} 行</div><pre class="code">${e(text.text)}${text.truncated?'\\n[文本已截取，完整内容见源行]':''}</pre>`;};
+ return `<tr><td><strong>${e(D.labels[4][c.id])}</strong></td><td><span class="count">${f(c.count)}</span><br>${pct(c.count,state.total)}</td><td>${scope(c.pairs.slice(0,3))}${c.pairs.length>3?`<details><summary>展开组合（共 ${c.pairCount} 个，最多显示 20 个）</summary>${scope(c.pairs.slice(3))}</details>`:''}</td><td>${timeText(c.first)}<br>至<br>${timeText(c.last)}</td><td>${c.samples.length?sample(c.samples[0]):'<small>此类别无保留样本，计数完整。</small>'}${c.samples.length>1?`<details><summary>更多证据样本（${c.samples.length-1}）</summary>${c.samples.slice(1).map(sample).join('')}</details>`:''}<small>未展示样本 ${f(c.count-c.samples.reduce((a,v)=>a+v.count,0))} 条</small></td></tr>`;
+ }).join('')||'<tr><td colspan="5" class="empty">当前条件没有错误记录</td></tr>';
+ $('pageInfo').textContent=`${state.rows.length} 类报错 · 当前 ${f(state.total)} 条`;$('pageNum').textContent=`${page} / ${pages}`;$('prev').disabled=page===1;$('next').disabled=page===pages;
+}
+['from','to','unknown','sort'].forEach(id=>$(id).onchange=()=>{if($('from').value&&$('to').value&&$('from').value>$('to').value){if(id==='from')$('to').value=$('from').value;else $('from').value=$('to').value;}page=1;query();});
+$('hourFrom').onchange=()=>{if(+$('hourTo').value<=+$('hourFrom').value)$('hourTo').value=String(+$('hourFrom').value+1);page=1;query();};
+$('hourTo').onchange=()=>{if(+$('hourFrom').value>=+$('hourTo').value)$('hourFrom').value=String(+$('hourTo').value-1);page=1;query();};
+$('search').oninput=()=>{clearTimeout(timer);timer=setTimeout(()=>{page=1;query();},180);};
+$('reset').onclick=()=>{clearTimeout(timer);selected.fill(-1);for(let i=0;i<5;i++){$('f'+i).value='';$('f'+i).setCustomValidity('');}$('from').value=$('to').value=$('search').value='';$('hourFrom').value='0';$('hourTo').value='24';$('unknown').checked=true;page=1;query();};
+$('prev').onclick=()=>{page--;renderRows();};$('next').onclick=()=>{page++;renderRows();};
+$('quality').innerHTML=`<p>原始行 ${f(D.rows_read)} · 错误记录 ${f(D.total)} · 聚合桶 ${f(D.records.length)} · 样本 ${f(D.samples.length)} · 规则 ${e(D.rule_version)}</p>`+
+ Object.entries(D.quality).filter(([,v])=>v).map(([k,v])=>`<p>${e(k)}：${f(v)}</p>`).join('')+
+ Object.entries(D.missing).map(([k,v])=>`<p>${e(k)}缺失：${f(v)} 条</p>`).join('')+
+ D.sources.map(s=>`<details><summary>${e(s.name)} / ${e(s.sheet)}（${f(s.rows)} 行）</summary><p>${Object.entries(s.columns).map(([k,v])=>e(k)+' ← '+e(v)).join('；')}</p><p>缺少字段：${s.absent.map(e).join('、')||'无'}</p></details>`).join('');
+if(worker)worker.postMessage({type:'init',data:{records:D.records,labels:D.labels}});
+</script></body></html>
