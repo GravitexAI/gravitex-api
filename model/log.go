@@ -119,6 +119,9 @@ const (
 	LogTypeRetryFail = 7 // 重试（中间失败，后续有重试）
 	LogTypeTest      = 8
 	LogTypeLogin     = 9
+
+	maxErrorLogContentRunes   = 4000
+	errorLogContentTruncation = "...[truncated]"
 )
 
 var logTypeNames = map[int]string{
@@ -436,6 +439,10 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 
 func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string, tokenName string, content string, tokenId int, useTimeSeconds int,
 	isStream bool, group string, other map[string]interface{}) {
+	contentRunes := []rune(content)
+	if len(contentRunes) > maxErrorLogContentRunes {
+		content = string(contentRunes[:maxErrorLogContentRunes-len([]rune(errorLogContentTruncation))]) + errorLogContentTruncation
+	}
 	logger.LogInfo(c, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, channelId, modelName, tokenName, common.LocalLogPreview(content)))
 	if other == nil {
 		other = make(map[string]interface{})
