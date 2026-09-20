@@ -64,6 +64,28 @@ ensure_venv() {
 ensure_venv claude-platform-test || exit 1
 ensure_venv claude-test-service  || exit 1
 
+# ---------- 3.5 确保 systemd 单元已安装且是最新的 ----------
+# 放在这里而不是让人手敲，是为了让「从零部署」和「日常更新」用同一条命令。
+# 单元文件内容变了也会自动更新（比如改了端口）。
+UNIT_SRC="$DIR/claude-test-service/claude-test-service.service"
+UNIT_DST="/etc/systemd/system/$SERVICE.service"
+if [ ! -f "$UNIT_SRC" ]; then
+  echo "❌ 找不到 $UNIT_SRC"; exit 1
+fi
+if [ ! -f "$UNIT_DST" ]; then
+  echo "==> systemd 单元未安装，安装中"
+  cp "$UNIT_SRC" "$UNIT_DST"
+  systemctl daemon-reload
+  systemctl enable "$SERVICE" >/dev/null 2>&1
+elif ! cmp -s "$UNIT_SRC" "$UNIT_DST"; then
+  echo "==> systemd 单元有更新，同步中"
+  cp "$UNIT_SRC" "$UNIT_DST"
+  systemctl daemon-reload
+  systemctl enable "$SERVICE" >/dev/null 2>&1
+else
+  echo "==> systemd 单元已是最新"
+fi
+
 # ---------- 冒烟：只校验配置，不发任何网络请求、不花钱 ----------
 echo "==> 配置校验"
 cd "$DIR/claude-platform-test" || exit 1
