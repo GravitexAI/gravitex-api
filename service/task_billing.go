@@ -169,27 +169,31 @@ func taskBillingOther(task *model.Task) taskBillingOtherMap {
 	// Missing, malformed, or out-of-range values keep the legacy log unchanged.
 	var taskData map[string]interface{}
 	costDiscount := 0.0
+	costDiscountConfigured := false
 	if len(task.Data) > 0 && common.Unmarshal(task.Data, &taskData) == nil {
-		if discount, ok := taskData["billing_cost_discount"].(float64); ok && discount > 0 && discount <= 1 {
+		if discount, ok := taskData["billing_cost_discount"].(float64); ok && discount >= 0 && discount <= 1 {
 			costDiscount = discount
+			costDiscountConfigured = true
 		}
 	}
-	if costDiscount <= 0 {
+	if !costDiscountConfigured {
 		if bc := task.PrivateData.BillingContext; bc != nil && bc.CostDiscount != nil &&
-			*bc.CostDiscount > 0 && *bc.CostDiscount <= 1 {
+			*bc.CostDiscount >= 0 && *bc.CostDiscount <= 1 {
 			costDiscount = *bc.CostDiscount
+			costDiscountConfigured = true
 		}
 	}
-	if costDiscount <= 0 {
+	if !costDiscountConfigured {
 		// Historical tasks have no immutable model-level snapshot. Preserve the
 		// legacy fallback by reading only the channel's generic cost_discount;
 		// do not apply today's model_cost_discount to old requests.
 		if channel, err := model.CacheGetChannel(task.ChannelId); err == nil && channel != nil &&
-			channel.CostDiscount != nil && *channel.CostDiscount > 0 {
+			channel.CostDiscount != nil && *channel.CostDiscount >= 0 && *channel.CostDiscount <= 1 {
 			costDiscount = *channel.CostDiscount
+			costDiscountConfigured = true
 		}
 	}
-	if costDiscount > 0 {
+	if costDiscountConfigured {
 		adminInfo, _ := other["admin_info"].(map[string]interface{})
 		if adminInfo == nil {
 			adminInfo = make(map[string]interface{})

@@ -997,6 +997,10 @@ func SearchTags(keyword string, group string, model string, idSort bool, region 
 }
 
 func (channel *Channel) ValidateSettings() error {
+	if channel.CostDiscount != nil &&
+		(math.IsNaN(*channel.CostDiscount) || math.IsInf(*channel.CostDiscount, 0) || *channel.CostDiscount < 0 || *channel.CostDiscount > 1) {
+		return fmt.Errorf("cost_discount must be between 0 and 1")
+	}
 	channelParams := &dto.ChannelSettings{}
 	if channel.Setting != nil && *channel.Setting != "" {
 		err := common.Unmarshal([]byte(*channel.Setting), channelParams)
@@ -1079,10 +1083,10 @@ func (channel *Channel) GetCostDiscountForModel(modelName string) (float64, bool
 	// can have their own cost without changing the upstream model name.
 	settings := channel.GetOtherSettings()
 	if discount, ok := settings.ModelCostDiscount[modelName]; ok &&
-		!math.IsNaN(discount) && !math.IsInf(discount, 0) && discount > 0 && discount <= 1 {
+		!math.IsNaN(discount) && !math.IsInf(discount, 0) && discount >= 0 && discount <= 1 {
 		return discount, true
 	}
-	if channel.CostDiscount != nil && *channel.CostDiscount > 0 &&
+	if channel.CostDiscount != nil && *channel.CostDiscount >= 0 && *channel.CostDiscount <= 1 &&
 		!math.IsNaN(*channel.CostDiscount) && !math.IsInf(*channel.CostDiscount, 0) {
 		return *channel.CostDiscount, true
 	}

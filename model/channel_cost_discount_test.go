@@ -39,6 +39,27 @@ func TestChannelGetCostDiscountForModelFallsBackToChannelDiscount(t *testing.T) 
 	require.Equal(t, 0.8, discount)
 }
 
+func TestChannelGetCostDiscountForModelTreatsZeroAsConfiguredChannelCost(t *testing.T) {
+	channel := &Channel{CostDiscount: float64PtrForTest(0)}
+
+	discount, ok := channel.GetCostDiscountForModel("seedance-2-0")
+
+	require.True(t, ok)
+	require.Zero(t, discount)
+}
+
+func TestChannelGetCostDiscountForModelTreatsZeroAsConfiguredModelOverride(t *testing.T) {
+	channel := &Channel{
+		CostDiscount:  float64PtrForTest(0.8),
+		OtherSettings: `{"model_cost_discount":{"seedance-2-0-fast":0}}`,
+	}
+
+	discount, ok := channel.GetCostDiscountForModel("seedance-2-0-fast")
+
+	require.True(t, ok)
+	require.Zero(t, discount)
+}
+
 func TestChannelGetCostDiscountForModelRejectsInvalidOverride(t *testing.T) {
 	channel := &Channel{
 		CostDiscount:  float64PtrForTest(0.8),

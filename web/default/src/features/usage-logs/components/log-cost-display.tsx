@@ -30,7 +30,7 @@ import {
 } from '@/components/ui/tooltip'
 import { formatLogQuota } from '@/lib/format'
 
-import { hasToolSurcharge } from '../lib/format'
+import { getAdminCostBreakdown, hasToolSurcharge } from '../lib/format'
 import type { LogOtherData } from '../types'
 
 interface LogCostDisplayProps {
@@ -140,5 +140,28 @@ export function LogCostDisplay(props: LogCostDisplayProps) {
         {showToolSurcharge ? <ToolSurchargeMarker /> : null}
       </div>
     </TooltipProvider>
+  )
+}
+
+interface LogAdminCostDisplayProps extends LogCostDisplayProps {
+  kind: 'cost' | 'profit'
+}
+
+export function LogAdminCostDisplay(props: LogAdminCostDisplayProps) {
+  const breakdown = getAdminCostBreakdown(props.quota, props.other)
+  if (!breakdown) {
+    return <span className='text-muted-foreground text-xs'>-</span>
+  }
+
+  const quota = props.kind === 'cost' ? breakdown.actualCost : breakdown.profit
+  return (
+    <div className='inline-flex items-center gap-1'>
+      <QuotaBadge quota={quota} />
+      {props.kind === 'cost' ? (
+        <Badge variant='secondary' className='h-5 px-1.5 tabular-nums'>
+          {breakdown.costDiscount}
+        </Badge>
+      ) : null}
+    </div>
   )
 }

@@ -92,3 +92,24 @@ func TestRecordConsumeLogWithoutCostDiscountLeavesOtherUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, other, "admin_info")
 }
+
+func TestRecordConsumeLogAddsConfiguredZeroCostDiscount(t *testing.T) {
+	truncateTables(t)
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, 0.0)
+	common.SetContextKey(c, constant.ContextKeyChannelCostDiscountConfigured, true)
+
+	RecordConsumeLog(c, 1, RecordConsumeLogParams{
+		ChannelId: 81,
+		ModelName: "seedance-2-0-fast",
+	})
+
+	var log Log
+	require.NoError(t, LOG_DB.Order("id desc").First(&log).Error)
+	other, err := common.StrToMap(log.Other)
+	require.NoError(t, err)
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, 0.0, adminInfo["cost_discount"])
+}

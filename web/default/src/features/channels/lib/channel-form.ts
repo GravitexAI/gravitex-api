@@ -142,7 +142,7 @@ function isOptionalModelCostDiscount(value: string | undefined): boolean {
         modelName.trim().length > 0 &&
         typeof discount === 'number' &&
         Number.isFinite(discount) &&
-        discount > 0 &&
+        discount >= 0 &&
         discount <= 1
     )
   } catch {
@@ -230,6 +230,12 @@ export const channelFormSchema = z
         isOptionalModelMapping,
         'Model mapping must be a JSON object with string values'
       ),
+    cost_discount: z
+      .number()
+      .min(0, 'Cost discount must be between 0 and 1')
+      .max(1, 'Cost discount must be between 0 and 1')
+      .nullable()
+      .optional(),
     model_cost_discount: z
       .string()
       .optional()

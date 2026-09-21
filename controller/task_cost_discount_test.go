@@ -52,6 +52,21 @@ func TestEnsureAsyncTaskCostDiscountSnapshotLeavesDataWithoutDiscount(t *testing
 	assert.Nil(t, billingContext.CostDiscount)
 }
 
+func TestEnsureAsyncTaskCostDiscountSnapshotPreservesConfiguredZeroCost(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, 0.0)
+	common.SetContextKey(c, constant.ContextKeyChannelCostDiscountConfigured, true)
+	billingContext := &model.TaskBillingContext{}
+
+	data := ensureAsyncTaskCostDiscountSnapshot(c, billingContext, []byte(`{"status":"submitted"}`))
+	var got map[string]interface{}
+	require.NoError(t, common.Unmarshal(data, &got))
+	assert.Equal(t, 0.0, got["billing_cost_discount"])
+	require.NotNil(t, billingContext.CostDiscount)
+	assert.Zero(t, *billingContext.CostDiscount)
+}
+
 func TestMergeVideoTaskDataPreservesCostDiscountSnapshot(t *testing.T) {
 	task := &model.Task{Data: []byte(`{"billing_cost_discount":0.75,"billing_processed":false}`)}
 	MergeVideoTaskDataWithUpstreamResponse(task, []byte(`{"id":"task-1","status":"running"}`))
@@ -67,18 +82,33 @@ func TestTaskCostDiscountSnapshotPrefersTaskData(t *testing.T) {
 	task := &model.Task{Data: []byte(`{"billing_cost_discount":0.75}`)}
 	require.NoError(t, common.UnmarshalJsonStr(`{"billing_context":{"cost_discount":0.8}}`, &task.PrivateData))
 
-	assert.Equal(t, 0.75, taskCostDiscountSnapshot(task, map[string]interface{}{"billing_cost_discount": 0.75}))
+	discount, configured := taskCostDiscountSnapshot(task, map[string]interface{}{"billing_cost_discount": 0.75})
+	assert.True(t, configured)
+	assert.Equal(t, 0.75, discount)
 }
 
 func TestTaskCostDiscountSnapshotFallsBackToBillingContext(t *testing.T) {
 	task := &model.Task{Data: []byte(`{"status":"succeeded"}`)}
 	require.NoError(t, common.UnmarshalJsonStr(`{"billing_context":{"cost_discount":0.75}}`, &task.PrivateData))
 
-	assert.Equal(t, 0.75, taskCostDiscountSnapshot(task, map[string]interface{}{"status": "succeeded"}))
+	discount, configured := taskCostDiscountSnapshot(task, map[string]interface{}{"status": "succeeded"})
+	assert.True(t, configured)
+	assert.Equal(t, 0.75, discount)
 }
 
 func TestTaskCostDiscountSnapshotWithoutConfigurationIsZero(t *testing.T) {
 	task := &model.Task{Data: []byte(`{"status":"succeeded"}`)}
 
-	assert.Zero(t, taskCostDiscountSnapshot(task, map[string]interface{}{"status": "succeeded"}))
+	discount, configured := taskCostDiscountSnapshot(task, map[string]interface{}{"status": "succeeded"})
+	assert.False(t, configured)
+	assert.Zero(t, discount)
+}
+
+func TestTaskCostDiscountSnapshotTreatsZeroAsConfigured(t *testing.T) {
+	task := &model.Task{Data: []byte(`{"billing_cost_discount":0}`)}
+
+	discount, configured := taskCostDiscountSnapshot(task, map[string]interface{}{"billing_cost_discount": 0.0})
+
+	assert.True(t, configured)
+	assert.Zero(t, discount)
 }

@@ -3534,6 +3534,47 @@ export function ChannelMutateDrawer({
                           <div className='border-border/60 rounded-lg border p-4'>
                             <FormField
                               control={form.control}
+                              name='cost_discount'
+                              render={({ field }) => (
+                                <FormItem className='space-y-3'>
+                                  <div className='space-y-1'>
+                                    <FormLabel>
+                                      {t('Channel Cost Discount')}
+                                    </FormLabel>
+                                    <FormDescription>
+                                      {t(
+                                        'Sets the channel-wide cost multiplier from 0 to 1. Leave empty to disable it; 0 means zero upstream cost.'
+                                      )}
+                                    </FormDescription>
+                                  </div>
+                                  <FormControl>
+                                    <Input
+                                      ref={field.ref}
+                                      name={field.name}
+                                      type='number'
+                                      min={0}
+                                      max={1}
+                                      step={0.001}
+                                      placeholder={t('Leave empty to disable')}
+                                      value={field.value ?? ''}
+                                      onBlur={field.onBlur}
+                                      onChange={(event) => {
+                                        const value = event.target.value
+                                        field.onChange(
+                                          value === '' ? null : Number(value)
+                                        )
+                                      }}
+                                    />
+                                  </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                          </div>
+
+                          <div className='border-border/60 rounded-lg border p-4'>
+                            <FormField
+                              control={form.control}
                               name='model_cost_discount'
                               render={({ field }) => (
                                 <FormItem className='space-y-3'>

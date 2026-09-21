@@ -117,7 +117,7 @@ func (s ChannelOtherSettings) ValidateModelCostDiscount() error {
 		if strings.TrimSpace(modelName) == "" {
 			return fmt.Errorf("model_cost_discount contains an empty model name")
 		}
-		if math.IsNaN(discount) || math.IsInf(discount, 0) || discount <= 0 || discount > 1 {
+		if math.IsNaN(discount) || math.IsInf(discount, 0) || discount < 0 || discount > 1 {
 			return fmt.Errorf("invalid model_cost_discount for %s: %v", modelName, discount)
 		}
 	}

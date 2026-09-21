@@ -41,6 +41,31 @@ func TestChannelValidateSettingsRejectsInvalidHTTPTransport(t *testing.T) {
 	}
 }
 
+func TestChannelValidateSettingsAcceptsZeroCostDiscount(t *testing.T) {
+	zero := 0.0
+	channel := &Channel{CostDiscount: &zero}
+
+	require.NoError(t, channel.ValidateSettings())
+}
+
+func TestChannelValidateSettingsAcceptsZeroModelCostDiscount(t *testing.T) {
+	channel := &Channel{}
+	channel.SetOtherSettings(dto.ChannelOtherSettings{
+		ModelCostDiscount: map[string]float64{"seedance-2-0-fast": 0},
+	})
+
+	require.NoError(t, channel.ValidateSettings())
+}
+
+func TestChannelValidateSettingsRejectsOutOfRangeCostDiscount(t *testing.T) {
+	overOne := 1.001
+	channel := &Channel{CostDiscount: &overOne}
+
+	err := channel.ValidateSettings()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cost_discount")
+}
+
 func TestAdvancedCustomChannelRequiresModelListRouteOnlyWhenUpdateChecksEnabled(t *testing.T) {
 	inferenceRoute := dto.AdvancedCustomRoute{
 		IncomingPath: "/v1/chat/completions",

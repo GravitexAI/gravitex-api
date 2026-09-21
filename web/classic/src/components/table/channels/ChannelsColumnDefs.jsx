@@ -50,6 +50,7 @@ import {
   IconAlertTriangle,
 } from '@douyinfe/semi-icons';
 import { FaRandom } from 'react-icons/fa';
+import { isConfiguredCostDiscount } from '../../../helpers/costDiscount.js';
 
 // Render functions
 const renderType = (type, record = {}, t) => {
@@ -690,7 +691,7 @@ export const getChannelsColumns = ({
         if (record.children !== undefined) {
           return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
         }
-        if (text == null || text <= 0) {
+        if (!isConfiguredCostDiscount(text)) {
           return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
         }
         return (

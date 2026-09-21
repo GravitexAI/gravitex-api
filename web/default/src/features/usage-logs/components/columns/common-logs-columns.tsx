@@ -58,7 +58,7 @@ import {
 } from '../../lib/utils'
 import type { LogOtherData } from '../../types'
 import { DetailsDialog } from '../dialogs/details-dialog'
-import { LogCostDisplay } from '../log-cost-display'
+import { LogAdminCostDisplay, LogCostDisplay } from '../log-cost-display'
 import { ModelBadge } from '../model-badge'
 import { TimingMetricsCell, StreamTpsCell } from '../timing-metrics-cell'
 import { useUsageLogsContext } from '../usage-logs-provider'
@@ -725,7 +725,40 @@ export function useCommonLogsColumns(
         return <LogCostDisplay quota={quota} other={other} />
       },
     },
-
+    ...(isAdmin
+      ? ([
+          {
+            id: 'actual_cost',
+            header: t('Actual Cost / Discount'),
+            cell: ({ row }) => {
+              const log = row.original
+              if (![2, 5, 7].includes(log.type)) return null
+              return (
+                <LogAdminCostDisplay
+                  kind='cost'
+                  quota={log.quota}
+                  other={parseLogOther(log.other)}
+                />
+              )
+            },
+          },
+          {
+            id: 'profit',
+            header: t('Profit'),
+            cell: ({ row }) => {
+              const log = row.original
+              if (![2, 5, 7].includes(log.type)) return null
+              return (
+                <LogAdminCostDisplay
+                  kind='profit'
+                  quota={log.quota}
+                  other={parseLogOther(log.other)}
+                />
+              )
+            },
+          },
+        ] satisfies ColumnDef<UsageLog>[])
+      : []),
     {
       accessorKey: 'use_time',
       header: t('Timing'),

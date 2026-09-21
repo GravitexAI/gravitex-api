@@ -117,6 +117,7 @@ export interface ToolSurchargeItem {
 
 export interface LogOtherData {
   admin_info?: {
+    cost_discount?: number
     is_multi_key?: boolean
     multi_key_index?: number
     use_channel?: number[]
@@ -187,6 +188,7 @@ export interface LogOtherData {
   model_ratio?: number
   completion_ratio?: number
   model_price?: number
+  official_quota?: number
   group_ratio?: number
   user_group_ratio?: number
   cache_ratio?: number

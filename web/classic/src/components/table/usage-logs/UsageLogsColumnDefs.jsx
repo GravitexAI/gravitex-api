@@ -892,8 +892,18 @@ export const getLogsColumns = ({
           return <></>;
         }
         const other = getLogOther(record.other);
-        const costDiscount = other?.admin_info?.cost_discount;
-        if (!costDiscount || costDiscount <= 0) {
+        const adminInfo = other?.admin_info;
+        const hasCostDiscount = Object.prototype.hasOwnProperty.call(
+          adminInfo || {},
+          'cost_discount',
+        );
+        const costDiscount = adminInfo?.cost_discount;
+        if (
+          !hasCostDiscount ||
+          typeof costDiscount !== 'number' ||
+          costDiscount < 0 ||
+          costDiscount > 1
+        ) {
           return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
         }
         let vendorQuota;
@@ -924,8 +934,18 @@ export const getLogsColumns = ({
           return <></>;
         }
         const other = getLogOther(record.other);
-        const costDiscount = other?.admin_info?.cost_discount;
-        if (!costDiscount || costDiscount <= 0) {
+        const adminInfo = other?.admin_info;
+        const hasCostDiscount = Object.prototype.hasOwnProperty.call(
+          adminInfo || {},
+          'cost_discount',
+        );
+        const costDiscount = adminInfo?.cost_discount;
+        if (
+          !hasCostDiscount ||
+          typeof costDiscount !== 'number' ||
+          costDiscount < 0 ||
+          costDiscount > 1
+        ) {
           return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
         }
         let vendorQuota;

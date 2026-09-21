@@ -257,9 +257,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if selectedChannel, cacheErr := model.CacheGetChannel(info.ChannelId); cacheErr == nil && selectedChannel != nil {
 		if costDiscount, ok := selectedChannel.GetCostDiscountForModel(modelName); ok {
 			common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, costDiscount)
+			common.SetContextKey(c, constant.ContextKeyChannelCostDiscountConfigured, true)
 			logger.LogInfo(c, fmt.Sprintf("[ChannelCostDiscount] channel=%d model=%s discount=%.6f source=channel_or_model", info.ChannelId, modelName, costDiscount))
 		} else {
 			common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, float64(0))
+			common.SetContextKey(c, constant.ContextKeyChannelCostDiscountConfigured, false)
 			logger.LogInfo(c, fmt.Sprintf("[ChannelCostDiscount] channel=%d model=%s discount=none", info.ChannelId, modelName))
 		}
 	}
@@ -1151,7 +1153,7 @@ func mergeVideoTaskBillingData(c *gin.Context, info *relaycommon.RelayInfo, task
 	dataMap["billing_token_id"] = tokenId
 	dataMap["requested_seconds"] = videoSeconds
 	costDiscount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
-	if costDiscount > 0 {
+	if (common.GetContextKeyBool(c, constant.ContextKeyChannelCostDiscountConfigured) || costDiscount > 0) && costDiscount >= 0 && costDiscount <= 1 {
 		// Snapshot the effective channel cost at task creation. Settlement must
 		// not change when an administrator edits model_cost_discount later.
 		dataMap["billing_cost_discount"] = costDiscount
@@ -1211,7 +1213,7 @@ func mergeVideoTokenRatioBillingData(c *gin.Context, info *relaycommon.RelayInfo
 	dataMap["billing_token_name"] = tokenName
 	dataMap["billing_token_id"] = tokenId
 	costDiscount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
-	if costDiscount > 0 {
+	if (common.GetContextKeyBool(c, constant.ContextKeyChannelCostDiscountConfigured) || costDiscount > 0) && costDiscount >= 0 && costDiscount <= 1 {
 		dataMap["billing_cost_discount"] = costDiscount
 	}
 	generateAudio := parseGenerateAudioForQuota(c)

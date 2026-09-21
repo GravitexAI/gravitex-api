@@ -539,7 +539,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	// This is a log-only fallback; when neither is configured, leave the legacy
 	// other payload untouched. Preserve a value explicitly supplied by a
 	// specialized billing path.
-	if discount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount); discount > 0 {
+	if discount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount); (common.GetContextKeyBool(c, constant.ContextKeyChannelCostDiscountConfigured) || discount > 0) && discount >= 0 && discount <= 1 {
 		if rawAdminInfo, exists := other["admin_info"]; !exists {
 			other["admin_info"] = map[string]interface{}{"cost_discount": discount}
 		} else if rawAdminInfo == nil {

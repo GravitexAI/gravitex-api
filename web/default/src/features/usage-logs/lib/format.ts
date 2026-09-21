@@ -153,6 +153,55 @@ export function hasToolSurcharge(other: LogOtherData | null): boolean {
   )
 }
 
+export interface AdminCostBreakdown {
+  costDiscount: number
+  vendorQuota: number
+  actualCost: number
+  profit: number
+}
+
+/**
+ * Calculate admin-only channel cost data from the immutable values recorded on
+ * the log. Explicit zero is a configured discount and must not fall back to 1.
+ */
+export function getAdminCostBreakdown(
+  quota: number,
+  other: LogOtherData | null
+): AdminCostBreakdown | null {
+  const costDiscount = other?.admin_info?.cost_discount
+  if (
+    typeof costDiscount !== 'number' ||
+    !Number.isFinite(costDiscount) ||
+    costDiscount < 0 ||
+    costDiscount > 1
+  ) {
+    return null
+  }
+
+  let vendorQuota = other?.official_quota
+  if (
+    typeof vendorQuota !== 'number' ||
+    !Number.isFinite(vendorQuota) ||
+    vendorQuota <= 0
+  ) {
+    let effectiveGroupRatio = 1
+    if (isPositiveFiniteNumber(other?.user_group_ratio)) {
+      effectiveGroupRatio = other.user_group_ratio
+    } else if (isPositiveFiniteNumber(other?.group_ratio)) {
+      effectiveGroupRatio = other.group_ratio
+    }
+    vendorQuota = quota / effectiveGroupRatio
+  }
+
+  const actualCost = vendorQuota * costDiscount
+  return {
+    costDiscount,
+    vendorQuota,
+    actualCost,
+    profit: quota - actualCost,
+  }
+}
+
 /**
  * Parse the 'other' field from JSON string to object
  */

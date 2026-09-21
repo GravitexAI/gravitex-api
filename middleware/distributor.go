@@ -918,9 +918,11 @@ func setupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	// effective channel cost for this request model, not a user billing ratio.
 	if costDiscount, ok := channel.GetCostDiscountForModel(modelName); ok {
 		common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, costDiscount)
+		common.SetContextKey(c, constant.ContextKeyChannelCostDiscountConfigured, true)
 	} else {
 		// 重试切换渠道时，清除上一个渠道的 cost_discount，避免残留旧值
 		common.SetContextKey(c, constant.ContextKeyChannelCostDiscount, float64(0))
+		common.SetContextKey(c, constant.ContextKeyChannelCostDiscountConfigured, false)
 	}
 
 	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, false)

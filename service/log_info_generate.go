@@ -106,7 +106,7 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	adminInfo := make(map[string]interface{})
 	AppendAutoRouterAdminInfo(ctx, adminInfo)
 	other.MergeAdmin(adminInfo)
-	if discount := common.GetContextKeyFloat64(ctx, constant.ContextKeyChannelCostDiscount); discount > 0 {
+	if discount := common.GetContextKeyFloat64(ctx, constant.ContextKeyChannelCostDiscount); (common.GetContextKeyBool(ctx, constant.ContextKeyChannelCostDiscountConfigured) || discount > 0) && discount >= 0 && discount <= 1 {
 		other.SetAdmin("cost_discount", discount)
 	}
 }
@@ -383,7 +383,7 @@ func GenerateMjOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, pri
 	if ctx != nil {
 		adminInfo := make(map[string]interface{})
 		costDiscount := common.GetContextKeyFloat64(ctx, constant.ContextKeyChannelCostDiscount)
-		if costDiscount > 0 {
+		if (common.GetContextKeyBool(ctx, constant.ContextKeyChannelCostDiscountConfigured) || costDiscount > 0) && costDiscount >= 0 && costDiscount <= 1 {
 			adminInfo["cost_discount"] = costDiscount
 		}
 		if len(adminInfo) > 0 {

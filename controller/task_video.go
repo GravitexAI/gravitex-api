@@ -1255,20 +1255,20 @@ func shouldRunVideoFallbackBilling(ctx context.Context, task *model.Task) bool {
 // taskCostDiscountSnapshot returns the immutable channel-cost snapshot used by
 // asynchronous video settlement. The legacy task.Data value remains
 // authoritative; BillingContext is the durable copy used when task.Data was
-// replaced by an upstream response. A zero return preserves the old channel
-// fallback path and is also the result for unconfigured historical tasks.
-func taskCostDiscountSnapshot(task *model.Task, taskData map[string]interface{}) float64 {
-	if discount, ok := taskData["billing_cost_discount"].(float64); ok && discount > 0 && discount <= 1 {
-		return discount
+// replaced by an upstream response. The boolean distinguishes an explicit
+// zero cost from an unconfigured historical task.
+func taskCostDiscountSnapshot(task *model.Task, taskData map[string]interface{}) (float64, bool) {
+	if discount, ok := taskData["billing_cost_discount"].(float64); ok && discount >= 0 && discount <= 1 {
+		return discount, true
 	}
 	if task == nil || task.PrivateData.BillingContext == nil || task.PrivateData.BillingContext.CostDiscount == nil {
-		return 0
+		return 0, false
 	}
 	discount := *task.PrivateData.BillingContext.CostDiscount
-	if discount <= 0 || discount > 1 {
-		return 0
+	if discount < 0 || discount > 1 {
+		return 0, false
 	}
-	return discount
+	return discount, true
 }
 
 // handleVideoPerSecondBilling 处理按秒计费视频模型的轮询成功计费逻辑（Veo / Sora-2 / kling-v3 / wan2.6 等所有按秒价模型）
@@ -1605,15 +1605,16 @@ func handleVideoPerSecondBilling(ctx context.Context, task *model.Task) error {
 	// 写入渠道成本折扣：task.Data 旧快照优先，private_data 双快照次之，
 	// 最后才按旧逻辑读取渠道通用 cost_discount。
 	adminInfo := make(map[string]interface{})
-	costDiscount := taskCostDiscountSnapshot(task, taskData)
-	if costDiscount <= 0 {
+	costDiscount, costDiscountConfigured := taskCostDiscountSnapshot(task, taskData)
+	if !costDiscountConfigured {
 		// 兜底：通过 channel_id 查询渠道信息
-		if ch, err := model.CacheGetChannel(task.ChannelId); err == nil && ch != nil && ch.CostDiscount != nil && *ch.CostDiscount > 0 {
+		if ch, err := model.CacheGetChannel(task.ChannelId); err == nil && ch != nil && ch.CostDiscount != nil && *ch.CostDiscount >= 0 && *ch.CostDiscount <= 1 {
 			costDiscount = *ch.CostDiscount
+			costDiscountConfigured = true
 			logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s cost_discount fallback from channel: %.3f", task.TaskID, costDiscount))
 		}
 	}
-	if costDiscount > 0 {
+	if costDiscountConfigured {
 		adminInfo["cost_discount"] = costDiscount
 	}
 	if projectID := getVideoTaskProjectID(task); projectID != "" {
@@ -1974,14 +1975,15 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	// 写入渠道成本折扣：task.Data 旧快照优先，private_data 双快照次之，
 	// 最后才按旧逻辑读取渠道通用 cost_discount。
 	adminInfoTokenRatio := make(map[string]interface{})
-	costDiscountTokenRatio := taskCostDiscountSnapshot(task, taskData)
-	if costDiscountTokenRatio <= 0 {
-		if ch, err := model.CacheGetChannel(task.ChannelId); err == nil && ch != nil && ch.CostDiscount != nil && *ch.CostDiscount > 0 {
+	costDiscountTokenRatio, costDiscountTokenRatioConfigured := taskCostDiscountSnapshot(task, taskData)
+	if !costDiscountTokenRatioConfigured {
+		if ch, err := model.CacheGetChannel(task.ChannelId); err == nil && ch != nil && ch.CostDiscount != nil && *ch.CostDiscount >= 0 && *ch.CostDiscount <= 1 {
 			costDiscountTokenRatio = *ch.CostDiscount
+			costDiscountTokenRatioConfigured = true
 			logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] token_ratio task=%s cost_discount fallback from channel: %.3f", task.TaskID, costDiscountTokenRatio))
 		}
 	}
-	if costDiscountTokenRatio > 0 {
+	if costDiscountTokenRatioConfigured {
 		adminInfoTokenRatio["cost_discount"] = costDiscountTokenRatio
 	}
 	if projectID := getVideoTaskProjectID(task); projectID != "" {

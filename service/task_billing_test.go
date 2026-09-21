@@ -921,6 +921,17 @@ func TestTaskBillingOtherFallsBackToChannelCostDiscount(t *testing.T) {
 	assert.Equal(t, 0.952, adminInfo["cost_discount"])
 }
 
+func TestTaskBillingOtherInjectsConfiguredZeroCostDiscount(t *testing.T) {
+	task := makeTask(1, 1, 3000, 1, BillingSourceWallet, 0)
+	task.Data = json.RawMessage(`{"billing_cost_discount":0}`)
+
+	other := taskBillingOther(task).Snapshot()
+
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, 0.0, adminInfo["cost_discount"])
+}
+
 func TestTaskBillingOtherWithoutCostDiscountDoesNotCreateAdminInfo(t *testing.T) {
 	task := makeTask(1, 1, 3000, 1, BillingSourceWallet, 0)
 	task.Data = json.RawMessage(`{"status":"submitted"}`)
