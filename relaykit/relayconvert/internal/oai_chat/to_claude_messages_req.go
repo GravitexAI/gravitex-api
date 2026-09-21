@@ -11,6 +11,7 @@ import (
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, textRequest dto.GeneralOpenAIRequest) (*dto.ClaudeRequest, error) {
@@ -180,7 +181,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		},
 	}
 
-	for _, message := range formatMessages {
+	for messageIndex, message := range formatMessages {
 		if message.Role == "system" {
 			if message.IsStringContent() {
 				if text := message.StringContent(); text != "" {
@@ -248,7 +249,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 			claudeMessage.Content = text
 		} else {
 			claudeMediaMessages := make([]dto.ClaudeMediaMessage, 0)
-			for _, mediaMessage := range message.ParseContent() {
+			for partIndex, mediaMessage := range message.ParseContent() {
 				switch mediaMessage.Type {
 				case "text":
 					if mediaMessage.Text != "" {
@@ -264,7 +265,8 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 					}
 					base64Data, mimeType, err := relaymedia.ResolveBase64Data(c, source, "formatting image for Claude")
 					if err != nil {
-						return nil, fmt.Errorf("get file data failed: %s", err.Error())
+						location := fmt.Sprintf("messages[%d](%s).content[%d]", messageIndex, message.Role, partIndex)
+						return nil, types.NewFileSourceError(err, location, mediaMessage.Type, source)
 					}
 					claudeMediaMessage := dto.ClaudeMediaMessage{
 						Source: &dto.ClaudeMessageSource{

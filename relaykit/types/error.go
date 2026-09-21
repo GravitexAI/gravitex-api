@@ -64,6 +64,7 @@ const (
 	ErrorCodeReadRequestBodyFailed ErrorCode = "read_request_body_failed"
 	ErrorCodeConvertRequestFailed  ErrorCode = "convert_request_failed"
 	ErrorCodeAccessDenied          ErrorCode = "access_denied"
+	ErrorCodeInvalidFileSource     ErrorCode = "invalid_file_source"
 
 	// request error
 	ErrorCodeBadRequestBody ErrorCode = "bad_request_body"
@@ -92,10 +93,13 @@ type NewAPIError struct {
 	RelayError     any
 	skipRetry      bool
 	recordErrorLog *bool
-	errorType      ErrorType
-	errorCode      ErrorCode
-	StatusCode     int
-	Metadata       json.RawMessage
+	// notChannelAttributable 标记错误与当前选中的渠道无关（请求在发往上游之前就失败了）。
+	// 错误日志会把渠道记为 ChannelIdNotApplicable，避免污染渠道维度的错误统计。
+	notChannelAttributable bool
+	errorType              ErrorType
+	errorCode              ErrorCode
+	StatusCode             int
+	Metadata               json.RawMessage
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.
@@ -263,6 +267,27 @@ func NewError(err error, errorCode ErrorCode, ops ...NewAPIErrorOptions) *NewAPI
 	return e
 }
 
+// NewFileSourceError 包装请求转换阶段的图片/文档加载失败。这类失败的原因在客户端请求
+// 本身（base64 非法、URL 下不下来等），请求从未发往上游，所以固定为 400、不重试、也不
+// 归因到渠道。location 说明出问题的内容块在请求里的位置，blockType 是该块的类型，
+// 配合脱敏后的来源描述，让调用方能定位到是哪一条消息的哪个附件。
+//
+// 这里用 %s 而不是 %w 拼接：外层 NewError 会用 errors.As 优先复用内层 *NewAPIError，
+// 保留可解包的链路反而会让这里补充的位置信息被丢掉。
+func NewFileSourceError(err error, location string, blockType string, source FileSource) *NewAPIError {
+	detail := DescribeFileSource(source)
+	if blockType != "" {
+		detail = blockType + ", " + detail
+	}
+	return NewErrorWithStatusCode(
+		fmt.Errorf("get file data failed at %s (%s): %s", location, detail, err.Error()),
+		ErrorCodeInvalidFileSource,
+		http.StatusBadRequest,
+		ErrOptionWithSkipRetry(),
+		ErrOptionWithoutChannelAttribution(),
+	)
+}
+
 func NewOpenAIError(err error, errorCode ErrorCode, statusCode int, ops ...NewAPIErrorOptions) *NewAPIError {
 	var newErr *NewAPIError
 	// 保留深层传递的 new err
@@ -388,6 +413,24 @@ func ErrOptionWithNoRecordErrorLog() NewAPIErrorOptions {
 	return func(e *NewAPIError) {
 		e.recordErrorLog = kitutil.GetPointer(false)
 	}
+}
+
+// ChannelIdNotApplicable 用于错误日志：请求在发往上游之前就失败，没有任何渠道该为它负责。
+const ChannelIdNotApplicable = -1
+
+// ErrOptionWithoutChannelAttribution 声明错误不归因到当前选中的渠道。
+func ErrOptionWithoutChannelAttribution() NewAPIErrorOptions {
+	return func(e *NewAPIError) {
+		e.notChannelAttributable = true
+	}
+}
+
+// IsChannelAttributableError 判断错误是否应该算在当前选中的渠道头上。
+func IsChannelAttributableError(e *NewAPIError) bool {
+	if e == nil {
+		return false
+	}
+	return !e.notChannelAttributable
 }
 
 func ErrOptionWithStatusCode(statusCode int) NewAPIErrorOptions {

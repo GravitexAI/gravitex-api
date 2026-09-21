@@ -401,6 +401,11 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		tokenId := c.GetInt("token_id")
 		userGroup := c.GetString("group")
 		channelId := c.GetInt("channel_id")
+		if !types.IsChannelAttributableError(err) {
+			// 请求在转换阶段就失败，从未发往上游，记成 -1 避免污染渠道维度的错误统计。
+			// 实际选中的渠道仍可从 other.channel_name / admin_info.use_channel 看到。
+			channelId = types.ChannelIdNotApplicable
+		}
 		other := make(map[string]interface{})
 		if c.Request != nil && c.Request.URL != nil {
 			other["request_path"] = c.Request.URL.Path

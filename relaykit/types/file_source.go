@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 )
 
 // FileSource 统一的文件来源抽象接口
@@ -130,6 +132,27 @@ func NewBase64FileSource(base64Data string, mimeType string) *Base64Source {
 		MimeType:   mimeType,
 	}
 }
+
+// DescribeFileSource 生成既能写日志、也能直接回给客户端的文件来源描述。
+// URL 走统一脱敏（主机名和路径打码），内联 base64 只暴露长度和开头很短的一段，
+// 让调用方认得出是哪个附件，同时不泄露文件内容本身。
+func DescribeFileSource(source FileSource) string {
+	switch s := source.(type) {
+	case *URLSource:
+		return "url=" + kitutil.MaskSensitiveInfo(s.URL)
+	case *Base64Source:
+		preview := s.Base64Data
+		if len(preview) > fileSourcePreviewBytes {
+			preview = preview[:fileSourcePreviewBytes] + "..."
+		}
+		// 非法输入可能不是合法 UTF-8，截断后剔除坏字节，避免日志里出现乱码
+		return fmt.Sprintf("inline data(len=%d) starting with %q", len(s.Base64Data), strings.ToValidUTF8(preview, ""))
+	}
+	return "unknown file source"
+}
+
+// fileSourcePreviewBytes 内联数据在错误信息里最多暴露的字节数。
+const fileSourcePreviewBytes = 24
 
 func NewFileSourceFromData(data string, mimeType string) FileSource {
 	if strings.HasPrefix(data, "http://") || strings.HasPrefix(data, "https://") {

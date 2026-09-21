@@ -391,7 +391,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	// 缓存「原始 tool id -> 净化后 id」，保证 tool_use 与 tool_result 映射一致
 	toolIdMap := map[string]string{}
 
-	for _, message := range formatMessages {
+	for messageIndex, message := range formatMessages {
 		if message.Role == "system" {
 			// 根据Claude API规范，system字段使用数组格式更有通用性
 			startLen := len(systemMessages)
@@ -478,7 +478,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 				claudeMessage.Content = text
 			} else {
 				claudeMediaMessages := make([]dto.ClaudeMediaMessage, 0)
-				for _, mediaMessage := range message.ParseContent() {
+				for partIndex, mediaMessage := range message.ParseContent() {
 					switch mediaMessage.Type {
 					case "text":
 						if mediaMessage.Text != "" {
@@ -499,7 +499,8 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 						}
 						base64Data, mimeType, err := service.GetBase64Data(c, source, "formatting image for Claude")
 						if err != nil {
-							return nil, fmt.Errorf("get file data failed: %s", err.Error())
+							location := fmt.Sprintf("messages[%d](%s).content[%d]", messageIndex, message.Role, partIndex)
+							return nil, types.NewFileSourceError(err, location, mediaMessage.Type, source)
 						}
 						claudeMediaMessage := dto.ClaudeMediaMessage{
 							Source: &dto.ClaudeMessageSource{

@@ -11,6 +11,7 @@ import (
 	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
+	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
 func convertOpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Meta, request any) (any, error) {
@@ -88,7 +89,7 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 	if err != nil {
 		return nil, err
 	}
-	for _, item := range inputItems {
+	for itemIndex, item := range inputItems {
 		itemType := strings.TrimSpace(kitutil.Interface2String(item["type"]))
 		switch itemType {
 		case ResponsesInputTypeFunctionCall:
@@ -100,7 +101,7 @@ func OpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Met
 		default:
 			sourceRole := strings.TrimSpace(kitutil.Interface2String(item["role"]))
 			role := responsesClaudeRole(sourceRole)
-			parts, err := responsesInputContentToClaudeMediaMessages(c, item["content"])
+			parts, err := responsesInputContentToClaudeMediaMessages(c, item["content"], itemIndex)
 			if err != nil {
 				return nil, err
 			}
@@ -156,14 +157,15 @@ func responsesFunctionDeclarationsToClaudeTools(functions []dto.FunctionRequest)
 	return tools
 }
 
-func responsesInputContentToClaudeMediaMessages(c context.Context, content any) ([]dto.ClaudeMediaMessage, error) {
+// itemIndex 是该 content 所属的 input item 在请求里的下标，仅用于媒体加载失败时定位问题附件。
+func responsesInputContentToClaudeMediaMessages(c context.Context, content any, itemIndex int) ([]dto.ClaudeMediaMessage, error) {
 	contentParts, err := ContentParts(content)
 	if err != nil {
 		return nil, err
 	}
 
 	parts := make([]dto.ClaudeMediaMessage, 0, len(contentParts))
-	for _, contentPart := range contentParts {
+	for partIndex, contentPart := range contentParts {
 		partType := strings.TrimSpace(kitutil.Interface2String(contentPart["type"]))
 		switch partType {
 		case "input_text", "output_text", "text":
@@ -181,7 +183,8 @@ func responsesInputContentToClaudeMediaMessages(c context.Context, content any) 
 			}
 			base64Data, mimeType, err := relaymedia.ResolveBase64Data(c, source, "formatting Responses input for Claude")
 			if err != nil {
-				return nil, fmt.Errorf("get file data failed: %s", err.Error())
+				location := fmt.Sprintf("input[%d].content[%d]", itemIndex, partIndex)
+				return nil, types.NewFileSourceError(err, location, partType, source)
 			}
 			claudePart := dto.ClaudeMediaMessage{
 				Source: &dto.ClaudeMessageSource{
