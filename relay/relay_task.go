@@ -1152,8 +1152,7 @@ func mergeVideoTaskBillingData(c *gin.Context, info *relaycommon.RelayInfo, task
 	dataMap["billing_token_name"] = tokenName
 	dataMap["billing_token_id"] = tokenId
 	dataMap["requested_seconds"] = videoSeconds
-	costDiscount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
-	if (common.GetContextKeyBool(c, constant.ContextKeyChannelCostDiscountConfigured) || costDiscount > 0) && costDiscount >= 0 && costDiscount <= 1 {
+	if costDiscount, ok := common.GetConfiguredCostDiscount(c); ok {
 		// Snapshot the effective channel cost at task creation. Settlement must
 		// not change when an administrator edits model_cost_discount later.
 		dataMap["billing_cost_discount"] = costDiscount
@@ -1212,8 +1211,7 @@ func mergeVideoTokenRatioBillingData(c *gin.Context, info *relaycommon.RelayInfo
 	dataMap["billing_effective_group_ratio"] = effectiveGroupRatio
 	dataMap["billing_token_name"] = tokenName
 	dataMap["billing_token_id"] = tokenId
-	costDiscount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
-	if (common.GetContextKeyBool(c, constant.ContextKeyChannelCostDiscountConfigured) || costDiscount > 0) && costDiscount >= 0 && costDiscount <= 1 {
+	if costDiscount, ok := common.GetConfiguredCostDiscount(c); ok {
 		dataMap["billing_cost_discount"] = costDiscount
 	}
 	generateAudio := parseGenerateAudioForQuota(c)

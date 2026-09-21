@@ -89,9 +89,9 @@ export function ModelCostDiscountEditor(props: ModelCostDiscountEditorProps) {
       const model = row.model.trim()
       const discount = Number(row.discount)
       if (!model) continue
-      if (!Number.isFinite(discount) || discount <= 0 || discount > 1) {
+      if (!Number.isFinite(discount) || discount < 0 || discount > 1) {
         setError(
-          t('Each model cost discount must be greater than 0 and at most 1')
+          t('Each model cost discount must be between 0 and 1')
         )
         return
       }

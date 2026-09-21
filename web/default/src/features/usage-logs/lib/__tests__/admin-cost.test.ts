@@ -16,50 +16,60 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
+import { describe, expect, test } from 'vitest'
 
 import { getAdminCostBreakdown } from '../format'
 
 describe('admin cost breakdown', () => {
   test('treats an explicit zero discount as zero upstream cost', () => {
-    assert.deepEqual(
+    expect(
       getAdminCostBreakdown(500, {
         official_quota: 300,
         admin_info: { cost_discount: 0 },
-      }),
-      {
+      })
+    ).toEqual({
         costDiscount: 0,
         vendorQuota: 300,
         actualCost: 0,
         profit: 500,
-      }
-    )
+      })
   })
 
   test('falls back to the effective group ratio when official quota is absent', () => {
-    assert.deepEqual(
+    expect(
       getAdminCostBreakdown(1000, {
         user_group_ratio: 2,
         group_ratio: 3,
         admin_info: { cost_discount: 0.5 },
-      }),
-      {
+      })
+    ).toEqual({
         costDiscount: 0.5,
         vendorQuota: 500,
         actualCost: 250,
         profit: 750,
-      }
-    )
+      })
   })
 
   test('does not invent a cost when the discount is missing or invalid', () => {
-    assert.equal(getAdminCostBreakdown(500, {}), null)
-    assert.equal(
+    expect(getAdminCostBreakdown(500, {})).toBeNull()
+    expect(
       getAdminCostBreakdown(500, {
         admin_info: { cost_discount: 1.01 },
       }),
-      null
-    )
+    ).toBeNull()
+  })
+
+  test('preserves an explicit zero official quota', () => {
+    expect(
+      getAdminCostBreakdown(500, {
+        official_quota: 0,
+        admin_info: { cost_discount: 0.5 },
+      })
+    ).toEqual({
+      costDiscount: 0.5,
+      vendorQuota: 0,
+      actualCost: 0,
+      profit: 500,
+    })
   })
 })

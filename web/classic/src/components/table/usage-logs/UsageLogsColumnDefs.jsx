@@ -37,6 +37,7 @@ import {
 } from '../../../helpers';
 import { IconHelpCircle } from '@douyinfe/semi-icons';
 import { CircleAlert, Route, Sparkles } from 'lucide-react';
+import { isConfiguredCostDiscount } from '../../../helpers/costDiscount.js';
 
 const colors = [
   'amber',
@@ -871,7 +872,11 @@ export const getLogsColumns = ({
           return <></>;
         }
         const other = getLogOther(record.other);
-        if (other?.official_quota != null && other.official_quota > 0) {
+        if (
+          typeof other?.official_quota === 'number' &&
+          Number.isFinite(other.official_quota) &&
+          other.official_quota >= 0
+        ) {
           return <>{other.official_quota === 0 ? '0' : renderQuota(other.official_quota, 8)}</>;
         }
         const groupRatio = getEffectiveGroupRatio(other);
@@ -893,21 +898,16 @@ export const getLogsColumns = ({
         }
         const other = getLogOther(record.other);
         const adminInfo = other?.admin_info;
-        const hasCostDiscount = Object.prototype.hasOwnProperty.call(
-          adminInfo || {},
-          'cost_discount',
-        );
         const costDiscount = adminInfo?.cost_discount;
-        if (
-          !hasCostDiscount ||
-          typeof costDiscount !== 'number' ||
-          costDiscount < 0 ||
-          costDiscount > 1
-        ) {
+        if (!isConfiguredCostDiscount(costDiscount)) {
           return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
         }
         let vendorQuota;
-        if (other?.official_quota != null && other.official_quota > 0) {
+        if (
+          typeof other?.official_quota === 'number' &&
+          Number.isFinite(other.official_quota) &&
+          other.official_quota >= 0
+        ) {
           vendorQuota = other.official_quota;
         } else {
           const groupRatio = getEffectiveGroupRatio(other);
@@ -935,21 +935,16 @@ export const getLogsColumns = ({
         }
         const other = getLogOther(record.other);
         const adminInfo = other?.admin_info;
-        const hasCostDiscount = Object.prototype.hasOwnProperty.call(
-          adminInfo || {},
-          'cost_discount',
-        );
         const costDiscount = adminInfo?.cost_discount;
-        if (
-          !hasCostDiscount ||
-          typeof costDiscount !== 'number' ||
-          costDiscount < 0 ||
-          costDiscount > 1
-        ) {
+        if (!isConfiguredCostDiscount(costDiscount)) {
           return <span style={{ color: 'var(--semi-color-text-2)' }}>-</span>;
         }
         let vendorQuota;
-        if (other?.official_quota != null && other.official_quota > 0) {
+        if (
+          typeof other?.official_quota === 'number' &&
+          Number.isFinite(other.official_quota) &&
+          other.official_quota >= 0
+        ) {
           vendorQuota = other.official_quota;
         } else {
           const groupRatio = getEffectiveGroupRatio(other);

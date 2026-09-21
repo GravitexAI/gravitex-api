@@ -430,8 +430,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			}
 		}
 		service.AppendAutoRouterAdminInfo(c, adminInfo)
-		costDiscount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
-		if (common.GetContextKeyBool(c, constant.ContextKeyChannelCostDiscountConfigured) || costDiscount > 0) && costDiscount >= 0 && costDiscount <= 1 {
+		if costDiscount, ok := common.GetConfiguredCostDiscount(c); ok {
 			adminInfo["cost_discount"] = costDiscount
 		}
 		other["admin_info"] = adminInfo
@@ -838,7 +837,7 @@ func buildSubmittedTask(c *gin.Context, relayInfo *relaycommon.RelayInfo, result
 		// Lyria's task row is the audit copy of the provider response. Keep it
 		// byte-for-byte intact; the discount snapshot still lives in private_data.
 		task.Data = append([]byte(nil), result.TaskData...)
-		if discount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount); (common.GetContextKeyBool(c, constant.ContextKeyChannelCostDiscountConfigured) || discount > 0) && discount >= 0 && discount <= 1 {
+		if discount, ok := common.GetConfiguredCostDiscount(c); ok {
 			billingContext.CostDiscount = common.GetPointer(discount)
 		}
 	} else {
@@ -888,8 +887,8 @@ func applyInitialTaskSubmitResult(task *model.Task, result *relay.TaskSubmitResu
 // response. An existing task.Data value remains authoritative for backward
 // compatibility, while an unconfigured task keeps both snapshots absent.
 func ensureAsyncTaskCostDiscountSnapshot(c *gin.Context, billingContext *model.TaskBillingContext, taskData []byte) []byte {
-	discount := common.GetContextKeyFloat64(c, constant.ContextKeyChannelCostDiscount)
-	if !(common.GetContextKeyBool(c, constant.ContextKeyChannelCostDiscountConfigured) || discount > 0) || discount < 0 || discount > 1 {
+	discount, configured := common.GetConfiguredCostDiscount(c)
+	if !configured {
 		return taskData
 	}
 	if billingContext != nil {

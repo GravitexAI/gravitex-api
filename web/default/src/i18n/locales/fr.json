@@ -1522,7 +1522,6 @@
     "Each item must have exactly one key-value pair.": "Chaque élément doit avoir exactement une paire clé-valeur.",
     "Each line represents one keyword. Leave blank to disable the list but keep the switch states.": "Chaque ligne représente un mot-clé. Laissez vide pour désactiver la liste mais conserver les états des interrupteurs.",
     "Each matrix cell is one rule: users of this row group pay this ratio when billed as this column group. In JSON the row is the outer key and the column is the inner key.": "Chaque cellule de la matrice est une règle : les utilisateurs du groupe de la ligne paient ce taux lorsqu’ils sont facturés sous le groupe de la colonne. En JSON, la ligne est la clé externe et la colonne la clé interne.",
-    "Each model cost discount must be greater than 0 and at most 1": "Chaque remise de coût doit être supérieure à 0 et inférieure ou égale à 1",
     "Each rule reads as a sentence: users of one group pay a special ratio when billed as another group. Without a rule, the billing group base ratio applies.": "Chaque règle se lit comme une phrase : les utilisateurs d’un groupe paient un taux spécial lorsqu’ils sont facturés sous un autre groupe. Sans règle, le taux de base du groupe de facturation s’applique.",
     "Each tier supports 0~2 conditions (over len, p, c); the last tier is the catch-all without conditions. Use len (full input length, including cache hits) for tier conditions to avoid mis-routing when cache hits reduce p.": "Chaque palier accepte 0 à 2 conditions (sur len, p, c) ; le dernier palier est le filet de sécurité sans condition. Utilisez len (longueur d'entrée complète, y compris les cache hits) pour les conditions de palier afin d'éviter les routages erronés lorsque les cache hits réduisent p.",
     "Each tier supports up to 2 conditions; the last tier is the catch-all without conditions. Use full input length for tier conditions to avoid mis-routing when cache hits reduce billable input tokens.": "Chaque palier accepte jusqu’à 2 conditions ; le dernier palier sert de repli sans condition. Utilisez la longueur complète de l’entrée pour éviter un mauvais aiguillage lorsque les lectures de cache réduisent les tokens d’entrée facturables.",
@@ -5276,6 +5275,7 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Each model cost discount must be between 0 and 1": "La remise de coût de chaque modèle doit être comprise entre 0 et 1"
   }
 }

@@ -16,8 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
+import { describe, expect, test } from 'vitest'
 
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
@@ -45,22 +44,21 @@ describe('channel cost discount form', () => {
   test('preserves an explicit zero through validation and update payload', () => {
     const result = channelFormSchema.safeParse(validForm(0))
 
-    assert.equal(result.success, true)
+    expect(result.success).toBe(true)
     if (!result.success) return
-    assert.equal(result.data.cost_discount, 0)
-    assert.equal(
+    expect(result.data.cost_discount).toBe(0)
+    expect(
       transformFormDataToUpdatePayload(result.data, 81).cost_discount,
-      0
-    )
+    ).toBe(0)
   })
 
   test('accepts an unset discount and rejects values outside zero to one', () => {
-    assert.equal(channelFormSchema.safeParse(validForm(null)).success, true)
-    assert.equal(channelFormSchema.safeParse(validForm(-0.001)).success, false)
-    assert.equal(channelFormSchema.safeParse(validForm(1.001)).success, false)
+    expect(channelFormSchema.safeParse(validForm(null)).success).toBe(true)
+    expect(channelFormSchema.safeParse(validForm(-0.001)).success).toBe(false)
+    expect(channelFormSchema.safeParse(validForm(1.001)).success).toBe(false)
   })
 
   test('accepts an explicit zero model override', () => {
-    assert.equal(channelFormSchema.safeParse(validModelCostDiscount(0)).success, true)
+    expect(channelFormSchema.safeParse(validModelCostDiscount(0)).success).toBe(true)
   })
 })

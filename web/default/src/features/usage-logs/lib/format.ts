@@ -182,7 +182,7 @@ export function getAdminCostBreakdown(
   if (
     typeof vendorQuota !== 'number' ||
     !Number.isFinite(vendorQuota) ||
-    vendorQuota <= 0
+    vendorQuota < 0
   ) {
     let effectiveGroupRatio = 1
     if (isPositiveFiniteNumber(other?.user_group_ratio)) {
