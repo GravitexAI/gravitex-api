@@ -577,6 +577,16 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if adminRejectReason != "" {
 		other.SetAdmin("reject_reason", adminRejectReason)
 	}
+	// Billing audit for Gemini image models: finish_reason tells a delivered image
+	// apart from one withheld by an output-side safety filter, and
+	// blocked_image_tokens records the image output we waived because the caller
+	// never received the image.
+	if finishReason := ctx.GetString("gemini_finish_reason"); finishReason != "" {
+		other.SetAdmin("upstream_finish_reason", finishReason)
+	}
+	if blockedImageTokens := ctx.GetInt("gemini_blocked_image_tokens"); blockedImageTokens > 0 {
+		other.SetAdmin("blocked_image_tokens", blockedImageTokens)
+	}
 	if summary.ImageTokens != 0 {
 		other.SetPublic("image", true)
 		other.SetPublic("image_ratio", summary.ImageRatio)

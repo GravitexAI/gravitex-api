@@ -56,6 +56,10 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	chatResp := responseGeminiChat2OpenAI(c, &geminiResponse)
 	chatResp.Model = info.UpstreamModelName
 	usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
+	applyGeminiOutputTokenSplit(c, &usage, geminiResponse.UsageMetadata, geminiResponseDeliveredImage(geminiResponse.Candidates))
+	if reason := geminiFinishReason(geminiResponse.Candidates); reason != "" {
+		c.Set("gemini_finish_reason", reason)
+	}
 	chatResp.Usage = usage
 
 	responsesResp, responsesUsage, err := service.ChatCompletionsResponseToResponsesResponse(chatResp, helper.GetResponseID(c))

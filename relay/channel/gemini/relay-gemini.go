@@ -1315,6 +1315,84 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 	return usage
 }
 
+// geminiResponseDeliveredImage reports whether the candidates actually carry
+// image bytes. Vertex still reports IMAGE-modality token counts in
+// usageMetadata when an output-side safety filter withholds the image
+// (finishReason IMAGE_SAFETY / IMAGE_PROHIBITED_CONTENT / IMAGE_RECITATION /
+// NO_IMAGE), so the usage numbers alone cannot tell delivery from a block.
+func geminiResponseDeliveredImage(candidates []dto.GeminiChatCandidate) bool {
+	for _, candidate := range candidates {
+		for _, part := range candidate.Content.Parts {
+			if part.InlineData != nil && strings.HasPrefix(part.InlineData.MimeType, "image") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// geminiFinishReason returns the first candidate finish reason, for billing audit logs.
+func geminiFinishReason(candidates []dto.GeminiChatCandidate) string {
+	for _, candidate := range candidates {
+		if candidate.FinishReason != nil && *candidate.FinishReason != "" {
+			return *candidate.FinishReason
+		}
+	}
+	return ""
+}
+
+// applyGeminiOutputTokenSplit classifies candidate output tokens into
+// image/audio/text buckets for billing and records the split on the context.
+//
+// Undelivered image tokens are dropped from both the image bucket and the
+// billable completion total: Google's own blocked-image response states "You
+// will not be charged for blocked images", so charging them — at the image
+// output price or at the text price — bills bytes the caller never received.
+// Thinking tokens stay billable because Google does charge them.
+func applyGeminiOutputTokenSplit(c *gin.Context, usage *dto.Usage, metadata dto.GeminiUsageMetadata, deliveredImage bool) {
+	var imageTokens, audioTokens, textTokens int
+	for _, detail := range metadata.CandidatesTokensDetails {
+		mod := strings.TrimSpace(detail.Modality)
+		switch {
+		case strings.EqualFold(mod, "IMAGE"):
+			imageTokens += detail.TokenCount
+		case strings.EqualFold(mod, "AUDIO"):
+			audioTokens += detail.TokenCount
+		case strings.EqualFold(mod, "TEXT"):
+			textTokens += detail.TokenCount
+		}
+	}
+
+	// Upstream omitted the modality split: attribute candidatesTokenCount by what
+	// the response actually carried, never by the model name (an image-capable
+	// model answering with plain text must not be billed as image output).
+	if imageTokens == 0 && audioTokens == 0 && textTokens == 0 && metadata.CandidatesTokenCount > 0 {
+		if deliveredImage {
+			imageTokens = metadata.CandidatesTokenCount
+		} else {
+			textTokens = metadata.CandidatesTokenCount
+		}
+	}
+
+	if !deliveredImage && imageTokens > 0 {
+		usage.CompletionTokens -= imageTokens
+		if usage.CompletionTokens < 0 {
+			usage.CompletionTokens = 0
+		}
+		// Keep the waived amount auditable: it is what a caller would otherwise
+		// have been billed for an image that was generated but never delivered.
+		c.Set("gemini_blocked_image_tokens", imageTokens)
+		imageTokens = 0
+	}
+
+	usage.CompletionTokenDetails.ImageTokens = imageTokens
+	usage.CompletionTokenDetails.AudioTokens = audioTokens
+	usage.CompletionTokenDetails.TextTokens = textTokens
+	c.Set("gemini_image_output_tokens", imageTokens)
+	c.Set("gemini_text_output_tokens", textTokens)
+	c.Set("gemini_image_delivered", deliveredImage)
+}
+
 func responseGeminiChat2OpenAI(c *gin.Context, response *dto.GeminiChatResponse) *dto.OpenAITextResponse {
 	fullTextResponse := dto.OpenAITextResponse{
 		// CHZ-PATCH(gemini-resp-id): 用上游 responseId 作为 response.id，与日志 request_id 对齐
@@ -1625,35 +1703,12 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			}
 			mappedUsage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
 			*usage = mappedUsage
-			// 流式最后一包：从 CandidatesTokensDetails 拆出图片/音频/文本输出 token，供计费与日志使用（modality 大小写不敏感）
-			var imageOutputTokens, audioOutputTokens, textOutputTokens int
-			for _, detail := range geminiResponse.UsageMetadata.CandidatesTokensDetails {
-				mod := strings.TrimSpace(detail.Modality)
-				if strings.EqualFold(mod, "IMAGE") {
-					imageOutputTokens += detail.TokenCount
-				} else if strings.EqualFold(mod, "AUDIO") {
-					audioOutputTokens += detail.TokenCount
-				} else if strings.EqualFold(mod, "TEXT") {
-					textOutputTokens += detail.TokenCount
-				}
-			}
-			// CHZ-PATCH(gemini-usage-fix): 上游未提供 CandidatesTokensDetails 拆分时，
-			// 根据流中累计是否产出过 image inlineData 归类：
-			//   - 实际产生图片  → 算图片输出
-			//   - 实际只产出文本 → 算文本输出（避免多模态模型纯文本响应被误按图片计费）
-			if imageOutputTokens == 0 && audioOutputTokens == 0 && textOutputTokens == 0 &&
-				geminiResponse.UsageMetadata.CandidatesTokenCount > 0 {
-				if hasImagePart {
-					imageOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
-				} else {
-					textOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
-				}
-			}
-			usage.CompletionTokenDetails.ImageTokens = imageOutputTokens
-			usage.CompletionTokenDetails.AudioTokens = audioOutputTokens
-			usage.CompletionTokenDetails.TextTokens = textOutputTokens
-			c.Set("gemini_image_output_tokens", imageOutputTokens)
-			c.Set("gemini_text_output_tokens", textOutputTokens)
+			// 流式按全流累计的 hasImagePart 判定是否真的交付了图片：末包的 candidate
+			// 通常已经没有 inlineData，只看末包会把正常出图误判成被拦。
+			applyGeminiOutputTokenSplit(c, usage, geminiResponse.UsageMetadata, hasImagePart)
+		}
+		if reason := geminiFinishReason(geminiResponse.Candidates); reason != "" {
+			c.Set("gemini_finish_reason", reason)
 		}
 
 		if !callback(data, &geminiResponse) {
@@ -1858,48 +1913,10 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	fullTextResponse.Model = info.UpstreamModelName
 	usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
 
-	// 从 CandidatesTokensDetails 拆出图片/音频/文本输出 token，供计费与日志使用（modality 大小写不敏感）
-	var imageOutputTokens, audioOutputTokens, textOutputTokens int
-	for _, detail := range geminiResponse.UsageMetadata.CandidatesTokensDetails {
-		mod := strings.TrimSpace(detail.Modality)
-		if strings.EqualFold(mod, "IMAGE") {
-			imageOutputTokens += detail.TokenCount
-		} else if strings.EqualFold(mod, "AUDIO") {
-			audioOutputTokens += detail.TokenCount
-		} else if strings.EqualFold(mod, "TEXT") {
-			textOutputTokens += detail.TokenCount
-		}
+	applyGeminiOutputTokenSplit(c, &usage, geminiResponse.UsageMetadata, geminiResponseDeliveredImage(geminiResponse.Candidates))
+	if reason := geminiFinishReason(geminiResponse.Candidates); reason != "" {
+		c.Set("gemini_finish_reason", reason)
 	}
-	// CHZ-PATCH(gemini-usage-fix): 上游未提供 CandidatesTokensDetails 拆分时，
-	// 根据 candidate 实际产出的内容归类 candidatesTokenCount：
-	//   - 实际产生 image inlineData → 算图片输出（按图片单价计费）
-	//   - 实际只产出文本          → 算文本输出（避免把 banana 等多模态模型的纯文本响应误按图片计费）
-	// 不再使用 "OriginModelName 含 image" 这种基于模型名的兜底（会误伤纯文本响应）。
-	if imageOutputTokens == 0 && audioOutputTokens == 0 && textOutputTokens == 0 &&
-		geminiResponse.UsageMetadata.CandidatesTokenCount > 0 {
-		hasImagePart := false
-		for _, candidate := range geminiResponse.Candidates {
-			for _, part := range candidate.Content.Parts {
-				if part.InlineData != nil && strings.HasPrefix(part.InlineData.MimeType, "image") {
-					hasImagePart = true
-					break
-				}
-			}
-			if hasImagePart {
-				break
-			}
-		}
-		if hasImagePart {
-			imageOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
-		} else {
-			textOutputTokens = geminiResponse.UsageMetadata.CandidatesTokenCount
-		}
-	}
-	usage.CompletionTokenDetails.ImageTokens = imageOutputTokens
-	usage.CompletionTokenDetails.AudioTokens = audioOutputTokens
-	usage.CompletionTokenDetails.TextTokens = textOutputTokens
-	c.Set("gemini_image_output_tokens", imageOutputTokens)
-	c.Set("gemini_text_output_tokens", textOutputTokens)
 
 	fullTextResponse.Usage = usage
 

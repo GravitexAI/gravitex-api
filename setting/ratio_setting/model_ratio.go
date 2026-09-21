@@ -638,9 +638,9 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 		} else if strings.HasPrefix(name, "gemini-robotics-er-1.5") {
 			return 2.5 / 0.3, false
 		} else if strings.HasPrefix(name, "gemini-3-pro") {
-			if strings.HasPrefix(name, "gemini-3-pro-image") {
-				return 60, false
-			}
+			// gemini-3-pro-image 的文本/思考输出与 gemini-3-pro 同档（$12 / $2 = 6x）。
+			// 图片输出是另一档（$120 / $2 = 60x），走 defaultImageCompletionRatio，
+			// 不能在这里返回 60——否则思考 token 会被按图片单价计费。
 			return 6, false
 		}
 		return 4, false
@@ -729,10 +729,17 @@ var defaultImageRatio = map[string]float64{
 }
 
 // defaultImageCompletionRatio 图片输出 token 计费倍率，未配置时 GetImageCompletionRatio 回退到 CompletionRatio
+// 取值口径：图片输出单价 / 文本输入单价（该倍率后续会与 modelRatio × groupRatio 相乘）。
 var defaultImageCompletionRatio = map[string]float64{
-	"gpt-image-1":                8, // 与文本补全倍率一致
-	"gpt-image-2":                6, // $30 / $5 = 6x
-	"gemini-3-pro-image-preview": 6, // Gemini 图片模型输出
+	"gpt-image-1":                    8,   // 与文本补全倍率一致
+	"gpt-image-2":                    6,   // $30 / $5 = 6x
+	"gemini-3-pro-image":             60,  // Nano Banana Pro: $120 / $2 = 60x
+	"gemini-3-pro-image-preview":     60,  // 同上
+	"nano-banana-pro-preview":        60,  // gemini-3-pro-image 别名
+	"gemini-3.1-flash-image":         120, // Nano Banana 2: $60 / $0.5 = 120x
+	"gemini-3.1-flash-image-preview": 120, // 同上
+	"gemini-2.5-flash-image":         100, // $30 / $0.3 = 100x
+	"gemini-2.5-flash-image-preview": 100, // 同上
 }
 
 var imageRatioMap = types.NewRWMap[string, float64]()
