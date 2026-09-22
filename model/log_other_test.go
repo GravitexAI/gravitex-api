@@ -69,6 +69,16 @@ func TestLogOtherRejectsSensitivePublicFields(t *testing.T) {
 	require.JSONEq(t, `{}`, NewLogOther().JSONString())
 }
 
+func TestLogOtherAllowsStreamStatusPublic(t *testing.T) {
+	other := NewLogOther()
+
+	require.True(t, other.SetPublic("stream_status", map[string]interface{}{
+		"status":     "ok",
+		"end_reason": "done",
+	}))
+	require.JSONEq(t, `{"stream_status":{"status":"ok","end_reason":"done"}}`, other.JSONString())
+}
+
 func TestLogOtherJSONStringDoesNotMutateReceiver(t *testing.T) {
 	other := NewLogOther()
 	require.True(t, other.SetPublic("request_path", "/v1/chat/completions"))

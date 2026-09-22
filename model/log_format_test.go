@@ -88,6 +88,7 @@ func TestTaskPluginLogVisibilityIsRoleSeparated(t *testing.T) {
 func TestLegacyLogOtherVisibilityIsRoleSeparated(t *testing.T) {
 	other := common.MapToJsonStr(map[string]interface{}{
 		"request_path":  "/v1/chat/completions",
+		"stream_status": map[string]interface{}{"status": "ok", "end_reason": "done"},
 		"channel_id":    202,
 		"channel_name":  "legacy-secret-channel",
 		"channel_type":  1,
@@ -124,6 +125,7 @@ func TestLegacyLogOtherVisibilityIsRoleSeparated(t *testing.T) {
 			"channel_name",
 			"channel_type",
 			"reject_reason",
+			"stream_status",
 			"admin_info",
 			"root_info",
 			"audit_info",
@@ -140,6 +142,7 @@ func TestLegacyLogOtherVisibilityIsRoleSeparated(t *testing.T) {
 		parsed, err := common.StrToMap(logs[0].Other)
 		require.NoError(t, err)
 		assert.Equal(t, "legacy-secret-channel", parsed["channel_name"])
+		assert.Contains(t, parsed, "stream_status")
 		assert.NotContains(t, parsed, "reject_reason")
 		assert.NotContains(t, parsed, "root_info")
 		assert.Contains(t, parsed, "audit_info")

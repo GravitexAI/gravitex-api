@@ -21,9 +21,14 @@ var legacySensitiveLogOtherKeys = []string{
 	"channel_name",
 	"channel_type",
 	"reject_reason",
-	"stream_status",
 	"official_quota",
 	"official_video_price_per_second",
+}
+
+// userHiddenLogOtherKeys are fields that may be stored for privileged/admin
+// views but must be removed from user-visible projections.
+var userHiddenLogOtherKeys = []string{
+	"stream_status",
 }
 
 type logOtherVisibility int
@@ -268,6 +273,12 @@ func formatLogOtherJSON(value string, visibility logOtherVisibility) string {
 			}
 		}
 		for _, key := range legacySensitiveLogOtherKeys {
+			if _, exists := values[key]; exists {
+				delete(values, key)
+				changed = true
+			}
+		}
+		for _, key := range userHiddenLogOtherKeys {
 			if _, exists := values[key]; exists {
 				delete(values, key)
 				changed = true
