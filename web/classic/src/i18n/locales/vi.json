@@ -1755,6 +1755,9 @@
     "新增条件": "Thêm điều kiện",
     "新增模型": "",
     "新增规则": "Thêm quy tắc",
+    "表格填写": "Nhập dạng bảng",
+    "手动填写": "Nhập JSON thủ công",
+    "可填写精确模型名或以 * 结尾的前缀，精确匹配优先": "Nhập tên mô hình chính xác hoặc tiền tố kết thúc bằng *; kết quả khớp chính xác được ưu tiên.",
     "新增订阅": "Thêm đăng ký",
     "新密码": "Mật khẩu mới",
     "新密码需要和原密码不一致！": "Mật khẩu mới phải khác với mật khẩu cũ!",
@@ -4249,6 +4252,11 @@
     "保存 Auto 路由设置": "保存 Auto 路由设置",
     "模型权重": "模型权重",
     "模型能力标注": "模型能力标注",
-    "JSON 格式错误": "JSON 格式错误"
+    "JSON 格式错误": "JSON 格式错误",
+    "最低剩余额度": "Hạn ngạch tối thiểu còn lại",
+    "模型请求预扣后必须保留的额度": "Hạn ngạch phải còn lại sau khi trừ trước cho yêu cầu mô hình",
+    "模型额度保留规则": "Quy tắc dự trữ hạn ngạch theo mô hình",
+    "使用 JSON 配置精确模型名或以 * 结尾的前缀规则，精确匹配优先。": "Dùng JSON với tên mô hình chính xác hoặc tiền tố kết thúc bằng *. Kết quả khớp chính xác được ưu tiên.",
+    "示例：{\"seedance*\": 10000, \"seedance-2-0\": 20000}": "Ví dụ: {\"seedance*\": 10000, \"seedance-2-0\": 20000}"
   }
 }

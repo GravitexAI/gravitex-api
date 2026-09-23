@@ -30,6 +30,21 @@ end
 redis.call('HINCRBY', KEYS[1], 'Quota', -tonumber(ARGV[1]))
 return 1`
 
+const userQuotaReserveWithMinimumScript = `
+if tonumber(redis.call('HGET', KEYS[1], 'Id') or '0') ~= tonumber(ARGV[2])
+  or tonumber(redis.call('HGET', KEYS[1], 'CacheSchema') or '0') ~= tonumber(ARGV[3])
+  or redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
+  return -1
+end
+local quota = tonumber(redis.call('HGET', KEYS[1], 'Quota'))
+local amount = tonumber(ARGV[1])
+local minimum = tonumber(ARGV[4])
+if quota == nil or quota < amount or quota - amount < minimum then
+  return 0
+end
+redis.call('HINCRBY', KEYS[1], 'Quota', -amount)
+return 1`
+
 const userQuotaDeltaScript = `
 if tonumber(redis.call('HGET', KEYS[1], 'Id') or '0') ~= tonumber(ARGV[2])
   or tonumber(redis.call('HGET', KEYS[1], 'CacheSchema') or '0') ~= tonumber(ARGV[3])
@@ -148,6 +163,16 @@ func reserveUserQuotaDB(id int, quota int) (bool, error) {
 	return result.RowsAffected == 1, result.Error
 }
 
+func reserveUserQuotaWithMinimumDB(id int, quota int, minimumRemaining int) (bool, error) {
+	if minimumRemaining > int(^uint(0)>>1)-quota {
+		return false, nil
+	}
+	result := DB.Model(&User{}).
+		Where("id = ? AND quota >= ?", id, quota+minimumRemaining).
+		Update("quota", gorm.Expr("quota - ?", quota))
+	return result.RowsAffected == 1, result.Error
+}
+
 func reserveTokenQuotaDB(id int, quota int) (bool, error) {
 	result := DB.Model(&Token{}).
 		Where("id = ? AND remain_quota >= ?", id, quota).
@@ -163,23 +188,39 @@ func reserveTokenQuotaDB(id int, quota int) (bool, error) {
 // 缓存命中时以缓存余额为准（避免批量模式下过期的数据库余额放大并发超扣）；
 // Redis 异常或水合失败时降级为数据库条件更新，保证服务可用。
 func TryReserveUserQuota(id int, quota int) (bool, error) {
+	return TryReserveUserQuotaWithMinimumRemaining(id, quota, 0)
+}
+
+// TryReserveUserQuotaWithMinimumRemaining atomically checks and deducts a
+// user's wallet quota while preserving minimumRemaining after the deduction.
+// The check and deduction happen in one Redis Lua script or one conditional DB
+// update, so concurrent requests cannot jointly consume the reserved balance.
+func TryReserveUserQuotaWithMinimumRemaining(id int, quota int, minimumRemaining int) (bool, error) {
 	if quota < 0 {
 		return false, errors.New("quota 不能为负数！")
 	}
-	if quota == 0 {
+	if minimumRemaining < 0 {
+		return false, errors.New("最低保留额度不能为负数！")
+	}
+	if quota == 0 && minimumRemaining == 0 {
 		return true, nil
 	}
 	if !common.RedisEnabled {
-		return reserveUserQuotaDB(id, quota)
+		return reserveUserQuotaWithMinimumDB(id, quota, minimumRemaining)
 	}
 
-	result, err := cacheTryReserveUserQuota(id, int64(quota))
+	reserve := func() (cacheQuotaResult, error) {
+		result, err := common.RDB.Eval(context.Background(), userQuotaReserveWithMinimumScript,
+			[]string{getUserCacheKey(id)}, quota, id, userCacheSchemaVersion, minimumRemaining).Int()
+		return quotaResultFromLua(result, err)
+	}
+	result, err := reserve()
 	if err == nil && result == cacheQuotaMiss {
 		// 同步水合缓存：fork 的 GetUserCache 走异步 populate，而 reserve 需要立即可见的
 		// 缓存副本，否则重试仍 miss、降级到批量模式下尚未刷新的过期 DB 余额而放大超扣。
 		if user, hydrateErr := GetUserById(id, false); hydrateErr == nil {
 			if popErr := populateUserCache(*user); popErr == nil {
-				result, err = cacheTryReserveUserQuota(id, int64(quota))
+				result, err = reserve()
 			}
 		}
 	}
@@ -187,7 +228,7 @@ func TryReserveUserQuota(id int, quota int) (bool, error) {
 		if err != nil {
 			common.SysLog("user quota cache reserve unavailable, falling back to database: " + err.Error())
 		}
-		return reserveUserQuotaDB(id, quota)
+		return reserveUserQuotaWithMinimumDB(id, quota, minimumRemaining)
 	}
 	if result == cacheQuotaInsufficient {
 		return false, nil

@@ -31,11 +31,13 @@ type FundingSource interface {
 // BillingSession 据此映射为 ErrorCodeInsufficientUserQuota，
 // 使 wallet_first 等计费偏好可以回退到订阅。
 var ErrInsufficientWalletQuota = errors.New("wallet quota insufficient")
+var ErrInsufficientQuotaReserve = errors.New("Insufficient minimum usage quota")
 
 type WalletFunding struct {
-	userId        int
-	consumed      int  // 实际预扣的用户额度
-	allowNegative bool // AllowNegativeBalance 白名单：允许扣成负余额，跳过原子预留门禁
+	userId                int
+	consumed              int  // 实际预扣的用户额度
+	allowNegative         bool // AllowNegativeBalance 白名单：允许扣成负余额，跳过原子预留门禁
+	minimumRemainingQuota int  // 预扣后必须保留的最低用户额度
 }
 
 func (w *WalletFunding) Source() string { return BillingSourceWallet }
@@ -54,11 +56,14 @@ func (w *WalletFunding) PreConsume(amount int) error {
 		w.consumed = amount
 		return nil
 	}
-	reserved, err := model.TryReserveUserQuota(w.userId, amount)
+	reserved, err := model.TryReserveUserQuotaWithMinimumRemaining(w.userId, amount, w.minimumRemainingQuota)
 	if err != nil {
 		return err
 	}
 	if !reserved {
+		if w.minimumRemainingQuota > 0 {
+			return ErrInsufficientQuotaReserve
+		}
 		return ErrInsufficientWalletQuota
 	}
 	w.consumed = amount

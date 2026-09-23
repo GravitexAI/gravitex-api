@@ -34,6 +34,7 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import { formatQuota } from '@/lib/format'
 
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
@@ -61,11 +62,36 @@ const quotaSchema = z.object({
   }),
   quota_setting: z.object({
     enable_free_model_pre_consume: z.boolean(),
+    minimum_remaining_quota: z.coerce.number().int().min(0),
+    model_quota_reserve: z.string().refine(isValidModelQuotaReserve, {
+      message: 'Model quota reserve rules must be a JSON object with non-negative integer values.',
+    }),
   }),
 })
 
 type QuotaFormValues = z.infer<typeof quotaSchema>
 type QuotaInputValue = number | ''
+
+function isValidModelQuotaReserve(value: string): boolean {
+  if (!value.trim()) return true
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return false
+    }
+    return Object.entries(parsed as Record<string, unknown>).every(
+      ([pattern, quota]) =>
+        pattern.length > 0 &&
+        (!pattern.includes('*') || pattern.endsWith('*')) &&
+        typeof quota === 'number' &&
+        Number.isInteger(quota) &&
+        Number.isFinite(quota) &&
+        quota >= 0
+    )
+  } catch {
+    return false
+  }
+}
 
 function formatQuotaInputValue(value: QuotaInputValue): string {
   return formatQuota(value === '' ? 0 : value)
@@ -259,6 +285,59 @@ export function QuotaSettingsSection({
                       />
                     </FormControl>
                   </SettingsSwitchItem>
+                )}
+              />
+            </SettingsFormGridItem>
+
+            <FormField
+              control={form.control}
+              name='quota_setting.minimum_remaining_quota'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Minimum Remaining Quota')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      step={1}
+                      value={field.value ?? ''}
+                      onChange={handleNumberChange(field.onChange)}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      ref={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Quota that must remain after a model request is pre-consumed')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <SettingsFormGridItem span='full'>
+              <FormField
+                control={form.control}
+                name='quota_setting.model_quota_reserve'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Model Quota Reserve Rules')}</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        className='min-h-28 font-mono text-sm'
+                        placeholder={t(
+                          'Example: {"seedance*": 10000, "seedance-2-0": 20000}'
+                        )}
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Use JSON with exact model names or trailing * prefixes. Exact matches take priority.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
                 )}
               />
             </SettingsFormGridItem>

@@ -71,6 +71,9 @@ const BILLING_SECTIONS = [
           quota_setting: {
             enable_free_model_pre_consume:
               settings['quota_setting.enable_free_model_pre_consume'],
+            minimum_remaining_quota:
+              settings['quota_setting.minimum_remaining_quota'],
+            model_quota_reserve: settings['quota_setting.model_quota_reserve'],
           },
         }}
         complianceConfirmed={

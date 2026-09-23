@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -234,6 +235,15 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if key == "quota_setting.model_quota_reserve" {
+		return operation_setting.ValidateModelQuotaReserve(value)
+	}
+	if key == "quota_setting.minimum_remaining_quota" {
+		quota, err := strconv.Atoi(value)
+		if err != nil || quota < 0 {
+			return fmt.Errorf("minimum remaining quota must be a non-negative integer")
+		}
+	}
 	if key == operation_setting.ToolPriceOptionKey {
 		return operation_setting.ValidateToolPricesJSON(value)
 	}

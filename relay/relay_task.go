@@ -313,6 +313,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
 	// 按秒/按量视频计费模型：不做预扣费，轮询成功后由 controller.UpdateVideoTaskAll 计费
 	// 但仍需检查用户余额，防止零余额用户白嫖（与 chat/images 路径一致，TokenUnlimited 只免 token 额度检查，不免用户余额检查）
+	if info.PriceData.FreeModel || isPerSecondBilling || isVideoTokenRatioBilling {
+		if apiErr := service.CheckModelQuotaReserve(c, info); apiErr != nil {
+			return nil, service.TaskErrorFromAPIError(apiErr)
+		}
+	}
 	if !isPerSecondBilling && !isVideoTokenRatioBilling {
 		if info.Billing == nil && !info.PriceData.FreeModel {
 			info.ForcePreConsume = true

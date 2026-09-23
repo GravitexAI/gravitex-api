@@ -202,6 +202,12 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 		return service.MidjourneyErrorWrapper(constant.MjRequestError, "sour_base64_and_target_base64_is_required")
 	}
 	modelName := service.CovertMjpActionToModelName(constant.MjActionSwapFace)
+	if apiErr := service.CheckModelQuotaReserveForModel(c, info.UserId, modelName); apiErr != nil {
+		return &dto.MidjourneyResponse{
+			Code:        4,
+			Description: apiErr.Error(),
+		}
+	}
 
 	priceData, err := helper.ModelPriceHelperPerCall(c, info)
 	if err != nil {
@@ -515,6 +521,12 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 	fullRequestURL := fmt.Sprintf("%s%s", baseURL, requestURL)
 
 	modelName := service.CovertMjpActionToModelName(midjRequest.Action)
+	if apiErr := service.CheckModelQuotaReserveForModel(c, relayInfo.UserId, modelName); apiErr != nil {
+		return &dto.MidjourneyResponse{
+			Code:        4,
+			Description: apiErr.Error(),
+		}
+	}
 
 	priceData, err := helper.ModelPriceHelperPerCall(c, relayInfo)
 	if err != nil {

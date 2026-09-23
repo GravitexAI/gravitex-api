@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
@@ -218,6 +219,16 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 			s.tokenConsumed = 0
 		}
 		// TODO: model 层应定义哨兵错误（如 ErrNoActiveSubscription），用 errors.Is 替代字符串匹配
+		if errors.Is(err, ErrInsufficientQuotaReserve) {
+			userQuota, quotaErr := model.GetUserQuota(s.relayInfo.UserId, false)
+			if quotaErr != nil {
+				userQuota = 0
+			}
+			return types.NewErrorWithStatusCode(
+				fmt.Errorf("%w: Current balance: %s, Minimum usage quota: %s", ErrInsufficientQuotaReserve, formatQuotaForEnglishMessage(userQuota), formatQuotaForEnglishMessage(s.minimumRemainingQuota())),
+				types.ErrorCodeInsufficientUserQuota, http.StatusForbidden,
+				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
 		if errors.Is(err, ErrInsufficientWalletQuota) {
 			userQuota, quotaErr := model.GetUserQuota(s.relayInfo.UserId, false)
 			if quotaErr != nil {
@@ -241,6 +252,13 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	s.syncRelayInfo()
 
 	return nil
+}
+
+func (s *BillingSession) minimumRemainingQuota() int {
+	if funding, ok := s.funding.(*WalletFunding); ok {
+		return funding.minimumRemainingQuota
+	}
+	return 0
 }
 
 func (s *BillingSession) reserveFunding(delta int) error {
@@ -391,10 +409,15 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
 		relayInfo.UserQuota = userQuota
+		minimumRemainingQuota := operation_setting.GetMinimumRemainingQuota(relayInfo.GetBillingModelName())
 
 		session := &BillingSession{
 			relayInfo: relayInfo,
-			funding:   &WalletFunding{userId: relayInfo.UserId, allowNegative: IsNegativeBalanceAllowed(c)},
+			funding: &WalletFunding{
+				userId:                relayInfo.UserId,
+				allowNegative:         IsNegativeBalanceAllowed(c),
+				minimumRemainingQuota: minimumRemainingQuota,
+			},
 		}
 		if apiErr := session.preConsume(c, preConsumedQuota); apiErr != nil {
 			return nil, apiErr
@@ -433,6 +456,9 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		session, err := tryWallet()
 		if err != nil {
 			if err.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
+				if errors.Is(err, ErrInsufficientQuotaReserve) {
+					return nil, err
+				}
 				return trySubscription()
 			}
 			return nil, err

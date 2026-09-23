@@ -1783,6 +1783,9 @@
     "新增条件": "Ajouter une condition",
     "新增模型": "",
     "新增规则": "Ajouter une règle",
+    "表格填写": "Saisie en tableau",
+    "手动填写": "JSON manuel",
+    "可填写精确模型名或以 * 结尾的前缀，精确匹配优先": "Utilisez un nom de modèle exact ou un préfixe se terminant par * ; les correspondances exactes sont prioritaires.",
     "新增订阅": "Ajouter un abonnement",
     "新密码": "Nouveau mot de passe",
     "新密码需要和原密码不一致！": "Le nouveau mot de passe doit être différent de l'ancien mot de passe !",
@@ -3715,6 +3718,11 @@
     "保存 Auto 路由设置": "保存 Auto 路由设置",
     "模型权重": "模型权重",
     "模型能力标注": "模型能力标注",
-    "JSON 格式错误": "JSON 格式错误"
+    "JSON 格式错误": "JSON 格式错误",
+    "最低剩余额度": "Quota minimum restant",
+    "模型请求预扣后必须保留的额度": "Quota devant rester après le pré-débit d’une requête modèle",
+    "模型额度保留规则": "Règles de réserve de quota par modèle",
+    "使用 JSON 配置精确模型名或以 * 结尾的前缀规则，精确匹配优先。": "Utilisez un JSON avec des noms de modèles exacts ou des préfixes terminés par *. Les correspondances exactes sont prioritaires.",
+    "示例：{\"seedance*\": 10000, \"seedance-2-0\": 20000}": "Exemple : {\"seedance*\": 10000, \"seedance-2-0\": 20000}"
   }
 }
