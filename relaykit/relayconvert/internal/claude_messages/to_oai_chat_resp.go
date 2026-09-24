@@ -549,11 +549,11 @@ func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *d
 			if claudeResponse.Usage.CacheCreationInputTokens > 0 {
 				claudeInfo.Usage.PromptTokensDetails.CachedCreationTokens = claudeResponse.Usage.CacheCreationInputTokens
 			}
-			if cacheCreation5m := claudeResponse.Usage.GetCacheCreation5mTokens(); cacheCreation5m > 0 {
-				claudeInfo.Usage.ClaudeCacheCreation5mTokens = cacheCreation5m
-			}
-			if cacheCreation1h := claudeResponse.Usage.GetCacheCreation1hTokens(); cacheCreation1h > 0 {
-				claudeInfo.Usage.ClaudeCacheCreation1hTokens = cacheCreation1h
+			// cache_creation 子对象是 5m/1h 拆分的最终值，整体覆盖（含显式 0），
+			// 否则 message_start 里的 1h 会残留，与 message_delta 的 5m 叠加重复计费。
+			if claudeResponse.Usage.CacheCreation != nil {
+				claudeInfo.Usage.ClaudeCacheCreation5mTokens = claudeResponse.Usage.CacheCreation.Ephemeral5mInputTokens
+				claudeInfo.Usage.ClaudeCacheCreation1hTokens = claudeResponse.Usage.CacheCreation.Ephemeral1hInputTokens
 			}
 			if claudeResponse.Usage.OutputTokens > 0 {
 				claudeInfo.Usage.CompletionTokens = claudeResponse.Usage.OutputTokens
