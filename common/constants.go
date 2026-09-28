@@ -139,6 +139,13 @@ var RuoYiAuthEnabled = false         // 是否启用 RuoYi JWT 鉴权模式
 var RuoYiJWTSecret = ""              // RuoYi sa-token.jwt-secret-key
 var PlatformIsolationEnabled = false // 是否按 Java sys_user.platform_id 隔离请求
 
+// TaskPluginChannelTypeAdaptorEnabled: when true, numeric task platforms that
+// match a factory plugin's channelTypes are served by the plugin adaptor
+// instead of the native Go adaptor. Off by default so native channel types
+// keep their battle-tested adaptors; enable only when the plugin path is the
+// agreed direction for that provider.
+var TaskPluginChannelTypeAdaptorEnabled = false
+
 var EmailDomainRestrictionEnabled = false // 是否启用邮箱域名限制
 var EmailAliasRestrictionEnabled = false  // 是否启用邮箱别名限制
 var EmailDomainWhitelist = []string{

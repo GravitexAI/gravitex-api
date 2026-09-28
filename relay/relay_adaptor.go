@@ -3,6 +3,7 @@ package relay
 import (
 	"strconv"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay/channel"
@@ -160,16 +161,21 @@ func GetTaskAdaptor(platform constant.TaskPlatform) channel.TaskAdaptor {
 	case constant.TaskPlatformLyria:
 		return &taskLyria.TaskAdaptor{}
 	}
-	// Named task-plugin platforms and channel types with an active factory
-	// plugin must use the plugin adaptor for submit and polling. Without this
-	// lookup, legacy plugin routes set platform="alibaba" and are rejected by
-	// the native numeric-channel switch as invalid_api_platform.
+	// Named task-plugin platforms must use the plugin adaptor for submit and
+	// polling. Without this lookup, legacy plugin routes set
+	// platform="alibaba" and are rejected by the native numeric-channel
+	// switch as invalid_api_platform.
 	if plugin, ok := pluginruntime.DefaultRegistry.Get(string(platform)); ok {
 		return jspluginadaptor.New(plugin)
 	}
 	if channelType, err := strconv.ParseInt(string(platform), 10, 64); err == nil {
-		if plugin, ok := pluginruntime.DefaultRegistry.GetByChannelType(int(channelType)); ok {
-			return jspluginadaptor.New(plugin)
+		// Channel types bound to a factory plugin are only served by the
+		// plugin adaptor when explicitly enabled; by default the native
+		// adaptors keep handling their own channel types.
+		if common.TaskPluginChannelTypeAdaptorEnabled {
+			if plugin, ok := pluginruntime.DefaultRegistry.GetByChannelType(int(channelType)); ok {
+				return jspluginadaptor.New(plugin)
+			}
 		}
 		switch channelType {
 		case constant.ChannelTypeAli:

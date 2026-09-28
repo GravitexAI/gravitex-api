@@ -88,6 +88,7 @@ func InitEnv() {
 	RuoYiAuthEnabled = GetEnvOrDefaultBool("RUOYI_AUTH_ENABLED", false)
 	RuoYiJWTSecret = GetEnvOrDefaultString("RUOYI_JWT_SECRET", "")
 	PlatformIsolationEnabled = GetEnvOrDefaultBool("PLATFORM_ISOLATION_ENABLED", RuoYiAuthEnabled)
+	TaskPluginChannelTypeAdaptorEnabled = GetEnvOrDefaultBool("TASK_PLUGIN_CHANNEL_TYPE_ADAPTOR_ENABLED", false)
 	initNodeNameIdentity()
 	TLSInsecureSkipVerify = GetEnvOrDefaultBool("TLS_INSECURE_SKIP_VERIFY", false)
 	if TLSInsecureSkipVerify {
