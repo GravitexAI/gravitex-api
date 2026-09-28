@@ -79,12 +79,19 @@ const maxTaskArtifacts = 64
 const maxTaskPluginPersistedJSONBytes = 1 << 20
 
 type TaskAdaptor struct {
-	plugin         *pluginruntime.LoadedPlugin
-	info           *relaycommon.RelayInfo
-	submit         *requestDescriptor
-	routeRequest   *pluginruntime.RouteRequestContext
-	requestHeaders map[string]string
-	files          []map[string]any
+	plugin *pluginruntime.LoadedPlugin
+	info   *relaycommon.RelayInfo
+	submit *requestDescriptor
+	// submitOriginModel/submitUpstreamModel record the relay model names the
+	// cached submit descriptor was built with. RelayTaskSubmit applies the
+	// channel model_mapping after ValidateRequestAndSetAction has already
+	// built (and cached) the descriptor, so a changed UpstreamModelName must
+	// invalidate the cache or the upstream body keeps the client model.
+	submitOriginModel   string
+	submitUpstreamModel string
+	routeRequest        *pluginruntime.RouteRequestContext
+	requestHeaders      map[string]string
+	files               []map[string]any
 }
 
 func New(plugin *pluginruntime.LoadedPlugin) *TaskAdaptor { return &TaskAdaptor{plugin: plugin} }
@@ -1161,7 +1168,7 @@ func validateTaskArtifacts(value any) ([]channel.TaskArtifact, error) {
 }
 
 func (a *TaskAdaptor) buildSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*requestDescriptor, error) {
-	if a.submit != nil {
+	if a.submit != nil && a.submitOriginModel == info.OriginModelName && a.submitUpstreamModel == info.UpstreamModelName {
 		return a.submit, nil
 	}
 	started := time.Now()
@@ -1214,6 +1221,8 @@ func (a *TaskAdaptor) buildSubmit(c *gin.Context, info *relaycommon.RelayInfo) (
 		info.UpstreamModelName = descriptor.RewriteModel
 	}
 	a.submit = &descriptor
+	a.submitOriginModel = info.OriginModelName
+	a.submitUpstreamModel = info.UpstreamModelName
 	method := strings.ToUpper(strings.TrimSpace(descriptor.Method))
 	if method == "" {
 		method = http.MethodPost
