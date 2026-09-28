@@ -183,7 +183,7 @@ func shouldSkipPassthroughHeader(name string) bool {
 	return false
 }
 
-func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey string) (string, bool, error) {
+func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey string, userID int) (string, bool, error) {
 	trimmed := strings.TrimSpace(template)
 	if strings.HasPrefix(trimmed, clientHeaderPlaceholderPrefix) {
 		afterPrefix := trimmed[len(clientHeaderPlaceholderPrefix):]
@@ -222,6 +222,12 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 	if strings.Contains(template, "{api_key}") {
 		template = strings.ReplaceAll(template, "{api_key}", apiKey)
 	}
+	if strings.Contains(template, "{user_id}") {
+		if userID <= 0 {
+			return "", false, nil
+		}
+		template = strings.ReplaceAll(template, "{user_id}", fmt.Sprintf("u_%d", userID))
+	}
 	if strings.TrimSpace(template) == "" {
 		return "", false, nil
 	}
@@ -234,6 +240,7 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 //   - {client_header:<name>}: resolved to the incoming request header value
 //   - {client_header:<name>|<default>}: same as above, falling back to <default>
 //     when the incoming request does not carry <name> (or it is blank)
+//   - {user_id}: resolved from the authenticated internal user ID as u_<id>
 //
 // Header passthrough rules (keys only; values are ignored):
 //   - "*": passthrough all incoming headers by name (excluding unsafe headers)
@@ -327,7 +334,7 @@ func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 			continue
 		}
 
-		value, include, err := applyHeaderOverridePlaceholders(str, c, info.ApiKey)
+		value, include, err := applyHeaderOverridePlaceholders(str, c, info.ApiKey, info.UserId)
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeChannelHeaderOverrideInvalid)
 		}
