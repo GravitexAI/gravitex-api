@@ -646,12 +646,26 @@ func endpointIndexKey(method, path, model string) string {
 }
 
 func intersectingReservedNamespace(routePath string) (string, bool) {
+	// Alibaba's native video API is intentionally exposed as a compatibility
+	// endpoint. Keep the exception narrow: only the two exact operations and
+	// their one-segment provider-prefix form are allowed under /api.
+	if isAlibabaVideoCompatibilityRoute(routePath) {
+		return "", false
+	}
 	for _, namespace := range reservedRouteNamespaces {
 		if routePatternIntersectsNamespace(routePath, namespace) {
 			return namespace, true
 		}
 	}
 	return "", false
+}
+
+func isAlibabaVideoCompatibilityRoute(routePath string) bool {
+	const submit = "/api/v1/services/aigc/video-generation/video-synthesis"
+	const query = "/api/v1/tasks/:task_id"
+	const prefixedSubmit = "/:prefix" + submit
+	const prefixedQuery = "/:prefix" + query
+	return routePath == submit || routePath == query || routePath == prefixedSubmit || routePath == prefixedQuery
 }
 
 func routePatternIntersectsNamespace(routePath, namespace string) bool {

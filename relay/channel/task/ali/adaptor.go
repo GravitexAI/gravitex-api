@@ -59,10 +59,10 @@ type AliVideoParameters struct {
 	Size         string `json:"size,omitempty"`          // 尺寸: 如 "832*480"（文生视频、参考生视频）
 	Ratio        string `json:"ratio,omitempty"`         // 比例: 16:9（wan2.7-t2v/r2v）
 	Duration     int    `json:"duration,omitempty"`      // 时长: 2-15秒
-	PromptExtend bool   `json:"prompt_extend,omitempty"` // 是否开启prompt智能改写
-	Watermark    bool   `json:"watermark,omitempty"`     // 是否添加水印
+	PromptExtend *bool  `json:"prompt_extend,omitempty"` // 是否开启prompt智能改写
+	Watermark    *bool  `json:"watermark,omitempty"`     // 是否添加水印
 	Audio        *bool  `json:"audio,omitempty"`         // 是否添加音频（wan2.5/wan2.6-flash）
-	Seed         int    `json:"seed,omitempty"`          // 随机数种子
+	Seed         *int   `json:"seed,omitempty"`          // 随机数种子；指针用于保留显式 0
 	ShotType     string `json:"shot_type,omitempty"`     // 镜头类型: single/multi（wan2.6，需prompt_extend=true）
 }
 
@@ -133,7 +133,7 @@ type TaskAdaptor struct {
 
 func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 	a.ChannelType = info.ChannelType
-	a.baseURL = info.ChannelBaseUrl
+	a.baseURL = strings.TrimRight(info.ChannelBaseUrl, "/")
 	a.apiKey = info.ApiKey
 }
 
@@ -181,10 +181,12 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 		return taskErr
 	}
 	switch {
-	case isWan27I2VModel(aliReq.Model), isWan27R2VModel(aliReq.Model):
+	case isAliImageToVideoModel(aliReq.Model):
 		info.Action = constant.TaskActionGenerate
-	case isWan27T2VModel(aliReq.Model):
+	case isAliTextToVideoModel(aliReq.Model):
 		info.Action = constant.TaskActionTextGenerate
+	case isAliReferenceToVideoModel(aliReq.Model):
+		info.Action = constant.TaskActionReferenceGenerate
 	}
 	return nil
 }
@@ -266,15 +268,15 @@ var (
 		"1280*720",
 		"720*1280",
 		"960*960",
-		"1088*832",
-		"832*1088",
+		"1104*832",
+		"832*1104",
 	}
 	size1080p = []string{
 		"1920*1080",
 		"1080*1920",
 		"1440*1440",
-		"1632*1248",
-		"1248*1632",
+		"1648*1248",
+		"1248*1648",
 	}
 )
 
@@ -360,6 +362,9 @@ func ProcessAliOtherRatios(aliReq *AliVideoRequest) (map[string]float64, error) 
 		},
 	}
 	var resolution string
+	if aliReq == nil || aliReq.Parameters == nil {
+		return otherRatios, nil
+	}
 
 	// size match
 	if aliReq.Parameters.Size != "" {
@@ -374,7 +379,27 @@ func ProcessAliOtherRatios(aliReq *AliVideoRequest) (map[string]float64, error) 
 			resolution = resolution + "P"
 		}
 	}
-	if otherRatio, ok := aliRatios[aliReq.Model]; ok {
+	otherRatio, ok := aliRatios[aliReq.Model]
+	if !ok {
+		switch {
+		case isWan27Model(aliReq.Model):
+			otherRatio = map[string]float64{
+				"720P":  1,
+				"1080P": 1 / 0.6,
+			}
+			ok = true
+		case isHappyHorseModel(aliReq.Model):
+			// HappyHorse 的 480P/720P/1080P 价格相对 720P 为 0.5/1/9/7。
+			// 具体美元单价由 VideoModelPricePerSecond 配置，避免把区域价格硬编码在适配器中。
+			otherRatio = map[string]float64{
+				"480P":  0.5,
+				"720P":  1,
+				"1080P": 4.0 / 3.0,
+			}
+			ok = true
+		}
+	}
+	if ok {
 		if ratio, ok := otherRatio[resolution]; ok {
 			otherRatios[fmt.Sprintf("resolution-%s", resolution)] = ratio
 		}
@@ -396,6 +421,26 @@ func isWan27I2VModel(model string) bool {
 
 func isWan27R2VModel(model string) bool {
 	return strings.HasPrefix(model, "wan2.7-r2v")
+}
+
+func isHappyHorseModel(model string) bool {
+	return strings.HasPrefix(model, "happyhorse-")
+}
+
+func usesAliResolutionParameters(model string) bool {
+	return isHappyHorseModel(model) || strings.HasPrefix(model, "wan2.7-") || strings.HasPrefix(model, "wan3.0-")
+}
+
+func isAliTextToVideoModel(model string) bool {
+	return isWan27T2VModel(model) || (isHappyHorseModel(model) && strings.Contains(model, "-t2v"))
+}
+
+func isAliImageToVideoModel(model string) bool {
+	return isWan27I2VModel(model) || (isHappyHorseModel(model) && strings.Contains(model, "-i2v"))
+}
+
+func isAliReferenceToVideoModel(model string) bool {
+	return isWan27R2VModel(model) || (isHappyHorseModel(model) && strings.Contains(model, "-r2v"))
 }
 
 func hasAliMediaType(media []AliVideoMedia, mediaType string) bool {
@@ -470,14 +515,20 @@ func normalizeWan27Input(req relaycommon.TaskSubmitReq, aliReq *AliVideoRequest)
 }
 
 func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relaycommon.TaskSubmitReq) (*AliVideoRequest, error) {
+	promptExtend := true
+	watermark := false
+	if isHappyHorseModel(req.Model) {
+		promptExtend = false
+		watermark = true
+	}
 	aliReq := &AliVideoRequest{
 		Model: req.Model,
 		Input: AliVideoInput{
 			Prompt: req.Prompt,
 		},
 		Parameters: &AliVideoParameters{
-			PromptExtend: true, // 默认开启智能改写
-			Watermark:    false,
+			PromptExtend: &promptExtend, // 默认开启智能改写
+			Watermark:    &watermark,
 		},
 	}
 
@@ -494,7 +545,7 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 	// 处理分辨率映射
 	if req.Size != "" {
 		// wan2.7 统一使用 resolution，不将 720P/1080P 转换成 size
-		if (isWan27T2VModel(req.Model) || isWan27R2VModel(req.Model)) && !strings.Contains(req.Size, "*") {
+		if usesAliResolutionParameters(req.Model) && !strings.Contains(req.Size, "*") {
 			resolution := strings.ToUpper(req.Size)
 			if !strings.HasSuffix(resolution, "P") {
 				resolution = resolution + "P"
@@ -518,7 +569,7 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 		if !strings.HasSuffix(resolution, "P") {
 			resolution = resolution + "P"
 		}
-		if (strings.Contains(req.Model, "t2v") || strings.Contains(req.Model, "r2v")) && !isWan27T2VModel(req.Model) && !isWan27R2VModel(req.Model) {
+		if (strings.Contains(req.Model, "t2v") || strings.Contains(req.Model, "r2v")) && !usesAliResolutionParameters(req.Model) {
 			// t2v/r2v 用 size，将 resolution 反查为 size（默认 16:9）
 			resolutionToSize := map[string]string{
 				"480P":  "832*480",
@@ -536,8 +587,8 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 	} else {
 		// 根据模型设置默认分辨率
 		if strings.Contains(req.Model, "t2v") || strings.Contains(req.Model, "r2v") {
-			if isWan27T2VModel(req.Model) || isWan27R2VModel(req.Model) {
-				aliReq.Parameters.Resolution = "720P"
+			if usesAliResolutionParameters(req.Model) {
+				aliReq.Parameters.Resolution = "1080P"
 			} else {
 				// 文生视频 / 参考生视频 使用 size
 				if strings.HasPrefix(req.Model, "wan2.6") {
@@ -583,7 +634,7 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 	if strings.HasPrefix(req.Model, "wan2.6") {
 		// smart_rewrite / prompt_extend 开关（默认已设为 true，支持覆盖为 false）
 		if req.SmartRewrite != nil {
-			aliReq.Parameters.PromptExtend = *req.SmartRewrite
+			aliReq.Parameters.PromptExtend = req.SmartRewrite
 		}
 		// shot_type: single/multi（需 prompt_extend=true）
 		if req.ShotType != "" {
@@ -597,12 +648,16 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 
 	// 处理水印
 	if req.Watermark != nil {
-		aliReq.Parameters.Watermark = *req.Watermark
+		aliReq.Parameters.Watermark = req.Watermark
 	}
 
 	// 处理随机种子
 	if req.Seed != nil {
-		aliReq.Parameters.Seed = *req.Seed
+		if *req.Seed < 0 || *req.Seed > 2147483647 {
+			return nil, fmt.Errorf("invalid seed: expected an integer between 0 and 2147483647")
+		}
+		seed := *req.Seed
+		aliReq.Parameters.Seed = &seed
 	}
 
 	// 处理音频URL（wan2.5/wan2.6 文生视频配音）

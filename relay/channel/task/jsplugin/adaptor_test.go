@@ -78,6 +78,101 @@ func TestTaskAdaptorRejectsDeprecatedClientResponse(t *testing.T) {
 	assert.Contains(t, taskErr.Error.Error(), "must not return clientResponse")
 }
 
+func TestTaskAdaptorRendersLegacySubmitResponseAndAlignsPublicTaskID(t *testing.T) {
+	const source = `
+export const meta = {
+  apiVersion: 1, key: "legacy-response", name: "Legacy response", version: "1.0.0",
+  author: {name: "Test"}, models: ["video-model"], fetchMode: "per_task",
+  routes: [{method: "POST", path: "/vendor/videos", type: "submit", decode: "decode", render: "created"}]
+};
+export function parseSubmitResponse(ctx, resp) {
+  return {taskId: resp.body.output.task_id, taskData: resp.body};
+}
+export const native = {
+  decode: function(ctx) { return {kind: "submit", model: "video-model", requestBody: ctx.body.value}; },
+  created: function(ctx, task) {
+    const requestBody = ctx.body.value;
+    return {
+      request_id: task.data.request_id,
+      model: requestBody.model,
+      input: requestBody.input,
+      parameters: requestBody.parameters,
+      output: {task_id: task.task_id, task_status: "PENDING"}
+    };
+  }
+};
+export function buildSubmitRequest(ctx) { return {url: "https://provider.example/submit", body: {}}; }
+export function buildQueryRequest(ctx) { return {url: "https://provider.example/tasks/" + ctx.taskId}; }
+export function parseTaskResult(ctx, body) { return {status: "SUCCESS"}; }
+`
+	plugin, err := pluginruntime.NewRegistry().Register(source, pluginruntime.Options{})
+	require.NoError(t, err)
+	adaptor := New(plugin)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: "https://provider.example"}, TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+	adaptor.Init(info)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/vendor/videos", nil)
+	c.Set(pluginruntime.ContextKeyPinnedRoute, pluginruntime.PinnedRoute{Plugin: plugin, Route: plugin.Meta.Routes[0]})
+	c.Set(pluginruntime.ContextKeyRouteRequest, pluginruntime.RouteRequestContext{
+		Method: http.MethodPost,
+		Path:   "/vendor/videos",
+		Body: map[string]any{
+			"kind": "json",
+			"value": map[string]any{
+				"model":      "video-model",
+				"input":      map[string]any{"prompt": "hello"},
+				"parameters": map[string]any{"duration": float64(5), "watermark": false},
+			},
+		},
+		RequestBody: map[string]any{
+			"model": "video-model",
+			"metadata": map[string]any{
+				"input":      map[string]any{"prompt": "hello"},
+				"parameters": map[string]any{"duration": float64(5), "watermark": false},
+			},
+		},
+	})
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"request_id":"req-1","output":{"task_id":"upstream-1","task_status":"PENDING"}}`)),
+	}
+
+	taskID, taskData, taskErr := adaptor.DoResponse(c, response, info)
+	require.Nil(t, taskErr)
+	assert.Equal(t, "upstream-1", taskID)
+	assert.Equal(t, "upstream-1", info.TaskRelayInfo.PublicTaskID)
+	assert.NotEmpty(t, taskData)
+	assert.JSONEq(t, `{"request_id":"req-1","model":"video-model","input":{"prompt":"hello"},"parameters":{"duration":5,"watermark":false},"output":{"task_id":"upstream-1","task_status":"PENDING"}}`, recorder.Body.String())
+}
+
+func TestTaskAdaptorDoesNotRenderSubmitResponseWithoutPinnedLegacyRoute(t *testing.T) {
+	const source = `
+export const meta = {apiVersion:1,key:"unbound-response",name:"Unbound response",version:"1.0.0",author:{name:"Test"},models:["m"],fetchMode:"per_task"};
+export function parseSubmitResponse(ctx, resp) { return {taskId: resp.body.id, taskData: resp.body}; }
+export function buildSubmitRequest(ctx) { return {url:"https://provider.example/submit"}; }
+export function buildQueryRequest(ctx) { return {url:"https://provider.example/tasks/" + ctx.taskId}; }
+export function parseTaskResult(ctx, body) { return {status:"SUCCESS"}; }
+`
+	plugin, err := pluginruntime.NewRegistry().Register(source, pluginruntime.Options{})
+	require.NoError(t, err)
+	adaptor := New(plugin)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: "https://provider.example"}, TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+	adaptor.Init(info)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	response := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"upstream-2"}`))}
+
+	taskID, _, taskErr := adaptor.DoResponse(c, response, info)
+	require.Nil(t, taskErr)
+	assert.Equal(t, "upstream-2", taskID)
+	assert.Equal(t, "upstream-2", info.TaskRelayInfo.PublicTaskID)
+	assert.Empty(t, recorder.Body.String())
+}
+
 func TestTaskAdaptorBuildsMultipartFromOpaqueFileReference(t *testing.T) {
 	source := `
 export const meta = {apiVersion:1,key:"multipart",name:"Multipart",version:"1.0.0",author:{name:"Test"},models:["m"],fetchMode:"per_task"};

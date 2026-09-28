@@ -520,7 +520,45 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	if taskErr != nil || parsed == nil {
 		return "", nil, taskErr
 	}
+	// Legacy plugin routes expose the upstream task ID to the caller. Persist
+	// the same ID as the local public task ID; otherwise polling receives the
+	// upstream ID but the local lookup only contains a generated task_xxx ID.
+	if info != nil && info.TaskRelayInfo != nil {
+		info.TaskRelayInfo.PublicTaskID = parsed.UpstreamTaskID
+	}
+	if taskErr = a.renderLegacySubmitResponse(c, parsed); taskErr != nil {
+		return "", nil, taskErr
+	}
 	return parsed.UpstreamTaskID, parsed.TaskData, nil
+}
+
+func (a *TaskAdaptor) renderLegacySubmitResponse(c *gin.Context, parsed *channel.TaskSubmitResponse) *dto.TaskError {
+	if c == nil || parsed == nil {
+		return nil
+	}
+	pinnedValue, exists := c.Get(pluginruntime.ContextKeyPinnedRoute)
+	pinned, ok := pinnedValue.(pluginruntime.PinnedRoute)
+	if !exists || !ok || pinned.Plugin != a.plugin || pinned.Route.Type != pluginruntime.RouteTypeSubmit || pinned.Route.Render == "" {
+		return nil
+	}
+	requestValue, exists := c.Get(pluginruntime.ContextKeyRouteRequest)
+	requestContext, ok := requestValue.(pluginruntime.RouteRequestContext)
+	if !exists || !ok {
+		return service.TaskErrorWrapperLocal(fmt.Errorf("task plugin request context is missing"), "plugin_submit_response_invalid", http.StatusBadGateway)
+	}
+	var data any
+	if len(parsed.TaskData) > 0 {
+		if err := common.Unmarshal(parsed.TaskData, &data); err != nil {
+			return service.TaskErrorWrapper(err, "plugin_submit_response_invalid", http.StatusBadGateway)
+		}
+	}
+	task := map[string]any{"task_id": parsed.UpstreamTaskID, "data": data}
+	rendered, err := a.plugin.Engine.CallMember(c.Request.Context(), "native", pinned.Route.Render, requestContext.JSValue(), task)
+	if err != nil {
+		return service.TaskErrorWrapper(err, "plugin_submit_response_failed", http.StatusBadGateway)
+	}
+	c.JSON(http.StatusOK, rendered)
+	return nil
 }
 
 func (a *TaskAdaptor) GetModelList() []string { return append([]string(nil), a.plugin.Meta.Models...) }

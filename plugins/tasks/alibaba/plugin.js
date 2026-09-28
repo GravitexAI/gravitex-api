@@ -13,12 +13,24 @@ export const meta = {
   models: [
     "wan2.7-i2v",
     "wan2.7-t2v",
+    "wan2.7-t2v-2026-06-12",
+    "wan2.7-t2v-2026-04-25",
+    "wan2.7-i2v-2026-04-25",
+    "wan2.7-r2v-2026-06-12",
+    "wan2.7-videoedit",
     "wan2.5-t2v-preview",
     "wan2.5-i2v-preview",
     "wan2.2-i2v-flash",
     "wan2.2-i2v-plus",
     "wanx2.1-i2v-plus",
     "wanx2.1-i2v-turbo",
+    "happyhorse-1.0-t2v",
+    "happyhorse-1.0-i2v",
+    "happyhorse-1.0-r2v",
+    "happyhorse-1.1-t2v",
+    "happyhorse-1.1-i2v",
+    "happyhorse-1.1-r2v",
+    "happyhorse-1.0-video-edit",
   ],
   fetchMode: "per_task",
   usageSchema: {
@@ -33,8 +45,10 @@ export const meta = {
     },
   },
   routes: [
-    { method: "POST", path: "/ali/api/v1/services/aigc/video-generation/video-synthesis", type: "submit", decode: "createVideoTask", render: "taskCreated" },
-    { method: "GET", path: "/ali/api/v1/tasks/:task_id", type: "query", render: "taskStatus" },
+    { method: "POST", path: "/api/v1/services/aigc/video-generation/video-synthesis", type: "submit", decode: "createVideoTask", render: "taskCreated" },
+    { method: "GET", path: "/api/v1/tasks/:task_id", type: "query", render: "taskStatus" },
+    { method: "POST", path: "/:prefix/api/v1/services/aigc/video-generation/video-synthesis", type: "submit", decode: "createVideoTask", render: "taskCreated" },
+    { method: "GET", path: "/:prefix/api/v1/tasks/:task_id", type: "query", render: "taskStatus" },
   ],
   protocols: [{ name: "openai_responses", supports: ["stream", "sync", "background"] }, "openai_video"],
 };
@@ -65,21 +79,60 @@ function normalizeResolution(value) {
   return resolution;
 }
 
+function usesResolutionParameters(model) {
+  const name = String(model || "");
+  return name.startsWith("happyhorse-") || name.startsWith("wan2.7-") || name.startsWith("wan3.0-");
+}
+
+function supportsPromptExtend(model) {
+  return !String(model || "").startsWith("happyhorse-");
+}
+
+const pixelSizeOptions = {
+  "832*480": { resolution: "480P", ratio: "16:9" },
+  "480*832": { resolution: "480P", ratio: "9:16" },
+  "624*624": { resolution: "480P", ratio: "1:1" },
+  "1280*720": { resolution: "720P", ratio: "16:9" },
+  "720*1280": { resolution: "720P", ratio: "9:16" },
+  "960*960": { resolution: "720P", ratio: "1:1" },
+  "1104*832": { resolution: "720P", ratio: "4:3" },
+  "832*1104": { resolution: "720P", ratio: "3:4" },
+  "1920*1080": { resolution: "1080P", ratio: "16:9" },
+  "1080*1920": { resolution: "1080P", ratio: "9:16" },
+  "1440*1440": { resolution: "1080P", ratio: "1:1" },
+  "1648*1248": { resolution: "1080P", ratio: "4:3" },
+  "1248*1648": { resolution: "1080P", ratio: "3:4" },
+};
+
+function baseUrl(ctx) {
+  return String((ctx && ctx.baseUrl) || "").replace(/\/+$/, "");
+}
+
 function convert(ctx) {
   const req = ctx.requestBody;
   const upstreamModel = ctx.upstreamModel || req.model;
+  const modelName = String(upstreamModel || req.model || "");
   const input = { prompt: req.prompt || "" };
   const image = firstImage(req);
   if (image) input.img_url = image;
-  const parameters = { prompt_extend: true, duration: 5 };
+  const parameters = { duration: 5 };
+  if (supportsPromptExtend(modelName)) parameters.prompt_extend = true;
 
-  if (req.size) {
-    if (String(req.model).includes("t2v") && !String(req.size).includes("*")) throw new Error("invalid size: " + req.size + ", example: 1920*1080");
-    if (String(req.size).includes("*")) parameters.size = req.size;
-    else parameters.resolution = normalizeResolution(req.size);
-  } else if (String(req.model).includes("t2v")) {
-    parameters.size = String(req.model).startsWith("wan2.5") || String(req.model).startsWith("wan2.2") ? "1920*1080" : "1280*720";
-  } else if (String(req.model).startsWith("wan2.6") || String(req.model).startsWith("wan2.5") || String(req.model).startsWith("wan2.2-i2v-plus")) {
+  const requestedSize = req.size || req.resolution;
+  if (requestedSize) {
+    if (req.size && !usesResolutionParameters(modelName) && modelName.includes("t2v") && !String(req.size).includes("*")) throw new Error("invalid size: " + req.size + ", example: 1920*1080");
+    if (String(requestedSize).includes("*") && usesResolutionParameters(modelName)) {
+      const option = pixelSizeOptions[String(requestedSize)];
+      if (!option) throw new Error("invalid size: " + requestedSize);
+      parameters.resolution = option.resolution;
+      if (!parameters.ratio) parameters.ratio = option.ratio;
+    } else if (String(requestedSize).includes("*")) parameters.size = requestedSize;
+    else parameters.resolution = normalizeResolution(requestedSize);
+  } else if (usesResolutionParameters(modelName)) {
+    parameters.resolution = "1080P";
+  } else if (modelName.includes("t2v")) {
+    parameters.size = modelName.startsWith("wan2.5") || modelName.startsWith("wan2.2") ? "1920*1080" : "1280*720";
+  } else if (modelName.startsWith("wan2.6") || modelName.startsWith("wan2.5") || modelName.startsWith("wan2.2-i2v-plus")) {
     parameters.resolution = "1080P";
   } else {
     parameters.resolution = "720P";
@@ -97,6 +150,16 @@ function convert(ctx) {
   Object.assign(parameters, metadata.parameters || {});
   const model = metadata.model === undefined ? upstreamModel : metadata.model;
   if (model !== upstreamModel) throw new Error("can't change model with metadata");
+  const duration = Number(parameters.duration);
+  if (!Number.isInteger(duration)) throw new Error("duration must be an integer");
+  if (model.startsWith("happyhorse-")) {
+    if (duration < 3 || duration > 15) throw new Error("invalid duration: happyhorse requires 3-15 seconds");
+    if (model.startsWith("happyhorse-1.0-") && parameters.resolution === "480P") throw new Error("invalid resolution: happyhorse-1.0 supports 720P or 1080P");
+  } else if (model.startsWith("wan2.7-") && (duration < 2 || duration > 15)) {
+    throw new Error("invalid duration: wan2.7 requires 2-15 seconds");
+  } else if (model.startsWith("wan3.0-") && (duration < 2 || duration > 30)) {
+    throw new Error("invalid duration: wan3.0 requires 2-30 seconds");
+  }
   const body = { model: model, input: input, parameters: parameters };
 
   if (String(model).startsWith("wan2.7-i2v")) {
@@ -114,9 +177,13 @@ function convert(ctx) {
     delete input.last_frame_url;
     delete input.audio_url;
   }
-  if (!parameters.prompt_extend) delete parameters.prompt_extend;
-  if (!parameters.watermark) delete parameters.watermark;
-  if (!parameters.seed) delete parameters.seed;
+  if (!supportsPromptExtend(model)) delete parameters.prompt_extend;
+  if (!Object.prototype.hasOwnProperty.call(parameters, "watermark")) delete parameters.watermark;
+  if (Object.prototype.hasOwnProperty.call(parameters, "seed")) {
+    const seed = Number(parameters.seed);
+    if (!Number.isInteger(seed) || seed < 0 || seed > 2147483647) throw new Error("invalid seed: expected an integer between 0 and 2147483647");
+    parameters.seed = seed;
+  }
   for (const key of ["resolution", "size"]) if (!parameters[key]) delete parameters[key];
   return body;
 }
@@ -130,16 +197,20 @@ function resolutionRatio(body) {
         "1280*720": "720P",
         "720*1280": "720P",
         "960*960": "720P",
-        "1088*832": "720P",
-        "832*1088": "720P",
+        "1104*832": "720P",
+        "832*1104": "720P",
         "1920*1080": "1080P",
         "1080*1920": "1080P",
         "1440*1440": "1080P",
-        "1632*1248": "1080P",
-        "1248*1632": "1080P",
+        "1648*1248": "1080P",
+        "1248*1648": "1080P",
       }[body.parameters.size]
     : normalizeResolution(body.parameters.resolution);
   const ratios = {
+    "wan2.7-t2v": { "720P": 1, "1080P": 1 / 0.6 },
+    "wan2.7-i2v": { "720P": 1, "1080P": 1 / 0.6 },
+    "wan2.7-r2v": { "720P": 1, "1080P": 1 / 0.6 },
+    "happyhorse": { "480P": 0.5, "720P": 1, "1080P": 4 / 3 },
     "wan2.6-i2v": { "720P": 1, "1080P": 1 / 0.6 },
     "wan2.5-t2v-preview": { "480P": 1, "720P": 2, "1080P": 1 / 0.3 },
     "wan2.2-t2v-plus": { "480P": 1, "1080P": 5 },
@@ -149,7 +220,9 @@ function resolutionRatio(body) {
     "wan2.2-i2v-flash": { "480P": 1, "720P": 2 },
     "wan2.2-s2v": { "480P": 1, "720P": 1.8 },
   };
-  return ratios[body.model] ? { key: "resolution-" + resolution, value: ratios[body.model][resolution] } : null;
+  const model = String(body.model || "");
+  const modelKey = Object.keys(ratios).find((key) => model === key || model.startsWith(key + "-"));
+  return modelKey ? { key: "resolution-" + resolution, value: ratios[modelKey][resolution] } : null;
 }
 
 function responsesInput(req) {
@@ -201,7 +274,7 @@ function responsesVideoText(ctx) {
 export function buildSubmitRequest(ctx) {
   const body = convert(ctx);
   return {
-    url: ctx.baseUrl + "/api/v1/services/aigc/video-generation/video-synthesis",
+    url: baseUrl(ctx) + "/api/v1/services/aigc/video-generation/video-synthesis",
     method: "POST",
     headers: { Authorization: "Bearer " + ctx.apiKey, "Content-Type": "application/json", "X-DashScope-Async": "enable" },
     body: body,
@@ -232,13 +305,13 @@ export function extractUsage(ctx) {
         "1280*720": "720P",
         "720*1280": "720P",
         "960*960": "720P",
-        "1088*832": "720P",
-        "832*1088": "720P",
+        "1104*832": "720P",
+        "832*1104": "720P",
         "1920*1080": "1080P",
         "1080*1920": "1080P",
         "1440*1440": "1080P",
-        "1632*1248": "1080P",
-        "1248*1632": "1080P",
+        "1648*1248": "1080P",
+        "1248*1648": "1080P",
       }[body.parameters.size]
     : normalizeResolution(body.parameters.resolution);
   if (!["480P", "720P", "1080P"].includes(resolution)) resolution = "720P";
@@ -247,16 +320,41 @@ export function extractUsage(ctx) {
 
 export function extractUsageOnComplete(task, taskResult, body) {
   const output = (body && body.output) || {};
+  const usage = (body && body.usage) || {};
   const facts = {};
-  const seconds = Number(output.duration || output.duration_seconds || 0);
+  const seconds = Number(
+    output.duration ||
+      output.duration_seconds ||
+      usage.output_video_duration ||
+      usage.duration ||
+      0,
+  );
   if (Number.isFinite(seconds) && seconds > 0) facts.seconds = Math.min(seconds, 3600);
-  const resolution = normalizeResolution(output.resolution || "");
+  const size = output.size || usage.size || "";
+  const sizeToResolution = {
+    "832*480": "480P",
+    "480*832": "480P",
+    "624*624": "480P",
+    "1280*720": "720P",
+    "720*1280": "720P",
+    "960*960": "720P",
+    "1088*832": "720P",
+    "832*1088": "720P",
+    "1920*1080": "1080P",
+    "1080*1920": "1080P",
+    "1440*1440": "1080P",
+    "1632*1248": "1080P",
+    "1248*1632": "1080P",
+  };
+  const rawResolution = output.resolution || usage.resolution || size;
+  const sr = Number(usage.SR);
+  const resolution = sizeToResolution[size] || (rawResolution ? normalizeResolution(rawResolution) : [480, 720, 1080].includes(sr) ? sr + "P" : "");
   if (["480P", "720P", "1080P"].includes(resolution)) facts.resolution = resolution;
   return facts;
 }
 
 export function buildQueryRequest(ctx) {
-  return { url: ctx.baseUrl + "/api/v1/tasks/" + ctx.taskId, method: "GET", headers: { Authorization: "Bearer " + ctx.apiKey } };
+  return { url: baseUrl(ctx) + "/api/v1/tasks/" + ctx.taskId, method: "GET", headers: { Authorization: "Bearer " + ctx.apiKey } };
 }
 
 export function parseTaskResult(ctx, body) {
@@ -297,22 +395,31 @@ export const native = {
     const req = ctx.body.value,
       input = req.input || {},
       parameters = req.parameters || {};
+    const requestBody = {
+      model: req.model,
+      prompt: input.prompt || "",
+      image: input.img_url,
+      duration: parameters.duration,
+      size: parameters.size,
+      resolution: parameters.resolution,
+      metadata: { input: input, parameters: parameters },
+    };
+    if (Array.isArray(input.media) && input.media.length > 0) requestBody.metadata.input = { media: input.media };
     return {
       kind: "submit",
       model: req.model,
-      action: input.img_url ? "image_to_video" : "text_to_video",
-      requestBody: {
-        model: req.model,
-        prompt: input.prompt || "",
-        image: input.img_url,
-        duration: parameters.duration,
-        size: parameters.size || parameters.resolution,
-      },
+      action: input.img_url || (Array.isArray(input.media) && input.media.length > 0) ? "image_to_video" : "text_to_video",
+      requestBody: requestBody,
     };
   },
   taskCreated: function (ctx, task) {
     const data = task.data || {};
-    return { request_id: data.request_id || "", output: { task_id: task.task_id, task_status: "PENDING" } };
+    const requestBody = ctx && ctx.body && ctx.body.kind === "json" ? ctx.body.value || {} : {},
+      response = { request_id: data.request_id || "", output: { task_id: task.task_id, task_status: "PENDING" } };
+    if (requestBody.model) response.model = requestBody.model;
+    if (requestBody.input) response.input = requestBody.input;
+    if (requestBody.parameters) response.parameters = requestBody.parameters;
+    return response;
   },
   taskStatus: function (ctx, task) {
     const data = task.data || {},
@@ -343,7 +450,7 @@ export const protocols = {
       for (const image of input.images) if (!images.includes(image)) images.push(image);
       if (images.length) requestBody.images = images;
       if (trimmed(req.input_reference)) requestBody.input_reference = trimmed(req.input_reference);
-      for (const key of ["size", "duration", "seconds"]) {
+      for (const key of ["size", "resolution", "ratio", "duration", "seconds", "watermark", "seed", "prompt_extend", "audio", "audio_setting"]) {
         if (Object.prototype.hasOwnProperty.call(req, key)) requestBody[key] = req[key];
       }
       if (Object.prototype.hasOwnProperty.call(req, "metadata")) requestBody.metadata = req.metadata;

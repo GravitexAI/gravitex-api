@@ -1495,9 +1495,15 @@ func handleVideoPerSecondBilling(ctx context.Context, task *model.Task) error {
 	// 优先使用上游 usage.size（实际分辨率），兜底解析上游请求体中的参数
 	resKey := ""
 	if usageMap, ok := taskData["usage"].(map[string]interface{}); ok && usageMap != nil {
+		if sr, ok := usageMap["SR"].(float64); ok && (sr == 480 || sr == 720 || sr == 1080) {
+			resKey = ratio_setting.NormalizeVideoResolutionKey(fmt.Sprintf("%dP", int(sr)))
+			logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s billing_resolution from usage.SR=%d -> %s", task.TaskID, int(sr), resKey))
+		}
 		if usageSize, ok := usageMap["size"].(string); ok && usageSize != "" {
-			resKey = ratio_setting.NormalizeVideoResolutionKey(alitask.ParseBillingResolutionFromSize(usageSize))
-			logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s billing_resolution from usage.size=%s -> %s", task.TaskID, usageSize, resKey))
+			if resKey == "" {
+				resKey = ratio_setting.NormalizeVideoResolutionKey(alitask.ParseBillingResolutionFromSize(usageSize))
+				logger.LogInfo(ctx, fmt.Sprintf("[VideoBilling] task=%s billing_resolution from usage.size=%s -> %s", task.TaskID, usageSize, resKey))
+			}
 		}
 	}
 	if resKey == "" {
@@ -1555,9 +1561,11 @@ func handleVideoPerSecondBilling(ctx context.Context, task *model.Task) error {
 
 	actualQuotaFloat := effectiveVideoPrice * float64(requestedSeconds) * common.QuotaPerUnit * groupRatio
 
-	actualQuota := int(actualQuotaFloat)
-	if actualQuota < 0 {
-		actualQuota = 0
+	actualQuota, quotaClamp := common.QuotaFromFloatChecked(actualQuotaFloat)
+	if quotaClamp != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] quota saturation: task=%s %s", task.TaskID, quotaClamp.Error()))
+		model.RecordLog(task.UserId, model.LogTypeSystem,
+			fmt.Sprintf("[VideoBilling] task=%s quota saturation: %s", task.TaskID, quotaClamp.Error()))
 	}
 
 	// 计费过程日志：公式与各因子，便于排查

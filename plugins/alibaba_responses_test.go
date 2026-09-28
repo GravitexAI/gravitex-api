@@ -11,6 +11,73 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func loadAlibabaPlugin(t *testing.T) *jsplugin.LoadedPlugin {
+	t.Helper()
+	source, err := builtinplugins.Source("alibaba")
+	require.NoError(t, err)
+	registry := jsplugin.NewRegistry()
+	plugin, err := registry.RegisterFactory(source, jsplugin.Options{Key: "alibaba"})
+	require.NoError(t, err)
+	return plugin
+}
+
+func TestAlibabaHappyHorseUsesOfficialDefaultsAndPreservesSeedZero(t *testing.T) {
+	plugin := loadAlibabaPlugin(t)
+	value, err := plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{
+		"model":         "happyhorse-1.1-t2v",
+		"upstreamModel": "happyhorse-1.1-t2v",
+		"apiKey":        "test-key",
+		"baseUrl":       "https://workspace.example",
+		"requestBody": map[string]any{
+			"model":  "happyhorse-1.1-t2v",
+			"prompt": "a horse running",
+			"metadata": map[string]any{"parameters": map[string]any{
+				"ratio": "9:16",
+				"seed":  float64(0),
+			}},
+		},
+	})
+	require.NoError(t, err)
+	descriptor, ok := value.(map[string]any)
+	require.True(t, ok)
+	body, ok := descriptor["body"].(map[string]any)
+	require.True(t, ok)
+	parameters, ok := body["parameters"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "1080P", parameters["resolution"])
+	assert.Equal(t, "9:16", parameters["ratio"])
+	assert.Equal(t, int64(0), parameters["seed"])
+	assert.NotContains(t, parameters, "size")
+	assert.NotContains(t, parameters, "prompt_extend")
+}
+
+func TestAlibabaCompletionUsageReadsOfficialSR(t *testing.T) {
+	plugin := loadAlibabaPlugin(t)
+	value, err := plugin.Engine.Call(t.Context(), "extractUsageOnComplete", nil, map[string]any{}, map[string]any{
+		"usage": map[string]any{
+			"output_video_duration": float64(8),
+			"SR":                    float64(1080),
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"seconds": int64(8), "resolution": "1080P"}, value)
+}
+
+func TestAlibabaWan27PixelSizeConvertsToOfficialParameters(t *testing.T) {
+	plugin := loadAlibabaPlugin(t)
+	value, err := plugin.Engine.Call(t.Context(), "buildSubmitRequest", map[string]any{
+		"model": "wan2.7-t2v", "upstreamModel": "wan2.7-t2v", "apiKey": "test-key", "baseUrl": "https://workspace.example",
+		"requestBody": map[string]any{"model": "wan2.7-t2v", "prompt": "waves", "size": "1280*720"},
+	})
+	require.NoError(t, err)
+	descriptor := value.(map[string]any)
+	body := descriptor["body"].(map[string]any)
+	parameters := body["parameters"].(map[string]any)
+	assert.Equal(t, "720P", parameters["resolution"])
+	assert.Equal(t, "16:9", parameters["ratio"])
+	assert.NotContains(t, parameters, "size")
+}
+
 func TestAlibabaResponsesProtocol(t *testing.T) {
 	source, err := builtinplugins.Source("alibaba")
 	require.NoError(t, err)
