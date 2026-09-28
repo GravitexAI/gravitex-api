@@ -80,7 +80,8 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	// gpt-image 系列：当 /v1/images/generations 请求包含 image 字段时，自动升级为 edits 模式
 	if info.RelayMode == relayconstant.RelayModeImagesGenerations && strings.HasPrefix(request.Model, "gpt-image") {
-		hasImage := request.Image != nil && len(request.Image) > 0
+		hasImage := (request.Image != nil && len(request.Image) > 0) ||
+			(request.Images != nil && len(request.Images) > 0)
 		if !hasImage && request.Extra != nil {
 			_, hasImage = request.Extra["image"]
 			if !hasImage {

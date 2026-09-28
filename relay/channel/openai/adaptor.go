@@ -591,8 +591,12 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		// 表单里已经上传了图片文件时必须走下面的 multipart 分支：只有那条分支会转发 mask
 		// 与 background/output_format 等其余表单字段，JSON 分支会把它们丢掉。
 		hasImageFilesInForm := c.Request.MultipartForm != nil && len(c.Request.MultipartForm.File) > 0
+		// 注意 images（复数）也是 DTO 已定义字段，JSON 解析后落在 request.Images
+		// 而不是 Extra；漏判它会让多图 JSON 请求掉进下面的原生 multipart 分支，
+		// 对 JSON body 调 c.MultipartForm() 报 "failed to parse multipart form"。
 		hasImageInDTO := !hasImageFilesInForm &&
 			((request.Image != nil && len(request.Image) > 0) ||
+				(request.Images != nil && len(request.Images) > 0) ||
 				(request.Extra != nil && (request.Extra["image"] != nil || request.Extra["images"] != nil)))
 
 		if hasImageInDTO {
@@ -637,43 +641,37 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 				writer.WriteField(key, strings.Trim(string(value), `"`))
 			}
 
-			// JSON 格式：从 Image 或 Extra 中提取图片，转为 multipart 文件
+			// JSON 格式：从 Image/Images/Extra 中提取图片引用，转为 multipart 文件。
+			// 兼容两种形态：官方 EditImageBodyJsonParam 的 images 数组（元素为
+			// {image_url|file_id} 引用对象），以及民间约定的字符串 / 字符串数组
+			// （URL 或 base64 data URI）。
 			var imageStrings []string
-
-			// 优先从 Image 字段获取（dto 中的 json.RawMessage，支持 string 或 []string）
-			if request.Image != nil && len(request.Image) > 0 {
-				// 先尝试解析为单图字符串
-				var imageStr string
-				if err := common.Unmarshal(request.Image, &imageStr); err == nil && imageStr != "" {
-					imageStrings = append(imageStrings, imageStr)
-				} else {
-					// 再尝试解析为图片数组
-					var imageArr []string
-					if err := common.Unmarshal(request.Image, &imageArr); err == nil && len(imageArr) > 0 {
-						imageStrings = append(imageStrings, imageArr...)
-					}
+			for _, raw := range []json.RawMessage{request.Image, request.Images} {
+				refs, err := parseImageRefList(raw)
+				if err != nil {
+					return nil, err
+				}
+				if len(refs) > 0 {
+					imageStrings = refs
+					break
 				}
 			}
-			// 其次从 Extra["images"] 获取多图
+			// Extra 里只可能有字符串形态（表单解析或旧客户端），作为最后兜底
 			if len(imageStrings) == 0 && request.Extra != nil {
 				if imagesData, ok := request.Extra["images"]; ok {
-					var images []string
-					if err := common.Unmarshal(imagesData, &images); err == nil {
-						imageStrings = images
+					refs, err := parseImageRefList(imagesData)
+					if err != nil {
+						return nil, err
 					}
+					imageStrings = refs
 				}
-				// 也尝试 Extra["image"]（单图字符串或数组）
 				if len(imageStrings) == 0 {
 					if imageData, ok := request.Extra["image"]; ok {
-						var imageStr string
-						if err := common.Unmarshal(imageData, &imageStr); err == nil && imageStr != "" {
-							imageStrings = append(imageStrings, imageStr)
-						} else {
-							var imageArr []string
-							if err := common.Unmarshal(imageData, &imageArr); err == nil && len(imageArr) > 0 {
-								imageStrings = append(imageStrings, imageArr...)
-							}
+						refs, err := parseImageRefList(imageData)
+						if err != nil {
+							return nil, err
 						}
+						imageStrings = refs
 					}
 				}
 			}
@@ -722,13 +720,17 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 			}
 
 			// mask 同样是用户显式传的参考图，JSON 请求里此前会被整个丢掉，
-			// 局部重绘请求发上去等于没带 mask。
+			// 局部重绘请求发上去等于没带 mask。官方 JSON 模式的 mask 是单个
+			// {image_url|file_id} 引用对象，与字符串形态一并兼容。
 			if len(request.Mask) > 0 {
-				var maskStr string
-				if err := common.Unmarshal(request.Mask, &maskStr); err != nil || maskStr == "" {
+				maskRefs, err := parseImageRefList(request.Mask)
+				if err != nil {
+					return nil, fmt.Errorf("failed to process mask: %w", err)
+				}
+				if len(maskRefs) == 0 {
 					return nil, errors.New("mask must be a URL or base64 data URI string")
 				}
-				maskBytes, mimeType, err := downloadOrDecodeImage(maskStr)
+				maskBytes, mimeType, err := downloadOrDecodeImage(maskRefs[0])
 				if err != nil {
 					return nil, fmt.Errorf("failed to process mask: %w", err)
 				}
@@ -897,6 +899,70 @@ const maxImageSize = 50 * 1024 * 1024
 
 // downloadOrDecodeImage 下载图片 URL 或解码 base64 图片
 // 返回：图片字节、MIME 类型、错误
+// imageRef 对应官方 /v1/images/edits JSON 模式（EditImageBodyJsonParam）的
+// 图片引用对象：image_url（URL 或 base64 data URL）与 file_id 二选一。
+type imageRef struct {
+	ImageURL string `json:"image_url"`
+	FileID   string `json:"file_id"`
+}
+
+// parseImageRefList 解析 JSON 请求里的图片字段，兼容四种形态：单图字符串、
+// 字符串数组、官方 [{image_url|file_id}] 对象数组、单个引用对象（mask 的形态）。
+// file_id 引用的是上游 File API 的文件，网关侧拿不到字节，只能明确报错。
+func parseImageRefList(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var single string
+	if err := common.Unmarshal(raw, &single); err == nil {
+		if single != "" {
+			return []string{single}, nil
+		}
+		return nil, nil
+	}
+	var items []json.RawMessage
+	if err := common.Unmarshal(raw, &items); err == nil {
+		result := make([]string, 0, len(items))
+		for _, item := range items {
+			ref, err := parseImageRefItem(item)
+			if err != nil {
+				return nil, err
+			}
+			if ref != "" {
+				result = append(result, ref)
+			}
+		}
+		return result, nil
+	}
+	ref, err := parseImageRefItem(raw)
+	if err != nil {
+		return nil, err
+	}
+	if ref != "" {
+		return []string{ref}, nil
+	}
+	return nil, nil
+}
+
+// parseImageRefItem 解析单个图片引用：字符串，或 {image_url|file_id} 对象。
+func parseImageRefItem(item json.RawMessage) (string, error) {
+	var s string
+	if err := common.Unmarshal(item, &s); err == nil {
+		return s, nil
+	}
+	var ref imageRef
+	if err := common.Unmarshal(item, &ref); err != nil {
+		return "", fmt.Errorf("unsupported image reference: %s", common.TruncateJsonValues(string(item)))
+	}
+	if ref.ImageURL != "" {
+		return ref.ImageURL, nil
+	}
+	if ref.FileID != "" {
+		return "", errors.New("file_id image references are not supported through this gateway, use image_url or base64 data URL instead")
+	}
+	return "", nil
+}
+
 func downloadOrDecodeImage(imageData string) ([]byte, string, error) {
 	if strings.HasPrefix(imageData, "data:image") {
 		// base64 data URI 解码

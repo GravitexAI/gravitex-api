@@ -2,6 +2,7 @@ package openai
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"mime"
@@ -232,6 +233,109 @@ func TestConvertImageEditRequestJSONForGPTImage(t *testing.T) {
 			_ = part.Close()
 		}
 		assert.Equal(t, 1, maskFiles, "mask 应作为文件部件转发")
+	})
+
+	// 回归：JSON 里的 images（复数）是 DTO 已定义字段，解析后落在 request.Images
+	// 而不是 Extra；此前 hasImageInDTO 漏判它，多图 JSON edits 请求会掉进原生
+	// multipart 分支，对 JSON body 调 c.MultipartForm() 报 "failed to parse multipart form"。
+	t.Run("gpt-image JSON edits with images array is converted to multipart", func(t *testing.T) {
+		req := dto.ImageRequest{
+			Model:  "gpt-image-1",
+			Prompt: "把两张图拼在一起",
+			Images: json.RawMessage(`["data:image/png;base64,` + tinyPNG + `","data:image/png;base64,` + tinyPNG + `"]`),
+		}
+		c := newJSONContext(t, "{}")
+		converted, err := (&Adaptor{}).ConvertImageRequest(c, info, req)
+		require.NoError(t, err, "images 数组请求不应再报 failed to parse multipart form")
+		buf, ok := converted.(*bytes.Buffer)
+		require.True(t, ok, "images 数组请求应被转换为 multipart body")
+
+		_, params, err := mime.ParseMediaType(c.Request.Header.Get("Content-Type"))
+		require.NoError(t, err)
+		fields := parseMultipartFields(t, buf.Bytes(), params["boundary"])
+		assert.Equal(t, "gpt-image-1", fields["model"])
+		assert.Equal(t, "把两张图拼在一起", fields["prompt"])
+
+		// 两张图都应以 image[] 文件部件写入
+		reader := multipart.NewReader(bytes.NewReader(buf.Bytes()), params["boundary"])
+		expectedBytes, err := base64.StdEncoding.DecodeString(tinyPNG)
+		require.NoError(t, err)
+		imageParts := 0
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+			if part.FormName() == "image[]" && part.FileName() != "" {
+				partBytes, readErr := io.ReadAll(part)
+				require.NoError(t, readErr)
+				assert.Equal(t, expectedBytes, partBytes, "image[] 部件内容应与 base64 解码后一致")
+				imageParts++
+			}
+			_ = part.Close()
+		}
+		assert.Equal(t, 2, imageParts, "images 数组里的每张图都应写成独立文件部件")
+	})
+
+	// 官方 JSON 模式（EditImageBodyJsonParam）：images 是 [{image_url|file_id}]
+	// 引用对象数组，mask 是单个引用对象。
+	t.Run("gpt-image JSON edits with official image_url object references", func(t *testing.T) {
+		dataURL := "data:image/png;base64," + tinyPNG
+		req := dto.ImageRequest{
+			Model:  "gpt-image-2",
+			Prompt: "把两张图拼在一起",
+			Images: json.RawMessage(`[{"image_url":"` + dataURL + `"},{"image_url":"` + dataURL + `"}]`),
+			Mask:   json.RawMessage(`{"image_url":"` + dataURL + `"}`),
+		}
+		c := newJSONContext(t, "{}")
+		converted, err := (&Adaptor{}).ConvertImageRequest(c, info, req)
+		require.NoError(t, err, "官方 image_url 对象引用应正常转换")
+		buf, ok := converted.(*bytes.Buffer)
+		require.True(t, ok)
+
+		_, params, err := mime.ParseMediaType(c.Request.Header.Get("Content-Type"))
+		require.NoError(t, err)
+		reader := multipart.NewReader(bytes.NewReader(buf.Bytes()), params["boundary"])
+		expectedBytes, err := base64.StdEncoding.DecodeString(tinyPNG)
+		require.NoError(t, err)
+		imageParts, maskParts := 0, 0
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+			if part.FileName() == "" {
+				_ = part.Close()
+				continue
+			}
+			partBytes, readErr := io.ReadAll(part)
+			require.NoError(t, readErr)
+			require.Equal(t, expectedBytes, partBytes, "引用对象的图片内容应与 base64 解码后一致")
+			if part.FormName() == "image[]" {
+				imageParts++
+			}
+			if part.FormName() == "mask" {
+				maskParts++
+			}
+			_ = part.Close()
+		}
+		assert.Equal(t, 2, imageParts, "官方 images 对象数组应逐张转成 image[] 文件部件")
+		assert.Equal(t, 1, maskParts, "官方 mask 引用对象应转成 mask 文件部件")
+	})
+
+	// file_id 引用的是上游 File API 的文件，网关拿不到字节，必须报明确错误
+	// 而不是静默丢图或掉进 multipart 分支。
+	t.Run("gpt-image JSON edits with file_id reference fails clearly", func(t *testing.T) {
+		req := dto.ImageRequest{
+			Model:  "gpt-image-2",
+			Prompt: "把两张图拼在一起",
+			Images: json.RawMessage(`[{"file_id":"file-abc123"}]`),
+		}
+		_, err := (&Adaptor{}).ConvertImageRequest(newJSONContext(t, "{}"), info, req)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "file_id", "file_id 引用应报明确错误")
 	})
 
 	t.Run("non-gpt-image JSON model still passes through", func(t *testing.T) {
