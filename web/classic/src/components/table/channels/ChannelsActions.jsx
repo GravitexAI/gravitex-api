@@ -315,9 +315,11 @@ const ChannelsActions = ({
                 );
               }}
             >
-              <Select.Option value='all'>{t('全部')}</Select.Option>
+              <Select.Option value=''>{t('全部')}</Select.Option>
               <Select.Option value='enabled'>{t('已启用')}</Select.Option>
               <Select.Option value='disabled'>{t('已禁用')}</Select.Option>
+              <Select.Option value='3'>{t('自动禁用')}</Select.Option>
+              <Select.Option value='-1'>{t('已删除')}</Select.Option>
             </Select>
           </div>
         </div>

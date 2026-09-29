@@ -974,12 +974,15 @@ export function useChannelsColumns(
             return true
           }
           const status = row.getValue(id) as number
+          if (value.includes('')) return true
           if (value.includes('enabled')) {
             return status === 1
           }
           if (value.includes('disabled')) {
-            return status !== 1
+            return status !== 1 && status !== -1
           }
+          if (value.includes('3')) return status === 3
+          if (value.includes('-1')) return status === -1
           return false
         },
         size: 120,

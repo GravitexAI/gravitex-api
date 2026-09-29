@@ -54,14 +54,22 @@ type OpenAIModelsResponse struct {
 	Success bool          `json:"success"`
 }
 
+const channelStatusFilterAll = -2
+
 func parseStatusFilter(statusParam string) int {
 	switch strings.ToLower(statusParam) {
+	case "", "all":
+		return channelStatusFilterAll
 	case "enabled", "1":
 		return common.ChannelStatusEnabled
 	case "disabled", "0":
 		return 0
+	case "auto_disabled", "3":
+		return common.ChannelStatusAutoDisabled
+	case "deleted", "-1":
+		return common.ChannelStatusDeleted
 	default:
-		return -1
+		return channelStatusFilterAll
 	}
 }
 
@@ -91,10 +99,29 @@ func applyChannelStatusFilter(query *gorm.DB, statusFilter int) *gorm.DB {
 	if statusFilter == common.ChannelStatusEnabled {
 		return query.Where("status = ?", common.ChannelStatusEnabled)
 	}
+	if statusFilter == common.ChannelStatusAutoDisabled {
+		return query.Where("status = ?", common.ChannelStatusAutoDisabled)
+	}
+	if statusFilter == common.ChannelStatusDeleted {
+		return query.Where("status = ?", common.ChannelStatusDeleted)
+	}
 	if statusFilter == 0 {
-		return query.Where("status != ?", common.ChannelStatusEnabled)
+		return query.Where("status != ? and status != ?", common.ChannelStatusEnabled, common.ChannelStatusDeleted)
 	}
 	return query
+}
+
+func channelStatusMatchesFilter(status int, statusFilter int) bool {
+	switch statusFilter {
+	case common.ChannelStatusEnabled:
+		return status == common.ChannelStatusEnabled
+	case common.ChannelStatusAutoDisabled, common.ChannelStatusDeleted:
+		return status == statusFilter
+	case 0:
+		return status != common.ChannelStatusEnabled && status != common.ChannelStatusDeleted
+	default:
+		return true
+	}
 }
 
 func buildChannelListQuery(group string, statusFilter int, typeFilter int) *gorm.DB {
@@ -122,7 +149,7 @@ func GetAllChannels(c *gin.Context) {
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
 	groupFilter := model.NormalizeChannelGroupFilter(c.Query("group"))
 	statusParam := c.Query("status")
-	// statusFilter: -1 all, 1 enabled, 0 disabled (include auto & manual)
+	// Empty status means all. Exact filters support enabled, disabled, auto-disabled, and deleted.
 	statusFilter := parseStatusFilter(statusParam)
 	// type filter
 	typeStr := c.Query("type")
@@ -136,13 +163,31 @@ func GetAllChannels(c *gin.Context) {
 	var total int64
 
 	if enableTagMode {
-		tags, err := model.GetPaginatedTags(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), region)
+		var tags []*string
+		var err error
+		var tagQuery *gorm.DB
+		needsTagFilter := statusFilter != channelStatusFilterAll || groupFilter != "" || typeFilter >= 0
+		if needsTagFilter {
+			tagQuery = model.DB.Table(model.ChannelTable(region))
+			tagQuery = model.ApplyChannelGroupFilter(tagQuery, groupFilter)
+			tagQuery = applyChannelStatusFilter(tagQuery, statusFilter)
+			if typeFilter >= 0 {
+				tagQuery = tagQuery.Where("type = ?", typeFilter)
+			}
+			tags, err = model.GetPaginatedChannelTags(tagQuery, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+		} else {
+			tags, err = model.GetPaginatedTags(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), region)
+		}
 		if err != nil {
 			common.SysError("failed to get paginated tags: " + err.Error())
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取标签失败，请稍后重试"})
 			return
 		}
-		total, err = model.CountChannelTags(buildChannelListQuery(groupFilter, statusFilter, typeFilter))
+		if !needsTagFilter {
+			total, err = model.CountAllTags(region)
+		} else {
+			total, err = model.CountChannelTags(tagQuery)
+		}
 		if err != nil {
 			common.SysError("failed to count tags: " + err.Error())
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取标签数量失败，请稍后重试"})
@@ -158,19 +203,34 @@ func GetAllChannels(c *gin.Context) {
 				c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取标签渠道失败，请稍后重试"})
 				return
 			}
-			channelData = append(channelData, tagChannels...)
+			for _, channel := range tagChannels {
+				if !channelStatusMatchesFilter(channel.Status, statusFilter) {
+					continue
+				}
+				if typeFilter >= 0 && channel.Type != typeFilter {
+					continue
+				}
+				if groupFilter != "" {
+					hasGroup := false
+					for _, group := range strings.Split(channel.Group, ",") {
+						if group == groupFilter {
+							hasGroup = true
+							break
+						}
+					}
+					if !hasGroup {
+						continue
+					}
+				}
+				channelData = append(channelData, channel)
+			}
 		}
-		total, _ = model.CountAllTags(region)
 	} else {
 		baseQuery := model.DB.Table(model.ChannelTable(region))
 		if typeFilter >= 0 {
 			baseQuery = baseQuery.Where("type = ?", typeFilter)
 		}
-		if statusFilter == common.ChannelStatusEnabled {
-			baseQuery = baseQuery.Where("status = ?", common.ChannelStatusEnabled)
-		} else if statusFilter == 0 {
-			baseQuery = baseQuery.Where("status != ?", common.ChannelStatusEnabled)
-		}
+		baseQuery = applyChannelStatusFilter(baseQuery, statusFilter)
 		// Apply group filter on top of region-based query
 		baseQuery = model.ApplyChannelGroupFilter(baseQuery, groupFilter)
 		if err := baseQuery.Count(&total).Error; err != nil {
@@ -195,12 +255,7 @@ func GetAllChannels(c *gin.Context) {
 		clearChannelInfo(datum)
 	}
 
-	countQuery := model.DB.Table(model.ChannelTable(region))
-	if statusFilter == common.ChannelStatusEnabled {
-		countQuery = countQuery.Where("status = ?", common.ChannelStatusEnabled)
-	} else if statusFilter == 0 {
-		countQuery = countQuery.Where("status != ?", common.ChannelStatusEnabled)
-	}
+	countQuery := applyChannelStatusFilter(model.DB.Table(model.ChannelTable(region)), statusFilter)
 	var results []struct {
 		Type  int64
 		Count int64
@@ -342,13 +397,19 @@ func SearchChannels(c *gin.Context) {
 		channelData = channels
 	}
 
-	if statusFilter == common.ChannelStatusEnabled || statusFilter == 0 {
+	if statusFilter == common.ChannelStatusEnabled || statusFilter == common.ChannelStatusAutoDisabled || statusFilter == common.ChannelStatusDeleted || statusFilter == 0 {
 		filtered := make([]*model.Channel, 0, len(channelData))
 		for _, ch := range channelData {
 			if statusFilter == common.ChannelStatusEnabled && ch.Status != common.ChannelStatusEnabled {
 				continue
 			}
-			if statusFilter == 0 && ch.Status == common.ChannelStatusEnabled {
+			if statusFilter == common.ChannelStatusAutoDisabled && ch.Status != common.ChannelStatusAutoDisabled {
+				continue
+			}
+			if statusFilter == common.ChannelStatusDeleted && ch.Status != common.ChannelStatusDeleted {
+				continue
+			}
+			if statusFilter == 0 && (ch.Status == common.ChannelStatusEnabled || ch.Status == common.ChannelStatusDeleted) {
 				continue
 			}
 			filtered = append(filtered, ch)

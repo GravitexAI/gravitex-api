@@ -150,6 +150,13 @@ const renderTagType = (t) => {
 };
 
 const renderStatus = (status, channelInfo = undefined, t) => {
+  if (status === -1) {
+    return (
+      <Tag color='grey' shape='circle'>
+        {t('已删除')}
+      </Tag>
+    );
+  }
   if (channelInfo) {
     if (channelInfo.is_multi_key) {
       let keySize = channelInfo.multi_key_size;
@@ -818,7 +825,7 @@ export const getChannelsColumns = ({
                 />
               </SplitButtonGroup>
 
-              {record.status === 1 ? (
+              {record.status === -1 ? null : record.status === 1 ? (
                 <Button
                   type='danger'
                   size='small'

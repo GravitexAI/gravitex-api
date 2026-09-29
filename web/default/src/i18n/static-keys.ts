@@ -244,6 +244,7 @@ export const STATIC_I18N_KEYS = [
   'Caps the response length',
   'Keeps compatible responses more repeatable',
   'All Status',
+  'Deleted Channel',
   'All Sync Status',
   'Official Sync',
   'No Sync',

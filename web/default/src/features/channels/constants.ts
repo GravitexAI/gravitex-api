@@ -138,6 +138,7 @@ export function channelTypeOptionsForTaskPluginBind(
 // ============================================================================
 
 export const CHANNEL_STATUS = {
+  DELETED: -1,
   UNKNOWN: 0,
   ENABLED: 1,
   MANUAL_DISABLED: 2,
@@ -145,6 +146,7 @@ export const CHANNEL_STATUS = {
 } as const
 
 export const CHANNEL_STATUS_LABELS = {
+  [CHANNEL_STATUS.DELETED]: 'Deleted Channel',
   [CHANNEL_STATUS.UNKNOWN]: 'Unknown',
   [CHANNEL_STATUS.ENABLED]: 'Enabled',
   [CHANNEL_STATUS.MANUAL_DISABLED]: 'Disabled',
@@ -152,12 +154,18 @@ export const CHANNEL_STATUS_LABELS = {
 } as const
 
 export const CHANNEL_STATUS_OPTIONS = [
-  { value: 'all', label: 'All Status' },
+  { value: '', label: 'All Status' },
   { value: 'enabled', label: 'Enabled' },
   { value: 'disabled', label: 'Disabled' },
+  { value: '3', label: 'Auto Disabled' },
+  { value: '-1', label: 'Deleted Channel' },
 ] as const
 
 export const CHANNEL_STATUS_CONFIG = {
+  [CHANNEL_STATUS.DELETED]: {
+    variant: 'neutral' as const,
+    label: 'Deleted Channel',
+  },
   [CHANNEL_STATUS.UNKNOWN]: {
     variant: 'neutral' as const,
     label: 'Unknown',

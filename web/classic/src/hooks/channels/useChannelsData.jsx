@@ -72,7 +72,9 @@ export const useChannelsData = () => {
 
   // Status filter
   const [statusFilter, setStatusFilter] = useState(
-    localStorage.getItem('channel-status-filter') || 'all',
+    localStorage.getItem('channel-status-filter') === 'all'
+      ? ''
+      : localStorage.getItem('channel-status-filter') || '',
   );
 
   // Type tabs states
@@ -347,7 +349,7 @@ export const useChannelsData = () => {
     const reqId = ++requestCounter.current;
     setLoading(true);
     const typeParam = typeKey !== 'all' ? `&type=${typeKey}` : '';
-    const statusParam = statusF !== 'all' ? `&status=${statusF}` : '';
+    const statusParam = `&status=${statusF === 'all' ? '' : statusF}`;
     const res = await API.get(
       `/api/channel/?p=${page}&page_size=${pageSize}&id_sort=${idSort}&tag_mode=${enableTagMode}${typeParam}${statusParam}`,
     );
@@ -399,7 +401,7 @@ export const useChannelsData = () => {
       }
 
       const typeParam = typeKey !== 'all' ? `&type=${typeKey}` : '';
-      const statusParam = statusF !== 'all' ? `&status=${statusF}` : '';
+      const statusParam = `&status=${statusF === 'all' ? '' : statusF}`;
       const res = await API.get(
         `/api/channel/search?keyword=${searchKeyword}&group=${searchGroup}&model=${searchModel}&id_sort=${sortFlag}&tag_mode=${enableTagMode}&p=${page}&page_size=${pageSz}${typeParam}${statusParam}`,
       );

@@ -331,7 +331,9 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 }
 
 func UpdateAbilityStatus(channelId int, status bool) error {
-	return DB.Model(&Ability{}).Where("channel_id = ?", channelId).Select("enabled").Update("enabled", status).Error
+	return DB.Model(&Ability{}).Where("channel_id = ? and channel_id in (?)", channelId,
+		DB.Model(&Channel{}).Select("id").Where("id = ? and status != ?", channelId, common.ChannelStatusDeleted),
+	).Select("enabled").Update("enabled", status).Error
 }
 
 func UpdateAbilityStatusByTag(tag string, status bool) error {

@@ -100,3 +100,60 @@ func TestSaveStatusStateFromSingleKeySnapshotPreservesUnownedColumns(t *testing.
 	assert.Equal(t, "manual operation", otherInfo["status_reason"])
 	assert.Equal(t, float64(1234), otherInfo["status_time"])
 }
+
+func TestChannelSoftDeleteDisablesOnlyItsAbilities(t *testing.T) {
+	setupChannelStatusTest(t)
+
+	tag := "shared-tag"
+	deletedChannel := Channel{Name: "delete-one", Key: "secret-a", Models: "shared-model,exclusive-model", Group: "default", Tag: &tag, Status: common.ChannelStatusEnabled}
+	otherChannel := Channel{Name: "keep-one", Key: "secret-b", Models: "shared-model", Group: "default", Tag: &tag, Status: common.ChannelStatusEnabled}
+	require.NoError(t, DB.Create(&deletedChannel).Error)
+	require.NoError(t, DB.Create(&otherChannel).Error)
+	require.NoError(t, deletedChannel.AddAbilities(nil))
+	require.NoError(t, otherChannel.AddAbilities(nil))
+
+	require.NoError(t, deletedChannel.Delete())
+	assert.False(t, UpdateChannelStatus(deletedChannel.Id, "", common.ChannelStatusEnabled, "manual operation"))
+
+	var stored Channel
+	require.NoError(t, DB.First(&stored, deletedChannel.Id).Error)
+	assert.Equal(t, common.ChannelStatusDeleted, stored.Status)
+	var deletedAbility Ability
+	require.NoError(t, DB.Where("channel_id = ? and model = ?", deletedChannel.Id, "shared-model").First(&deletedAbility).Error)
+	assert.False(t, deletedAbility.Enabled)
+	var unaffectedAbility Ability
+	require.NoError(t, DB.Where("channel_id = ? and model = ?", otherChannel.Id, "shared-model").First(&unaffectedAbility).Error)
+	assert.True(t, unaffectedAbility.Enabled)
+	assert.Contains(t, GetEnabledModels(), "shared-model")
+	assert.NotContains(t, GetEnabledModels(), "exclusive-model")
+	require.NoError(t, EnableChannelByTag("shared-tag"))
+	require.NoError(t, DB.First(&stored, deletedChannel.Id).Error)
+	assert.Equal(t, common.ChannelStatusDeleted, stored.Status)
+	require.NoError(t, DB.Where("channel_id = ? and model = ?", deletedChannel.Id, "shared-model").First(&deletedAbility).Error)
+	assert.False(t, deletedAbility.Enabled)
+}
+
+func TestBatchDeleteChannelsSoftDeletesAndPreservesOtherChannels(t *testing.T) {
+	setupChannelStatusTest(t)
+
+	deletedChannel := Channel{Name: "batch-delete-one", Key: "secret-a", Models: "shared-model", Group: "default", Status: common.ChannelStatusEnabled}
+	otherChannel := Channel{Name: "batch-keep-one", Key: "secret-b", Models: "shared-model", Group: "default", Status: common.ChannelStatusEnabled}
+	require.NoError(t, DB.Create(&deletedChannel).Error)
+	require.NoError(t, DB.Create(&otherChannel).Error)
+	require.NoError(t, deletedChannel.AddAbilities(nil))
+	require.NoError(t, otherChannel.AddAbilities(nil))
+
+	count, err := BatchDeleteChannels([]int{deletedChannel.Id})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, count)
+
+	var stored Channel
+	require.NoError(t, DB.First(&stored, deletedChannel.Id).Error)
+	assert.Equal(t, common.ChannelStatusDeleted, stored.Status)
+	var deletedAbility Ability
+	require.NoError(t, DB.Where("channel_id = ?", deletedChannel.Id).First(&deletedAbility).Error)
+	assert.False(t, deletedAbility.Enabled)
+	var unaffectedAbility Ability
+	require.NoError(t, DB.Where("channel_id = ?", otherChannel.Id).First(&unaffectedAbility).Error)
+	assert.True(t, unaffectedAbility.Enabled)
+}
