@@ -101,6 +101,36 @@ func TestSaveStatusStateFromSingleKeySnapshotPreservesUnownedColumns(t *testing.
 	assert.Equal(t, float64(1234), otherInfo["status_time"])
 }
 
+func TestCountChannelTagsIgnoresPaginationAppliedForPageQuery(t *testing.T) {
+	setupChannelStatusTest(t)
+
+	for _, tag := range []string{"tag-a", "tag-b", "tag-c"} {
+		channel := Channel{Name: tag, Tag: &tag, Status: common.ChannelStatusEnabled}
+		require.NoError(t, DB.Create(&channel).Error)
+	}
+
+	query := DB.Model(&Channel{}).Where("status = ?", common.ChannelStatusEnabled)
+	page, err := GetPaginatedChannelTags(query, 1, 1)
+	require.NoError(t, err)
+	require.Len(t, page, 1)
+
+	total, err := CountChannelTags(query)
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, total)
+}
+
+func TestSaveStatusStateAcceptsUnchangedUpdateForExistingChannel(t *testing.T) {
+	setupChannelStatusTest(t)
+	channel := Channel{Name: "unchanged-status", Status: common.ChannelStatusAutoDisabled}
+	require.NoError(t, DB.Create(&channel).Error)
+	require.NoError(t, DB.Exec("CREATE TRIGGER ignore_channel_status_update BEFORE UPDATE ON channels BEGIN SELECT RAISE(IGNORE); END").Error)
+	t.Cleanup(func() {
+		DB.Exec("DROP TRIGGER IF EXISTS ignore_channel_status_update")
+	})
+
+	require.NoError(t, channel.saveStatusState())
+}
+
 func TestChannelSoftDeleteDisablesOnlyItsAbilities(t *testing.T) {
 	setupChannelStatusTest(t)
 

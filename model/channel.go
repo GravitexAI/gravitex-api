@@ -389,7 +389,13 @@ func (channel *Channel) saveStatusState() error {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
+		var current Channel
+		if err := DB.Select("status").First(&current, "id = ?", channel.Id).Error; err != nil {
+			return err
+		}
+		if current.Status == common.ChannelStatusDeleted {
+			return gorm.ErrRecordNotFound
+		}
 	}
 	return nil
 }
@@ -777,10 +783,6 @@ func hasEnabledMultiKey(keys []string, statusList map[int]int) bool {
 }
 
 func UpdateChannelStatus(channelId int, usingKey string, status int, reason string) bool {
-	channel, err := GetChannelById(channelId, true)
-	if err != nil || channel == nil || channel.Status == common.ChannelStatusDeleted {
-		return false
-	}
 	if common.MemoryCacheEnabled {
 		channelStatusLock.Lock()
 		defer channelStatusLock.Unlock()
@@ -792,6 +794,10 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	pollingLock := GetChannelPollingLock(channelId)
 	pollingLock.Lock()
 	defer pollingLock.Unlock()
+	channel, err := GetChannelById(channelId, true)
+	if err != nil || channel == nil || channel.Status == common.ChannelStatusDeleted {
+		return false
+	}
 
 	if common.MemoryCacheEnabled {
 		channelCache, _ := CacheGetChannel(channelId)
@@ -856,8 +862,11 @@ func EnableChannelByTag(tag string) error {
 	if err != nil {
 		return err
 	}
-	err = DB.Model(&Ability{}).Where("tag = ? and channel_id in (?)", tag, DB.Model(&Channel{}).Select("id").Where("tag = ? and status != ?", tag, common.ChannelStatusDeleted)).Update("enabled", true).Error
-	return err
+	return updateAbilityStatusForActiveChannels(
+		DB.Model(&Ability{}).Where("tag = ?", tag),
+		DB.Model(&Channel{}).Where("tag = ?", tag),
+		true,
+	)
 }
 
 func DisableChannelByTag(tag string) error {
@@ -865,8 +874,11 @@ func DisableChannelByTag(tag string) error {
 	if err != nil {
 		return err
 	}
-	err = DB.Model(&Ability{}).Where("tag = ? and channel_id in (?)", tag, DB.Model(&Channel{}).Select("id").Where("tag = ? and status != ?", tag, common.ChannelStatusDeleted)).Update("enabled", false).Error
-	return err
+	return updateAbilityStatusForActiveChannels(
+		DB.Model(&Ability{}).Where("tag = ?", tag),
+		DB.Model(&Channel{}).Where("tag = ?", tag),
+		false,
+	)
 }
 
 func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
@@ -1003,7 +1015,7 @@ func GetPaginatedTags(offset int, limit int, region string) ([]*string, error) {
 
 func GetPaginatedChannelTags(query *gorm.DB, offset int, limit int) ([]*string, error) {
 	var tags []*string
-	err := query.
+	err := query.Session(&gorm.Session{}).
 		Select("DISTINCT tag").
 		Where("tag is not null AND tag != ''").
 		Order(clause.OrderByColumn{Column: clause.Column{Name: "tag"}}).
@@ -1240,7 +1252,7 @@ func CountAllTags(region string) (int64, error) {
 
 func CountChannelTags(query *gorm.DB) (int64, error) {
 	var total int64
-	err := query.Where("tag is not null AND tag != ''").Distinct("tag").Count(&total).Error
+	err := query.Session(&gorm.Session{}).Where("tag is not null AND tag != ''").Distinct("tag").Count(&total).Error
 	return total, err
 }
 

@@ -42,6 +42,7 @@
     "{{count}} days ago": "il y a {{count}} jours",
     "{{count}} days remaining": "{{count}} days remaining",
     "{{count}} disabled channel(s) deleted": "{{count}} canal(canaux) désactivé(s) supprimé(s)",
+    "{{count}} disabled channel(s) marked as deleted": "{{count}} canal(aux) désactivé(s) marqué(s) comme supprimé(s)",
     "{{count}} FAQ entries will be removed from the list.": "{{count}} entrées de FAQ seront retirées de la liste.",
     "{{count}} hours ago": "il y a {{count}} heures",
     "{{count}} incidents": "{{count}} incidents",
@@ -291,6 +292,7 @@
     "All group names live here. Ratio applies when calls are billed as this group; top-up ratio applies to users whose account is in this group.": "Tous les noms de groupes sont gérés ici. Le taux s’applique lorsque les appels sont facturés sous ce groupe ; le taux de recharge s’applique aux utilisateurs appartenant à ce groupe.",
     "All Groups": "Tous les groupes",
     "All groups share one pool of names managed in the pricing group table, but a name plays two different roles: as a user group it describes the user, as a token group it decides routing and billing.": "Tous les groupes partagent un même ensemble de noms géré dans le tableau des groupes tarifaires, mais un nom joue deux rôles distincts : en tant que groupe d’utilisateurs il décrit l’utilisateur, en tant que groupe de jetons il détermine le routage et la facturation.",
+    "All manually and automatically disabled channels will be marked as deleted. Their records and keys will remain in the database.": "Tous les canaux désactivés manuellement ou automatiquement seront marqués comme supprimés. Leurs enregistrements et clés resteront dans la base de données.",
     "All Models": "Tous les modèles",
     "All models in use are properly configured.": "Tous les modèles utilisés sont correctement configurés.",
     "All Must Match (AND)": "Toutes doivent correspondre (AND)",
@@ -2595,6 +2597,8 @@
     "Map request model names to actual provider model names (JSON format)": "Mapper les noms de modèles de requête aux noms réels de modèles du fournisseur (format JSON)",
     "Map response status codes (JSON format)": "Mapper les codes de statut de réponse (format JSON)",
     "Map upstream status codes to different codes": "Mapper les codes de statut amont à différents codes",
+    "Mark All Disabled Channels as Deleted?": "Marquer tous les canaux désactivés comme supprimés ?",
+    "Mark Disabled Channels as Deleted": "Marquer les canaux désactivés comme supprimés",
     "Market Share": "Part de marché",
     "Marketing": "Marketing",
     "Master instances run scheduled background tasks.": "Les instances master exécutent les tâches planifiées en arrière-plan.",
@@ -5277,6 +5281,7 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "Les canaux désactivés seront marqués comme supprimés ; leurs enregistrements et clés resteront dans la base de données."
   }
 }

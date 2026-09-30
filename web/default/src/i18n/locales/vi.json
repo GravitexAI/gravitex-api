@@ -42,6 +42,7 @@
     "{{count}} days ago": "{{count}} ngày trước",
     "{{count}} days remaining": "{{count}} days remaining",
     "{{count}} disabled channel(s) deleted": "Đã xóa {{count}} kênh đã tắt",
+    "{{count}} disabled channel(s) marked as deleted": "{{count}} kênh bị vô hiệu hóa đã được đánh dấu là đã xóa",
     "{{count}} FAQ entries will be removed from the list.": "{{count}} mục FAQ sẽ bị xóa khỏi danh sách.",
     "{{count}} hours ago": "{{count}} giờ trước",
     "{{count}} incidents": "{{count}} sự cố",
@@ -291,6 +292,7 @@
     "All group names live here. Ratio applies when calls are billed as this group; top-up ratio applies to users whose account is in this group.": "Tất cả tên nhóm được quản lý tại đây. Hệ số áp dụng khi cuộc gọi được tính phí theo nhóm này; hệ số nạp tiền áp dụng cho người dùng thuộc nhóm này.",
     "All Groups": "Tất cả các nhóm",
     "All groups share one pool of names managed in the pricing group table, but a name plays two different roles: as a user group it describes the user, as a token group it decides routing and billing.": "Tất cả các nhóm dùng chung một bộ tên được quản lý trong bảng nhóm định giá, nhưng một tên có hai vai trò khác nhau: là nhóm người dùng thì mô tả người dùng, là nhóm token thì quyết định định tuyến và tính phí.",
+    "All manually and automatically disabled channels will be marked as deleted. Their records and keys will remain in the database.": "Tất cả kênh bị vô hiệu hóa thủ công hoặc tự động sẽ được đánh dấu là đã xóa. Bản ghi và khóa vẫn được giữ trong cơ sở dữ liệu.",
     "All Models": "Tất cả các mẫu",
     "All models in use are properly configured.": "Tất cả các mô hình đang được sử dụng đều được cấu hình đúng cách.",
     "All Must Match (AND)": "Tất cả phải khớp (AND)",
@@ -2595,6 +2597,8 @@
     "Map request model names to actual provider model names (JSON format)": "Ánh xạ tên mô hình yêu cầu đến tên mô hình thực tế của nhà cung cấp (định dạng JSON)",
     "Map response status codes (JSON format)": "Ánh xạ mã trạng thái phản hồi (định dạng JSON)",
     "Map upstream status codes to different codes": "Ánh xạ mã trạng thái upstream sang các mã khác",
+    "Mark All Disabled Channels as Deleted?": "Đánh dấu tất cả kênh bị vô hiệu hóa là đã xóa?",
+    "Mark Disabled Channels as Deleted": "Đánh dấu kênh bị vô hiệu hóa là đã xóa",
     "Market Share": "Thị phần",
     "Marketing": "Tiếp thị",
     "Master instances run scheduled background tasks.": "Phiên bản master chạy các tác vụ nền theo lịch.",
@@ -5277,6 +5281,7 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "Các kênh bị vô hiệu hóa sẽ được đánh dấu là đã xóa; bản ghi và khóa vẫn được giữ trong cơ sở dữ liệu."
   }
 }

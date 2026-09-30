@@ -743,7 +743,7 @@ export const useChannelsData = () => {
     const { success, message, data } = res.data;
     if (success) {
       showSuccess(
-        t('已删除所有禁用渠道，共计 ${data} 个').replace('${data}', data),
+        t('{{count}} disabled channel(s) marked as deleted', { count: data }),
       );
       await refresh();
     } else {

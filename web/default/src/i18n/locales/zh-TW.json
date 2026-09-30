@@ -42,6 +42,7 @@
     "{{count}} days ago": "{{count}} 日前",
     "{{count}} days remaining": "剩餘 {{count}} 日",
     "{{count}} disabled channel(s) deleted": "已刪除 {{count}} 個已停用的渠道",
+    "{{count}} disabled channel(s) marked as deleted": "{{count}} 個停用渠道已標記為已刪除",
     "{{count}} FAQ entries will be removed from the list.": "將從列表中移除 {{count}} 個 FAQ 條目。",
     "{{count}} hours ago": "{{count}} 小時前",
     "{{count}} incidents": "{{count}} 宗事件",
@@ -291,6 +292,7 @@
     "All group names live here. Ratio applies when calls are billed as this group; top-up ratio applies to users whose account is in this group.": "所有分組名稱都在這裡管理。倍率在呼叫按該分組收費時生效；儲值倍率對所屬該分組的用戶生效。",
     "All Groups": "所有分組",
     "All groups share one pool of names managed in the pricing group table, but a name plays two different roles: as a user group it describes the user, as a token group it decides routing and billing.": "所有分組共用定價分組表中的同一批名稱，但同一個名稱有兩種角色：作為用戶分組表示用戶身份，作為令牌分組決定路由和收費。",
+    "All manually and automatically disabled channels will be marked as deleted. Their records and keys will remain in the database.": "所有手動停用和自動停用的渠道都會標記為已刪除；渠道記錄和密鑰仍會保留在資料庫中。",
     "All Models": "所有模型",
     "All models in use are properly configured.": "所有正在使用的模型都已正確設定。",
     "All Must Match (AND)": "全部滿足（AND）",
@@ -2595,6 +2597,8 @@
     "Map request model names to actual provider model names (JSON format)": "將請求模型名稱映射到實際供應商模型名稱 (JSON 格式)",
     "Map response status codes (JSON format)": "映射回應狀態碼（JSON 格式）",
     "Map upstream status codes to different codes": "將上游狀態碼映射到不同的代碼",
+    "Mark All Disabled Channels as Deleted?": "確定要將所有停用渠道標記為已刪除嗎？",
+    "Mark Disabled Channels as Deleted": "將停用渠道標記為已刪除",
     "Market Share": "市場份額",
     "Marketing": "市場營銷",
     "Master instances run scheduled background tasks.": "master 實例執行排程背景任務。",
@@ -5277,6 +5281,7 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "停用渠道將標記為已刪除，渠道記錄和密鑰仍會保留在資料庫中。"
   }
 }

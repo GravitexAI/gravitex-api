@@ -612,7 +612,7 @@ export async function handleDeleteAllDisabled(
     const response = await deleteDisabledChannels()
     if (response.success) {
       toast.success(
-        i18next.t('{{count}} disabled channel(s) deleted', {
+        i18next.t('{{count}} disabled channel(s) marked as deleted', {
           count: response.data || 0,
         })
       )

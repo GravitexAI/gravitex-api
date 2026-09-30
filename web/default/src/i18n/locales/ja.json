@@ -42,6 +42,7 @@
     "{{count}} days ago": "{{count}} 日前",
     "{{count}} days remaining": "残り {{count}} 日",
     "{{count}} disabled channel(s) deleted": "{{count}} 個の無効チャネルを削除しました",
+    "{{count}} disabled channel(s) marked as deleted": "{{count}} 件の無効なチャネルを削除済みにしました",
     "{{count}} FAQ entries will be removed from the list.": "{{count}} 件の FAQ 項目がリストから削除されます。",
     "{{count}} hours ago": "{{count}} 時間前",
     "{{count}} incidents": "{{count}} 件のインシデント",
@@ -291,6 +292,7 @@
     "All group names live here. Ratio applies when calls are billed as this group; top-up ratio applies to users whose account is in this group.": "すべてのグループ名はここで管理します。倍率はこのグループとして課金される呼び出しに適用され、チャージ倍率はこのグループに所属するユーザーに適用されます。",
     "All Groups": "すべてのグループ",
     "All groups share one pool of names managed in the pricing group table, but a name plays two different roles: as a user group it describes the user, as a token group it decides routing and billing.": "すべてのグループは料金グループ表で管理される同じ名前プールを共有しますが、1つの名前には2つの役割があります。ユーザーグループとしてはユーザーの属性を表し、トークングループとしてはルーティングと課金を決定します。",
+    "All manually and automatically disabled channels will be marked as deleted. Their records and keys will remain in the database.": "手動または自動で無効化されたすべてのチャネルを削除済みにします。チャネル情報とキーはデータベースに保持されます。",
     "All Models": "すべてのモデル",
     "All models in use are properly configured.": "使用中のすべてのモデルが適切に構成されています。",
     "All Must Match (AND)": "すべて一致（AND）",
@@ -2595,6 +2597,8 @@
     "Map request model names to actual provider model names (JSON format)": "リクエストのモデル名を実際のプロバイダーのモデル名にマッピング (JSON 形式)",
     "Map response status codes (JSON format)": "応答ステータスコードをマッピング（JSON形式）",
     "Map upstream status codes to different codes": "アップストリームのステータスコードを別のコードにマッピングする",
+    "Mark All Disabled Channels as Deleted?": "無効なチャネルをすべて削除済みにしますか？",
+    "Mark Disabled Channels as Deleted": "無効なチャネルを削除済みにする",
     "Market Share": "マーケットシェア",
     "Marketing": "マーケティング",
     "Master instances run scheduled background tasks.": "master インスタンスはスケジュールされたバックグラウンドタスクを実行します。",
@@ -5277,6 +5281,7 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "無効なチャネルは削除済みとしてマークされます。チャネル情報とキーはデータベースに保持されます。"
   }
 }

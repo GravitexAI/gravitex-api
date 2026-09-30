@@ -199,15 +199,17 @@ const ChannelsActions = ({
                     className='w-full'
                     onClick={() => {
                       Modal.confirm({
-                        title: t('确定是否要删除禁用通道？'),
-                        content: t('此修改将不可逆'),
+                        title: t('Mark All Disabled Channels as Deleted?'),
+                        content: t(
+                          '禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。',
+                        ),
                         onOk: () => deleteAllDisabledChannels(),
                         size: 'sm',
                         centered: true,
                       });
                     }}
                   >
-                    {t('删除禁用通道')}
+                    {t('Mark Disabled Channels as Deleted')}
                   </Button>
                 </Dropdown.Item>
               </Dropdown.Menu>

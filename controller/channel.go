@@ -397,25 +397,13 @@ func SearchChannels(c *gin.Context) {
 		channelData = channels
 	}
 
-	if statusFilter == common.ChannelStatusEnabled || statusFilter == common.ChannelStatusAutoDisabled || statusFilter == common.ChannelStatusDeleted || statusFilter == 0 {
-		filtered := make([]*model.Channel, 0, len(channelData))
-		for _, ch := range channelData {
-			if statusFilter == common.ChannelStatusEnabled && ch.Status != common.ChannelStatusEnabled {
-				continue
-			}
-			if statusFilter == common.ChannelStatusAutoDisabled && ch.Status != common.ChannelStatusAutoDisabled {
-				continue
-			}
-			if statusFilter == common.ChannelStatusDeleted && ch.Status != common.ChannelStatusDeleted {
-				continue
-			}
-			if statusFilter == 0 && (ch.Status == common.ChannelStatusEnabled || ch.Status == common.ChannelStatusDeleted) {
-				continue
-			}
+	filtered := make([]*model.Channel, 0, len(channelData))
+	for _, ch := range channelData {
+		if channelStatusMatchesFilter(ch.Status, statusFilter) {
 			filtered = append(filtered, ch)
 		}
-		channelData = filtered
 	}
+	channelData = filtered
 
 	// calculate type counts for search results
 	typeCounts := make(map[int64]int64)

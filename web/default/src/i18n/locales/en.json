@@ -42,6 +42,7 @@
     "{{count}} days ago": "{{count}} days ago",
     "{{count}} days remaining": "{{count}} days remaining",
     "{{count}} disabled channel(s) deleted": "{{count}} disabled channel(s) deleted",
+    "{{count}} disabled channel(s) marked as deleted": "{{count}} disabled channel(s) marked as deleted",
     "{{count}} FAQ entries will be removed from the list.": "{{count}} FAQ entries will be removed from the list.",
     "{{count}} hours ago": "{{count}} hours ago",
     "{{count}} incidents": "{{count}} incidents",
@@ -291,6 +292,7 @@
     "All group names live here. Ratio applies when calls are billed as this group; top-up ratio applies to users whose account is in this group.": "All group names live here. Ratio applies when calls are billed as this group; top-up ratio applies to users whose account is in this group.",
     "All Groups": "All Groups",
     "All groups share one pool of names managed in the pricing group table, but a name plays two different roles: as a user group it describes the user, as a token group it decides routing and billing.": "All groups share one pool of names managed in the pricing group table, but a name plays two different roles: as a user group it describes the user, as a token group it decides routing and billing.",
+    "All manually and automatically disabled channels will be marked as deleted. Their records and keys will remain in the database.": "All manually and automatically disabled channels will be marked as deleted. Their records and keys will remain in the database.",
     "All Models": "All Models",
     "All models in use are properly configured.": "All models in use are properly configured.",
     "All Must Match (AND)": "All Must Match (AND)",
@@ -2595,6 +2597,8 @@
     "Map request model names to actual provider model names (JSON format)": "Map request model names to actual provider model names (JSON format)",
     "Map response status codes (JSON format)": "Map response status codes (JSON format)",
     "Map upstream status codes to different codes": "Map upstream status codes to different codes",
+    "Mark All Disabled Channels as Deleted?": "Mark All Disabled Channels as Deleted?",
+    "Mark Disabled Channels as Deleted": "Mark Disabled Channels as Deleted",
     "Market Share": "Market Share",
     "Marketing": "Marketing",
     "Master instances run scheduled background tasks.": "Master instances run scheduled background tasks.",
@@ -5277,6 +5281,7 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "Disabled channels will be marked as deleted; their records and keys will remain in the database."
   }
 }

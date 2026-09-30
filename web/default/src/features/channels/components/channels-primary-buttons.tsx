@@ -276,7 +276,7 @@ export function ChannelsPrimaryButtons() {
               disabled={!canEditSensitive}
               className='text-destructive focus:text-destructive'
             >
-              {t('Delete All Disabled')}
+              {t('Mark Disabled Channels as Deleted')}
               <DropdownMenuShortcut>
                 <Trash2 className='h-4 w-4' />
               </DropdownMenuShortcut>
@@ -288,9 +288,9 @@ export function ChannelsPrimaryButtons() {
       <ConfirmDialog
         open={showDeleteDialog}
         onOpenChange={setShowDeleteDialog}
-        title={t('Delete All Disabled Channels?')}
+        title={t('Mark All Disabled Channels as Deleted?')}
         desc={t(
-          'This will permanently delete all manually and automatically disabled channels. This action cannot be undone.'
+          'All manually and automatically disabled channels will be marked as deleted. Their records and keys will remain in the database.'
         )}
         destructive
         handleConfirm={() => {

@@ -331,13 +331,16 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 }
 
 func UpdateAbilityStatus(channelId int, status bool) error {
-	return DB.Model(&Ability{}).Where("channel_id = ? and channel_id in (?)", channelId,
-		DB.Model(&Channel{}).Select("id").Where("id = ? and status != ?", channelId, common.ChannelStatusDeleted),
-	).Select("enabled").Update("enabled", status).Error
+	return updateAbilityStatusForActiveChannels(
+		DB.Model(&Ability{}).Where("channel_id = ?", channelId),
+		DB.Model(&Channel{}).Where("id = ?", channelId),
+		status,
+	)
 }
 
-func UpdateAbilityStatusByTag(tag string, status bool) error {
-	return DB.Model(&Ability{}).Where("tag = ?", tag).Select("enabled").Update("enabled", status).Error
+func updateAbilityStatusForActiveChannels(abilityQuery *gorm.DB, channelQuery *gorm.DB, status bool) error {
+	activeChannelIds := channelQuery.Select("id").Where("status != ?", common.ChannelStatusDeleted)
+	return abilityQuery.Where("channel_id in (?)", activeChannelIds).Select("enabled").Update("enabled", status).Error
 }
 
 func UpdateAbilityByTag(tag string, newTag *string, priority *int64, weight *uint) error {

@@ -42,6 +42,7 @@
     "{{count}} days ago": "{{count}} дней назад",
     "{{count}} days remaining": "Осталось {{count}} дней",
     "{{count}} disabled channel(s) deleted": "Удалено {{count}} отключённых каналов",
+    "{{count}} disabled channel(s) marked as deleted": "{{count}} отключённых каналов помечено как удалённые",
     "{{count}} FAQ entries will be removed from the list.": "{{count}} записей FAQ будут удалены из списка.",
     "{{count}} hours ago": "{{count}} часов назад",
     "{{count}} incidents": "{{count}} инцидентов",
@@ -291,6 +292,7 @@
     "All group names live here. Ratio applies when calls are billed as this group; top-up ratio applies to users whose account is in this group.": "Все названия групп управляются здесь. Коэффициент применяется, когда вызовы тарифицируются по этой группе; коэффициент пополнения применяется к пользователям, состоящим в этой группе.",
     "All Groups": "Все группы",
     "All groups share one pool of names managed in the pricing group table, but a name plays two different roles: as a user group it describes the user, as a token group it decides routing and billing.": "Все группы используют общий набор имён из таблицы тарифных групп, но одно имя играет две разные роли: как группа пользователя оно описывает пользователя, как группа токена — определяет маршрутизацию и тарификацию.",
+    "All manually and automatically disabled channels will be marked as deleted. Their records and keys will remain in the database.": "Все каналы, отключённые вручную или автоматически, будут помечены как удалённые. Их записи и ключи останутся в базе данных.",
     "All Models": "Все модели",
     "All models in use are properly configured.": "Все используемые модели настроены правильно.",
     "All Must Match (AND)": "Все должны совпасть (AND)",
@@ -2595,6 +2597,8 @@
     "Map request model names to actual provider model names (JSON format)": "Сопоставление имён моделей запроса реальным именам моделей провайдера (формат JSON)",
     "Map response status codes (JSON format)": "Сопоставить коды статусов ответа (JSON-формат)",
     "Map upstream status codes to different codes": "Сопоставить коды статуса вышестоящего сервера с различными кодами",
+    "Mark All Disabled Channels as Deleted?": "Пометить все отключённые каналы как удалённые?",
+    "Mark Disabled Channels as Deleted": "Пометить отключённые каналы как удалённые",
     "Market Share": "Доля рынка",
     "Marketing": "Маркетинг",
     "Master instances run scheduled background tasks.": "Экземпляры master выполняют плановые фоновые задачи.",
@@ -5277,6 +5281,7 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "Отключённые каналы будут помечены как удалённые; их записи и ключи останутся в базе данных."
   }
 }
