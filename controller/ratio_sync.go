@@ -996,7 +996,7 @@ func GetSyncableChannels(c *gin.Context) {
 
 	var syncableChannels []dto.SyncableChannel
 	for _, channel := range channels {
-		if channel.GetBaseURL() != "" {
+		if channel.Status != common.ChannelStatusDeleted && channel.GetBaseURL() != "" {
 			syncableChannels = append(syncableChannels, dto.SyncableChannel{
 				ID:      channel.Id,
 				Name:    channel.Name,

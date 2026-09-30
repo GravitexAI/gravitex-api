@@ -108,7 +108,7 @@ func applyChannelStatusFilter(query *gorm.DB, statusFilter int) *gorm.DB {
 	if statusFilter == 0 {
 		return query.Where("status != ? and status != ?", common.ChannelStatusEnabled, common.ChannelStatusDeleted)
 	}
-	return query
+	return query.Where("status != ?", common.ChannelStatusDeleted)
 }
 
 func channelStatusMatchesFilter(status int, statusFilter int) bool {
@@ -120,7 +120,7 @@ func channelStatusMatchesFilter(status int, statusFilter int) bool {
 	case 0:
 		return status != common.ChannelStatusEnabled && status != common.ChannelStatusDeleted
 	default:
-		return true
+		return status != common.ChannelStatusDeleted
 	}
 }
 
@@ -165,29 +165,19 @@ func GetAllChannels(c *gin.Context) {
 	if enableTagMode {
 		var tags []*string
 		var err error
-		var tagQuery *gorm.DB
-		needsTagFilter := statusFilter != channelStatusFilterAll || groupFilter != "" || typeFilter >= 0
-		if needsTagFilter {
-			tagQuery = model.DB.Table(model.ChannelTable(region))
-			tagQuery = model.ApplyChannelGroupFilter(tagQuery, groupFilter)
-			tagQuery = applyChannelStatusFilter(tagQuery, statusFilter)
-			if typeFilter >= 0 {
-				tagQuery = tagQuery.Where("type = ?", typeFilter)
-			}
-			tags, err = model.GetPaginatedChannelTags(tagQuery, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
-		} else {
-			tags, err = model.GetPaginatedTags(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), region)
+		tagQuery := model.DB.Table(model.ChannelTable(region))
+		tagQuery = model.ApplyChannelGroupFilter(tagQuery, groupFilter)
+		tagQuery = applyChannelStatusFilter(tagQuery, statusFilter)
+		if typeFilter >= 0 {
+			tagQuery = tagQuery.Where("type = ?", typeFilter)
 		}
+		tags, err = model.GetPaginatedChannelTags(tagQuery, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 		if err != nil {
 			common.SysError("failed to get paginated tags: " + err.Error())
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取标签失败，请稍后重试"})
 			return
 		}
-		if !needsTagFilter {
-			total, err = model.CountAllTags(region)
-		} else {
-			total, err = model.CountChannelTags(tagQuery)
-		}
+		total, err = model.CountChannelTags(tagQuery)
 		if err != nil {
 			common.SysError("failed to count tags: " + err.Error())
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取标签数量失败，请稍后重试"})
@@ -1114,12 +1104,28 @@ func UpdateChannel(c *gin.Context) {
 		})
 		return
 	}
+	var unlockTagMutation func()
+	if _, tagProvided := requestData["tag"]; tagProvided {
+		unlockTagMutation = model.LockChannelTagMutation()
+		defer unlockTagMutation()
+	}
+	lock := model.GetChannelPollingLock(channel.Id)
+	lock.Lock()
+	defer lock.Unlock()
+
 	// Preserve existing ChannelInfo to ensure multi-key channels keep correct state even if the client does not send ChannelInfo in the request.
 	originChannel, err := model.GetChannelById(channel.Id, true)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": err.Error(),
+		})
+		return
+	}
+	if originChannel.Status == common.ChannelStatusDeleted {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "已删除的渠道不能修改",
 		})
 		return
 	}
@@ -1560,6 +1566,9 @@ func GetTagModels(c *gin.Context) {
 
 	// Find the longest models string among all channels with the given tag
 	for _, channel := range channels {
+		if channel.Status == common.ChannelStatusDeleted {
+			continue
+		}
 		if channel.Models != "" {
 			currentModels := strings.Split(channel.Models, ",")
 			if len(currentModels) > maxLength {
@@ -1686,6 +1695,10 @@ func ManageMultiKeys(c *gin.Context) {
 		return
 	}
 
+	lock := model.GetChannelPollingLock(request.ChannelId)
+	lock.Lock()
+	defer lock.Unlock()
+
 	channel, err := model.GetChannelById(request.ChannelId, true)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -1699,6 +1712,13 @@ func ManageMultiKeys(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "该渠道不是多密钥模式",
+		})
+		return
+	}
+	if channel.Status == common.ChannelStatusDeleted && request.Action != "get_key_status" {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "已删除的渠道不能修改密钥",
 		})
 		return
 	}
@@ -1717,10 +1737,6 @@ func ManageMultiKeys(c *gin.Context) {
 			"id":     channel.Id,
 		})
 	}
-
-	lock := model.GetChannelPollingLock(channel.Id)
-	lock.Lock()
-	defer lock.Unlock()
 
 	switch request.Action {
 	case "get_key_status":

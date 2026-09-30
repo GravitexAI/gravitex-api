@@ -1116,6 +1116,9 @@ func runChannelTestTask(ctx context.Context, mode string, notify bool, report fu
 func selectChannelsForAutomaticTest(channels []*model.Channel, mode string) []*model.Channel {
 	selected := make([]*model.Channel, 0, len(channels))
 	for _, channel := range channels {
+		if channel.Status == common.ChannelStatusDeleted {
+			continue
+		}
 		if channel.Status == common.ChannelStatusManuallyDisabled {
 			continue
 		}

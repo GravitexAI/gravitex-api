@@ -354,7 +354,8 @@ func UpdateAbilityByTag(tag string, newTag *string, priority *int64, weight *uin
 	if weight != nil {
 		ability.Weight = *weight
 	}
-	return DB.Model(&Ability{}).Where("tag = ?", tag).Updates(ability).Error
+	activeChannelIds := DB.Model(&Channel{}).Select("id").Where("status != ?", common.ChannelStatusDeleted)
+	return DB.Model(&Ability{}).Where("tag = ? and channel_id in (?)", tag, activeChannelIds).Updates(ability).Error
 }
 
 var fixLock = sync.Mutex{}

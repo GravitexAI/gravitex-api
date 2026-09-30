@@ -33,6 +33,22 @@
 
 ---
 
+## 零点一、待合入官方更新的增量核对（2026-09-14）
+
+> **状态：尚未合入 `main-alpha-merge`。** 本节覆盖官方 `main` 从 `3a9f41ee8` 到 `7fd063819` 的 74 个提交；本地 `main` 已快进到该版本，但这不代表这些功能已进入 `main-alpha`。完整功能梳理见 [20260914/官方更新内容.md](20260914/官方更新内容.md)。
+
+本批官方改动集中在账户安全、模型与供应商管理、表达式计费、任务插件、Relay/relaykit、数据库迁移和 default 前端。合入时，除第九节历史核对项外，还必须逐项确认：
+
+1. **鉴权链路只做能力叠加**：官方的 Access Token 管理、审计日志、操作证明、Telegram OAuth、统一登录验证和多 RP ID Passkey 不能改变 Alpha 的 `access_token → cookie → RuoYi JWT → char32` 鉴权顺序，也不能引入已拒绝的 AuthVersion 会话机制。
+2. **双前端结构不能被官方前端重写**：官方本批大量修改 `web/` 根应用。只选择性移植可复用页面/组件；保持 `web/default`、`web/classic` 两套应用、根 workspace、四处 embed 和 classic 构建链路。不得整目录覆盖 `web/`、`web/default` 或 `web/classic`。
+3. **🔴 计费以 Alpha 为唯一基线，官方仅可增量吸收**：不得用官方 `main` 的计费实现覆盖 Alpha 的 `controller/task_video.go`、`service/task_billing.go`、`service/text_quota.go`、`relay/image_handler.go`、`relay/helper/image_billing.go` 或原生任务适配器。官方新增的固定按请求、时段、图片数量/缓存变量、GPT Image 默认表达式和请求数量校验，只能逐项接入 Alpha 既有的“验证 → 预扣费 → 实际结算 → 退款 → 日志审计”闭环。必须保持 Alpha 的图片 `n` 不重复计算、Seedream 分档/拆图、视频 CAS 结算、Lyria 与 Gemini 专项计费、渠道成本快照和额度饱和审计。
+4. **任务插件不能替代原生任务适配器**：官方增强插件元数据、图标、模型价格和流式提交。Alpha 的 Lyria 本地异步、视频轮询/计费、Seedance/TokenHub 等原生适配器与既有任务数据格式必须继续存在。
+5. **渠道及模型管理保留 Alpha 字段语义**：官方重构模型/供应商、渠道插件扩展、内置 Base URL 占位和多 key 编辑。需保留 `cost_discount`、`setting/settings` 顶层合并与 null 删除、渠道类型号段 60/63/64、渠道亲和性和 Java 写入的未知元数据。
+6. **数据库迁移必须三库验证**：官方涉及 options 主键、prefill group 索引、旧约束兼容、账户安全/审计/供应商等模型迁移。最终合入后必须在 SQLite、MySQL、PostgreSQL 的新库与升级库重复启动验证；当前仅完成提交与源码范围梳理。
+7. **relaykit 保持独立**：官方 JSON codec、缓存 token 拆分和请求能力调整需要与 Alpha 的转换前用量审计、`BillingUsage` 不下发、Qwen 扩展字段、Claude/Gemini 原生适配共存；修改后必须执行 `cd relaykit && GOWORK=off go build ./...`。
+
+---
+
 ## 一、渠道相关
 
 ### 1.1 豆包视频渠道 BytePlus 素材库 AK/SK 配置
@@ -1102,6 +1118,17 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
 - [ ] Lyria 同步不建任务、本地异步创建 / 终态 / 计费链路保留（7.12.2）。
 - [ ] Claude body 保留策略与 Responses 能力门禁成套处理（7.12.3）。
 - [ ] classic 定价 / 日志补齐、Claude 测试服务与运维说明保留（4.4 / 7.12.4）。
+
+**2026-09-14 官方 74 提交增量核对项（`3a9f41ee8..7fd063819`，当前未执行 main 合并）：**
+
+- [ ] 官方账户安全、Passkey、Telegram OAuth、Access Token 与审计能力未改变 RuoYi/A2/Cookie/`access_token` 的既有顺序，且没有重新引入 AuthVersion（零点一）。
+- [ ] 官方模型/供应商、渠道配置和插件扩展合入后，`cost_discount`、`setting/settings` 合并、未知字段保留、渠道亲和性与 60/63/64 类型号段仍正确（1.2 / 1.4b / 1.6 / 1.7）。
+- [ ] 🔴 计费实现仍以 Alpha 为主：`controller/task_video.go`、`service/task_billing.go`、`service/text_quota.go`、`relay/image_handler.go`、`relay/helper/image_billing.go` 和原生任务适配器未被官方版本替换；官方固定价格、时段、图片数量和缓存变量仅作为增量接入。
+- [ ] 官方计费增量接入后，图片 n、Seedream、视频 CAS、Lyria/Gemini 专项计费、渠道成本快照及饱和审计没有重复扣费或丢失结算（3.2 / 3.6 / 3.7 / 3.8）。
+- [ ] 官方插件流式、插件元数据/图标/定价能力与 Alpha 原生任务适配器并存，未删除本地异步、任务轮询或原生任务状态字段（7.12.2）。
+- [ ] 官方 default 前端改动未摊平 workspace 或删除 classic，实际使用的两个前端均补齐相应接口和 i18n（4.5）。
+- [ ] options 主键、prefill group 索引和旧约束兼容等迁移已在 SQLite、MySQL、PostgreSQL 的新库/升级库/重复启动场景完成验证；未验证前不宣称数据库兼容完成（零点一）。
+- [ ] `relaykit` 独立构建通过，且转换用量审计、内部 `BillingUsage` 隐藏、Qwen 扩展字段和原生 Claude/Gemini 行为仍存在（7.11.14 / 7.11.15 / 7.12.3）。
 
 **历史检查项（旧路径、数量阈值按本次 main-alpha 基线复核）：**
 
