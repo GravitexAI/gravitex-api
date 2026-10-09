@@ -3,8 +3,11 @@ package relay
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -110,4 +113,110 @@ func TestVertexVeoKeepsExistingTaskAdaptor(t *testing.T) {
 	adaptor := GetTaskAdaptorForRequest(constant.TaskPlatform("41"), "veo-3.1-generate-001", info)
 	require.NotNil(t, adaptor)
 	require.Equal(t, "vertex", adaptor.GetChannelName())
+}
+
+func TestNativeGenerateContentUsageQuotaBillsThoughtTokensAtTextRatio(t *testing.T) {
+	originalQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() { common.QuotaPerUnit = originalQuotaPerUnit })
+
+	info := &relaycommon.RelayInfo{
+		NativeInteractions: true,
+		OriginModelName:    "gemini-nano-banana-2.1",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:           0.75, // $1.5 / 1M input tokens
+			CompletionRatio:      10,   // $15 / 1M text output tokens
+			ImageCompletionRatio: 20,   // $30 / 1M image output tokens
+			GroupRatioInfo:       hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	taskInfo := &relaycommon.TaskInfo{
+		Status:           model.TaskStatusSuccess,
+		InputTokens:      5,
+		CompletionTokens: 1680,
+		TotalTokens:      2589, // 904 thinking tokens only visible in the total
+	}
+
+	quota, ok := nativeGenerateContentUsageQuota(info, taskInfo)
+	require.True(t, ok)
+	// 5×$1.5/1M + 1680×$30/1M + 904×$15/1M = $0.0639675 → 31983.75 → 31984
+	require.Equal(t, 31984, quota)
+
+	taskInfo.TotalTokens = 1685 // input + output exactly, no thinking tokens
+	quotaWithoutThoughts, ok := nativeGenerateContentUsageQuota(info, taskInfo)
+	require.True(t, ok)
+	// 5×$1.5/1M + 1680×$30/1M = $0.0504075 → 25203.75 → 25204
+	require.Equal(t, 25204, quotaWithoutThoughts)
+}
+
+func TestNativeGenerateContentUsageQuotaDiscountsCachedInputTokens(t *testing.T) {
+	originalQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() { common.QuotaPerUnit = originalQuotaPerUnit })
+
+	info := &relaycommon.RelayInfo{
+		NativeInteractions: true,
+		OriginModelName:    "gemini-nano-banana-2.1",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:           0.75, // $1.5 / 1M input tokens
+			CompletionRatio:      10,
+			ImageCompletionRatio: 20, // $30 / 1M image output tokens
+			CacheRatio:           0.2,
+			GroupRatioInfo:       hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	taskInfo := &relaycommon.TaskInfo{
+		Status:           model.TaskStatusSuccess,
+		InputTokens:      1000,
+		CachedTokens:     600,
+		CompletionTokens: 1680,
+		TotalTokens:      2680,
+	}
+
+	quota, ok := nativeGenerateContentUsageQuota(info, taskInfo)
+	require.True(t, ok)
+	// fresh 400×$1.5/1M + cached 600×$0.3/1M + 1680×$30/1M = $0.05118 → 25590
+	require.Equal(t, 25590, quota)
+
+	// A missing cache ratio must fall back to full input price, never a free ride.
+	info.PriceData.CacheRatio = 0
+	fullPrice, ok := nativeGenerateContentUsageQuota(info, taskInfo)
+	require.True(t, ok)
+	// 1000×$1.5/1M + 1680×$30/1M = $0.0519 → 25950
+	require.Equal(t, 25950, fullPrice)
+}
+
+func TestNativeGenerateContentUsageQuotaSplitsMixedOutputByModality(t *testing.T) {
+	originalQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() { common.QuotaPerUnit = originalQuotaPerUnit })
+
+	info := &relaycommon.RelayInfo{
+		NativeInteractions: true,
+		OriginModelName:    "gemini-nano-banana-2.1",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:           0.75, // $1.5 / 1M input tokens
+			CompletionRatio:      10,   // $15 / 1M text output tokens
+			ImageCompletionRatio: 20,   // $30 / 1M image output tokens
+			GroupRatioInfo:       hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	taskInfo := &relaycommon.TaskInfo{
+		Status:           model.TaskStatusSuccess,
+		InputTokens:      5,
+		CompletionTokens: 1680,
+		TextOutputTokens: 80, // candidatesTokensDetails reported a text share
+		TotalTokens:      1685,
+	}
+
+	quota, ok := nativeGenerateContentUsageQuota(info, taskInfo)
+	require.True(t, ok)
+	// 5×$1.5/1M + 1600×$30/1M + 80×$15/1M = $0.0492075 → 24603.75 → 24604
+	require.Equal(t, 24604, quota)
+
+	// Without modality details every output token stays on the image ratio.
+	taskInfo.TextOutputTokens = 0
+	undetailed, ok := nativeGenerateContentUsageQuota(info, taskInfo)
+	require.True(t, ok)
+	require.Equal(t, 25204, undetailed)
 }

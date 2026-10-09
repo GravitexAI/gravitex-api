@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -74,9 +75,14 @@ func logTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, taskInfo *r
 		if info.NativeInteractions && isNativeInteractionImageModel(info.OriginModelName) && taskInfo.CompletionTokens > 0 {
 			// Vertex GenerateContent returns image tokens in the aggregate
 			// output count. Preserve the modality explicitly so the log API and
-			// admin UI do not classify image output as text output.
-			usageFacts["image_output_tokens"] = taskInfo.CompletionTokens
-			usageFacts["text_output_tokens"] = 0
+			// admin UI do not classify image output as text output. When the
+			// upstream reported a text share, keep that split.
+			textOut := taskInfo.TextOutputTokens
+			if textOut > taskInfo.CompletionTokens {
+				textOut = taskInfo.CompletionTokens
+			}
+			usageFacts["image_output_tokens"] = taskInfo.CompletionTokens - textOut
+			usageFacts["text_output_tokens"] = textOut
 		}
 		if len(usageFacts) > 0 {
 			other["usage_facts"] = usageFacts
@@ -101,12 +107,59 @@ func logTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, taskInfo *r
 		billingSource = "upstream"
 	}
 	other["billing_process"] = taskBillingProcess(info, billingSource)
-	if info.NativeInteractions && isNativeInteractionImageModel(info.OriginModelName) && info.PriceData.ImageCompletionRatio > 0 {
+	if info.NativeInteractions && info.PriceData.ModelRatio > 0 &&
+		!strings.HasPrefix(strings.ToLower(strings.TrimSpace(info.OriginModelName)), "lyria-") {
+		// Price descriptors for the billing-process panel. They must cover
+		// every component of the actual charge: fresh input, cached input,
+		// text output (also the rate for thinking tokens), and image output.
 		inputTextPrice := info.PriceData.ModelRatio * 2
-		other["image_completion_ratio"] = info.PriceData.ImageCompletionRatio
 		other["input_text_price"] = inputTextPrice
-		other["output_image_price"] = inputTextPrice * info.PriceData.ImageCompletionRatio
-		other["output_text_price"] = inputTextPrice * info.PriceData.CompletionRatio
+		textOutputPrice := inputTextPrice
+		if info.PriceData.CompletionRatio > 0 {
+			textOutputPrice = inputTextPrice * info.PriceData.CompletionRatio
+			// Flat completion_ratio is what the Java log layer
+			// (api/logs/list BillingDetailService) reads; without it the
+			// rendered text-output price falls back to the input price.
+			other["completion_ratio"] = info.PriceData.CompletionRatio
+		}
+		other["output_text_price"] = textOutputPrice
+		if info.PriceData.CacheRatio > 0 {
+			other["cache_read_price"] = inputTextPrice * info.PriceData.CacheRatio
+		}
+		if isNativeInteractionImageModel(info.OriginModelName) && info.PriceData.ImageCompletionRatio > 0 {
+			other["image_completion_ratio"] = info.PriceData.ImageCompletionRatio
+			other["output_image_price"] = inputTextPrice * info.PriceData.ImageCompletionRatio
+		}
+		if taskInfo != nil {
+			// Flat token keys consumed by the Java log layer and its
+			// billing-process renderer — the chat path (text_quota.go) writes
+			// the same names. Without them imageInputTokens stays null and
+			// image/video input is folded into plain input in the formula.
+			if taskInfo.TextOutputTokens > 0 {
+				other["text_output_tokens"] = taskInfo.TextOutputTokens
+			}
+			if taskInfo.ImageInputTokens > 0 {
+				other["input_image_tokens"] = taskInfo.ImageInputTokens
+				other["input_image_price"] = inputTextPrice
+			}
+			if taskInfo.VideoInputTokens > 0 {
+				other["video_input_tokens"] = taskInfo.VideoInputTokens
+				other["video_input_price"] = inputTextPrice
+			}
+			if taskInfo.CachedTokens > 0 {
+				// Flat cache keys, same names the chat path writes; the Java
+				// billing-process renderer shows them as a discounted input
+				// line instead of folding cached tokens into full-price input.
+				other["cache_tokens"] = taskInfo.CachedTokens
+				if info.PriceData.CacheRatio > 0 {
+					other["cache_ratio"] = info.PriceData.CacheRatio
+				}
+			}
+			if taskInfo.ThoughtTokens > 0 {
+				// The Java renderer bills reasoning tokens as text output.
+				other["reasoning_tokens"] = taskInfo.ThoughtTokens
+			}
+		}
 	}
 	if info.PriceData.ModelRatio > 0 {
 		other["model_ratio"] = info.PriceData.ModelRatio
@@ -142,16 +195,28 @@ func logTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, taskInfo *r
 		promptTokens = taskInfo.InputTokens
 		completionTokens = taskInfo.CompletionTokens
 		if isNativeInteractionImageModel(info.OriginModelName) {
-			other["image_output_tokens"] = taskInfo.CompletionTokens
-			other["text_output_tokens"] = 0
-			// completion_tokens is the legacy text-output column. Do not put
-			// image output into that column; it is preserved in Other instead.
-			completionTokens = 0
+			textOut := taskInfo.TextOutputTokens
+			if textOut > taskInfo.CompletionTokens {
+				textOut = taskInfo.CompletionTokens
+			}
+			other["image_output_tokens"] = taskInfo.CompletionTokens - textOut
+			other["text_output_tokens"] = textOut
+			// completion_tokens is the legacy text-output column. Keep only the
+			// upstream-reported text share there; image output stays in Other.
+			completionTokens = textOut
 		}
 	}
-	requestID := c.GetString(common.RequestIdKey)
-	if requestID == "" {
-		requestID = info.RequestId
+	// Legacy task platforms (MJ/Suno/video/kling…) have always exported the
+	// upstream/task id in the request_id column; reconciliation tooling keys
+	// on it. Only the native Interactions GenerateContent logs use the
+	// gateway request id, with the upstream id preserved in its own column.
+	requestID := info.UpstreamResponseId
+	if info.NativeInteractions && taskInfo != nil &&
+		!strings.HasPrefix(strings.ToLower(strings.TrimSpace(info.OriginModelName)), "lyria-") {
+		requestID = c.GetString(common.RequestIdKey)
+		if requestID == "" {
+			requestID = info.RequestId
+		}
 	}
 	upstreamRequestID := info.UpstreamResponseId
 	if upstreamRequestID == "" && info.TaskRelayInfo != nil {
@@ -192,20 +257,18 @@ func taskBillingProcess(info *relaycommon.RelayInfo, source string) map[string]a
 	}
 	completionRatio := info.PriceData.CompletionRatio
 	imageCompletionRatio := info.PriceData.ImageCompletionRatio
-	// Native Interactions image models return image output tokens in the same
-	// total-output field as text tokens. The task log is rendered from this
-	// billing_process object, so expose the image output ratio as the effective
-	// completion ratio for these models. Do not change ordinary Gemini/text or
-	// video task logs.
-	if info.NativeInteractions && imageCompletionRatio > 0 && isNativeInteractionImageModel(info.OriginModelName) {
-		completionRatio = imageCompletionRatio
-	}
+	// Mixed output is now billed per modality (text at completion_ratio, image
+	// at image_completion_ratio, thoughts at completion_ratio), so both ratios
+	// are reported as-is. Historically completion_ratio was overridden with the
+	// image ratio for image models; that would misprice the text share in the
+	// rendered billing process now that the split exists.
 	return map[string]any{
 		"mode":                   taskBillingMode(info),
 		"model_price":            info.PriceData.ModelPrice,
 		"model_ratio":            info.PriceData.ModelRatio,
 		"completion_ratio":       completionRatio,
 		"image_completion_ratio": imageCompletionRatio,
+		"cache_ratio":            info.PriceData.CacheRatio,
 		"image_ratio":            info.PriceData.ImageRatio,
 		"group_ratio":            info.PriceData.GroupRatioInfo.GroupRatio,
 		"other_ratios":           info.PriceData.OtherRatios(),
@@ -214,6 +277,9 @@ func taskBillingProcess(info *relaycommon.RelayInfo, source string) map[string]a
 	}
 }
 
+// isNativeInteractionImageModel mirrors
+// tasklyria.IsGenerateContentImageModel; this package cannot import that
+// adaptor (it imports service). Keep the two in sync.
 func isNativeInteractionImageModel(modelName string) bool {
 	modelName = strings.ToLower(strings.TrimSpace(modelName))
 	return strings.Contains(modelName, "image") || strings.Contains(modelName, "nano-banana")
@@ -297,6 +363,14 @@ func taskBillingOther(task *model.Task) taskBillingOtherMap {
 		if priceData := taskBillingContextPriceData(bc); priceData != nil {
 			for k, v := range priceData.OtherRatios() {
 				other[k] = v
+			}
+		}
+		if snap := bc.TieredSnapshot; snap != nil {
+			other["billing_mode"] = "tiered_expr"
+			other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
+			other["matched_tier"] = snap.EstimatedTier
+			if len(snap.UsageFacts) > 0 {
+				other["usage_facts"] = snap.UsageFacts
 			}
 		}
 	}

@@ -120,6 +120,19 @@ func convertNativeInteractionRequest(raw []byte) ([]byte, string, error) {
 		converted, err := convertLyriaInteractionRequest(request)
 		return converted, modelName, err
 	}
+	if tasklyria.IsNativeInteractionGenerateContentModel(modelName) {
+		// GenerateContent accepts image/audio/document-only input and has no
+		// Omni video constraints. The raw body is mirrored to the adaptor,
+		// so this converted body only carries what the task distributor
+		// reads; a placeholder prompt keeps the generic task validator happy
+		// for media-only requests.
+		prompt := nativeInteractionPrompt(request["input"])
+		if strings.TrimSpace(prompt) == "" {
+			prompt = "(non-text input)"
+		}
+		converted, err := common.Marshal(map[string]any{"model": modelName, "prompt": prompt})
+		return converted, modelName, err
+	}
 	prompt := nativeInteractionPrompt(request["input"])
 	if strings.TrimSpace(prompt) == "" {
 		return nil, "", fmt.Errorf("field input is required")

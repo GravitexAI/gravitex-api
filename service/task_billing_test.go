@@ -341,7 +341,55 @@ func TestLogTaskConsumptionPreservesNativeInteractionRequestPath(t *testing.T) {
 	assert.Equal(t, float64(0), other["text_output_tokens"])
 }
 
-func TestTaskBillingProcessUsesImageOutputRatioForNativeImageInteractions(t *testing.T) {
+func TestLogTaskConsumptionWritesFlatModalityKeysForJavaLayer(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 43, 43
+	seedUser(t, userID, 10_000)
+	seedChannel(t, channelID)
+
+	info := &relaycommon.RelayInfo{
+		UserId:             userID,
+		OriginModelName:    "gemini-nano-banana-2.1",
+		NativeInteractions: true,
+		UsingGroup:         "default",
+		ChannelMeta:        &relaycommon.ChannelMeta{ChannelId: channelID},
+		PriceData: types.PriceData{
+			ModelRatio:           0.75,
+			CompletionRatio:      5,
+			ImageCompletionRatio: 20,
+			CacheRatio:           0.1,
+			Quota:                100,
+			GroupRatioInfo:       types.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+	ctx.Set("token_name", "test_token")
+	ctx.Set("native_interactions_original_path", "/v1beta/interactions")
+	LogTaskConsumptionWithTaskInfo(ctx, info, &relaycommon.TaskInfo{
+		InputTokens:      1231,
+		ImageInputTokens: 1120,
+		CachedTokens:     100,
+		CompletionTokens: 1120,
+		TotalTokens:      2351,
+	})
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	// Flat keys consumed by the Java log layer (api/logs/list); without them
+	// imageInputTokens stays null and the billing process hides image input.
+	assert.Equal(t, float64(1120), other["input_image_tokens"])
+	assert.Equal(t, 1.5, other["input_image_price"])
+	assert.Equal(t, float64(100), other["cache_tokens"])
+	assert.Equal(t, 0.1, other["cache_ratio"])
+	assert.Equal(t, 5.0, other["completion_ratio"])
+	assert.Equal(t, 1.5, other["input_text_price"])
+}
+
+func TestTaskBillingProcessReportsModalityRatiosSeparately(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		NativeInteractions: true,
 		OriginModelName:    "gemini-nano-banana-2.1",
@@ -349,12 +397,16 @@ func TestTaskBillingProcessUsesImageOutputRatioForNativeImageInteractions(t *tes
 			ModelRatio:           0.75,
 			CompletionRatio:      1,
 			ImageCompletionRatio: 20,
+			CacheRatio:           0.2,
 		},
 	}
 
 	billing := taskBillingProcess(info, "upstream")
-	require.Equal(t, 20.0, billing["completion_ratio"])
+	// Mixed output is billed per modality, so the text completion ratio must
+	// not be overridden with the image ratio anymore.
+	require.Equal(t, 1.0, billing["completion_ratio"])
 	require.Equal(t, 20.0, billing["image_completion_ratio"])
+	require.Equal(t, 0.2, billing["cache_ratio"])
 }
 
 func TestLogTaskConsumptionIncludesTieredSnapshotUsageFacts(t *testing.T) {
@@ -1558,10 +1610,10 @@ type mockAdaptor struct {
 }
 
 func (m *mockAdaptor) Init(_ *relaycommon.RelayInfo) {}
-func (m *mockAdaptor) FetchTask(string, string, *model.Task, string) (*http.Response, error) {
+func (m *mockAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
 	return nil, nil
 }
-func (m *mockAdaptor) ParseTaskResult(*model.Task, *http.Response, []byte) (*relaycommon.TaskInfo, error) {
+func (m *mockAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
 	return nil, nil
 }
 func (m *mockAdaptor) AdjustBillingOnComplete(_ *model.Task, _ *relaycommon.TaskInfo) int {

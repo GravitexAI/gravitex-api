@@ -2,9 +2,14 @@ package lyria
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"math"
 	"net/http"
@@ -54,6 +59,14 @@ func IsNativeInteractionGenerateContentModel(name string) bool {
 	return IsNativeInteractionModel(modelName) && !strings.HasPrefix(modelName, "veo-")
 }
 
+// IsGenerateContentImageModel reports whether a native Interactions model
+// bills its output as image tokens. Single source of truth for this check;
+// service/task_billing.go keeps a local copy only because this package
+// imports service (import cycle).
+func IsGenerateContentImageModel(name string) bool {
+	return isGenerateContentImageModel(name)
+}
+
 func isGenerateContentImageModel(name string) bool {
 	modelName := strings.ToLower(strings.TrimSpace(name))
 	return strings.Contains(modelName, "image") || strings.Contains(modelName, "nano-banana")
@@ -80,8 +93,45 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 	if err := relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionTextGenerate); err != nil {
 		return err
 	}
+	if err := validatePreviousInteractionReference(c, info); err != nil {
+		return err
+	}
 	applyNativeInteractionVideoBillingMetadata(c)
 	info.Action = nativeInteractionTaskAction(info.OriginModelName)
+	return nil
+}
+
+// validatePreviousInteractionReference rejects an unresolvable
+// previous_interaction_id at request validation time with a 400. Without this
+// check the lookup fails inside BuildRequestBody and surfaces as a 500 after
+// billing has been pre-consumed. Synchronous GenerateContent interactions are
+// not persisted as tasks, so a chained reference can only resolve when it
+// points at a stored (background) interaction.
+func validatePreviousInteractionReference(c *gin.Context, info *relaycommon.RelayInfo) *taskdto.TaskError {
+	if !IsNativeInteractionGenerateContentModel(info.OriginModelName) {
+		return nil
+	}
+	raw, ok := c.Get(common.KeyLyriaRawRequestBody)
+	if !ok {
+		return nil
+	}
+	body, _ := raw.([]byte)
+	var request struct {
+		PreviousInteractionID string `json:"previous_interaction_id"`
+	}
+	if common.Unmarshal(body, &request) != nil || strings.TrimSpace(request.PreviousInteractionID) == "" {
+		return nil
+	}
+	userID := c.GetInt("id")
+	if userID <= 0 {
+		return service.TaskErrorWrapperLocal(errors.New("previous_interaction_id requires an authenticated user"), "invalid_request", http.StatusBadRequest)
+	}
+	_, exists, err := model.GetByTaskId(userID, strings.TrimSpace(request.PreviousInteractionID))
+	if err != nil || !exists {
+		return service.TaskErrorWrapperLocal(
+			fmt.Errorf("previous interaction not found: %s (synchronous interactions are not stored; only background interactions can be referenced)", request.PreviousInteractionID),
+			"invalid_request", http.StatusBadRequest)
+	}
 	return nil
 }
 
@@ -457,7 +507,12 @@ func convertNativeInteractionToGenerateContent(c *gin.Context, raw []byte) ([]by
 		return nil, errors.New("field input is required")
 	}
 	result := map[string]any{"contents": contents}
-	config := convertInteractionGenerationConfig(request["generation_config"])
+	generationConfigInput := request["generation_config"]
+	if generationConfigInput == nil {
+		// Official clients send camelCase; accept both spellings.
+		generationConfigInput = request["generationConfig"]
+	}
+	config := convertInteractionGenerationConfig(generationConfigInput)
 	if config == nil {
 		config = map[string]any{}
 	}
@@ -665,13 +720,18 @@ func convertInteractionGenerationConfig(value any) map[string]any {
 	}
 	for key, item := range input {
 		if mapped, ok := known[key]; ok {
-			if key == "thinking_config" {
+			switch key {
+			case "thinking_config":
 				result[mapped] = convertThinkingConfig(item)
-			} else {
+			case "image_config":
+				result[mapped] = convertImageConfig(item)
+			default:
 				result[mapped] = item
 			}
 		} else if strings.Contains(key, "_") {
 			continue
+		} else if key == "imageConfig" {
+			result[key] = convertImageConfig(item)
 		} else {
 			result[key] = item
 		}
@@ -698,6 +758,31 @@ func convertThinkingConfig(value any) any {
 			result["thinkingLevel"] = item
 		case "include_thoughts":
 			result["includeThoughts"] = item
+		case "thinking_budget":
+			result["thinkingBudget"] = item
+		default:
+			result[key] = item
+		}
+	}
+	return result
+}
+
+// convertImageConfig normalizes the snake_case image size keys clients send
+// on the Interactions surface into the camelCase keys GenerateContent expects.
+func convertImageConfig(value any) any {
+	input, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	result := map[string]any{}
+	for key, item := range input {
+		switch key {
+		case "aspect_ratio":
+			result["aspectRatio"] = item
+		case "image_size":
+			result["imageSize"] = item
+		case "person_generation":
+			result["personGeneration"] = item
 		default:
 			result[key] = item
 		}
@@ -720,8 +805,9 @@ func applyInteractionResponseFormat(config map[string]any, value any) {
 		config["responseModalities"] = []string{"IMAGE"}
 		imageConfig := map[string]any{}
 		for from, to := range map[string]string{
-			"aspect_ratio": "aspectRatio",
-			"image_size":   "imageSize",
+			"aspect_ratio":      "aspectRatio",
+			"image_size":        "imageSize",
+			"person_generation": "personGeneration",
 		} {
 			if item, ok := format[from]; ok && item != nil {
 				imageConfig[to] = item
@@ -861,7 +947,70 @@ func mustMarshalGenerateContent(value any) []byte {
 	return data
 }
 
-func convertGenerateContentResponse(raw []byte, modelName string) ([]byte, error) {
+// requestImageEchoParams extracts the image size parameters from the original
+// Interactions request so the converted response can echo them, matching the
+// behavior of the legacy /v1/images/generations surface.
+func requestImageEchoParams(c *gin.Context) map[string]any {
+	if c == nil {
+		return nil
+	}
+	value, ok := c.Get(common.KeyLyriaRawRequestBody)
+	if !ok {
+		return nil
+	}
+	raw, _ := value.([]byte)
+	var request map[string]any
+	if common.Unmarshal(raw, &request) != nil {
+		return nil
+	}
+	params := map[string]any{}
+	config, _ := request["generation_config"].(map[string]any)
+	if config == nil {
+		config, _ = request["generationConfig"].(map[string]any)
+	}
+	imageConfig, _ := config["image_config"].(map[string]any)
+	if imageConfig == nil {
+		imageConfig, _ = config["imageConfig"].(map[string]any)
+	}
+	copyImageEchoField := func(source map[string]any, from, to string) {
+		if source == nil {
+			return
+		}
+		if text, ok := source[from].(string); ok && strings.TrimSpace(text) != "" {
+			params[to] = text
+		}
+	}
+	copyImageEchoField(imageConfig, "aspect_ratio", "aspect_ratio")
+	copyImageEchoField(imageConfig, "aspectRatio", "aspect_ratio")
+	copyImageEchoField(imageConfig, "image_size", "image_size")
+	copyImageEchoField(imageConfig, "imageSize", "image_size")
+	if format, ok := request["response_format"].(map[string]any); ok {
+		if formatType, _ := format["type"].(string); formatType == "image" {
+			copyImageEchoField(format, "aspect_ratio", "aspect_ratio")
+			copyImageEchoField(format, "image_size", "image_size")
+		}
+	}
+	if len(params) == 0 {
+		return nil
+	}
+	return params
+}
+
+// decodedImagePixelSize reads only the image header from a base64 payload and
+// returns an OpenAI-style "WIDTHxHEIGHT" size string, or "" if undecodable.
+func decodedImagePixelSize(b64 string) string {
+	decoded, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil || len(decoded) == 0 {
+		return ""
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(decoded))
+	if err != nil || config.Width <= 0 || config.Height <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%dx%d", config.Width, config.Height)
+}
+
+func convertGenerateContentResponse(raw []byte, modelName string, imageEcho map[string]any) ([]byte, error) {
 	var response struct {
 		Candidates []struct {
 			Content struct {
@@ -875,9 +1024,19 @@ func convertGenerateContentResponse(raw []byte, modelName string) ([]byte, error
 			} `json:"content"`
 		} `json:"candidates"`
 		Usage struct {
-			PromptTokenCount     int `json:"promptTokenCount"`
-			CandidatesTokenCount int `json:"candidatesTokenCount"`
-			TotalTokenCount      int `json:"totalTokenCount"`
+			PromptTokenCount        int `json:"promptTokenCount"`
+			CandidatesTokenCount    int `json:"candidatesTokenCount"`
+			TotalTokenCount         int `json:"totalTokenCount"`
+			CachedContentTokenCount int `json:"cachedContentTokenCount"`
+			ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
+			PromptTokensDetails     []struct {
+				Modality   string `json:"modality"`
+				TokenCount int    `json:"tokenCount"`
+			} `json:"promptTokensDetails"`
+			CandidatesTokensDetails []struct {
+				Modality   string `json:"modality"`
+				TokenCount int    `json:"tokenCount"`
+			} `json:"candidatesTokensDetails"`
 		} `json:"usageMetadata"`
 	}
 	if err := common.Unmarshal(raw, &response); err != nil {
@@ -890,11 +1049,21 @@ func convertGenerateContentResponse(raw []byte, modelName string) ([]byte, error
 				outputs = append(outputs, map[string]any{"type": "text", "text": part.Text})
 			}
 			if part.InlineData != nil && part.InlineData.Data != "" {
-				outputs = append(outputs, map[string]any{
+				block := map[string]any{
 					"type":      "image",
 					"data":      part.InlineData.Data,
 					"mime_type": part.InlineData.MimeType,
-				})
+				}
+				// Echo the size parameters like the legacy image surface did:
+				// requested aspect_ratio / image_size plus the actual decoded
+				// pixel size of the returned image.
+				for key, value := range imageEcho {
+					block[key] = value
+				}
+				if size := decodedImagePixelSize(part.InlineData.Data); size != "" {
+					block["size"] = size
+				}
+				outputs = append(outputs, block)
 			}
 		}
 	}
@@ -905,6 +1074,44 @@ func convertGenerateContentResponse(raw []byte, modelName string) ([]byte, error
 	}
 	if response.Usage.TotalTokenCount == 0 {
 		usage["total_tokens"] = response.Usage.PromptTokenCount + response.Usage.CandidatesTokenCount
+	}
+	if response.Usage.CachedContentTokenCount > 0 {
+		usage["cached_tokens"] = response.Usage.CachedContentTokenCount
+	}
+	if response.Usage.ThoughtsTokenCount > 0 {
+		usage["thought_tokens"] = response.Usage.ThoughtsTokenCount
+	}
+	for _, detail := range response.Usage.PromptTokensDetails {
+		if detail.TokenCount <= 0 {
+			continue
+		}
+		switch strings.ToUpper(detail.Modality) {
+		case "TEXT":
+			usage["text_input_tokens"] = detail.TokenCount
+		case "IMAGE":
+			usage["image_input_tokens"] = detail.TokenCount
+		case "VIDEO":
+			usage["video_input_tokens"] = detail.TokenCount
+		case "AUDIO":
+			usage["audio_input_tokens"] = detail.TokenCount
+		case "DOCUMENT":
+			usage["document_input_tokens"] = detail.TokenCount
+		}
+	}
+	for _, detail := range response.Usage.CandidatesTokensDetails {
+		if detail.TokenCount <= 0 {
+			continue
+		}
+		switch strings.ToUpper(detail.Modality) {
+		case "TEXT":
+			usage["text_output_tokens"] = detail.TokenCount
+		case "IMAGE":
+			usage["image_output_tokens"] = detail.TokenCount
+		case "VIDEO":
+			usage["video_output_tokens"] = detail.TokenCount
+		case "AUDIO":
+			usage["audio_output_tokens"] = detail.TokenCount
+		}
 	}
 	return common.Marshal(map[string]any{
 		"id":      model.GenerateInteractionID(),
@@ -944,7 +1151,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 				preservedVertexUsage = true
 			}
 		}
-		body, err = convertGenerateContentResponse(body, info.OriginModelName)
+		body, err = convertGenerateContentResponse(body, info.OriginModelName, requestImageEchoParams(c))
 		if err != nil {
 			return "", nil, service.TaskErrorWrapper(err, "invalid_response", http.StatusBadGateway)
 		}
@@ -1115,6 +1322,14 @@ func parseInteractionResult(body []byte) (*relaycommon.TaskInfo, error) {
 			TotalInputTokens  int `json:"total_input_tokens"`
 			TotalOutputTokens int `json:"total_output_tokens"`
 			TotalTokens       int `json:"total_tokens"`
+			CachedTokens      int `json:"cached_tokens"`
+			ThoughtTokens     int `json:"thought_tokens"`
+			TextInputTokens   int `json:"text_input_tokens"`
+			ImageInputTokens  int `json:"image_input_tokens"`
+			VideoInputTokens  int `json:"video_input_tokens"`
+			TextOutputTokens  int `json:"text_output_tokens"`
+			ImageOutputTokens int `json:"image_output_tokens"`
+			VideoOutputTokens int `json:"video_output_tokens"`
 		} `json:"usage"`
 		Error  lyriaInteractionError   `json:"error"`
 		Errors []lyriaInteractionError `json:"errors"`
@@ -1133,6 +1348,36 @@ func parseInteractionResult(body []byte) (*relaycommon.TaskInfo, error) {
 	result.UsageFacts["total_input_tokens"] = result.InputTokens
 	result.UsageFacts["total_output_tokens"] = result.CompletionTokens
 	result.UsageFacts["total_tokens"] = result.TotalTokens
+	result.CachedTokens = interaction.Usage.CachedTokens
+	if result.CachedTokens > result.InputTokens {
+		result.CachedTokens = result.InputTokens
+	}
+	if result.CachedTokens > 0 {
+		result.UsageFacts["cached_tokens"] = result.CachedTokens
+	}
+	result.TextInputTokens = interaction.Usage.TextInputTokens
+	result.ImageInputTokens = interaction.Usage.ImageInputTokens
+	result.VideoInputTokens = interaction.Usage.VideoInputTokens
+	result.TextOutputTokens = interaction.Usage.TextOutputTokens
+	if result.TextOutputTokens > result.CompletionTokens {
+		result.TextOutputTokens = result.CompletionTokens
+	}
+	result.VideoOutputTokens = interaction.Usage.VideoOutputTokens
+	if interaction.Usage.ImageOutputTokens > 0 {
+		result.UsageFacts["image_output_tokens"] = interaction.Usage.ImageOutputTokens
+	}
+	result.ThoughtTokens = interaction.Usage.ThoughtTokens
+	if result.ThoughtTokens == 0 {
+		// Gemini reports thinking tokens only inside total_tokens; derive them
+		// when the explicit count is absent so billing and the consume log
+		// still see them.
+		if derived := result.TotalTokens - result.InputTokens - result.CompletionTokens; derived > 0 {
+			result.ThoughtTokens = derived
+		}
+	}
+	if result.ThoughtTokens > 0 {
+		result.UsageFacts["thought_tokens"] = result.ThoughtTokens
+	}
 	providerError := interaction.Error
 	if providerError.Message == "" && len(interaction.Errors) > 0 {
 		providerError = interaction.Errors[0]

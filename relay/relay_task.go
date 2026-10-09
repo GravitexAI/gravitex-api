@@ -466,6 +466,18 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 		initialTaskInfo = parsed
 	}
+	if initialTaskInfo != nil && taskLyria.IsLyriaModel(modelName) &&
+		initialTaskInfo.Status == model.TaskStatusSuccess && initialTaskInfo.Url == "" {
+		// Restore the historical Lyria guarantee: a COMPLETED music task
+		// without a playable audio URL must not settle as success. The parser
+		// itself was relaxed for GenerateContent outputs (text/image blocks),
+		// which would otherwise weaken this music-specific protection.
+		initialTaskInfo.Status = model.TaskStatusFailure
+		initialTaskInfo.Progress = "100%"
+		if initialTaskInfo.Reason == "" {
+			initialTaskInfo.Reason = "completed_without_audio: Vertex returned COMPLETED without audio output"
+		}
+	}
 	if quota, ok := nativeGenerateContentUsageQuota(info, initialTaskInfo); ok {
 		finalQuota = quota
 		info.PriceData.Quota = quota
@@ -508,8 +520,57 @@ func nativeGenerateContentUsageQuota(info *relaycommon.RelayInfo, taskInfo *rela
 	if groupRatio <= 0 {
 		groupRatio = 1
 	}
-	cost := decimal.NewFromInt(int64(taskInfo.InputTokens)).Mul(decimal.NewFromFloat(inputPrice))
-	cost = cost.Add(decimal.NewFromInt(int64(taskInfo.CompletionTokens)).Mul(decimal.NewFromFloat(info.PriceData.ModelRatio * 2 * outputRatio)))
+	cachedTokens := taskInfo.CachedTokens
+	if cachedTokens < 0 {
+		cachedTokens = 0
+	}
+	if cachedTokens > taskInfo.InputTokens {
+		cachedTokens = taskInfo.InputTokens
+	}
+	freshInputTokens := taskInfo.InputTokens - cachedTokens
+	cost := decimal.NewFromInt(int64(freshInputTokens)).Mul(decimal.NewFromFloat(inputPrice))
+	if cachedTokens > 0 {
+		// Context-cache reads are billed at the configured cache ratio. A
+		// missing ratio falls back to full input price so a configuration gap
+		// can never undercharge.
+		cacheRatio := info.PriceData.CacheRatio
+		if cacheRatio <= 0 {
+			cacheRatio = 1
+		}
+		cost = cost.Add(decimal.NewFromInt(int64(cachedTokens)).Mul(decimal.NewFromFloat(inputPrice * cacheRatio)))
+	}
+	splitTextOutputTokens := 0
+	if isNativeGenerateContentImageModel(info.OriginModelName) && outputRatio != info.PriceData.CompletionRatio &&
+		taskInfo.TextOutputTokens > 0 && taskInfo.TextOutputTokens <= taskInfo.CompletionTokens {
+		// Upstream candidatesTokensDetails identifies mixed output: bill the
+		// text share at the text completion ratio and only the remainder at
+		// the image output ratio. Without details everything stays on the
+		// image ratio (conservative, never undercharges).
+		splitTextOutputTokens = taskInfo.TextOutputTokens
+	}
+	cost = cost.Add(decimal.NewFromInt(int64(taskInfo.CompletionTokens - splitTextOutputTokens)).Mul(decimal.NewFromFloat(info.PriceData.ModelRatio * 2 * outputRatio)))
+	if splitTextOutputTokens > 0 {
+		splitTextRatio := info.PriceData.CompletionRatio
+		if splitTextRatio <= 0 {
+			splitTextRatio = 1
+		}
+		cost = cost.Add(decimal.NewFromInt(int64(splitTextOutputTokens)).Mul(decimal.NewFromFloat(inputPrice * splitTextRatio)))
+	}
+	thoughtTokens := taskInfo.ThoughtTokens
+	if thoughtTokens == 0 {
+		thoughtTokens = taskInfo.TotalTokens - taskInfo.InputTokens - taskInfo.CompletionTokens
+	}
+	if thoughtTokens > 0 {
+		// Gemini counts thinking tokens in totalTokenCount but not in
+		// candidatesTokenCount, and bills them as output. Thoughts are text
+		// even for image models, so charge the text completion ratio rather
+		// than the image output ratio.
+		textRatio := info.PriceData.CompletionRatio
+		if textRatio <= 0 {
+			textRatio = 1
+		}
+		cost = cost.Add(decimal.NewFromInt(int64(thoughtTokens)).Mul(decimal.NewFromFloat(inputPrice * textRatio)))
+	}
 	quotaDecimal := cost.Div(decimal.NewFromInt(1_000_000)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).Mul(decimal.NewFromFloat(groupRatio))
 	quota, clamp := common.QuotaFromDecimalChecked(quotaDecimal)
 	noteTaskQuotaClamp(info, clamp)
@@ -517,8 +578,7 @@ func nativeGenerateContentUsageQuota(info *relaycommon.RelayInfo, taskInfo *rela
 }
 
 func isNativeGenerateContentImageModel(modelName string) bool {
-	modelName = strings.ToLower(strings.TrimSpace(modelName))
-	return strings.Contains(modelName, "image") || strings.Contains(modelName, "nano-banana")
+	return taskLyria.IsGenerateContentImageModel(modelName)
 }
 
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。

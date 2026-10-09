@@ -334,12 +334,14 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 		}
 	}
 
+	cacheRatioPerCall, _ := ratio_setting.GetCacheRatio(info.OriginModelName)
 	priceData := hosttypes.PriceData{
 		FreeModel:            freeModel,
 		ModelPrice:           modelPrice,
 		ModelRatio:           modelRatio,
 		CompletionRatio:      ratio_setting.GetCompletionRatio(info.OriginModelName),
 		ImageCompletionRatio: ratio_setting.GetImageCompletionRatio(info.OriginModelName),
+		CacheRatio:           cacheRatioPerCall,
 		UsePrice:             usePrice,
 		Quota:                quota,
 		GroupRatioInfo:       groupRatioInfo,

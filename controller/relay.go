@@ -738,9 +738,10 @@ func RelayTask(c *gin.Context) {
 			if upstreamStatus == 0 {
 				upstreamStatus = http.StatusOK
 			}
-			if result.Platform == constant.TaskPlatformLyria {
-				recordVertexLyriaSubmitFailure(c, relayInfo, result.InitialTaskInfo.Reason, upstreamStatus)
-			}
+			// Both interactions platforms (lyria and vertex-interactions) need
+			// the failure audit log; a refunded submit with no log entry is
+			// invisible to admins.
+			recordVertexLyriaSubmitFailure(c, relayInfo, result.InitialTaskInfo.Reason, upstreamStatus)
 			if relayInfo.Billing != nil {
 				relayInfo.Billing.Refund(c)
 			}

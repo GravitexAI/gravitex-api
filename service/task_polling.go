@@ -16,6 +16,7 @@ import (
 	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -664,30 +665,59 @@ func truncateBase64(s string) string {
 }
 
 // settleTaskBillingOnComplete 任务完成时的统一计费调整。
-// 优先级：1. adaptor.AdjustBillingOnComplete 返回正数 → 使用 adaptor 计算的额度
+// 返回 true 表示计费已在此定稿（结算或明确保留预扣额度），调用方不得再全额退款；
+// 返回 false 表示未结算，失败任务由调用方 RefundTaskQuota 全额退回。
+// 优先级：1. 用量表达式（TieredSnapshot）结算
 //
-//  2. taskResult.TotalTokens > 0 → 按 token 重算
-//  3. 都不满足 → 保持预扣额度不变
-func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo) {
-	// 0. 按次计费的任务不做差额结算
+//  2. adaptor.AdjustBillingOnComplete 返回正数 → 使用 adaptor 计算的额度
+//  3. taskResult 携带 token → 按 token 重算
+//  4. 都不满足 → 保持预扣额度不变，返回 false
+func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo) bool {
+	if bc := task.PrivateData.BillingContext; bc != nil && bc.TieredSnapshot != nil {
+		// 用量表达式结算只适用于成功任务；失败任务由调用方全额退款。
+		if task.Status == model.TaskStatusFailure {
+			return false
+		}
+		usageFacts := make(map[string]any, len(bc.TieredSnapshot.UsageFacts)+len(taskResult.UsageFacts))
+		for key, value := range bc.TieredSnapshot.UsageFacts {
+			usageFacts[key] = value
+		}
+		for key, value := range taskResult.UsageFacts {
+			usageFacts[key] = value
+		}
+		result, err := billingexpr.ComputeTieredQuotaWithRequest(bc.TieredSnapshot, billingexpr.TokenParams{}, billingexpr.RequestInput{Usage: usageFacts})
+		if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("任务 %s 表达式结算失败，保留预扣额度: %v", task.TaskID, err))
+			return true
+		}
+		if result.Clamp != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("任务 %s 表达式结算额度发生饱和: %+v", task.TaskID, result.Clamp))
+		}
+		bc.TieredSnapshot.UsageFacts = usageFacts
+		bc.TieredSnapshot.EstimatedTier = result.MatchedTier
+		RecalculateTaskQuota(ctx, task, result.ActualQuotaAfterGroup, "任务用量表达式结算", result.Clamp)
+		return true
+	}
+	// 按次计费的成功任务保持预扣；失败任务由调用方全额退款。
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.PerCallBilling {
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按次计费，跳过差额结算", task.TaskID))
-		return
+		return false
 	}
-	// 1. 优先让 adaptor 决定最终额度
+	// 优先让 adaptor 决定最终额度
 	if actualQuota := adaptor.AdjustBillingOnComplete(task, taskResult); actualQuota > 0 {
 		RecalculateTaskQuota(ctx, task, actualQuota, "adaptor计费调整")
-		return
+		return true
 	}
-	// 2. 回退到 token 重算
+	// 回退到 token 重算
 	if taskResult.TotalTokens > 0 {
 		enrichTaskBillingDataForTokenSettlement(task, taskResult)
 		if actualQuota, ok, clamp := calculateGeminiOmniQuota(task, taskResult); ok {
 			RecalculateTaskQuota(ctx, task, actualQuota, "Gemini Omni token重算", clamp)
-			return
+			return true
 		}
 		RecalculateTaskQuotaByTokens(ctx, task, taskResult.TotalTokens)
-		return
+		return true
 	}
-	// 3. 无调整，保持预扣额度
+	// 无调整，保持预扣额度；失败任务交由调用方退款
+	return false
 }

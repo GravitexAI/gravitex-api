@@ -192,18 +192,76 @@ func TestParseInteractionResultPreservesUsageForBilling(t *testing.T) {
 func TestConvertGenerateContentResponseToInteractionOutput(t *testing.T) {
 	converted, err := convertGenerateContentResponse([]byte(`{
 		"candidates":[{"content":{"parts":[{"text":"caption"},{"inlineData":{"mimeType":"image/png","data":"aGVsbG8="}}]}}],
-		"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":7,"totalTokenCount":10}
-	}`), "gemini-nano-banana-2.1")
+		"usageMetadata":{
+			"promptTokenCount":100,
+			"candidatesTokenCount":7,
+			"totalTokenCount":157,
+			"cachedContentTokenCount":60,
+			"thoughtsTokenCount":50,
+			"promptTokensDetails":[{"modality":"TEXT","tokenCount":40},{"modality":"IMAGE","tokenCount":60}],
+			"candidatesTokensDetails":[{"modality":"TEXT","tokenCount":2},{"modality":"IMAGE","tokenCount":5}]
+		}
+	}`), "gemini-nano-banana-2.1", nil)
 	require.NoError(t, err)
 	var response map[string]any
 	require.NoError(t, common.Unmarshal(converted, &response))
 	require.Equal(t, "completed", response["status"])
 	require.True(t, strings.HasPrefix(response["id"].(string), "interaction_"))
 	require.Len(t, response["outputs"], 2)
-	require.Equal(t, float64(10), response["usage"].(map[string]any)["total_tokens"])
+	usage := response["usage"].(map[string]any)
+	require.Equal(t, float64(157), usage["total_tokens"])
+	require.Equal(t, float64(60), usage["cached_tokens"])
+	require.Equal(t, float64(50), usage["thought_tokens"])
+	require.Equal(t, float64(40), usage["text_input_tokens"])
+	require.Equal(t, float64(60), usage["image_input_tokens"])
+	require.Equal(t, float64(2), usage["text_output_tokens"])
+	require.Equal(t, float64(5), usage["image_output_tokens"])
 	result, err := parseInteractionResult(converted)
 	require.NoError(t, err)
 	require.Equal(t, model.TaskStatusSuccess, result.Status)
+	require.Equal(t, 100, result.InputTokens)
+	require.Equal(t, 7, result.CompletionTokens)
+	require.Equal(t, 60, result.CachedTokens)
+	require.Equal(t, 50, result.ThoughtTokens)
+	require.Equal(t, 40, result.TextInputTokens)
+	require.Equal(t, 60, result.ImageInputTokens)
+	require.Equal(t, 2, result.TextOutputTokens)
+}
+
+func TestConvertGenerateContentResponseEchoesImageSizeParams(t *testing.T) {
+	// 1x1 transparent PNG
+	const onePixelPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+	converted, err := convertGenerateContentResponse([]byte(`{
+		"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"`+onePixelPNG+`"}}]}}],
+		"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":7,"totalTokenCount":10}
+	}`), "gemini-nano-banana-2.1", map[string]any{"aspect_ratio": "16:9", "image_size": "2K"})
+	require.NoError(t, err)
+	var response map[string]any
+	require.NoError(t, common.Unmarshal(converted, &response))
+	block := response["outputs"].([]any)[0].(map[string]any)
+	require.Equal(t, "16:9", block["aspect_ratio"])
+	require.Equal(t, "2K", block["image_size"])
+	require.Equal(t, "1x1", block["size"])
+}
+
+func TestParseInteractionResultPrefersExplicitThoughtTokensOverDerived(t *testing.T) {
+	result, err := parseInteractionResult([]byte(`{
+		"id":"interaction-3",
+		"status":"completed",
+		"outputs":[{"type":"text","text":"ok"}],
+		"usage":{"total_input_tokens":10,"total_output_tokens":5,"total_tokens":100,"thought_tokens":50}
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, 50, result.ThoughtTokens)
+
+	derived, err := parseInteractionResult([]byte(`{
+		"id":"interaction-4",
+		"status":"completed",
+		"outputs":[{"type":"text","text":"ok"}],
+		"usage":{"total_input_tokens":10,"total_output_tokens":5,"total_tokens":100}
+	}`))
+	require.NoError(t, err)
+	require.Equal(t, 85, derived.ThoughtTokens)
 }
 
 func TestApplyNativeInteractionVideoBillingMetadataReadsVeoConfig(t *testing.T) {

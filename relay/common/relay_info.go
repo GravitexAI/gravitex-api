@@ -1264,6 +1264,12 @@ type TaskInfo struct {
 	VideoInputTokens  int `json:"video_input_tokens,omitempty"`
 	VideoOutputTokens int `json:"video_output_tokens,omitempty"`
 	TextOutputTokens  int `json:"text_output_tokens,omitempty"`
+	// CachedTokens are prompt tokens served from provider-side context cache
+	// (subset of InputTokens, billed at the cache-read ratio). ThoughtTokens
+	// are reasoning tokens reported outside the completion count and billed as
+	// text output.
+	CachedTokens  int `json:"cached_tokens,omitempty"`
+	ThoughtTokens int `json:"thought_tokens,omitempty"`
 	// 实际使用量（由上游 usage 字段提供，优先用于计费）
 	ActualSize     string          `json:"actual_size,omitempty"`     // 实际分辨率，如 "1280*720"（阿里 wan2.6）
 	ActualSR       int             `json:"actual_sr,omitempty"`       // 实际 SR（分辨率数值，如 720）
