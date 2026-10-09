@@ -286,15 +286,75 @@ func TestTaskBillingOtherOmitsEmptyUsageFacts(t *testing.T) {
 }
 
 func callLogTaskConsumption(t *testing.T, info *relaycommon.RelayInfo, task *model.Task) *model.Log {
+	return callLogTaskConsumptionWithPath(t, info, task, "/v1/videos")
+}
+
+func callLogTaskConsumptionWithPath(t *testing.T, info *relaycommon.RelayInfo, task *model.Task, path string) *model.Log {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	ctx.Request = httptest.NewRequest(http.MethodPost, path, nil)
 	ctx.Set("token_name", "test_token")
-	LogTaskConsumption(ctx, info, task)
+	LogTaskConsumption(ctx, info)
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	return log
+}
+
+func TestLogTaskConsumptionPreservesNativeInteractionRequestPath(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 42, 42
+	seedUser(t, userID, 10_000)
+	seedChannel(t, channelID)
+
+	info := &relaycommon.RelayInfo{
+		UserId:             userID,
+		OriginModelName:    "gemini-nano-banana-2.1",
+		NativeInteractions: true,
+		UsingGroup:         "default",
+		ChannelMeta:        &relaycommon.ChannelMeta{ChannelId: channelID},
+		PriceData: types.PriceData{
+			ModelPrice:     0.75,
+			Quota:          100,
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+	ctx.Set("token_name", "test_token")
+	ctx.Set("native_interactions_original_path", "/v1beta/interactions")
+	LogTaskConsumptionWithTaskInfo(ctx, info, &relaycommon.TaskInfo{
+		InputTokens:      22,
+		CompletionTokens: 1_680,
+		TotalTokens:      1_702,
+	})
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	assert.Equal(t, "/v1beta/interactions", other["request_path"])
+	assert.Equal(t, 22, log.PromptTokens)
+	assert.Equal(t, 0, log.CompletionTokens)
+	assert.Equal(t, float64(1_680), other["image_output_tokens"])
+	assert.Equal(t, float64(0), other["text_output_tokens"])
+}
+
+func TestTaskBillingProcessUsesImageOutputRatioForNativeImageInteractions(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		NativeInteractions: true,
+		OriginModelName:    "gemini-nano-banana-2.1",
+		PriceData: types.PriceData{
+			ModelRatio:           0.75,
+			CompletionRatio:      1,
+			ImageCompletionRatio: 20,
+		},
+	}
+
+	billing := taskBillingProcess(info, "upstream")
+	require.Equal(t, 20.0, billing["completion_ratio"])
+	require.Equal(t, 20.0, billing["image_completion_ratio"])
 }
 
 func TestLogTaskConsumptionIncludesTieredSnapshotUsageFacts(t *testing.T) {

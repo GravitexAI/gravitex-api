@@ -438,7 +438,7 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 		return fmt.Errorf("video adaptor not found")
 	}
 	pollingChannelType := 0
-	if platform == constant.TaskPlatformLyria {
+	if constant.IsInteractionsTaskPlatform(platform) {
 		pollingChannelType = cacheGetChannel.Type
 	}
 	info := &relaycommon.RelayInfo{}

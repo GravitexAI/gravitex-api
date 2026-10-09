@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	tasklyria "github.com/QuantumNous/new-api/relay/channel/task/lyria"
 	"github.com/gin-gonic/gin"
 )
 
@@ -43,7 +44,9 @@ func NativeInteractions() gin.HandlerFunc {
 				}})
 				return
 			}
-			if shouldUseLyriaNativeAdapter(originalPath, modelName) {
+			if shouldUseLyriaNativeAdapter(originalPath, modelName) ||
+				(originalPath == "/v1beta/interactions" &&
+					tasklyria.IsNativeInteractionModel(modelName) && modelName != nativeOmniModel) {
 				c.Set(common.KeyLyriaRawMirror, true)
 				c.Set(common.KeyLyriaRawRequestBody, append([]byte(nil), raw...))
 				c.Set("native_interactions_original_path", originalPath)

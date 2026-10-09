@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
+	tasklyria "github.com/QuantumNous/new-api/relay/channel/task/lyria"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -705,7 +706,14 @@ func RelayTask(c *gin.Context) {
 		// snapshots are persisted independently below and must not alter whether
 		// a task uses pre-deduction, per-second, or token-ratio settlement.
 		isPerSecondOrTokenRatio := result.IsPerSecondBilling || result.IsVideoTokenRatioBilling
-		lyriaFailed := isFailedNativeLyriaSubmit(relayInfo.NativeInteractions, relayInfo.OriginModelName, result)
+		// A successful native Gemini GenerateContent interaction is already
+		// complete in the submit response. It must settle and write a consume
+		// log here, even when stale video pricing metadata was present or the
+		// channel marker was reconstructed during retry setup.
+		if isSynchronousNativeGenerateContentResult(relayInfo, result) {
+			isPerSecondOrTokenRatio = false
+		}
+		interactionFailed := isFailedNativeInteractionSubmit(relayInfo.NativeInteractions, result)
 
 		// 落库先于结算和响应：入库失败时预扣费还没结算，交给顶部 defer 的
 		// Billing.Refund 原样退回，上游任务同步取消，客户端收到 500 后可以安全重试。
@@ -725,12 +733,14 @@ func RelayTask(c *gin.Context) {
 		switch {
 		case persistFailed:
 			// 保留 relayInfo.Billing，由顶部 defer 退回预扣费
-		case lyriaFailed:
+		case interactionFailed:
 			upstreamStatus := result.UpstreamStatusCode
 			if upstreamStatus == 0 {
 				upstreamStatus = http.StatusOK
 			}
-			recordVertexLyriaSubmitFailure(c, relayInfo, result.InitialTaskInfo.Reason, upstreamStatus)
+			if result.Platform == constant.TaskPlatformLyria {
+				recordVertexLyriaSubmitFailure(c, relayInfo, result.InitialTaskInfo.Reason, upstreamStatus)
+			}
 			if relayInfo.Billing != nil {
 				relayInfo.Billing.Refund(c)
 			}
@@ -738,7 +748,11 @@ func RelayTask(c *gin.Context) {
 			if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 				common.SysError("settle task billing error: " + settleErr.Error())
 			}
-			service.LogTaskConsumption(c, relayInfo)
+			if result.InitialTaskInfo != nil {
+				service.LogTaskConsumptionWithTaskInfo(c, relayInfo, result.InitialTaskInfo)
+			} else {
+				service.LogTaskConsumption(c, relayInfo)
+			}
 		default:
 			// 按秒/按量计费不做 Settle（未预扣），仅清理 Billing 引用防止 defer Refund
 			relayInfo.Billing = nil
@@ -761,11 +775,26 @@ func RelayTask(c *gin.Context) {
 	}
 }
 
+func isSynchronousNativeGenerateContentResult(info *relaycommon.RelayInfo, result *relay.TaskSubmitResult) bool {
+	if info == nil || result == nil || result.InitialTaskInfo == nil {
+		return false
+	}
+	if !tasklyria.IsNativeInteractionGenerateContentModel(info.OriginModelName) {
+		return false
+	}
+	return info.NativeInteractions || result.Platform == constant.TaskPlatformVertexInteractions
+}
+
 func shouldPersistSynchronousLyriaTask(nativeInteractions bool, modelName string) bool {
 	return !(nativeInteractions && (modelName == "lyria-3-pro-preview" || modelName == "lyria-3-clip-preview"))
 }
 
 func shouldPersistLyriaTask(nativeInteractions bool, modelName string, background bool) bool {
+	if nativeInteractions && tasklyria.IsNativeInteractionGenerateContentModel(modelName) {
+		// GenerateContent is completed synchronously. Do not expose or persist
+		// it as a video task; billing is recorded directly in the consume log.
+		return false
+	}
 	if nativeInteractions && (modelName == "lyria-3-pro-preview" || modelName == "lyria-3-clip-preview") {
 		return background
 	}
@@ -786,6 +815,15 @@ func isNativeLyriaScope(nativeInteractions bool, modelName string) bool {
 func isFailedNativeLyriaSubmit(nativeInteractions bool, modelName string, result *relay.TaskSubmitResult) bool {
 	if !isNativeLyriaScope(nativeInteractions, modelName) || result == nil ||
 		result.Platform != constant.TaskPlatformLyria || result.InitialTaskInfo == nil {
+		return false
+	}
+	status := model.TaskStatus(result.InitialTaskInfo.Status)
+	return status == model.TaskStatusFailure || status == model.TaskStatusCancelled
+}
+
+func isFailedNativeInteractionSubmit(nativeInteractions bool, result *relay.TaskSubmitResult) bool {
+	if !nativeInteractions || result == nil || result.InitialTaskInfo == nil ||
+		!constant.IsInteractionsTaskPlatform(result.Platform) {
 		return false
 	}
 	status := model.TaskStatus(result.InitialTaskInfo.Status)
@@ -869,7 +907,7 @@ func buildSubmittedTask(c *gin.Context, relayInfo *relaycommon.RelayInfo, result
 }
 
 func applyInitialTaskSubmitResult(task *model.Task, result *relay.TaskSubmitResult, now int64) {
-	if task == nil || result == nil || result.InitialTaskInfo == nil || task.Platform != constant.TaskPlatformLyria {
+	if task == nil || result == nil || result.InitialTaskInfo == nil || !constant.IsInteractionsTaskPlatform(task.Platform) {
 		return
 	}
 	info := result.InitialTaskInfo

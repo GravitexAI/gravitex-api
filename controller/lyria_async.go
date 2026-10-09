@@ -172,7 +172,11 @@ func runLyriaAsyncWorker(c *gin.Context, info *relaycommon.RelayInfo, taskID str
 		if err := service.SettleBilling(c, info, result.Quota); err != nil {
 			common.SysError(fmt.Sprintf("lyria async task %s settle failed: %v", taskID, err))
 		}
-		service.LogTaskConsumption(c, info)
+		if result.InitialTaskInfo != nil {
+			service.LogTaskConsumptionWithTaskInfo(c, info, result.InitialTaskInfo)
+		} else {
+			service.LogTaskConsumption(c, info)
+		}
 		info.Billing = nil
 	}
 

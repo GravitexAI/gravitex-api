@@ -42,6 +42,20 @@ func TestConvertNativeInteractionRequestPreservesMediaAndExecutionMode(t *testin
 	require.Equal(t, "gs://bucket/source.mp4", metadata["video"])
 }
 
+func TestNativeInteractionsPreservesVertexInteractionBodyForSupportedModel(t *testing.T) {
+	raw := []byte(`{"model":"gemini-nano-banana-2.1","input":"draw a cat"}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", bytes.NewReader(raw))
+
+	NativeInteractions()(c)
+
+	require.True(t, c.GetBool(common.KeyLyriaRawMirror))
+	stored, ok := c.Get(common.KeyLyriaRawRequestBody)
+	require.True(t, ok)
+	require.Equal(t, raw, stored)
+}
+
 func TestConvertNativeInteractionRequestReadsOfficialResponseFormatArray(t *testing.T) {
 	raw := []byte(`{
 		"model":"gemini-omni-flash-preview",

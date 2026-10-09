@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -18,6 +19,17 @@ import (
 // LogTaskConsumption 记录任务消费日志和统计信息（仅记录，不涉及实际扣费）。
 // 实际扣费已由 BillingSession（PreConsumeBilling + SettleBilling）完成。
 func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
+	logTaskConsumption(c, info, nil)
+}
+
+// LogTaskConsumptionWithTaskInfo records the upstream usage returned by a
+// synchronous task endpoint. Keeping this separate preserves the existing
+// task-log behavior for providers that do not return token usage.
+func LogTaskConsumptionWithTaskInfo(c *gin.Context, info *relaycommon.RelayInfo, taskInfo *relaycommon.TaskInfo) {
+	logTaskConsumption(c, info, taskInfo)
+}
+
+func logTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, taskInfo *relaycommon.TaskInfo) {
 	tokenName := c.GetString("token_name")
 	logContent := fmt.Sprintf("操作 %s", info.Action)
 	// 支持任务仅按次计费
@@ -38,8 +50,64 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	}
 	other := make(map[string]interface{})
 	other["is_task"] = true
-	other["request_path"] = c.Request.URL.Path
+	requestPath := c.Request.URL.Path
+	if originalPath := c.GetString("native_interactions_original_path"); originalPath != "" {
+		requestPath = originalPath
+	}
+	other["request_path"] = requestPath
 	other["model_price"] = info.PriceData.ModelPrice
+	other["billing_process"] = taskBillingProcess(info, "configured")
+	if taskInfo != nil {
+		usageFacts := make(map[string]any)
+		if taskInfo.InputTokens > 0 {
+			usageFacts["input_tokens"] = taskInfo.InputTokens
+		}
+		if taskInfo.CompletionTokens > 0 {
+			usageFacts["output_tokens"] = taskInfo.CompletionTokens
+		}
+		if taskInfo.TotalTokens > 0 {
+			usageFacts["total_tokens"] = taskInfo.TotalTokens
+		}
+		for key, value := range taskInfo.UsageFacts {
+			usageFacts[key] = value
+		}
+		if info.NativeInteractions && isNativeInteractionImageModel(info.OriginModelName) && taskInfo.CompletionTokens > 0 {
+			// Vertex GenerateContent returns image tokens in the aggregate
+			// output count. Preserve the modality explicitly so the log API and
+			// admin UI do not classify image output as text output.
+			usageFacts["image_output_tokens"] = taskInfo.CompletionTokens
+			usageFacts["text_output_tokens"] = 0
+		}
+		if len(usageFacts) > 0 {
+			other["usage_facts"] = usageFacts
+		}
+		other["admin_info"] = map[string]any{"usage_billing_path": "upstream"}
+	}
+	structuredOther := model.NewLogOtherFromMap(other)
+	appendRequestConversionChain(info, structuredOther)
+	appendFinalRequestFormat(info, structuredOther)
+	usageAudit := make(map[string]interface{})
+	appendUpstreamResponses(usageAudit, info)
+	appendUsageConversion(usageAudit, info)
+	structuredOther.MergePublic(usageAudit)
+	appendBillingInfo(info, structuredOther)
+	AppendRelayLogAdminInfo(c, info, structuredOther)
+	other = structuredOther.Snapshot()
+	// Keep this assignment after LogOther normalization as a defense-in-depth
+	// guarantee for task logs. The billing process is an audit record and must
+	// reach RecordConsumeLog even when other metadata is filtered or merged.
+	billingSource := "configured"
+	if taskInfo != nil {
+		billingSource = "upstream"
+	}
+	other["billing_process"] = taskBillingProcess(info, billingSource)
+	if info.NativeInteractions && isNativeInteractionImageModel(info.OriginModelName) && info.PriceData.ImageCompletionRatio > 0 {
+		inputTextPrice := info.PriceData.ModelRatio * 2
+		other["image_completion_ratio"] = info.PriceData.ImageCompletionRatio
+		other["input_text_price"] = inputTextPrice
+		other["output_image_price"] = inputTextPrice * info.PriceData.ImageCompletionRatio
+		other["output_text_price"] = inputTextPrice * info.PriceData.CompletionRatio
+	}
 	if info.PriceData.ModelRatio > 0 {
 		other["model_ratio"] = info.PriceData.ModelRatio
 	}
@@ -59,19 +127,96 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	}
 
 	attachQuotaSaturationToOther(other, info.QuotaClamp)
+	promptTokens := 0
+	completionTokens := 0
+	useTimeSeconds := 0
+	if info.NativeInteractions && taskInfo != nil &&
+		!strings.HasPrefix(strings.ToLower(strings.TrimSpace(info.OriginModelName)), "lyria-") {
+		elapsed := time.Since(info.StartTime)
+		useTimeSeconds = int(elapsed.Seconds())
+		// Only streaming requests have a meaningful first-token time;
+		// non-streaming requests record total use time only.
+		if info.IsStream {
+			other["frt"] = float64(elapsed.Milliseconds())
+		}
+		promptTokens = taskInfo.InputTokens
+		completionTokens = taskInfo.CompletionTokens
+		if isNativeInteractionImageModel(info.OriginModelName) {
+			other["image_output_tokens"] = taskInfo.CompletionTokens
+			other["text_output_tokens"] = 0
+			// completion_tokens is the legacy text-output column. Do not put
+			// image output into that column; it is preserved in Other instead.
+			completionTokens = 0
+		}
+	}
+	requestID := c.GetString(common.RequestIdKey)
+	if requestID == "" {
+		requestID = info.RequestId
+	}
+	upstreamRequestID := info.UpstreamResponseId
+	if upstreamRequestID == "" && info.TaskRelayInfo != nil {
+		upstreamRequestID = info.TaskRelayInfo.PublicTaskID
+	}
 	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
-		RequestId: info.UpstreamResponseId,
-		ChannelId: info.ChannelId,
-		ModelName: info.OriginModelName,
-		TokenName: tokenName,
-		Quota:     info.PriceData.Quota,
-		Content:   logContent,
-		TokenId:   info.TokenId,
-		Group:     info.UsingGroup,
-		Other:     other,
+		RequestId:         requestID,
+		UpstreamRequestId: upstreamRequestID,
+		ChannelId:         info.ChannelId,
+		PromptTokens:      promptTokens,
+		CompletionTokens:  completionTokens,
+		UseTimeSeconds:    useTimeSeconds,
+		ModelName:         info.OriginModelName,
+		TokenName:         tokenName,
+		Quota:             info.PriceData.Quota,
+		Content:           logContent,
+		TokenId:           info.TokenId,
+		Group:             info.UsingGroup,
+		Other:             other,
 	})
 	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
 	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)
+}
+
+func taskBillingMode(info *relaycommon.RelayInfo) string {
+	if info == nil {
+		return "unknown"
+	}
+	if info.PriceData.ModelPrice > 0 || info.PriceData.UsePrice {
+		return "per_call"
+	}
+	return "per_token"
+}
+
+func taskBillingProcess(info *relaycommon.RelayInfo, source string) map[string]any {
+	if info == nil {
+		return map[string]any{"mode": "unknown", "source": source}
+	}
+	completionRatio := info.PriceData.CompletionRatio
+	imageCompletionRatio := info.PriceData.ImageCompletionRatio
+	// Native Interactions image models return image output tokens in the same
+	// total-output field as text tokens. The task log is rendered from this
+	// billing_process object, so expose the image output ratio as the effective
+	// completion ratio for these models. Do not change ordinary Gemini/text or
+	// video task logs.
+	if info.NativeInteractions && imageCompletionRatio > 0 && isNativeInteractionImageModel(info.OriginModelName) {
+		completionRatio = imageCompletionRatio
+	}
+	return map[string]any{
+		"mode":                   taskBillingMode(info),
+		"model_price":            info.PriceData.ModelPrice,
+		"model_ratio":            info.PriceData.ModelRatio,
+		"completion_ratio":       completionRatio,
+		"image_completion_ratio": imageCompletionRatio,
+		"image_ratio":            info.PriceData.ImageRatio,
+		"group_ratio":            info.PriceData.GroupRatioInfo.GroupRatio,
+		"other_ratios":           info.PriceData.OtherRatios(),
+		"final_quota":            info.PriceData.Quota,
+		"source":                 source,
+	}
+}
+
+func isNativeInteractionImageModel(modelName string) bool {
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	return strings.Contains(modelName, "image") || strings.Contains(modelName, "nano-banana")
 }
 
 // ---------------------------------------------------------------------------

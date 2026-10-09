@@ -335,12 +335,14 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 	}
 
 	priceData := hosttypes.PriceData{
-		FreeModel:      freeModel,
-		ModelPrice:     modelPrice,
-		ModelRatio:     modelRatio,
-		UsePrice:       usePrice,
-		Quota:          quota,
-		GroupRatioInfo: groupRatioInfo,
+		FreeModel:            freeModel,
+		ModelPrice:           modelPrice,
+		ModelRatio:           modelRatio,
+		CompletionRatio:      ratio_setting.GetCompletionRatio(info.OriginModelName),
+		ImageCompletionRatio: ratio_setting.GetImageCompletionRatio(info.OriginModelName),
+		UsePrice:             usePrice,
+		Quota:                quota,
+		GroupRatioInfo:       groupRatioInfo,
 	}
 	return priceData, nil
 }

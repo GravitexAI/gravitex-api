@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay"
+	tasklyria "github.com/QuantumNous/new-api/relay/channel/task/lyria"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -74,6 +75,9 @@ func NativeInteractionsSubmit(c *gin.Context) {
 }
 
 func shouldWaitNativeInteraction(modelName string, background, stream bool) bool {
+	if tasklyria.IsNativeInteractionGenerateContentModel(modelName) {
+		return false
+	}
 	if background || stream {
 		return false
 	}
@@ -250,14 +254,14 @@ func NativeInteractionsFetch(c *gin.Context) {
 
 func augmentLyriaInteractionResponse(userID int, taskID string, raw []byte) []byte {
 	task, exists, err := model.GetByTaskId(userID, taskID)
-	if err != nil || !exists || task.Platform != constant.TaskPlatformLyria || len(task.Data) == 0 {
+	if err != nil || !exists || !constant.IsInteractionsTaskPlatform(task.Platform) || len(task.Data) == 0 {
 		return nil
 	}
 	return mergeLyriaTaskSnapshot(raw, task.Data, task)
 }
 
 func mergeLyriaTaskSnapshot(raw, providerRaw []byte, task *model.Task) []byte {
-	if task == nil || task.Platform != constant.TaskPlatformLyria {
+	if task == nil || !constant.IsInteractionsTaskPlatform(task.Platform) {
 		return nil
 	}
 	var current map[string]any
@@ -334,7 +338,7 @@ func nativeInteractionResponse(raw []byte, fallbackModel string) ([]byte, error)
 		"object": "interaction",
 		"status": nativeInteractionStatus(data["status"]),
 	}
-	if platform, _ := data["platform"].(string); platform == string(constant.TaskPlatformLyria) {
+	if platform, _ := data["platform"].(string); constant.IsInteractionsTaskPlatform(constant.TaskPlatform(platform)) {
 		if taskID, _ := data["task_id"].(string); taskID != "" {
 			interaction["id"] = taskID
 		}

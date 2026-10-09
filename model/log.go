@@ -496,20 +496,21 @@ type PriceChainParams struct {
 }
 
 type RecordConsumeLogParams struct {
-	ChannelId        int                    `json:"channel_id"`
-	PromptTokens     int                    `json:"prompt_tokens"`
-	CompletionTokens int                    `json:"completion_tokens"`
-	ModelName        string                 `json:"model_name"`
-	TokenName        string                 `json:"token_name"`
-	Quota            int                    `json:"quota"`
-	Content          string                 `json:"content"`
-	TokenId          int                    `json:"token_id"`
-	UseTimeSeconds   int                    `json:"use_time_seconds"`
-	IsStream         bool                   `json:"is_stream"`
-	Group            string                 `json:"group"`
-	Other            map[string]interface{} `json:"other"`
-	PriceChain       *PriceChainParams      `json:"price_chain,omitempty"`
-	RequestId        string                 `json:"request_id,omitempty"` // 可选覆盖，视频任务用 taskID
+	ChannelId         int                    `json:"channel_id"`
+	PromptTokens      int                    `json:"prompt_tokens"`
+	CompletionTokens  int                    `json:"completion_tokens"`
+	ModelName         string                 `json:"model_name"`
+	TokenName         string                 `json:"token_name"`
+	Quota             int                    `json:"quota"`
+	Content           string                 `json:"content"`
+	TokenId           int                    `json:"token_id"`
+	UseTimeSeconds    int                    `json:"use_time_seconds"`
+	IsStream          bool                   `json:"is_stream"`
+	Group             string                 `json:"group"`
+	Other             map[string]interface{} `json:"other"`
+	PriceChain        *PriceChainParams      `json:"price_chain,omitempty"`
+	RequestId         string                 `json:"request_id,omitempty"` // 可选覆盖，视频任务用 taskID
+	UpstreamRequestId string                 `json:"upstream_request_id,omitempty"`
 }
 
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
@@ -522,7 +523,10 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if requestId == "" {
 		requestId = c.GetString(common.RequestIdKey)
 	}
-	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
+	upstreamRequestId := params.UpstreamRequestId
+	if upstreamRequestId == "" {
+		upstreamRequestId = c.GetString(common.UpstreamRequestIdKey)
+	}
 	// 合并 other 与 vendor_id（来自 PriceChain），与 Nebula 一致
 	other := make(map[string]interface{})
 	if params.Other != nil {

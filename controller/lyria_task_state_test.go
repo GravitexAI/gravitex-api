@@ -122,6 +122,36 @@ func TestLyriaSubmitOutcomeOnlyFailsExactVertexLyriaScope(t *testing.T) {
 	}))
 }
 
+func TestNativeInteractionSubmitFailureIncludesGenericVertexInteractionsPlatform(t *testing.T) {
+	result := &relay.TaskSubmitResult{
+		Platform: constant.TaskPlatformVertexInteractions,
+		InitialTaskInfo: &relaycommon.TaskInfo{
+			Status: string(model.TaskStatusFailure),
+		},
+	}
+
+	require.True(t, isFailedNativeInteractionSubmit(true, result))
+	require.False(t, isFailedNativeInteractionSubmit(false, result))
+}
+
+func TestNativeGenerateContentSubmitAlwaysUsesSynchronousBillingLog(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		NativeInteractions: true,
+		OriginModelName:    "gemini-nano-banana-2.1",
+	}
+	result := &relay.TaskSubmitResult{
+		Platform:                 constant.TaskPlatformVertexInteractions,
+		IsVideoTokenRatioBilling: true,
+		InitialTaskInfo: &relaycommon.TaskInfo{
+			Status: model.TaskStatusSuccess,
+		},
+	}
+
+	// Even if stale video pricing marked the result as token-ratio billing,
+	// this completed GenerateContent response must reach LogTaskConsumption.
+	require.True(t, isSynchronousNativeGenerateContentResult(info, result))
+}
+
 func TestSynchronousLyriaInteractionSkipsTaskPersistenceOnlyForNativeLyria(t *testing.T) {
 	require.False(t, shouldPersistSynchronousLyriaTask(true, "lyria-3-pro-preview"))
 	require.False(t, shouldPersistSynchronousLyriaTask(true, "lyria-3-clip-preview"))
