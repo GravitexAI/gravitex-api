@@ -829,15 +829,10 @@ func GetAudioCompletionRatioCopy() map[string]float64 {
 	return audioCompletionRatioMap.ReadAll()
 }
 
-// 转换模型名，减少渠道必须配置各种带参数模型
+// 转换模型名，减少渠道必须配置各种带参数模型。
+// 注意：不做 "-nsfw" 后缀归一化——nsfw 别名是独立模型，定价、渠道、
+// 令牌白名单都必须显式配置，禁止回退到基础模型。
 func FormatMatchingModelName(name string) string {
-
-	// 一些业务侧会把模型做成别名后缀（例如 "-nsfw" 用于走不同 endpoint），
-	// 但定价/倍率通常与基础模型一致；这里做归一化以复用配置。
-	if strings.HasSuffix(name, "-nsfw") {
-		name = strings.TrimSuffix(name, "-nsfw")
-	}
-
 	if strings.HasPrefix(name, "gemini-2.5-flash-lite") {
 		name = handleThinkingBudgetModel(name, "gemini-2.5-flash-lite", "gemini-2.5-flash-lite-thinking-*")
 	} else if strings.HasPrefix(name, "gemini-2.5-flash") {
