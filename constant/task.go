@@ -3,10 +3,15 @@ package constant
 type TaskPlatform string
 
 const (
-	TaskPlatformSuno       TaskPlatform = "suno"
-	TaskPlatformMidjourney              = "mj"
-	TaskPlatformLyria                   = "lyria"
+	TaskPlatformSuno               TaskPlatform = "suno"
+	TaskPlatformMidjourney                      = "mj"
+	TaskPlatformLyria                           = "lyria"
+	TaskPlatformVertexInteractions              = "vertex-interactions"
 )
+
+func IsInteractionsTaskPlatform(platform TaskPlatform) bool {
+	return platform == TaskPlatformLyria || platform == TaskPlatformVertexInteractions
+}
 
 const (
 	TaskActionImageToVideo     = "image_to_video"
@@ -30,8 +35,11 @@ const (
 	SunoActionMusic  = "MUSIC"
 	SunoActionLyrics = "LYRICS"
 
-	TaskActionGenerate          = "generate"
-	TaskActionTextGenerate      = "textGenerate"
+	TaskActionGenerate     = "generate"
+	TaskActionTextGenerate = "textGenerate"
+	// TaskActionGenerateContent is used by synchronous Gemini GenerateContent
+	// requests. It must not be normalized to a legacy video action.
+	TaskActionGenerateContent   = "generate_content"
 	TaskActionFirstTailGenerate = "firstTailGenerate"
 	TaskActionReferenceGenerate = "referenceGenerate"
 	TaskActionRemix             = "remixGenerate"

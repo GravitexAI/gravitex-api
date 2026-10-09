@@ -225,6 +225,14 @@ func GenerateTaskID() string {
 	return "task_" + key
 }
 
+// GenerateInteractionID creates a gateway-local id for synchronous
+// Interactions responses. It is intentionally distinct from task ids because
+// the request was completed inline and does not represent a background task.
+func GenerateInteractionID() string {
+	key, _ := common.GenerateRandomCharsKey(32)
+	return "interaction_" + key
+}
+
 func (p *TaskPrivateData) Scan(val interface{}) error {
 	var bytesValue []byte
 	switch v := val.(type) {

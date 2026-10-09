@@ -24,6 +24,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 )
 
 // CompleteVideoTaskOnUpstreamSuccessFn is set by main.go to break the import cycle
@@ -247,9 +248,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if modelName == "" {
 		modelName = service.CoverTaskActionToModelName(platform, info.Action)
 	}
-	if isNativeLyriaRequest(info, modelName) {
-		platform = constant.TaskPlatformLyria
-	}
+	platform = nativeInteractionTaskPlatform(platform, info, modelName)
 	// Re-resolve from the selected channel at task submission time. Task
 	// endpoints can arrive through a locked/retry path where the middleware
 	// context was initialized earlier; the channel's model override must still
@@ -279,6 +278,16 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// controller for every newly created async task.
 	isPerSecondBilling := isVideoPerSecondModel(modelName)
 	isVideoTokenRatioBilling := isVideoTokenRatioModel(modelName)
+	if isNativeGenerateContentBilling(info, modelName) {
+		// A Gemini GenerateContent image/text request is synchronous and must
+		// never enter the video billing path, even if stale video pricing exists
+		// for the same model name. Keep this keyed only by the native interaction
+		// marker and model capability: channel metadata can be lost during a
+		// retry/locked-channel setup, and using it here would silently skip the
+		// consume log for an otherwise successful request.
+		isPerSecondBilling = false
+		isVideoTokenRatioBilling = false
+	}
 
 	// 3. PublicTaskID 不再预生成：由各 adaptor 的 DoResponse 在拿到上游真实 ID 后
 	//    回写 info.PublicTaskID = upstreamID，使 task_id 直接使用上游 ID，
@@ -359,7 +368,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// request returns after the local task row is created; the worker invokes
 	// this method again with the same billing session to perform the provider
 	// call and finalize the row.
-	if c.GetBool("native_interactions_async") && !c.GetBool("native_interactions_worker") && isNativeLyriaRequest(info, modelName) {
+	if c.GetBool("native_interactions_async") && !c.GetBool("native_interactions_worker") && isNativeInteractionTaskRequest(info, modelName) {
 		if DispatchLyriaAsyncFn == nil {
 			return nil, service.TaskErrorWrapperLocal(errors.New("lyria async dispatcher is not configured"), "async_dispatch_unavailable", http.StatusServiceUnavailable)
 		}
@@ -371,9 +380,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
-	lyriaVertexResponse := isNativeLyriaRequest(info, modelName)
+	nativeVertexInteractionResponse := isNativeInteractionTaskRequest(info, modelName)
 	responseSucceeded := resp != nil && resp.StatusCode == http.StatusOK
-	if lyriaVertexResponse && resp != nil {
+	if nativeVertexInteractionResponse && resp != nil {
 		responseSucceeded = resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices
 	}
 	if resp != nil && !responseSucceeded {
@@ -382,7 +391,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		if common.IsTaskRawMirror(c) {
 			taskErr.RawBody = responseBody
 		}
-		if lyriaVertexResponse {
+		if nativeVertexInteractionResponse {
 			initial := taskLyria.ParseVertexHTTPFailure(resp.StatusCode, responseBody)
 			if initial.TaskID != "" && info.TaskRelayInfo != nil {
 				info.TaskRelayInfo.PublicTaskID = initial.TaskID
@@ -390,7 +399,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 			return &TaskSubmitResult{
 				UpstreamTaskID:     initial.TaskID,
 				TaskData:           append([]byte(nil), responseBody...),
-				Platform:           constant.TaskPlatformLyria,
+				Platform:           platform,
 				Quota:              info.PriceData.Quota,
 				UpstreamStatusCode: resp.StatusCode,
 				InitialTaskInfo:    initial,
@@ -441,10 +450,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 
 	var initialTaskInfo *relaycommon.TaskInfo
-	if platform == constant.TaskPlatformLyria {
+	if constant.IsInteractionsTaskPlatform(platform) {
 		parsed, parseErr := parseSubmittedTaskResult(adaptor, taskData)
 		if parseErr != nil {
-			if lyriaVertexResponse {
+			if nativeVertexInteractionResponse {
 				parsed = &relaycommon.TaskInfo{
 					Status:   model.TaskStatusFailure,
 					Progress: "100%",
@@ -456,6 +465,10 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 			}
 		}
 		initialTaskInfo = parsed
+	}
+	if quota, ok := nativeGenerateContentUsageQuota(info, initialTaskInfo); ok {
+		finalQuota = quota
+		info.PriceData.Quota = quota
 	}
 
 	return &TaskSubmitResult{
@@ -471,8 +484,54 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}, nil
 }
 
+// nativeGenerateContentUsageQuota converts the completed Vertex
+// GenerateContent usage into the final quota. ModelPriceHelperPerCall only
+// has an estimate for the initial pre-consume; using that estimate as the
+// final charge is what previously produced $0.375 for 22 input and 1680 image
+// output tokens.
+func nativeGenerateContentUsageQuota(info *relaycommon.RelayInfo, taskInfo *relaycommon.TaskInfo) (int, bool) {
+	if info == nil || taskInfo == nil || !isNativeGenerateContentBilling(info, info.OriginModelName) {
+		return 0, false
+	}
+	if taskInfo.Status != model.TaskStatusSuccess || info.PriceData.ModelRatio <= 0 {
+		return 0, false
+	}
+	inputPrice := info.PriceData.ModelRatio * 2
+	outputRatio := info.PriceData.CompletionRatio
+	if isNativeGenerateContentImageModel(info.OriginModelName) && info.PriceData.ImageCompletionRatio > 0 {
+		outputRatio = info.PriceData.ImageCompletionRatio
+	}
+	if outputRatio <= 0 {
+		outputRatio = 1
+	}
+	groupRatio := info.PriceData.GroupRatioInfo.GroupRatio
+	if groupRatio <= 0 {
+		groupRatio = 1
+	}
+	cost := decimal.NewFromInt(int64(taskInfo.InputTokens)).Mul(decimal.NewFromFloat(inputPrice))
+	cost = cost.Add(decimal.NewFromInt(int64(taskInfo.CompletionTokens)).Mul(decimal.NewFromFloat(info.PriceData.ModelRatio * 2 * outputRatio)))
+	quotaDecimal := cost.Div(decimal.NewFromInt(1_000_000)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).Mul(decimal.NewFromFloat(groupRatio))
+	quota, clamp := common.QuotaFromDecimalChecked(quotaDecimal)
+	noteTaskQuotaClamp(info, clamp)
+	return quota, true
+}
+
+func isNativeGenerateContentImageModel(modelName string) bool {
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	return strings.Contains(modelName, "image") || strings.Contains(modelName, "nano-banana")
+}
+
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。
 // 公式: baseQuota × ∏(ratio) — 其中 baseQuota 是不含 OtherRatios 的基础额度。
+// isNativeGenerateContentBilling keeps native Gemini Interactions out of the
+// video settlement path. It intentionally does not depend on ChannelType:
+// during locked-channel retries that metadata may be reconstructed after the
+// billing classification, while the native marker and model capability remain
+// request-scoped and authoritative.
+func isNativeGenerateContentBilling(info *relaycommon.RelayInfo, modelName string) bool {
+	return info != nil && info.NativeInteractions && taskLyria.IsNativeInteractionGenerateContentModel(modelName)
+}
+
 func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float64) (int, bool) {
 	// 从 PriceData 获取不含 OtherRatios 的基础价格
 	baseQuota := info.PriceData.RemoveOtherRatiosFromFloat(float64(info.PriceData.Quota))

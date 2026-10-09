@@ -2,6 +2,7 @@ package relay
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -160,6 +161,8 @@ func GetTaskAdaptor(platform constant.TaskPlatform) channel.TaskAdaptor {
 		return &suno.TaskAdaptor{}
 	case constant.TaskPlatformLyria:
 		return &taskLyria.TaskAdaptor{}
+	case constant.TaskPlatformVertexInteractions:
+		return &taskLyria.TaskAdaptor{}
 	}
 	// Named task-plugin platforms must use the plugin adaptor for submit and
 	// polling. Without this lookup, legacy plugin routes set
@@ -207,18 +210,34 @@ func GetTaskAdaptor(platform constant.TaskPlatform) channel.TaskAdaptor {
 	return nil
 }
 
-// GetTaskAdaptorForRequest selects Lyria only for the native Interactions route
-// on Vertex channels. Existing task routes and non-Vertex channels retain their
-// channel-type adaptor even when a caller supplies the same model string.
+// GetTaskAdaptorForRequest selects the native Interactions task adaptor for
+// supported models on Vertex channels. Existing task routes and non-Vertex
+// channels retain their channel-type adaptor.
 func GetTaskAdaptorForRequest(platform constant.TaskPlatform, modelName string, info *relaycommon.RelayInfo) channel.TaskAdaptor {
-	if isNativeLyriaRequest(info, modelName) {
+	if isNativeInteractionTaskRequest(info, modelName) {
 		return &taskLyria.TaskAdaptor{}
 	}
 	return GetTaskAdaptor(platform)
 }
 
-func isNativeLyriaRequest(info *relaycommon.RelayInfo, modelName string) bool {
-	return info != nil && info.NativeInteractions && taskLyria.IsLyriaModel(modelName)
+func isNativeInteractionTaskRequest(info *relaycommon.RelayInfo, modelName string) bool {
+	if info == nil || !info.NativeInteractions || info.ChannelType != constant.ChannelTypeVertexAi {
+		return false
+	}
+	if taskLyria.IsLyriaModel(modelName) {
+		return true
+	}
+	return taskLyria.IsNativeInteractionModel(modelName) && !strings.EqualFold(modelName, "gemini-omni-flash-preview")
+}
+
+func nativeInteractionTaskPlatform(platform constant.TaskPlatform, info *relaycommon.RelayInfo, modelName string) constant.TaskPlatform {
+	if !isNativeInteractionTaskRequest(info, modelName) {
+		return platform
+	}
+	if taskLyria.IsLyriaModel(modelName) {
+		return constant.TaskPlatformLyria
+	}
+	return constant.TaskPlatformVertexInteractions
 }
 
 func isNativeVertexLyriaRequest(info *relaycommon.RelayInfo, modelName string) bool {
