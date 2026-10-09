@@ -314,6 +314,14 @@ func SetRelayRouter(router *gin.Engine) {
 		relayGeminiRouter.POST("/models/*path", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatGemini)
 		})
+
+		// GET /v1beta/voices：TTS 音色库透传。上游接口没有模型参数，
+		// 不走 Distribute（渠道由 ?model= 查询参数在控制器内选择）。
+		voicesRouter := router.Group(prefix)
+		voicesRouter.Use(middleware.RouteTag("relay"))
+		voicesRouter.Use(middleware.SystemPerformanceCheck())
+		voicesRouter.Use(middleware.TokenAuth())
+		voicesRouter.GET("/voices", controller.RelayVoices)
 	}
 }
 

@@ -2101,6 +2101,12 @@ func convertImagineImageRequest(c *gin.Context, info *relaycommon.RelayInfo, req
 	}
 	if request.Quality != "" {
 		imageConfig["imageSize"] = imagineImageSizeFromQuality(request.Quality)
+		if imageConfig["imageSize"] == "2K" {
+			// 实测：上游模型在 TEXT+IMAGE 双模态下会忽略 imageSize（返回 1K），
+			// 只有纯 IMAGE 模态才产出 2K。请求 2K 时切换模态，
+			// 代价是该响应不再携带 revised_prompt 文本。
+			geminiReq.GenerationConfig.ResponseModalities = []string{"IMAGE"}
+		}
 	}
 	if len(imageConfig) > 0 {
 		raw, marshalErr := common.Marshal(imageConfig)
