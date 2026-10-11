@@ -1312,3 +1312,47 @@ func TestAppendToolSurchargeLogInfoWritesOnlyStructuredFields(t *testing.T) {
 	assert.NotContains(t, fields, "image_generation_call")
 	assert.NotContains(t, fields, "image_generation_call_price")
 }
+
+func TestUnbilledRequestContent(t *testing.T) {
+	upstreamMissing := "上游没有返回计费信息，无法扣费（可能是上游超时）"
+	clientGone := "客户端已取消请求，未产生计费"
+
+	tests := []struct {
+		name      string
+		relayInfo *relaycommon.RelayInfo
+		want      string
+	}{
+		{
+			name:      "nil relay info defaults to upstream message",
+			relayInfo: nil,
+			want:      upstreamMissing,
+		},
+		{
+			name:      "non-stream request defaults to upstream message",
+			relayInfo: &relaycommon.RelayInfo{},
+			want:      upstreamMissing,
+		},
+		{
+			name: "stream ended normally without usage keeps upstream message",
+			relayInfo: &relaycommon.RelayInfo{
+				StreamStatus: &relaycommon.StreamStatus{EndReason: relaycommon.StreamEndReasonEOF},
+			},
+			want: upstreamMissing,
+		},
+		{
+			name: "client gone shows cancel message",
+			relayInfo: &relaycommon.RelayInfo{
+				StreamStatus: &relaycommon.StreamStatus{EndReason: relaycommon.StreamEndReasonClientGone},
+			},
+			want: clientGone,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NotNil(t, tt)
+			got := unbilledRequestContent(tt.relayInfo)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}

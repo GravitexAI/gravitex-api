@@ -464,6 +464,16 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 	return "openai"
 }
 
+// unbilledRequestContent 返回零计费消费日志中面向用户的说明文案：
+// 客户端主动断开导致的无法计费，不应把责任归到上游缺计费数据上。
+func unbilledRequestContent(relayInfo *relaycommon.RelayInfo) string {
+	if relayInfo != nil && relayInfo.StreamStatus != nil &&
+		relayInfo.StreamStatus.EndReason == relaycommon.StreamEndReasonClientGone {
+		return "客户端已取消请求，未产生计费"
+	}
+	return "上游没有返回计费信息，无法扣费（可能是上游超时）"
+}
+
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
 	originUsage := usage
 	billingUsage := effectiveBillingUsage(usage)
@@ -518,7 +528,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	if !summary.hasBillableUsage() {
-		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
+		extraContent = append(extraContent, unbilledRequestContent(relayInfo))
 		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 		// 退还用户预扣额度（与 SettleBilling 退还令牌保持一致）
 		if relayInfo.Billing != nil && relayInfo.BillingSource != BillingSourceSubscription {
