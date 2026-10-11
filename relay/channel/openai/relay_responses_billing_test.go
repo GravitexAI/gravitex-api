@@ -265,3 +265,62 @@ func TestOaiResponsesStreamHandlerDoesNotCountPartialImageEvent(t *testing.T) {
 
 	assert.Equal(t, 0, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration].CallCount)
 }
+
+func TestOaiResponsesStreamHandlerReturnsRetryableErrorBeforeAnyOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldTimeout
+	})
+
+	tests := []struct {
+		name   string
+		events []string
+	}{
+		{
+			name:   "empty stream",
+			events: nil,
+		},
+		{
+			name:   "only created event then EOF",
+			events: []string{`{"type":"response.created","response":{"id":"resp_1"}}`},
+		},
+		{
+			name: "failed event before output",
+			events: []string{
+				`{"type":"response.created","response":{"id":"resp_1"}}`,
+				`{"type":"response.failed","response":{"status":"failed","error":{"code":"server_error","message":"boom"}}}`,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var body strings.Builder
+			for _, event := range tt.events {
+				body.WriteString("data: " + event + "\n\n")
+			}
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			c.Set(common.RequestIdKey, "responses-retry-test")
+			info := &relaycommon.RelayInfo{
+				OriginModelName: "gpt-5.1",
+				DisablePing:     true,
+				ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.1"},
+			}
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body.String())),
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			}
+
+			usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
+			require.NotNil(t, apiErr)
+			assert.Nil(t, usage)
+			assert.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+			assert.Empty(t, w.Body.String(), "nothing may be written to the client so the request can be retried")
+		})
+	}
+}

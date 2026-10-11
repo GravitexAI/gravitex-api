@@ -93,6 +93,15 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var responseTextBuilder strings.Builder
 	imageCounter := &relaycommon.ImageGenerationCallCounter{}
 	imageCommitted := false
+	// 在收到第一个实质内容事件前，先缓存开头事件、不写给客户端；
+	// 若此时上游失败/空流结束，客户端尚未收到任何数据，可安全走重试换渠道。
+	type pendingEvent struct {
+		resp dto.ResponsesStreamResponse
+		data string
+	}
+	var pendingEvents []pendingEvent
+	flushed := false
+	var upstreamFailure error
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
@@ -102,6 +111,22 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
 			sr.Error(err)
 			return
+		}
+		if !flushed {
+			switch streamResponse.Type {
+			case "response.created", "response.in_progress", "response.queued":
+				pendingEvents = append(pendingEvents, pendingEvent{streamResponse, data})
+				return
+			case "error", "response.failed":
+				upstreamFailure = fmt.Errorf("upstream %s before any output: %s", streamResponse.Type, data)
+				sr.Stop(upstreamFailure)
+				return
+			}
+			for _, event := range pendingEvents {
+				sendResponsesStreamData(c, event.resp, event.data)
+			}
+			pendingEvents = nil
+			flushed = true
 		}
 		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {
@@ -174,6 +199,14 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
+
+	if !flushed && c.Request.Context().Err() == nil {
+		if upstreamFailure == nil {
+			upstreamFailure = fmt.Errorf("upstream stream ended without any output, received %d events", len(pendingEvents))
+		}
+		logger.LogError(c, upstreamFailure.Error())
+		return nil, types.NewErrorWithStatusCode(upstreamFailure, types.ErrorCodeBadResponse, http.StatusBadGateway)
+	}
 
 	if usage.CompletionTokens == 0 {
 		// 计算输出文本的 token 数量
