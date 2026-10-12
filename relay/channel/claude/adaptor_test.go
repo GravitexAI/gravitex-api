@@ -1,10 +1,13 @@
 package claude
 
 import (
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -87,6 +90,72 @@ func TestConvertClaudeRequestDoesNotOverwriteTrimmedUpstreamModelName(t *testing
 	_, err := (&Adaptor{}).ConvertClaudeRequest(nil, info, req)
 	require.NoError(t, err)
 	assert.Equal(t, "claude-3-7-sonnet", info.UpstreamModelName)
+}
+
+func TestSetupRequestHeaderForDirectAnthropicPreservesClaudeCodeExtensionHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+	c.Request.Header.Set("X-Claude-Code-Feature", "server-safeguards")
+	c.Request.Header.Set("X-Unrelated-Client-Header", "must-not-reach-upstream")
+	c.Request.Header.Set("Authorization", "Bearer client-secret")
+	c.Request.Header.Set("X-Api-Key", "client-secret")
+
+	header := http.Header{}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType: constant.ChannelTypeAnthropic,
+			ApiKey:      "upstream-secret",
+		},
+	}
+
+	require.NoError(t, (&Adaptor{}).SetupRequestHeader(c, &header, info))
+	assert.Equal(t, "server-safeguards", header.Get("X-Claude-Code-Feature"))
+	assert.Empty(t, header.Get("X-Unrelated-Client-Header"))
+	assert.Empty(t, header.Get("Authorization"))
+	assert.Equal(t, "upstream-secret", header.Get("X-Api-Key"))
+}
+
+func TestSetupRequestHeaderForNonDirectAnthropicDoesNotPreserveClaudeCodeExtensionHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+	c.Request.Header.Set("X-Claude-Code-Feature", "server-safeguards")
+
+	header := http.Header{}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType: constant.ChannelTypeAnthropic,
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				AnthropicBetaTarget: "bedrock",
+			},
+		},
+	}
+
+	require.NoError(t, (&Adaptor{}).SetupRequestHeader(c, &header, info))
+	assert.Empty(t, header.Get("X-Claude-Code-Feature"))
+}
+
+func TestConvertClaudeRequestDoesNotSendSafeguardsToNonDirectAnthropic(t *testing.T) {
+	request := &dto.ClaudeRequest{
+		Model:      "claude-sonnet-4-5",
+		Messages:   []dto.ClaudeMessage{{Role: "user", Content: "hello"}},
+		Safeguards: json.RawMessage(`{"mode":"auto"}`),
+	}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType: constant.ChannelTypeAnthropic,
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				AnthropicBetaTarget: "bedrock",
+			},
+		},
+	}
+
+	converted, err := (&Adaptor{}).ConvertClaudeRequest(nil, info, request)
+	require.NoError(t, err)
+	output, ok := converted.(*dto.ClaudeRequest)
+	require.True(t, ok)
+	assert.Empty(t, output.Safeguards)
 }
 
 func geminiToClaudeInfo() *relaycommon.RelayInfo {

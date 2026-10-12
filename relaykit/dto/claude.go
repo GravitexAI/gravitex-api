@@ -234,6 +234,7 @@ type ClaudeRequest struct {
 	OutputConfig      json.RawMessage `json:"output_config,omitempty"`
 	OutputFormat      json.RawMessage `json:"output_format,omitempty"`
 	Container         json.RawMessage `json:"container,omitempty"`
+	Safeguards        json.RawMessage `json:"safeguards,omitempty"`
 	ToolChoice        any             `json:"tool_choice,omitempty"`
 	Thinking          *Thinking       `json:"thinking,omitempty"`
 	// Reasoning is a non-standard OpenRouter-style field ({enabled,effort,max_tokens})

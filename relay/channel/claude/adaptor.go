@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -27,6 +28,11 @@ func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dt
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
+	if info.GetChannelType() != constant.ChannelTypeAnthropic ||
+		ResolveBetaTarget(info.ChannelType, info.ChannelOtherSettings.AnthropicBetaTarget) != TargetAnthropicDirect {
+		request.Safeguards = nil
+	}
+
 	// Native /v1/messages 路径保持透传：不做 top_p/temperature/top_k 剥离、
 	// thinking.type 转换或 tool_choice 降级。这些兼容性处理只在 OpenAI→Claude
 	// (RequestOpenAI2ClaudeMessage) 路径执行，用于屏蔽 OpenAI 客户端不感知的
@@ -128,6 +134,12 @@ func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relayc
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
+	if info.GetChannelType() == constant.ChannelTypeAnthropic &&
+		ResolveBetaTarget(info.ChannelType, info.ChannelOtherSettings.AnthropicBetaTarget) == TargetAnthropicDirect {
+		if feature := c.Request.Header.Get("X-Claude-Code-Feature"); feature != "" {
+			req.Set("X-Claude-Code-Feature", feature)
+		}
+	}
 	req.Set("x-api-key", info.ApiKey)
 	anthropicVersion := c.Request.Header.Get("anthropic-version")
 	if anthropicVersion == "" {
