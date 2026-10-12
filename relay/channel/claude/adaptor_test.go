@@ -116,7 +116,7 @@ func TestSetupRequestHeaderForDirectAnthropicPreservesClaudeCodeExtensionHeaders
 	assert.Equal(t, "upstream-secret", header.Get("X-Api-Key"))
 }
 
-func TestSetupRequestHeaderForNonDirectAnthropicDoesNotPreserveClaudeCodeExtensionHeaders(t *testing.T) {
+func TestSetupRequestHeaderForBedrockTargetPreservesClaudeCodeExtensionHeaders(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
@@ -133,10 +133,10 @@ func TestSetupRequestHeaderForNonDirectAnthropicDoesNotPreserveClaudeCodeExtensi
 	}
 
 	require.NoError(t, (&Adaptor{}).SetupRequestHeader(c, &header, info))
-	assert.Empty(t, header.Get("X-Claude-Code-Feature"))
+	assert.Equal(t, "server-safeguards", header.Get("X-Claude-Code-Feature"))
 }
 
-func TestConvertClaudeRequestDoesNotSendSafeguardsToNonDirectAnthropic(t *testing.T) {
+func TestConvertClaudeRequestPreservesSafeguardsForBedrockTarget(t *testing.T) {
 	request := &dto.ClaudeRequest{
 		Model:      "claude-sonnet-4-5",
 		Messages:   []dto.ClaudeMessage{{Role: "user", Content: "hello"}},
@@ -155,7 +155,7 @@ func TestConvertClaudeRequestDoesNotSendSafeguardsToNonDirectAnthropic(t *testin
 	require.NoError(t, err)
 	output, ok := converted.(*dto.ClaudeRequest)
 	require.True(t, ok)
-	assert.Empty(t, output.Safeguards)
+	assert.JSONEq(t, `{"mode":"auto"}`, string(output.Safeguards))
 }
 
 func geminiToClaudeInfo() *relaycommon.RelayInfo {

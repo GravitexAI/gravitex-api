@@ -28,8 +28,7 @@ func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dt
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
-	if info.GetChannelType() != constant.ChannelTypeAnthropic ||
-		ResolveBetaTarget(info.ChannelType, info.ChannelOtherSettings.AnthropicBetaTarget) != TargetAnthropicDirect {
+	if info.GetChannelType() != constant.ChannelTypeAnthropic {
 		request.Safeguards = nil
 	}
 
@@ -134,8 +133,7 @@ func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relayc
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
-	if info.GetChannelType() == constant.ChannelTypeAnthropic &&
-		ResolveBetaTarget(info.ChannelType, info.ChannelOtherSettings.AnthropicBetaTarget) == TargetAnthropicDirect {
+	if info.GetChannelType() == constant.ChannelTypeAnthropic {
 		if feature := c.Request.Header.Get("X-Claude-Code-Feature"); feature != "" {
 			req.Set("X-Claude-Code-Feature", feature)
 		}
