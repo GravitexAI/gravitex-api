@@ -102,10 +102,25 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
-		if debugBytes, bErr := storage.Bytes(); bErr == nil {
-			logger.LogDebug(c, "requestBody: %s", common.TruncateJsonValues(string(debugBytes)))
+		requestBytes, err := storage.Bytes()
+		if err != nil {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.NewReplayableBodyReader(storage)
+		requestBytes, sanitized, err := relaycommon.SanitizeGPT6ChatToolReasoningEffort(requestBytes, info)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		logger.LogDebug(c, "requestBody: %s", common.TruncateJsonValues(string(requestBytes)))
+		if sanitized {
+			body, closer, err := relaycommon.NewOutboundJSONBody(requestBytes)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			defer closer.Close()
+			requestBody = body
+		} else {
+			requestBody = common.NewReplayableBodyReader(storage)
+		}
 	} else {
 		convertedRequest, err := adaptor.ConvertOpenAIRequest(c, info, request)
 		if err != nil {
@@ -172,6 +187,10 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			if err != nil {
 				return newAPIErrorFromParamOverride(err)
 			}
+		}
+		jsonData, _, err = relaycommon.SanitizeGPT6ChatToolReasoningEffort(jsonData, info)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 
 		logger.LogDebug(c, fmt.Sprintf("text request body: %s", common.TruncateJsonValues(string(jsonData))))
