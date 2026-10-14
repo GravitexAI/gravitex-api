@@ -9,7 +9,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 )
 
-const omniModelName = "gemini-omni-flash-preview"
+const omniModelName = relaycommon.GeminiOmniFlashPreview
 const omniTaskIDPrefix = "omni:"
 
 type omniContent struct {
@@ -51,7 +51,7 @@ type omniInteraction struct {
 }
 
 func isOmniModel(name string) bool {
-	return strings.EqualFold(strings.TrimSpace(name), omniModelName)
+	return relaycommon.IsGeminiOmniModel(name)
 }
 
 func markOmniTaskID(interactionID string) string {
@@ -131,8 +131,12 @@ func buildOmniRequestBody(req relaycommon.TaskSubmitReq) ([]byte, error) {
 		// while the normal task poller performs completion billing.
 		background = true
 	}
+	modelName := strings.TrimSpace(req.Model)
+	if modelName == "" {
+		modelName = omniModelName
+	}
 	body := map[string]interface{}{
-		"model": omniModelName,
+		"model": modelName,
 		"input": content,
 		"generation_config": map[string]interface{}{
 			"video_config": map[string]string{"task": task},
@@ -161,6 +165,14 @@ func buildOmniRequestBody(req relaycommon.TaskSubmitReq) ([]byte, error) {
 	// requested ratio for text/image/reference generation only.
 	if task != "edit" {
 		responseFormat["aspect_ratio"] = aspect
+	}
+	if strings.EqualFold(modelName, relaycommon.GeminiOmni11FlashPreview) {
+		// The 1.1 model accepts resolution in response_format. Keep the
+		// older model's upstream request shape unchanged.
+		switch resolution := strings.ToLower(strings.TrimSpace(metadataString(metadata, "resolution"))); resolution {
+		case "360p", "720p", "1080p", "4k":
+			responseFormat["resolution"] = resolution
+		}
 	}
 	// The Interactions API defines response_format as an array. Keep inline
 	// delivery so the gateway does not require an OSS/GCS output location.

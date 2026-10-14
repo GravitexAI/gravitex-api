@@ -73,6 +73,19 @@ func TestConvertNativeInteractionRequestReadsOfficialResponseFormatArray(t *test
 	require.Equal(t, float64(4), metadata["durationSeconds"])
 }
 
+func TestConvertNativeInteractionRequestPreservesOmni11ResolutionAndStream(t *testing.T) {
+	raw := []byte(`{"model":"gemini-omni-1.1-flash-preview","input":[{"type":"text","text":"make a video"}],"stream":true,"response_format":[{"type":"video","resolution":"720p"}]}`)
+	converted, modelName, err := convertNativeInteractionRequest(raw)
+	require.NoError(t, err)
+	require.Equal(t, "gemini-omni-1.1-flash-preview", modelName)
+	var request map[string]any
+	require.NoError(t, common.Unmarshal(converted, &request))
+	metadata := request["metadata"].(map[string]any)
+	require.Equal(t, "720p", metadata["resolution"])
+	require.Equal(t, true, metadata["stream"])
+	require.Equal(t, false, metadata["background"])
+}
+
 func TestConvertNativeInteractionRequestPreservesPreviousInteraction(t *testing.T) {
 	raw := []byte(`{
 		"model":"gemini-omni-flash-preview",
@@ -98,6 +111,12 @@ func TestConvertNativeInteractionRequestRejectsAudioInput(t *testing.T) {
 	}`)
 	_, _, err := convertNativeInteractionRequest(raw)
 	require.EqualError(t, err, "audio input is not supported for gemini-omni-flash-preview video tasks")
+}
+
+func TestConvertNativeInteractionRequestRejectsAudioInputForOmni11(t *testing.T) {
+	raw := []byte(`{"model":"gemini-omni-1.1-flash-preview","input":[{"type":"text","text":"use this soundtrack"},{"type":"audio","mime_type":"audio/mpeg","data":"YWJj"}]}`)
+	_, _, err := convertNativeInteractionRequest(raw)
+	require.EqualError(t, err, "audio input is not supported for gemini-omni-1.1-flash-preview video tasks")
 }
 
 func TestConvertNativeInteractionRequestForLyriaPreservesAudioInputShape(t *testing.T) {

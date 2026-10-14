@@ -153,7 +153,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 // metadata into the async task data. It is intentionally scoped to Gemini
 // Omni; regular relay/task logs keep their existing path unchanged.
 func AppendGeminiOmniTaskLogMetadata(c *gin.Context, relayInfo *relaycommon.RelayInfo, taskData []byte) []byte {
-	if relayInfo == nil || !strings.EqualFold(strings.TrimSpace(relayInfo.OriginModelName), "gemini-omni-flash-preview") {
+	if relayInfo == nil || !relaycommon.IsGeminiOmniModel(relayInfo.OriginModelName) {
 		return taskData
 	}
 	data := make(map[string]interface{})

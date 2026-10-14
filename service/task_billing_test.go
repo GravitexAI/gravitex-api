@@ -1072,27 +1072,31 @@ func TestTaskBillingOtherIgnoresMalformedTaskData(t *testing.T) {
 }
 
 func TestEnrichTaskBillingDataForTokenSettlementAddsVideoBillingDetails(t *testing.T) {
-	task := makeTask(1, 1, 3000, 1, BillingSourceWallet, 0)
-	task.PrivateData.BillingContext.OriginModelName = "gemini-omni-flash-preview"
-	task.Properties.OriginModelName = "gemini-omni-flash-preview"
-	task.Data = json.RawMessage(`{"requested_seconds":4}`)
+	for _, modelName := range []string{"gemini-omni-flash-preview", "gemini-omni-1.1-flash-preview"} {
+		t.Run(modelName, func(t *testing.T) {
+			task := makeTask(1, 1, 3000, 1, BillingSourceWallet, 0)
+			task.PrivateData.BillingContext.OriginModelName = modelName
+			task.Properties.OriginModelName = modelName
+			task.Data = json.RawMessage(`{"requested_seconds":4}`)
 
-	result := &relaycommon.TaskInfo{TotalTokens: 17813, InputTokens: 1000, TextOutputTokens: 100, VideoOutputTokens: 500}
-	enrichTaskBillingDataForTokenSettlement(task, result)
+			result := &relaycommon.TaskInfo{TotalTokens: 17813, InputTokens: 1000, TextOutputTokens: 100, VideoOutputTokens: 500}
+			enrichTaskBillingDataForTokenSettlement(task, result)
 
-	var data map[string]interface{}
-	require.NoError(t, common.Unmarshal(task.Data, &data))
-	assert.Equal(t, "video_token_ratio", data["billing_type"])
-	assert.Equal(t, float64(17813), data["tokens"])
-	assert.Equal(t, float64(1000), data["input_tokens"])
-	assert.Equal(t, float64(1000), data["input_text_tokens"])
-	assert.Equal(t, float64(100), data["text_output_tokens"])
-	assert.Equal(t, float64(500), data["video_output_tokens"])
-	assert.Equal(t, 1.5, data["input_price_per_million_tokens"])
+			var data map[string]interface{}
+			require.NoError(t, common.Unmarshal(task.Data, &data))
+			assert.Equal(t, "video_token_ratio", data["billing_type"])
+			assert.Equal(t, float64(17813), data["tokens"])
+			assert.Equal(t, float64(1000), data["input_tokens"])
+			assert.Equal(t, float64(1000), data["input_text_tokens"])
+			assert.Equal(t, float64(100), data["text_output_tokens"])
+			assert.Equal(t, float64(500), data["video_output_tokens"])
+			assert.Equal(t, 1.5, data["input_price_per_million_tokens"])
 
-	actualQuota, ok, _ := calculateGeminiOmniQuota(task, result)
-	require.True(t, ok)
-	assert.Equal(t, 5575, actualQuota)
+			actualQuota, ok, _ := calculateGeminiOmniQuota(task, result)
+			require.True(t, ok)
+			assert.Equal(t, 5575, actualQuota)
+		})
+	}
 }
 
 func TestRecalculateGeminiOmniWritesUsageAndDurationColumns(t *testing.T) {

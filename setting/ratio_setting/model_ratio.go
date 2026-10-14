@@ -30,7 +30,8 @@ const (
 // 1 === ￥0.014 / 1k tokens
 
 var defaultModelRatio = map[string]float64{
-	"gemini-omni-flash-preview": 0.75, // $1.50 / 1M input tokens
+	"gemini-omni-flash-preview":     0.75, // $1.50 / 1M input tokens
+	"gemini-omni-1.1-flash-preview": 0.75, // $1.50 / 1M input tokens
 	//"midjourney":                50,
 	"gpt-4-gizmo-*":                           15,
 	"gpt-4o-gizmo-*":                          2.5,
@@ -1460,10 +1461,11 @@ var defaultVideoAudioPricing = map[string]VideoAudioPricing{
 // 当 VideoRatio 存在且 == 0 时，此值直接作为 $/M tokens 计费
 var defaultVideoCompletionRatioAudio = map[string]VideoAudioPricing{
 	// Gemini Omni Flash video output: $17.50 / 1M output tokens.
-	"gemini-omni-flash-preview": {NoAudio: 17.5, Audio: 17.5},
-	"seedance-1-5-pro-251215":   {NoAudio: 1.2, Audio: 2.4},
-	"seedance-2-0-pro":          {NoVideo: 7.0, Video: 4.3},
-	"seedance-2-0-fast":         {NoVideo: 5.6, Video: 3.3},
+	"gemini-omni-flash-preview":     {NoAudio: 17.5, Audio: 17.5},
+	"gemini-omni-1.1-flash-preview": {NoAudio: 17.5, Audio: 17.5},
+	"seedance-1-5-pro-251215":       {NoAudio: 1.2, Audio: 2.4},
+	"seedance-2-0-pro":              {NoVideo: 7.0, Video: 4.3},
+	"seedance-2-0-fast":             {NoVideo: 5.6, Video: 3.3},
 }
 
 // defaultVideoRatio 视频倍率默认值（VideoRatio=0 表示 VideoCompletionRatio 直接作为 $/M tokens 价格）

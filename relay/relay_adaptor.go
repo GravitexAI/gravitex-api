@@ -2,7 +2,6 @@ package relay
 
 import (
 	"strconv"
-	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -227,7 +226,7 @@ func isNativeInteractionTaskRequest(info *relaycommon.RelayInfo, modelName strin
 	if taskLyria.IsLyriaModel(modelName) {
 		return true
 	}
-	return taskLyria.IsNativeInteractionModel(modelName) && !strings.EqualFold(modelName, "gemini-omni-flash-preview")
+	return taskLyria.IsNativeInteractionModel(modelName) && !relaycommon.IsGeminiOmniModel(modelName)
 }
 
 func nativeInteractionTaskPlatform(platform constant.TaskPlatform, info *relaycommon.RelayInfo, modelName string) constant.TaskPlatform {

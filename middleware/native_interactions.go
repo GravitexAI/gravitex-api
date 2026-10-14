@@ -9,10 +9,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	tasklyria "github.com/QuantumNous/new-api/relay/channel/task/lyria"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 )
-
-const nativeOmniModel = "gemini-omni-flash-preview"
 
 // NativeInteractions converts the Google Interactions API request into the
 // gateway's existing video task request. The route is intentionally isolated
@@ -46,7 +45,7 @@ func NativeInteractions() gin.HandlerFunc {
 			}
 			if shouldUseLyriaNativeAdapter(originalPath, modelName) ||
 				(originalPath == "/v1beta/interactions" &&
-					tasklyria.IsNativeInteractionModel(modelName) && modelName != nativeOmniModel) {
+					tasklyria.IsNativeInteractionModel(modelName) && !relaycommon.IsGeminiOmniModel(modelName)) {
 				c.Set(common.KeyLyriaRawMirror, true)
 				c.Set(common.KeyLyriaRawRequestBody, append([]byte(nil), raw...))
 				c.Set("native_interactions_original_path", originalPath)
@@ -65,7 +64,7 @@ func NativeInteractions() gin.HandlerFunc {
 			// Synchronous Lyria requests must not create a task row.
 			c.Set("native_interactions_async", background && isLyriaInteractionModel(modelName))
 			stream, _ := requestBool(raw, "stream")
-			c.Set("native_interactions_stream", stream && strings.EqualFold(modelName, nativeOmniModel))
+			c.Set("native_interactions_stream", stream && relaycommon.IsGeminiOmniModel(modelName))
 			convertedStorage, err := common.CreateBodyStorage(converted)
 			if err != nil {
 				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "code": "invalid_request"}})
@@ -140,7 +139,7 @@ func convertNativeInteractionRequest(raw []byte) ([]byte, string, error) {
 
 	metadata := map[string]any{}
 	if nativeInteractionHasAudio(request["input"]) {
-		return nil, "", fmt.Errorf("audio input is not supported for gemini-omni-flash-preview video tasks")
+		return nil, "", fmt.Errorf("audio input is not supported for %s video tasks", modelName)
 	}
 	images, videos := nativeInteractionMedia(request["input"])
 	if len(images) == 1 {
@@ -165,7 +164,7 @@ func convertNativeInteractionRequest(raw []byte) ([]byte, string, error) {
 		metadata["background"] = background
 	}
 	stream, _ := request["stream"].(bool)
-	if stream && strings.EqualFold(modelName, nativeOmniModel) {
+	if stream && relaycommon.IsGeminiOmniModel(modelName) {
 		metadata["stream"] = true
 	}
 	for _, key := range []string{"previous_interaction_id"} {
@@ -176,12 +175,15 @@ func convertNativeInteractionRequest(raw []byte) ([]byte, string, error) {
 	// Native synchronous requests use the existing background task path. Native
 	// SSE is different: the Omni adaptor sends the request directly to the
 	// upstream stream and completes the task from the final GET response.
-	if stream && strings.EqualFold(modelName, nativeOmniModel) {
+	if stream && relaycommon.IsGeminiOmniModel(modelName) {
 		metadata["background"] = false
 	} else if background, ok := request["background"].(bool); !ok || !background {
 		metadata["background"] = true
 	}
 	if responseFormat := nativeInteractionResponseFormat(request["response_format"]); responseFormat != nil {
+		if resolution, ok := responseFormat["resolution"].(string); ok {
+			metadata["resolution"] = resolution
+		}
 		if aspect, ok := responseFormat["aspect_ratio"].(string); ok {
 			metadata["aspectRatio"] = aspect
 		}

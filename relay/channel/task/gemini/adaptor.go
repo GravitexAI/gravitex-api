@@ -435,7 +435,7 @@ func isOmniTerminalStatus(status string) bool {
 }
 
 func (a *TaskAdaptor) GetModelList() []string {
-	return []string{"veo-3.0-generate-001", "veo-3.1-generate-preview", "veo-3.1-fast-generate-preview", omniModelName}
+	return []string{"veo-3.0-generate-001", "veo-3.1-generate-preview", "veo-3.1-fast-generate-preview", omniModelName, relaycommon.GeminiOmni11FlashPreview}
 }
 
 func (a *TaskAdaptor) GetChannelName() string {

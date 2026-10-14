@@ -318,9 +318,9 @@ func taskAdjustFunding(task *model.Task, delta int) error {
 
 // TaskAdjustTokenQuota 调整任务的令牌额度，delta > 0 表示扣费，delta < 0 表示退还。
 // 需要通过 resolveTokenKey 运行时获取 key（不从 PrivateData 中读取）。
-func TaskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
+func TaskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) error {
 	if delta == 0 {
-		return
+		return nil
 	}
 	// 优先使用 PrivateData.TokenId，若为 0（JSON 反序列化失败等）则 fallback 到 task.TokenId（INT 列）
 	tokenId := task.PrivateData.TokenId
@@ -328,11 +328,11 @@ func TaskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
 		tokenId = task.TokenId
 	}
 	if tokenId <= 0 {
-		return
+		return nil
 	}
 	tokenKey := resolveTokenKey(ctx, tokenId, task.TaskID)
 	if tokenKey == "" {
-		return
+		return nil
 	}
 	var err error
 	if delta > 0 {
@@ -343,6 +343,7 @@ func TaskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
 	if err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("调整令牌额度失败 (delta=%d, task=%s): %s", delta, task.TaskID, err.Error()))
 	}
+	return err
 }
 
 // taskBillingOther 从 task 的 BillingContext 构建日志 Other 字段。
@@ -440,8 +441,7 @@ func enrichTaskBillingDataForTokenSettlement(task *model.Task, taskResult *relay
 	if task == nil || taskResult == nil || taskResult.TotalTokens <= 0 {
 		return
 	}
-	modelName := strings.ToLower(taskModelName(task))
-	if !strings.Contains(modelName, "gemini-omni") {
+	if !relaycommon.IsGeminiOmniModel(taskModelName(task)) {
 		return
 	}
 
@@ -486,7 +486,7 @@ func enrichTaskBillingDataForTokenSettlement(task *model.Task, taskResult *relay
 // calculateGeminiOmniQuota applies the same modality prices used by the
 // dedicated Omni billing path when the generic task settlement path is used.
 func calculateGeminiOmniQuota(task *model.Task, taskResult *relaycommon.TaskInfo) (int, bool, *common.QuotaClamp) {
-	if task == nil || taskResult == nil || !strings.Contains(strings.ToLower(taskModelName(task)), "gemini-omni") {
+	if task == nil || taskResult == nil || !relaycommon.IsGeminiOmniModel(taskModelName(task)) {
 		return 0, false, nil
 	}
 	if taskResult.InputTokens <= 0 && taskResult.TextOutputTokens <= 0 && taskResult.VideoOutputTokens <= 0 {
@@ -772,7 +772,7 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 }
 
 func geminiOmniTaskUseTimeSeconds(task *model.Task) int {
-	if task == nil || !strings.EqualFold(taskModelName(task), "gemini-omni-flash-preview") {
+	if task == nil || !relaycommon.IsGeminiOmniModel(taskModelName(task)) {
 		return 0
 	}
 	start, finish := task.StartTime, task.FinishTime

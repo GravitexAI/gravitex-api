@@ -898,21 +898,6 @@ func parseHasVideoInputFromUpstreamBody(body []byte) (bool, bool) {
 	return false, true
 }
 
-// parseResolutionFromUpstreamBody 从 upstream_request_body 解析 resolution 字段
-func parseResolutionFromUpstreamBody(body []byte) string {
-	if len(body) == 0 {
-		return ""
-	}
-	var m map[string]interface{}
-	if err := common.Unmarshal(body, &m); err != nil {
-		return ""
-	}
-	if res, ok := m["resolution"].(string); ok && res != "" {
-		return res
-	}
-	return ""
-}
-
 // mergeBillingFieldsIntoTaskData 将 existingData 中的计费字段合并进 newData，返回合并后的 JSON；用于 New API 格式分支避免覆盖导致计费失败。
 // 与 nebula-new-api 对齐：当上游响应非 New API（如 Vertex 仅返回 {"name":"..."}）时不要用空数据覆盖，保留 existingData。
 func mergeBillingFieldsIntoTaskData(existingData, newData []byte) []byte {
@@ -1018,7 +1003,7 @@ func isVideoTokenRatioModel(name string) bool {
 // Omni can reach SUCCESS without an intermediate IN_PROGRESS poll, so StartTime
 // may be empty; in that case SubmitTime is the reliable task boundary.
 func videoTaskUseTimeSeconds(task *model.Task, modelName string) int {
-	if task == nil || !strings.EqualFold(modelName, "gemini-omni-flash-preview") {
+	if task == nil || !relaycommon.IsGeminiOmniModel(modelName) {
 		return 0
 	}
 	start := task.StartTime
@@ -1063,7 +1048,7 @@ func videoTaskUseTimeSeconds(task *model.Task, modelName string) int {
 }
 
 func isGeminiOmniVideoModel(name string) bool {
-	return strings.EqualFold(strings.TrimSpace(name), "gemini-omni-flash-preview")
+	return relaycommon.IsGeminiOmniModel(name)
 }
 
 func isGeminiOmniDataURL(value string) bool {
@@ -1198,10 +1183,8 @@ func CompleteVideoTaskOnUpstreamSuccess(ctx context.Context, task *model.Task, c
 	if taskResult.Status == model.TaskStatusSuccess && isVideoTokenRatioModel(taskModelName) {
 		if err := handleVideoTokenRatioBilling(ctx, task, taskResult); err != nil {
 			logger.LogError(ctx, fmt.Sprintf("[VideoBilling] GET path token_ratio model=%s task=%s failed: %v", taskModelName, task.TaskID, err))
-			_ = model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
-				"status":      model.TaskStatusFailure,
-				"fail_reason": fmt.Sprintf("billing_failed: %v", err),
-			}).Error
+			// Billing/log persistence failures must not turn an upstream-successful
+			// video into a failed task. Keep it retryable on the next GET.
 			return err
 		}
 	}
@@ -1582,9 +1565,8 @@ func handleVideoPerSecondBilling(ctx context.Context, task *model.Task) error {
 		// 同步扣除令牌额度
 		service.TaskAdjustTokenQuota(ctx, task, actualQuota)
 	}
-	// 扣费成功（或 actualQuota==0 无需扣费），标记计费锁已消费，defer 不再回滚
+	// Per-second billing retains its existing settlement boundary.
 	billingLockClaimed = false
-
 	// 获取用户名（用于日志）
 	username := ""
 	if user, err := model.GetUserById(task.UserId, false); err == nil && user != nil {
@@ -1751,8 +1733,8 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 	}
 	if tokens <= 0 {
 		if isGeminiOmniVideoModel(modelName) {
-			// Preview responses may omit usage. Keep billing deterministic with
-			// Google's documented 5,792 video tokens per second fallback.
+			// Preview responses may omit usage. Use Google's published output
+			// token rates for the requested resolution (720p by default).
 			seconds := task.Properties.RequestedSeconds
 			if seconds <= 0 {
 				if value, ok := taskData["requested_seconds"].(float64); ok {
@@ -1762,7 +1744,17 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 			if seconds <= 0 {
 				seconds = 4
 			}
-			tokens = seconds * 5792
+			resolution := ""
+			if strings.EqualFold(strings.TrimSpace(modelName), relaycommon.GeminiOmni11FlashPreview) {
+				resolution = strings.ToLower(strings.TrimSpace(taskResult.Resolution))
+				if resolution == "" {
+					resolution, _ = taskData["video_resolution"].(string)
+				}
+				if resolution == "" {
+					resolution = parseResolutionFromUpstreamBody(task.UpstreamRequestBody)
+				}
+			}
+			tokens = seconds * geminiOmniFallbackVideoTokensPerSecond(modelName, resolution)
 			taskResult.VideoOutputTokens = tokens
 			logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] Omni usage missing, fallback to %d video tokens (%ds)", tokens, seconds))
 		}
@@ -1966,9 +1958,6 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		// 同步扣除令牌额度
 		service.TaskAdjustTokenQuota(ctx, task, actualQuota)
 	}
-	// 扣费成功（或 actualQuota==0 无需扣费），标记计费锁已消费，defer 不再回滚
-	billingLockClaimed = false
-
 	// 获取用户名（用于日志）
 	username := ""
 	if user, err := model.GetUserById(task.UserId, false); err == nil && user != nil {
@@ -2026,8 +2015,30 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		Other:            string(otherBytes),
 	}
 	if err := model.CreateLog(consumeLog); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("[VideoBilling] token_ratio model=%s task=%s failed to insert consume log: %v", modelName, task.TaskID, err))
-	} else if model.IsQuotaDataStreamEnabled() {
+		// The wallet and token quota were already deducted. Roll them back before
+		// releasing the task's DB claim, so the next GET can retry without charging
+		// the user for a consume log that does not exist.
+		var rollbackErrors []string
+		if tokenErr := service.TaskAdjustTokenQuota(ctx, task, -actualQuota); tokenErr != nil {
+			rollbackErrors = append(rollbackErrors, "token quota: "+tokenErr.Error())
+		}
+		if actualQuota > 0 {
+			if userErr := model.IncreaseUserQuota(task.UserId, actualQuota, true); userErr != nil {
+				rollbackErrors = append(rollbackErrors, "user quota: "+userErr.Error())
+			}
+		}
+		if len(rollbackErrors) > 0 {
+			// Keep quota=-1 as a billing lock when rollback is incomplete; retrying
+			// could otherwise debit the same task a second time.
+			billingLockClaimed = false
+			return fmt.Errorf("handleVideoTokenRatioBilling: log insert failed (%v) and charge rollback failed (%s)", err, strings.Join(rollbackErrors, ", "))
+		}
+		return fmt.Errorf("handleVideoTokenRatioBilling: failed to insert consume log: %w", err)
+	}
+	// The charge is now represented by a durable consume log. Do not release the
+	// DB guard on later bookkeeping failures.
+	billingLockClaimed = false
+	if model.IsQuotaDataStreamEnabled() {
 		model.QueueConsumeLogToQuotaStream(consumeLog, "video_billing_token_ratio")
 	}
 
@@ -2052,6 +2063,22 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		}
 	}
 	return nil
+}
+
+func geminiOmniFallbackVideoTokensPerSecond(modelName, resolution string) int {
+	if !strings.EqualFold(strings.TrimSpace(modelName), relaycommon.GeminiOmni11FlashPreview) {
+		return 5792
+	}
+	switch strings.ToLower(strings.TrimSpace(resolution)) {
+	case "360p":
+		return 1931
+	case "1080p":
+		return 8688
+	case "4k":
+		return 17376
+	default:
+		return 5792
+	}
 }
 
 func geminiOmniInputTokens(taskResult *relaycommon.TaskInfo) (aggregate int, textInput int) {

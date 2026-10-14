@@ -362,7 +362,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 }
 
 func (a *TaskAdaptor) GetModelList() []string {
-	return []string{"veo-3.0-generate-001", vertexOmniModelName}
+	return []string{"veo-3.0-generate-001", vertexOmniModelName, relaycommon.GeminiOmni11FlashPreview}
 }
 func (a *TaskAdaptor) GetChannelName() string { return "vertex" }
 

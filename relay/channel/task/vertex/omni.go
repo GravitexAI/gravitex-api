@@ -12,11 +12,11 @@ import (
 	"github.com/QuantumNous/new-api/service"
 )
 
-const vertexOmniModelName = "gemini-omni-flash-preview"
+const vertexOmniModelName = relaycommon.GeminiOmniFlashPreview
 const omniTaskIDPrefix = "omni:"
 
 func isVertexOmniModel(name string) bool {
-	return strings.EqualFold(strings.TrimSpace(name), vertexOmniModelName)
+	return relaycommon.IsGeminiOmniModel(name)
 }
 
 func markOmniTaskID(interactionID string) string {

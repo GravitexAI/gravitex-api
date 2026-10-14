@@ -110,6 +110,46 @@ func TestBuildOmniRequestBodyUsesInlineDelivery(t *testing.T) {
 	require.Equal(t, "inline", responseFormat["delivery"])
 }
 
+func TestBuildOmniRequestBodyPreservesModelAndNewResolution(t *testing.T) {
+	for _, tc := range []struct {
+		model          string
+		resolution     string
+		wantResolution bool
+	}{
+		{omniModelName, "720p", false},
+		{"gemini-omni-1.1-flash-preview", "360p", true},
+		{"gemini-omni-1.1-flash-preview", "720p", true},
+		{"gemini-omni-1.1-flash-preview", "1080p", true},
+		{"gemini-omni-1.1-flash-preview", "4k", true},
+		{"gemini-omni-1.1-flash-preview", "bogus", false},
+	} {
+		t.Run(tc.model+"/"+tc.resolution, func(t *testing.T) {
+			body, err := buildOmniRequestBody(relaycommon.TaskSubmitReq{
+				Model: tc.model, Prompt: "make a video",
+				Metadata: map[string]interface{}{"resolution": tc.resolution},
+			})
+			require.NoError(t, err)
+			var payload map[string]interface{}
+			require.NoError(t, common.Unmarshal(body, &payload))
+			require.Equal(t, tc.model, payload["model"])
+			format := payload["response_format"].([]interface{})[0].(map[string]interface{})
+			if tc.wantResolution {
+				require.Equal(t, tc.resolution, format["resolution"])
+			} else {
+				_, exists := format["resolution"]
+				require.False(t, exists)
+			}
+		})
+	}
+}
+
+func TestGeminiOmni11UsesInteractionsEndpoint(t *testing.T) {
+	adaptor := &TaskAdaptor{baseURL: "https://generativelanguage.googleapis.com"}
+	url, err := adaptor.BuildRequestURL(&relaycommon.RelayInfo{OriginModelName: relaycommon.GeminiOmni11FlashPreview})
+	require.NoError(t, err)
+	require.Equal(t, "https://generativelanguage.googleapis.com/v1beta/interactions", url)
+}
+
 func TestBuildOmniRequestBodyUsesUpstreamStreamForNativeSSE(t *testing.T) {
 	body, err := buildOmniRequestBody(relaycommon.TaskSubmitReq{
 		Prompt: "stream a video",
