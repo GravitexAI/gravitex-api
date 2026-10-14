@@ -88,20 +88,16 @@ func (token *Token) GetMaskedKey() string {
 }
 
 func (token *Token) GetIpLimits() []string {
-	// delete empty spaces
-	//split with \n
 	ipLimits := make([]string, 0)
 	if token.AllowIps == nil {
 		return ipLimits
 	}
-	cleanIps := strings.ReplaceAll(*token.AllowIps, " ", "")
-	if cleanIps == "" {
+	if strings.TrimSpace(*token.AllowIps) == "" {
 		return ipLimits
 	}
-	ips := strings.Split(cleanIps, "\n")
+	ips := strings.Split(*token.AllowIps, "\n")
 	for _, ip := range ips {
 		ip = strings.TrimSpace(ip)
-		ip = strings.ReplaceAll(ip, ",", "")
 		if ip != "" {
 			ipLimits = append(ipLimits, ip)
 		}

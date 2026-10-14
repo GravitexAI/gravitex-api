@@ -336,6 +336,12 @@ func AddToken(c *gin.Context) {
 		return
 	}
 	token := request.Token
+	if token.AllowIps != nil {
+		if err := common.ValidateIPAllowlist(*token.AllowIps); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
 	// 企业主账号（已开启限制）无权创建 API 密钥。
 	// 判定依赖 Java 维护的企业表；查询出错时按"不受限"处理并记录日志，
 	// 避免因企业表异常波及全体（含非企业）用户创建密钥。
@@ -480,6 +486,12 @@ func UpdateToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if statusOnly != "true" && req.AllowIps != nil {
+		if err := common.ValidateIPAllowlist(*req.AllowIps); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
 	// 企业主账号（已开启限制）无权修改 API 密钥；仅启用/禁用（status_only）不拦截
 	if statusOnly != "true" {
 		restricted, rerr := model.IsEnterpriseApikeyRestrictedOwner(userId)
@@ -556,7 +568,9 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.ModelLimitsEnabled = token.ModelLimitsEnabled
 		cleanToken.ModelLimits = token.ModelLimits
 		cleanToken.VendorLimits = token.VendorLimits
-		cleanToken.AllowIps = token.AllowIps
+		if req.AllowIps != nil {
+			cleanToken.AllowIps = req.AllowIps
+		}
 		cleanToken.Group = token.Group
 		cleanToken.CrossGroupRetry = token.CrossGroupRetry
 		cleanToken.DailySpendThreshold = token.DailySpendThreshold
