@@ -14,10 +14,10 @@ var gpt6ChatFunctionToolModels = map[string]struct{}{
 }
 
 // SanitizeGPT6ChatToolReasoningEffort applies the GPT-6 Chat Completions
-// compatibility rule. GPT-6.1 Sol rejects "none" as an effort and rejects
-// function tools with any supported effort, so Chat Completions requests for
-// that model must omit function tools. Sol and Luna accept an explicit "none"
-// to disable reasoning while preserving function tools.
+// compatibility rule. GPT-6 Astra and GPT-6.1 Sol reject "none" as an effort
+// and reject function tools with any supported effort, so Chat Completions
+// requests for those models must omit function tools. Sol and Luna accept an
+// explicit "none" to disable reasoning while preserving function tools.
 func SanitizeGPT6ChatToolReasoningEffort(data []byte, info *RelayInfo) ([]byte, bool, error) {
 	if info == nil || info.RelayMode != relayconstant.RelayModeChatCompletions {
 		return data, false, nil
@@ -25,7 +25,7 @@ func SanitizeGPT6ChatToolReasoningEffort(data []byte, info *RelayInfo) ([]byte, 
 
 	model := strings.TrimSpace(gjson.GetBytes(data, "model").String())
 	effort := strings.TrimSpace(gjson.GetBytes(data, "reasoning_effort").String())
-	if model == "gpt-6.1-sol" {
+	if model == "gpt-6-astra" || model == "gpt-6.1-sol" {
 		if !hasOpenAIFunctionTool(data) && !strings.EqualFold(effort, "none") {
 			return data, false, nil
 		}

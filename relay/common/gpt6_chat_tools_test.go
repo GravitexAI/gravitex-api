@@ -19,13 +19,13 @@ func TestSanitizeGPT6ChatToolReasoningEffort(t *testing.T) {
 		expectedSanitized bool
 	}{
 		{
-			name:              "leaves gpt-6-astra reasoning untouched with function tools",
-			request:           `{"model":"gpt-6-astra","reasoning_effort":"high","tools":[{"type":"function","function":{"name":"read_file"}}]}`,
-			expected:          `{"model":"gpt-6-astra","reasoning_effort":"high","tools":[{"type":"function","function":{"name":"read_file"}}]}`,
+			name:              "removes function tools for gpt-6-astra while preserving supported reasoning",
+			request:           `{"model":"gpt-6-astra","reasoning_effort":"high","tools":[{"type":"function","function":{"name":"read_file"}}],"tool_choice":"auto"}`,
+			expected:          `{"model":"gpt-6-astra","reasoning_effort":"high"}`,
 			relayMode:         constant.RelayModeChatCompletions,
 			initialEffort:     "high",
 			expectedEffort:    "high",
-			expectedSanitized: false,
+			expectedSanitized: true,
 		},
 		{
 			name:              "disables reasoning for gpt-6-sol with function tools",
