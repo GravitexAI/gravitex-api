@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	rootconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
@@ -54,6 +55,12 @@ var xaiGrok46ResponsesFields = map[string]struct{}{
 	"user":                 {},
 }
 
+// OpenAI 图像接口专有、xAI 图像接口未定义的字段，转发前剔除。
+var xaiImageUnsupportedFields = []string{
+	"size", "style", "background", "moderation", "output_format", "output_compression",
+	"partial_images", "stream", "mask", "input_fidelity", "watermark",
+}
+
 var xaiGrok46ToolTypes = map[string]struct{}{
 	"function":           {},
 	"web_search":         {},
@@ -92,13 +99,34 @@ func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
-	xaiRequest := ImageRequest{
-		Model:          request.Model,
-		Prompt:         request.Prompt,
-		N:              int(lo.FromPtrOr(request.N, uint(1))),
-		ResponseFormat: request.ResponseFormat,
+	// grok-imagine 的 aspect_ratio / resolution / quality / image / images / deferred 等参数
+	// 都要原样透传：已定义字段与 Extra 里的未知字段合并成一个 map 发给上游。
+	base, err := common.Marshal(request)
+	if err != nil {
+		return nil, err
 	}
-	return xaiRequest, nil
+	body := make(map[string]json.RawMessage, len(request.Extra))
+	if err := common.Unmarshal(base, &body); err != nil {
+		return nil, err
+	}
+	for k, v := range request.Extra {
+		if _, exists := body[k]; !exists {
+			body[k] = v
+		}
+	}
+	// OpenAI 专有、xAI 未定义的字段去掉，避免老客户端（如固定带 size 的 SDK）被上游拒绝。
+	for _, k := range xaiImageUnsupportedFields {
+		delete(body, k)
+	}
+
+	// xAI 图生图只走 /v1/images/edits；generations 请求带了参考图时改发 edits，
+	// 否则上游会忽略参考图、按纯文生图出图。
+	_, hasImage := body["image"]
+	_, hasImages := body["images"]
+	if info.RelayMode == constant.RelayModeImagesGenerations && (hasImage || hasImages) {
+		info.RequestURLPath = strings.Replace(info.RequestURLPath, "/images/generations", "/images/edits", 1)
+	}
+	return body, nil
 }
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
