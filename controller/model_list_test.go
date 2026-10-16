@@ -522,3 +522,41 @@ func TestSetupLoginDoesNotTouchPasswordWhenPasswordFieldOmitted(t *testing.T) {
 	require.NoError(t, db.First(&stored, user.Id).Error)
 	assert.Equal(t, hashedPassword, stored.Password)
 }
+
+// 企业子账号场景：密钥只勾选整厂（vendor_limits），model_limits 为空，
+// /v1/models 必须与 relay 侧 IsModelAllowedByToken 一致，列出该厂商下的模型。
+func TestListModelsTokenVendorLimitListsVendorModels(t *testing.T) {
+	withSelfUseModeEnabled(t)
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.Create(&[]model.Vendor{
+		{Id: 101, Name: "zz-vendor-allowed", Status: 1},
+		{Id: 102, Name: "zz-vendor-other", Status: 1},
+	}).Error)
+	require.NoError(t, db.Create(&[]model.Model{
+		{ModelName: "zz-vendor-allowed-model", VendorID: 101, Status: 1},
+		{ModelName: "zz-vendor-other-model", VendorID: 102, Status: 1},
+	}).Error)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "default", Model: "zz-vendor-allowed-model", ChannelId: 1, Enabled: true},
+		{Group: "default", Model: "zz-vendor-other-model", ChannelId: 1, Enabled: true},
+		{Group: "default", Model: "zz-vendor-explicit-model", ChannelId: 1, Enabled: true},
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+	common.SetContextKey(ctx, constant.ContextKeyTokenModelLimitEnabled, true)
+	common.SetContextKey(ctx, constant.ContextKeyTokenModelLimit, map[string]bool{
+		"zz-vendor-explicit-model": true,
+	})
+	common.SetContextKey(ctx, constant.ContextKeyTokenVendorLimitEnabled, true)
+	common.SetContextKey(ctx, constant.ContextKeyTokenVendorLimit, map[int]bool{101: true})
+
+	ListModels(ctx, constant.ChannelTypeOpenAI)
+
+	ids := decodeListModelsResponse(t, recorder)
+	require.Contains(t, ids, "zz-vendor-allowed-model")
+	require.Contains(t, ids, "zz-vendor-explicit-model")
+	require.NotContains(t, ids, "zz-vendor-other-model")
+}

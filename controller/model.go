@@ -22,7 +22,6 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
@@ -227,7 +226,8 @@ func ListModels(c *gin.Context, modelType int) {
 		return
 	}
 	ownerGroups := groups.ownerGroups
-	modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
+	// 与 relay 侧 distributor 保持一致：模型限制与厂商限制取并集
+	modelLimitEnable := service.IsTokenModelAccessLimited(c)
 	var tokenModelLimit map[string]bool
 	if modelLimitEnable {
 		s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
@@ -240,11 +240,8 @@ func ListModels(c *gin.Context, modelType int) {
 	}
 	models := service.GetGroupsEnabledModels(ownerGroups)
 	for _, modelName := range models {
-		if modelLimitEnable {
-			matchingName := ratio_setting.FormatMatchingModelName(modelName)
-			if !tokenModelLimit[modelName] && !tokenModelLimit[matchingName] {
-				continue
-			}
+		if modelLimitEnable && !tokenModelLimit[modelName] && !service.IsModelAllowedByToken(c, modelName) {
+			continue
 		}
 		if !acceptUnsetRatioModel && !helper.HasModelBillingConfig(modelName) {
 			continue
