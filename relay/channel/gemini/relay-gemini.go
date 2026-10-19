@@ -199,9 +199,10 @@ func ThinkingAdaptor(geminiRequest *dto.GeminiChatRequest, info *relaycommon.Rel
 			// thoughtsTokenCount，却不会回传思考摘要，导致 reasoning_tokens 有值但 reasoning_content 为空。
 			effort := oaiRequest[0].ReasoningEffort
 			thinkingConfig := &dto.GeminiThinkingConfig{IncludeThoughts: common.GetPointer(true)}
-			if strings.HasPrefix(modelName, "gemini-3") {
-				// Gemini 3.x 使用 thinkingLevel（low/high），不再使用 thinkingBudget
-				thinkingConfig.ThinkingLevel = mapEffortToGeminiThinkingLevel(effort)
+			if strings.HasPrefix(modelName, "gemini-3") || strings.HasPrefix(modelName, "gemini-4") {
+				// Gemini 3 及以后使用 thinkingLevel，不再使用 thinkingBudget
+				// （对 Gemini 3+ 设置 thinkingBudget 上游直接返回 400）
+				thinkingConfig.ThinkingLevel = mapEffortToGeminiThinkingLevel(modelName, effort)
 			} else {
 				thinkingConfig.ThinkingBudget = common.GetPointer(clampThinkingBudgetByEffort(modelName, effort))
 			}
@@ -234,13 +235,26 @@ func geminiThinkingOnByDefault(modelName string) bool {
 		}
 	}
 	return strings.HasPrefix(modelName, "gemini-3") ||
+		strings.HasPrefix(modelName, "gemini-4") ||
 		strings.HasPrefix(modelName, "gemini-2.5-pro") ||
 		strings.HasPrefix(modelName, "gemini-2.5-flash")
 }
 
-// mapEffortToGeminiThinkingLevel 将 OpenAI 的 reasoning_effort 映射为 Gemini 3.x 的 thinkingLevel。
-// Gemini 3.x 当前仅支持 low / high 两档。
-func mapEffortToGeminiThinkingLevel(effort string) string {
+// mapEffortToGeminiThinkingLevel 将 OpenAI 的 reasoning_effort 映射为 thinkingLevel。
+// Gemini 3.x 当前仅支持 low / high 两档；Gemini 4 支持 low / medium / high，没有 minimal。
+func mapEffortToGeminiThinkingLevel(modelName string, effort string) string {
+	if strings.HasPrefix(modelName, "gemini-4") {
+		switch effort {
+		case "minimal", "low":
+			return "low"
+		case "medium":
+			return "medium"
+		case "high", "xhigh", "max":
+			return "high"
+		default:
+			return ""
+		}
+	}
 	switch effort {
 	case "minimal", "low":
 		return "low"
