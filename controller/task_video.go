@@ -999,6 +999,15 @@ func isVideoTokenRatioModel(name string) bool {
 	return false
 }
 
+func appendInteractionsTaskRequestPath(task *model.Task, other map[string]interface{}) {
+	if task == nil || other == nil || !constant.IsInteractionsTaskPlatform(task.Platform) || task.PrivateData.Execution == nil {
+		return
+	}
+	if requestPath := strings.TrimSpace(task.PrivateData.Execution.RequestPath); requestPath != "" {
+		other["request_path"] = requestPath
+	}
+}
+
 // videoTaskUseTimeSeconds returns the actual duration for Omni async billing.
 // Omni can reach SUCCESS without an intermediate IN_PROGRESS poll, so StartTime
 // may be empty; in that case SubmitTime is the reliable task boundary.
@@ -1588,6 +1597,7 @@ func handleVideoPerSecondBilling(ctx context.Context, task *model.Task) error {
 		"generate_audio":                  generateAudio,
 		"video_resolution":                resKey,
 	}
+	appendInteractionsTaskRequestPath(task, otherMap)
 	// official_quota: vendor cost without group ratio
 	if groupRatio > 0 {
 		otherMap["official_quota"] = float64(actualQuota) / groupRatio
@@ -1898,6 +1908,7 @@ func handleVideoTokenRatioBilling(ctx context.Context, task *model.Task, taskRes
 		"video_completion_ratio_val": cfgVal,
 		"ratio_mode":                 ratioMode,
 	}
+	appendInteractionsTaskRequestPath(task, otherMap)
 	// 记录视频输入维度（如果解析到了）
 	if hasVideoInputResolved {
 		otherMap["has_video_input"] = hasVideoInputVal

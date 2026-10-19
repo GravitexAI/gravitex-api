@@ -15,16 +15,22 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/relay/channel"
+	taskGemini "github.com/QuantumNous/new-api/relay/channel/task/gemini"
 	taskLyria "github.com/QuantumNous/new-api/relay/channel/task/lyria"
 	"github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
+	"github.com/tidwall/gjson"
 )
 
 // CompleteVideoTaskOnUpstreamSuccessFn is set by main.go to break the import cycle
@@ -88,7 +94,14 @@ func parseTaskForPolling(a channel.TaskAdaptor, task *model.Task, resp *http.Res
 	}
 	return nil, fmt.Errorf("task adaptor does not support polling")
 }
-func parseSubmittedTaskResult(a channel.TaskAdaptor, body []byte) (*relaycommon.TaskInfo, error) {
+func parseSubmittedTaskResult(a channel.TaskAdaptor, body []byte, modelNames ...string) (*relaycommon.TaskInfo, error) {
+	if len(modelNames) > 0 {
+		if n, ok := a.(interface {
+			ParseTaskResultWithModel([]byte, string) (*relaycommon.TaskInfo, error)
+		}); ok {
+			return n.ParseTaskResultWithModel(body, modelNames[0])
+		}
+	}
 	if n, ok := a.(interface {
 		ParseTaskResult([]byte) (*relaycommon.TaskInfo, error)
 	}); ok {
@@ -294,9 +307,18 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	//    避免依赖 private_data.upstream_task_id（GORM MySQL JSON Scanner 有 bug）。
 	//    如果 adaptor 未设置，InitTask 内部会 fallback 生成 task_xxxx。
 
-	// 4. 价格计算：基础模型价格
+	// 4. Interactions 的阶梯表达式复用表达式计费；其他 task 计费保持原路径。
 	info.OriginModelName = modelName
-	priceData, err := helper.ModelPriceHelperPerCall(c, info)
+	priceData, tieredInteractions, err := nativeInteractionsTieredPrice(c, info, nativeInteractionsRequestBody(c))
+	if err != nil {
+		return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
+	}
+	if !tieredInteractions {
+		priceData, err = helper.ModelPriceHelperPerCall(c, info)
+	} else {
+		isPerSecondBilling = false
+		isVideoTokenRatioBilling = false
+	}
 	if err != nil {
 		return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
 	}
@@ -312,7 +334,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}
 
 	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
-	if !common.StringsContains(constant.TaskPricePatches, modelName) {
+	if info.TieredBillingSnapshot == nil && !common.StringsContains(constant.TaskPricePatches, modelName) {
 		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
 		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
 		info.PriceData.Quota = quota
@@ -438,7 +460,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 13. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
 	// 按秒计费 / 视频按量计费走各自的引擎，不参与 OtherRatios 调整（main-alpha）
-	if !isPerSecondBilling && !isVideoTokenRatioBilling {
+	if info.TieredBillingSnapshot == nil && !isPerSecondBilling && !isVideoTokenRatioBilling {
 		if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
 			if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
 				// 基于调整后的 ratios 重新计算 quota
@@ -451,7 +473,16 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 
 	var initialTaskInfo *relaycommon.TaskInfo
 	if constant.IsInteractionsTaskPlatform(platform) {
-		parsed, parseErr := parseSubmittedTaskResult(adaptor, taskData)
+		var parsed *relaycommon.TaskInfo
+		var parseErr error
+		if info.NativeInteractions && info.ChannelType == constant.ChannelTypeGemini &&
+			!relaycommon.IsGeminiOmniModel(modelName) &&
+			!strings.HasPrefix(strings.ToLower(modelName), "veo-") &&
+			!strings.HasPrefix(strings.ToLower(modelName), "lyria-") {
+			parsed, parseErr = taskGemini.ParseNativeInteractionTaskResult(taskData, modelName)
+		} else {
+			parsed, parseErr = parseSubmittedTaskResult(adaptor, taskData, modelName)
+		}
 		if parseErr != nil {
 			if nativeVertexInteractionResponse {
 				parsed = &relaycommon.TaskInfo{
@@ -496,6 +527,153 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	}, nil
 }
 
+func nativeInteractionsRequestBody(c *gin.Context) []byte {
+	if c == nil {
+		return nil
+	}
+	if raw, ok := c.Get("native_interactions_original_request_body"); ok {
+		if body, valid := raw.([]byte); valid {
+			return append([]byte(nil), body...)
+		}
+	}
+	if raw, ok := c.Get(common.KeyLyriaRawRequestBody); ok {
+		if body, valid := raw.([]byte); valid {
+			return append([]byte(nil), body...)
+		}
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return nil
+	}
+	body, err := storage.Bytes()
+	if err != nil {
+		return nil
+	}
+	return body
+}
+
+func nativeInteractionsTieredPrice(c *gin.Context, info *relaycommon.RelayInfo, raw []byte) (hosttypes.PriceData, bool, error) {
+	if info == nil || !info.NativeInteractions || billing_setting.GetBillingMode(info.GetBillingModelName()) != billing_setting.BillingModeTieredExpr {
+		return hosttypes.PriceData{}, false, nil
+	}
+	modelName := info.GetBillingModelName()
+	expr, ok := billing_setting.GetBillingExpr(modelName)
+	if !ok || strings.TrimSpace(expr) == "" {
+		return hosttypes.PriceData{}, true, fmt.Errorf("model %s is configured as tiered_expr but has no billing expression", modelName)
+	}
+	if len(raw) == 0 {
+		return hosttypes.PriceData{}, true, fmt.Errorf("model %s tiered billing requires the original Interactions request", modelName)
+	}
+
+	request := gjson.ParseBytes(raw)
+	promptTokens := 0
+	if constant.CountToken {
+		promptTokens = service.CountTextToken(nativeInteractionPromptText(request.Get("input")), modelName)
+	}
+	completionTokens := helper.DefaultTieredPreConsumeMaxTokens
+	if maxOutput := request.Get("max_output_tokens"); maxOutput.Exists() && maxOutput.Type == gjson.Number {
+		value, parseErr := strconv.ParseInt(maxOutput.Raw, 10, 64)
+		if parseErr != nil {
+			return hosttypes.PriceData{}, true, fmt.Errorf("max_output_tokens must be an integer")
+		}
+		if value < 0 || value > int64(helper.MaxTokensLimit) {
+			return hosttypes.PriceData{}, true, fmt.Errorf("max_output_tokens must be between 0 and %d", helper.MaxTokensLimit)
+		}
+		completionTokens = int(value)
+	}
+
+	requestInput := billingexpr.RequestInput{Body: append([]byte(nil), raw...), Headers: map[string]string{}}
+	for key, value := range info.RequestHeaders {
+		requestInput.Headers[key] = value
+	}
+	info.BillingRequestInput = &requestInput
+	groupRatioInfo := helper.HandleGroupRatio(c, info)
+	params := billingexpr.TokenParams{
+		P:   float64(promptTokens),
+		C:   float64(completionTokens),
+		Len: float64(promptTokens),
+	}
+	taskUsageBilling := len(billingexpr.UsedUsageKeys(expr)) > 0
+	if taskUsageBilling {
+		params = billingexpr.TokenParams{}
+		requestInput.Usage = map[string]any{}
+	}
+	rawCost := 0.0
+	trace := billingexpr.TraceResult{}
+	if taskUsageBilling {
+		rawCost = float64(common.PreConsumedQuota) / common.QuotaPerUnit
+	} else {
+		cost, evalTrace, evalErr := billingexpr.RunExprWithRequest(expr, params, requestInput)
+		if evalErr != nil {
+			return hosttypes.PriceData{}, true, fmt.Errorf("model %s tiered expr run failed: %w", modelName, evalErr)
+		}
+		rawCost = cost
+		trace = evalTrace
+	}
+	quotaBeforeGroup := rawCost * common.QuotaPerUnit
+	if !taskUsageBilling {
+		quotaBeforeGroup = rawCost / 1_000_000 * common.QuotaPerUnit
+	}
+	quota, clamp := common.QuotaRoundChecked(quotaBeforeGroup * groupRatioInfo.GroupRatio)
+	if clamp != nil {
+		noteTaskQuotaClamp(info, clamp)
+	}
+	freeModel := false
+	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && groupRatioInfo.GroupRatio == 0 {
+		quota = 0
+		freeModel = true
+	}
+	info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{
+		BillingMode:               billing_setting.BillingModeTieredExpr,
+		ModelName:                 modelName,
+		ExprString:                expr,
+		ExprHash:                  billingexpr.ExprHashString(expr),
+		GroupRatio:                groupRatioInfo.GroupRatio,
+		EstimatedPromptTokens:     promptTokens,
+		EstimatedCompletionTokens: completionTokens,
+		EstimatedQuotaBeforeGroup: quotaBeforeGroup,
+		EstimatedQuotaAfterGroup:  quota,
+		EstimatedTier:             trace.MatchedTier,
+		QuotaPerUnit:              common.QuotaPerUnit,
+		ExprVersion:               billingexpr.ExprVersion(expr),
+		TaskUsageBilling:          taskUsageBilling,
+		UsageFacts:                requestInput.Usage,
+	}
+	priceData := hosttypes.PriceData{FreeModel: freeModel, GroupRatioInfo: groupRatioInfo, Quota: quota, QuotaToPreConsume: quota}
+	info.PriceData = priceData
+	return priceData, true, nil
+}
+
+func nativeInteractionPromptText(input gjson.Result) string {
+	if input.Type == gjson.String {
+		return input.String()
+	}
+	var text strings.Builder
+	var appendText func(gjson.Result)
+	appendText = func(value gjson.Result) {
+		if value.IsArray() {
+			value.ForEach(func(_, child gjson.Result) bool {
+				appendText(child)
+				return true
+			})
+			return
+		}
+		if value.IsObject() {
+			value.ForEach(func(key, child gjson.Result) bool {
+				if (key.String() == "text" || key.String() == "content") && child.Type == gjson.String {
+					text.WriteString(child.String())
+					text.WriteByte('\n')
+				} else {
+					appendText(child)
+				}
+				return true
+			})
+		}
+	}
+	appendText(input)
+	return text.String()
+}
+
 // nativeGenerateContentUsageQuota converts the completed Vertex
 // GenerateContent usage into the final quota. ModelPriceHelperPerCall only
 // has an estimate for the initial pre-consume; using that estimate as the
@@ -505,7 +683,44 @@ func nativeGenerateContentUsageQuota(info *relaycommon.RelayInfo, taskInfo *rela
 	if info == nil || taskInfo == nil || !isNativeGenerateContentBilling(info, info.OriginModelName) {
 		return 0, false
 	}
-	if taskInfo.Status != model.TaskStatusSuccess || info.PriceData.ModelRatio <= 0 {
+	if snapshot := info.TieredBillingSnapshot; snapshot != nil {
+		if taskInfo.Status != model.TaskStatusSuccess || !taskInfo.UsageAvailable {
+			return 0, false
+		}
+		var result billingexpr.TieredResult
+		var err error
+		requestInput := billingexpr.RequestInput{}
+		if info.BillingRequestInput != nil {
+			requestInput = *info.BillingRequestInput
+		}
+		if snapshot.TaskUsageBilling {
+			usageFacts := make(map[string]any, len(snapshot.UsageFacts)+len(taskInfo.UsageFacts))
+			for key, value := range snapshot.UsageFacts {
+				usageFacts[key] = value
+			}
+			for key, value := range taskInfo.UsageFacts {
+				usageFacts[key] = value
+			}
+			if !service.HasTieredTaskUsageFacts(snapshot.ExprString, usageFacts) {
+				logger.LogWarn(context.Background(), fmt.Sprintf("request_id=%s native Interactions tiered task expression lacks validated usage facts for model %s; keeping pre-consume", info.RequestId, info.OriginModelName))
+				return 0, false
+			}
+			requestInput.Usage = usageFacts
+			result, err = billingexpr.ComputeTieredQuotaWithRequest(snapshot, billingexpr.TokenParams{}, requestInput)
+			snapshot.UsageFacts = usageFacts
+		} else {
+			params := service.BuildTieredTokenParamsForTask(taskInfo, info.OriginModelName, snapshot.ExprString)
+			result, err = billingexpr.ComputeTieredQuotaWithRequest(snapshot, params, requestInput)
+		}
+		if err != nil {
+			logger.LogWarn(context.Background(), fmt.Sprintf("request_id=%s native Interactions tiered settlement failed for model %s; keeping pre-consume: %v", info.RequestId, info.OriginModelName, err))
+			return 0, false
+		}
+		snapshot.EstimatedTier = result.MatchedTier
+		noteTaskQuotaClamp(info, result.Clamp)
+		return result.ActualQuotaAfterGroup, true
+	}
+	if taskInfo.Status != model.TaskStatusSuccess || !taskInfo.UsageAvailable || info.PriceData.ModelRatio <= 0 {
 		return 0, false
 	}
 	inputPrice := info.PriceData.ModelRatio * 2
@@ -583,13 +798,19 @@ func isNativeGenerateContentImageModel(modelName string) bool {
 
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。
 // 公式: baseQuota × ∏(ratio) — 其中 baseQuota 是不含 OtherRatios 的基础额度。
-// isNativeGenerateContentBilling keeps native Gemini Interactions out of the
-// video settlement path. It intentionally does not depend on ChannelType:
-// during locked-channel retries that metadata may be reconstructed after the
-// billing classification, while the native marker and model capability remain
-// request-scoped and authoritative.
+// isNativeGenerateContentBilling keeps usage-priced Interactions out of the
+// video settlement path. Explicitly supported models retain their existing
+// classification; the generic protocol-based fallback is limited to Gemini
+// and Vertex Interactions and excludes task-specific media adapters.
 func isNativeGenerateContentBilling(info *relaycommon.RelayInfo, modelName string) bool {
-	return info != nil && info.NativeInteractions && taskLyria.IsNativeInteractionGenerateContentModel(modelName)
+	if info == nil || !info.NativeInteractions {
+		return false
+	}
+	if taskLyria.IsNativeInteractionGenerateContentModel(modelName) ||
+		(info.ChannelMeta != nil && info.ChannelType == constant.ChannelTypeGemini && taskLyria.IsVertexGenerateContentModelName(modelName)) {
+		return true
+	}
+	return info.ChannelMeta != nil && info.ChannelType == constant.ChannelTypeVertexAi && taskLyria.IsVertexGenerateContentModelName(modelName)
 }
 
 func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float64) (int, bool) {
@@ -719,7 +940,8 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	isOpenAIVideoAPI := strings.HasPrefix(c.Request.RequestURI, "/v1/videos/")
 
 	// Gemini/Vertex 支持实时查询：用户 fetch 时直接从上游拉取最新状态
-	if realtimeResp := tryRealtimeFetch(originTask, isOpenAIVideoAPI, c.GetBool(common.KeySeedanceRawMirror)); len(realtimeResp) > 0 {
+	rawTaskResponse := c.GetBool(common.KeySeedanceRawMirror) || c.GetBool(common.KeyNativeInteractionsRawMirror)
+	if realtimeResp := tryRealtimeFetch(originTask, isOpenAIVideoAPI, rawTaskResponse); len(realtimeResp) > 0 {
 		respBody = realtimeResp
 		return
 	}
@@ -728,7 +950,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 	adaptor := GetTaskAdaptor(originTask.Platform)
 	if adaptor != nil {
 		if converter, ok := adaptor.(channel.OpenAIVideoConverter); ok {
-			if c.GetBool(common.KeySeedanceRawMirror) {
+			if rawTaskResponse {
 				respBody = originTask.Data
 				return
 			}

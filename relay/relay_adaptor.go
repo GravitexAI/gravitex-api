@@ -2,6 +2,7 @@ package relay
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -226,7 +227,12 @@ func isNativeInteractionTaskRequest(info *relaycommon.RelayInfo, modelName strin
 	if taskLyria.IsLyriaModel(modelName) {
 		return true
 	}
-	return taskLyria.IsNativeInteractionModel(modelName) && !relaycommon.IsGeminiOmniModel(modelName)
+	if taskLyria.IsNativeInteractionModel(modelName) {
+		return !relaycommon.IsGeminiOmniModel(modelName)
+	}
+	// The generic Interactions transport is selected by channel type, not a
+	// catalog allowlist. Keep the existing Veo task path and Omni adaptor intact.
+	return !relaycommon.IsGeminiOmniModel(modelName) && !strings.HasPrefix(strings.ToLower(modelName), "veo-")
 }
 
 func nativeInteractionTaskPlatform(platform constant.TaskPlatform, info *relaycommon.RelayInfo, modelName string) constant.TaskPlatform {

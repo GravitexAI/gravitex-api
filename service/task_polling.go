@@ -124,11 +124,13 @@ type TaskPollSummary struct {
 // adaptor factory has not been wired yet, to avoid a nil call during startup.
 func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) TaskPollSummary {
 	summary := TaskPollSummary{}
-	if GetTaskAdaptorFunc == nil {
-		return summary
-	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	recoverPendingInteractionsTaskSettlements(ctx, 100)
+	deliverPendingTaskBillingLogs(ctx, 100)
+	if GetTaskAdaptorFunc == nil {
+		return summary
 	}
 
 	common.SysLog("任务进度轮询开始")
@@ -200,6 +202,120 @@ func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) 
 	}
 	common.SysLog("任务进度轮询完成")
 	return summary
+}
+
+type taskBillingOutboxPayload struct {
+	SkipLog          bool                   `json:"skip_log"`
+	UserID           int                    `json:"user_id"`
+	LogType          int                    `json:"log_type"`
+	Content          string                 `json:"content"`
+	ChannelID        int                    `json:"channel_id"`
+	ModelName        string                 `json:"model_name"`
+	Quota            int                    `json:"quota"`
+	TokenID          int                    `json:"token_id"`
+	Group            string                 `json:"group"`
+	Other            map[string]interface{} `json:"other"`
+	NodeName         string                 `json:"node_name"`
+	PromptTokens     int                    `json:"prompt_tokens"`
+	CompletionTokens int                    `json:"completion_tokens"`
+	UseTime          int                    `json:"use_time"`
+}
+
+func deliverPendingTaskBillingLogs(ctx context.Context, limit int) {
+	rows, err := model.GetPendingTaskBillingLogOutbox(limit)
+	if err != nil {
+		logger.LogError(ctx, "failed to query task billing log outbox: "+err.Error())
+		return
+	}
+	for _, row := range rows {
+		if ctx.Err() != nil {
+			return
+		}
+		claimed, err := model.ClaimTaskBillingLogOutbox(row.ID)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("failed to claim task billing log outbox %s: %v", row.OperationID, err))
+			continue
+		}
+		if !claimed {
+			continue
+		}
+		var payload taskBillingOutboxPayload
+		if err := common.Unmarshal([]byte(row.Payload), &payload); err != nil {
+			_ = model.MarkTaskBillingLogOutboxFailed(row.ID, err)
+			logger.LogError(ctx, fmt.Sprintf("invalid task billing log outbox payload %s: %v", row.OperationID, err))
+			continue
+		}
+		if payload.SkipLog {
+			if err := model.MarkTaskBillingLogOutboxDeliveredByID(row.ID); err != nil {
+				logger.LogError(ctx, fmt.Sprintf("task billing outbox %s skip marker failed: %v", row.OperationID, err))
+			}
+			continue
+		}
+		err = model.RecordTaskBillingLogWithError(model.RecordTaskBillingLogParams{
+			RequestId: row.OperationID, UserId: payload.UserID, LogType: payload.LogType,
+			Content: payload.Content, ChannelId: payload.ChannelID, ModelName: payload.ModelName,
+			Quota: payload.Quota, TokenId: payload.TokenID, Group: payload.Group, Other: payload.Other,
+			NodeName: payload.NodeName, PromptTokens: payload.PromptTokens,
+			CompletionTokens: payload.CompletionTokens, UseTime: payload.UseTime,
+		})
+		if err != nil {
+			_ = model.MarkTaskBillingLogOutboxFailed(row.ID, err)
+			logger.LogError(ctx, fmt.Sprintf("failed to deliver task billing log outbox %s: %v", row.OperationID, err))
+			continue
+		}
+		if err := model.MarkTaskBillingLogOutboxDeliveredByID(row.ID); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("task billing log outbox %s was written but delivery marker failed: %v", row.OperationID, err))
+		}
+	}
+}
+
+func recoverPendingInteractionsTaskSettlements(ctx context.Context, limit int) {
+	cacheRows, cacheErr := model.GetPendingTaskBillingCacheSync(limit)
+	if cacheErr != nil {
+		logger.LogError(ctx, "failed to query pending task billing cache sync: "+cacheErr.Error())
+	} else {
+		for _, row := range cacheRows {
+			if err := model.SyncTaskBillingSettlementCache(row.TaskID); err != nil {
+				logger.LogWarn(ctx, fmt.Sprintf("failed to recover task settlement cache sync %s: %v", row.TaskID, err))
+			}
+		}
+	}
+	settlements, err := model.GetPendingTaskBillingSettlements(limit)
+	if err != nil {
+		logger.LogError(ctx, "failed to query pending Interactions task settlements: "+err.Error())
+		return
+	}
+	for _, settlement := range settlements {
+		if ctx.Err() != nil {
+			return
+		}
+		task, err := model.GetTaskByTaskID(settlement.TaskID)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("failed to load task %s for settlement recovery: %v", settlement.TaskID, err))
+			continue
+		}
+		if task.Status != model.TaskStatusSuccess || task.PrivateData.BillingContext == nil ||
+			!task.PrivateData.BillingContext.NativeInteractions || task.PrivateData.BillingContext.TieredSnapshot == nil {
+			continue
+		}
+		if GetTaskAdaptorFunc == nil || len(task.Data) == 0 {
+			logger.LogWarn(ctx, fmt.Sprintf("pending Interactions settlement %s cannot recover without stored result data", settlement.TaskID))
+			continue
+		}
+		adaptor := GetTaskAdaptorFunc(task.Platform)
+		if adaptor == nil {
+			logger.LogWarn(ctx, fmt.Sprintf("pending Interactions settlement %s has no task adaptor", settlement.TaskID))
+			continue
+		}
+		taskResult, err := adaptor.ParseTaskResult(task.Data)
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("failed to parse stored result for Interactions settlement %s: %v", settlement.TaskID, err))
+			continue
+		}
+		if !settleNativeInteractionsTieredTask(ctx, task, taskResult) {
+			logger.LogWarn(ctx, fmt.Sprintf("pending Interactions settlement %s was not committed; it will be retried", settlement.TaskID))
+		}
+	}
 }
 
 func isLocallyDispatchedLyriaTask(task *model.Task) bool {
@@ -674,8 +790,19 @@ func truncateBase64(s string) string {
 //  4. 都不满足 → 保持预扣额度不变，返回 false
 func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor, task *model.Task, taskResult *relaycommon.TaskInfo) bool {
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.TieredSnapshot != nil {
+		if bc.NativeInteractions && model.HasTaskBillingSettlement(task.TaskID) {
+			return settleNativeInteractionsTieredTask(ctx, task, taskResult)
+		}
 		// 用量表达式结算只适用于成功任务；失败任务由调用方全额退款。
 		if task.Status == model.TaskStatusFailure {
+			return false
+		}
+		if taskResult == nil {
+			if bc.NativeInteractions {
+				bc.TieredUsageMissing = true
+				bc.TieredUsageSource = "configured"
+			}
+			logger.LogWarn(ctx, fmt.Sprintf("任务 %s 阶梯计费缺少完成用量，保留预扣额度", task.TaskID))
 			return false
 		}
 		usageFacts := make(map[string]any, len(bc.TieredSnapshot.UsageFacts)+len(taskResult.UsageFacts))
@@ -685,10 +812,45 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 		for key, value := range taskResult.UsageFacts {
 			usageFacts[key] = value
 		}
-		result, err := billingexpr.ComputeTieredQuotaWithRequest(bc.TieredSnapshot, billingexpr.TokenParams{}, billingexpr.RequestInput{Usage: usageFacts})
+		if bc.NativeInteractions && bc.TieredSnapshot.TaskUsageBilling && !HasTieredTaskUsageFacts(bc.TieredSnapshot.ExprString, usageFacts) {
+			bc.TieredUsageMissing = true
+			bc.TieredUsageSource = "configured"
+			logger.LogWarn(ctx, fmt.Sprintf("任务 %s 阶梯计费缺少表达式所需 usage facts，保留预扣额度", task.TaskID))
+			return false
+		}
+		requestInput := billingexpr.RequestInput{Usage: usageFacts}
+		if bc.TieredRequestInput != nil {
+			requestInput.Body = append([]byte(nil), bc.TieredRequestInput.Body...)
+			requestInput.Headers = bc.TieredRequestInput.Headers
+		}
+		var result billingexpr.TieredResult
+		var err error
+		if !bc.NativeInteractions {
+			// Preserve the historical task settlement contract for non-Interactions
+			// task platforms. Their snapshots have always been usage-fact based.
+			result, err = billingexpr.ComputeTieredQuotaWithRequest(bc.TieredSnapshot, billingexpr.TokenParams{}, requestInput)
+		} else if bc.TieredSnapshot.TaskUsageBilling {
+			result, err = billingexpr.ComputeTieredQuotaWithRequest(bc.TieredSnapshot, billingexpr.TokenParams{}, requestInput)
+		} else if bc.NativeInteractions && !taskResult.UsageAvailable {
+			bc.TieredUsageMissing = true
+			bc.TieredUsageSource = "configured"
+			logger.LogWarn(ctx, fmt.Sprintf("任务 %s token 阶梯计费缺少上游 usage，保留预扣额度", task.TaskID))
+			return false
+		} else {
+			params := BuildTieredTokenParamsForTask(taskResult, bc.OriginModelName, bc.TieredSnapshot.ExprString)
+			result, err = billingexpr.ComputeTieredQuotaWithRequest(bc.TieredSnapshot, params, requestInput)
+		}
 		if err != nil {
+			if bc.NativeInteractions {
+				bc.TieredUsageMissing = true
+				bc.TieredUsageSource = "configured"
+			}
 			logger.LogWarn(ctx, fmt.Sprintf("任务 %s 表达式结算失败，保留预扣额度: %v", task.TaskID, err))
 			return true
+		}
+		bc.TieredUsageMissing = false
+		if bc.NativeInteractions {
+			bc.TieredUsageSource = "upstream"
 		}
 		if result.Clamp != nil {
 			logger.LogWarn(ctx, fmt.Sprintf("任务 %s 表达式结算额度发生饱和: %+v", task.TaskID, result.Clamp))
@@ -720,4 +882,147 @@ func settleTaskBillingOnComplete(ctx context.Context, adaptor TaskPollingAdaptor
 	}
 	// 无调整，保持预扣额度；失败任务交由调用方退款
 	return false
+}
+
+func settleNativeInteractionsTieredTask(ctx context.Context, task *model.Task, taskResult *relaycommon.TaskInfo) bool {
+	bc := task.PrivateData.BillingContext
+	if task.Status != model.TaskStatusSuccess {
+		return false
+	}
+	var result billingexpr.TieredResult
+	var settleErr error
+	usageFacts := make(map[string]any, len(bc.TieredSnapshot.UsageFacts))
+	for key, value := range bc.TieredSnapshot.UsageFacts {
+		usageFacts[key] = value
+	}
+	usageAvailable := taskResult != nil && taskResult.UsageAvailable
+	if taskResult != nil {
+		for key, value := range taskResult.UsageFacts {
+			usageFacts[key] = value
+		}
+	}
+	requestInput := billingexpr.RequestInput{Usage: usageFacts}
+	if bc.TieredRequestInput != nil {
+		requestInput.Body = append([]byte(nil), bc.TieredRequestInput.Body...)
+		requestInput.Headers = bc.TieredRequestInput.Headers
+	}
+	missingReason := ""
+	missingKeys := ""
+	if taskResult == nil {
+		missingReason = "completion task result was unavailable"
+	} else if len(billingexpr.UsedUsageKeys(bc.TieredSnapshot.ExprString)) > 0 && !HasTieredTaskUsageFacts(bc.TieredSnapshot.ExprString, usageFacts) {
+		missingReason = "required expression usage facts were unavailable"
+		keys := make([]string, 0)
+		for key := range billingexpr.UsedUsageKeys(bc.TieredSnapshot.ExprString) {
+			if _, exists := usageFacts[key]; !exists {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		missingKeys = strings.Join(keys, ",")
+	} else if !usageAvailable && (billingexpr.UsedVars(bc.TieredSnapshot.ExprString)["p"] || billingexpr.UsedVars(bc.TieredSnapshot.ExprString)["c"]) {
+		missingReason = "upstream token usage was unavailable"
+		missingKeys = "input_tokens,output_tokens"
+	} else {
+		params := BuildTieredTokenParamsForTask(taskResult, bc.OriginModelName, bc.TieredSnapshot.ExprString)
+		result, settleErr = billingexpr.ComputeTieredQuotaWithRequest(bc.TieredSnapshot, params, requestInput)
+		if settleErr != nil {
+			missingReason = "tiered expression could not be evaluated: " + settleErr.Error()
+		}
+	}
+
+	status := model.TaskBillingSettlementSettled
+	actualQuota := task.Quota
+	if missingReason == "" {
+		actualQuota = result.ActualQuotaAfterGroup
+		bc.TieredUsageMissing = false
+		bc.TieredUsageSource = "upstream"
+		bc.TieredSnapshot.UsageFacts = usageFacts
+		bc.TieredSnapshot.EstimatedTier = result.MatchedTier
+	} else {
+		status = model.TaskBillingSettlementUsageUnavailable
+		bc.TieredUsageMissing = true
+		bc.TieredUsageSource = "configured"
+	}
+	other := taskBillingOther(task)
+	other["task_id"] = task.TaskID
+	other["pre_consumed_quota"] = task.Quota
+	other["actual_quota"] = actualQuota
+	promptTokens := 0
+	completionTokens := 0
+	if taskResult != nil {
+		promptTokens = taskResult.InputTokens
+		completionTokens = taskResult.CompletionTokens
+		imageOutputTokens := taskResult.ImageOutputTokens
+		textOutputTokens := min(max(taskResult.TextOutputTokens, 0), max(taskResult.CompletionTokens, 0))
+		if !bc.NativeInteractions && isNativeInteractionImageModel(taskModelName(task)) && taskResult.CompletionTokens > 0 && imageOutputTokens == 0 {
+			imageOutputTokens = max(taskResult.CompletionTokens-textOutputTokens-max(taskResult.ThoughtTokens, 0), 0)
+		}
+		other["input_tokens"] = taskResult.InputTokens
+		other["input_text_tokens"] = taskResult.TextInputTokens
+		other["input_image_tokens"] = taskResult.ImageInputTokens
+		other["video_input_tokens"] = taskResult.VideoInputTokens
+		other["cache_tokens"] = taskResult.CachedTokens
+		other["audio_input"] = taskResult.AudioInputTokens
+		other["audio_output"] = taskResult.AudioOutputTokens
+		other["text_output_tokens"] = textOutputTokens
+		other["image_output_tokens"] = imageOutputTokens
+		other["video_output_tokens"] = taskResult.VideoOutputTokens
+		other["reasoning_tokens"] = taskResult.ThoughtTokens
+	}
+	if missingReason != "" {
+		adminInfo, _ := other["admin_info"].(map[string]interface{})
+		if adminInfo == nil {
+			adminInfo = make(map[string]interface{})
+			other["admin_info"] = adminInfo
+		}
+		adminInfo["tiered_usage_unavailable"] = true
+		adminInfo["usage_missing_reason"] = missingReason
+		adminInfo["missing_usage_keys"] = missingKeys
+	}
+	delta := actualQuota - task.Quota
+	logType, logQuota := model.LogTypeConsume, delta
+	if delta < 0 {
+		logType, logQuota = model.LogTypeRefund, -delta
+	}
+	if delta == 0 {
+		logType, logQuota = 0, 0
+	}
+	outboxPayload, err := model.EncodeTaskBillingPayload(map[string]any{
+		"skip_log": logType == 0,
+		"user_id":  task.UserId, "log_type": logType, "content": "Interactions tiered usage settlement",
+		"channel_id": task.ChannelId, "model_name": taskModelName(task), "quota": logQuota,
+		"token_id": task.PrivateData.TokenId, "group": task.Group, "other": other.Snapshot(),
+		"node_name":     task.PrivateData.NodeName,
+		"prompt_tokens": promptTokens, "completion_tokens": completionTokens,
+	})
+	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("Interactions task %s billing outbox encode failed: %v", task.TaskID, err))
+		return false
+	}
+	privateData, err := common.Marshal(task.PrivateData)
+	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("Interactions task %s billing context encode failed: %v", task.TaskID, err))
+		return false
+	}
+	committed, err := model.CommitTaskBillingSettlement(model.TaskBillingSettlementCommit{
+		TaskID: task.TaskID, ActualQuota: actualQuota, Status: status,
+		Outcome: missingReason, UsageMissingReason: missingReason, MissingUsageKeys: missingKeys,
+		OutboxOperationID: "interactions-settlement:" + task.TaskID + ":" + string(status),
+		OutboxPayload:     outboxPayload, TaskPrivateData: string(privateData),
+	})
+	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("Interactions task %s atomic billing settlement failed: %v", task.TaskID, err))
+		return false
+	}
+	if committed {
+		task.Quota = actualQuota
+		task.PrivateData.BillingContext = bc
+		if missingReason != "" {
+			logger.LogWarn(ctx, fmt.Sprintf("Interactions task %s usage unavailable; retained pre-consumed quota: %s", task.TaskID, missingReason))
+		} else if result.Clamp != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("Interactions task %s expression settlement quota saturated: %+v", task.TaskID, result.Clamp))
+		}
+	}
+	return true
 }

@@ -630,6 +630,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 }
 
 type RecordTaskBillingLogParams struct {
+	RequestId        string
 	UserId           int
 	LogType          int
 	Content          string
@@ -646,8 +647,27 @@ type RecordTaskBillingLogParams struct {
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
+	if err := RecordTaskBillingLogWithError(params); err != nil {
+		common.SysLog("failed to record task billing log: " + err.Error())
+	}
+}
+
+func RecordTaskBillingLogWithError(params RecordTaskBillingLogParams) error {
 	if params.LogType == LogTypeConsume && !common.LogConsumeEnabled {
-		return
+		return nil
+	}
+	if params.RequestId != "" {
+		var existing Log
+		err := LOG_DB.Where("request_id = ?", params.RequestId).First(&existing).Error
+		if err == nil {
+			if params.LogType == LogTypeConsume && IsQuotaDataStreamEnabled() {
+				QueueConsumeLogToQuotaStream(&existing, "record_task_billing_log_retry")
+			}
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
 	}
 	username, _ := GetUsernameById(params.UserId, false)
 	tokenName := ""
@@ -673,11 +693,28 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		PromptTokens:     params.PromptTokens,
 		CompletionTokens: params.CompletionTokens,
 		UseTime:          params.UseTime,
+		RequestId:        params.RequestId,
 	}
-	err := CreateLog(log)
+	var err error
+	if params.RequestId != "" && common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		ensureLogRequestId(log)
+		ensureQuotaStreamEventIDOnLog(log)
+		// Outbox delivery must know that the log reached the sink before it
+		// acknowledges the event. The ordinary ClickHouse path is buffered in
+		// memory, which would allow the outbox row to be marked delivered before
+		// the log itself is durable.
+		err = LOG_DB.Omit("id").Create(log).Error
+		if err == nil {
+			var stored Log
+			if queryErr := LOG_DB.Select("id").Where("request_id = ?", params.RequestId).First(&stored).Error; queryErr == nil {
+				log.Id = stored.Id
+			}
+		}
+	} else {
+		err = CreateLog(log)
+	}
 	if err != nil {
-		common.SysLog("failed to record task billing log: " + err.Error())
-		return
+		return err
 	}
 	if params.LogType == LogTypeConsume && IsQuotaDataStreamEnabled() {
 		QueueConsumeLogToQuotaStream(log, "record_task_billing_log")
@@ -699,6 +736,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 			NodeName:  nodeName,
 		})
 	}
+	return nil
 }
 
 func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {

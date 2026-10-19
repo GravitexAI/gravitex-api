@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	tasklyria "github.com/QuantumNous/new-api/relay/channel/task/lyria"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
@@ -18,8 +19,9 @@ import (
 // so existing /v1/video/generations and /v1/videos clients are unchanged.
 func NativeInteractions() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		originalPath := c.Request.URL.Path
+		c.Set("native_interactions_original_path", originalPath)
 		if c.Request.Method == http.MethodPost {
-			originalPath := c.Request.URL.Path
 			body, err := common.GetBodyStorage(c)
 			if err != nil {
 				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "code": "invalid_request"}})
@@ -32,7 +34,29 @@ func NativeInteractions() gin.HandlerFunc {
 			}
 
 			converted, modelName, err := convertNativeInteractionRequest(raw)
-			if err != nil {
+			if err != nil && strings.TrimSpace(modelName) == "" {
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "code": "invalid_request"}})
+				return
+			}
+			generic := !isLyriaInteractionModel(modelName) &&
+				!tasklyria.IsNativeInteractionModel(modelName) &&
+				!relaycommon.IsGeminiOmniModel(modelName) &&
+				!strings.HasPrefix(strings.ToLower(modelName), "veo-")
+			if generic {
+				if err != nil {
+					c.Set("native_interactions_legacy_error", err.Error())
+				} else {
+					c.Set("native_interactions_legacy_body", converted)
+				}
+				// Keep the complete request for Gemini/Vertex; the placeholder only
+				// lets the distributor select a channel by model.
+				converted, err = common.Marshal(map[string]any{"model": modelName, "prompt": "(interaction input)"})
+				if err != nil {
+					c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "code": "invalid_request"}})
+					return
+				}
+				c.Set("native_interactions_generic", true)
+			} else if err != nil {
 				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "code": "invalid_request"}})
 				return
 			}
@@ -43,28 +67,32 @@ func NativeInteractions() gin.HandlerFunc {
 				}})
 				return
 			}
-			if shouldUseLyriaNativeAdapter(originalPath, modelName) ||
+			if generic || shouldUseLyriaNativeAdapter(originalPath, modelName) ||
 				(originalPath == "/v1beta/interactions" &&
 					tasklyria.IsNativeInteractionModel(modelName) && !relaycommon.IsGeminiOmniModel(modelName)) {
 				c.Set(common.KeyLyriaRawMirror, true)
 				c.Set(common.KeyLyriaRawRequestBody, append([]byte(nil), raw...))
-				c.Set("native_interactions_original_path", originalPath)
 			}
 			c.Set("native_interactions", true)
 			c.Set("native_interactions_model", modelName)
+			c.Set("native_interactions_original_request_body", append([]byte(nil), raw...))
+			stream, _ := requestBool(raw, "stream")
 			background, hasBackground := requestBool(raw, "background")
-			if !hasBackground {
-				// Lyria 3 does not support background interactions. Keep the
-				// historical async default for Omni, but do not inject background
-				// into Lyria requests that omitted the field.
+			if stream {
+				// Interactions streaming is foreground execution. In particular,
+				// do not return only interaction.created for async task adapters.
+				background = false
+			} else if !hasBackground {
+				// Preserve the existing async default for task-backed models while
+				// leaving Lyria foreground unless the caller explicitly asks for
+				// background execution.
 				background = !isLyriaInteractionModel(modelName)
 			}
 			c.Set("native_interactions_background", background)
 			// Only an explicit background=true request is locally asynchronous.
 			// Synchronous Lyria requests must not create a task row.
 			c.Set("native_interactions_async", background && isLyriaInteractionModel(modelName))
-			stream, _ := requestBool(raw, "stream")
-			c.Set("native_interactions_stream", stream && relaycommon.IsGeminiOmniModel(modelName))
+			c.Set("native_interactions_stream", stream)
 			convertedStorage, err := common.CreateBodyStorage(converted)
 			if err != nil {
 				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "code": "invalid_request"}})
@@ -84,9 +112,54 @@ func NativeInteractions() gin.HandlerFunc {
 		} else if c.Request.Method == http.MethodGet {
 			c.Request.URL.Path = "/v1/video/generations/" + c.Param("interaction_id")
 			c.Set("task_id", c.Param("interaction_id"))
+			c.Set(common.KeyNativeInteractionsRawMirror, true)
 		}
 		c.Next()
 	}
+}
+
+// NativeInteractionsChannelDispatch applies generic Interaction adaptation
+// only after channel selection so unrelated task channels keep their old body
+// conversion and validation behavior.
+func NativeInteractionsChannelDispatch() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if err := PrepareNativeInteractionsChannelRequest(c, c.GetInt("channel_type")); err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error(), "code": "invalid_request"}})
+			return
+		}
+		c.Next()
+	}
+}
+
+// PrepareNativeInteractionsChannelRequest must be called for every selected
+// channel attempt, including retries. Gemini/Vertex consume the raw body from
+// context; all other channels retain their pre-Interactions legacy conversion.
+func PrepareNativeInteractionsChannelRequest(c *gin.Context, channelType int) error {
+	if c.Request.Method != http.MethodPost || !c.GetBool("native_interactions_generic") ||
+		channelType == constant.ChannelTypeGemini || channelType == constant.ChannelTypeVertexAi {
+		return nil
+	}
+	if message := c.GetString("native_interactions_legacy_error"); message != "" {
+		return fmt.Errorf("%s", message)
+	}
+	legacyBody, ok := c.Get("native_interactions_legacy_body")
+	if !ok {
+		return fmt.Errorf("invalid Interactions request")
+	}
+	bodyBytes, ok := legacyBody.([]byte)
+	if !ok {
+		return fmt.Errorf("invalid Interactions request state")
+	}
+	storage, err := common.CreateBodyStorage(bodyBytes)
+	if err != nil {
+		return err
+	}
+	if current, err := common.GetBodyStorage(c); err == nil {
+		_ = current.Close()
+	}
+	c.Set(common.KeyBodyStorage, storage)
+	c.Request.Body = io.NopCloser(storage)
+	return nil
 }
 
 func requestBool(raw []byte, key string) (bool, bool) {
@@ -134,12 +207,12 @@ func convertNativeInteractionRequest(raw []byte) ([]byte, string, error) {
 	}
 	prompt := nativeInteractionPrompt(request["input"])
 	if strings.TrimSpace(prompt) == "" {
-		return nil, "", fmt.Errorf("field input is required")
+		return nil, modelName, fmt.Errorf("field input is required")
 	}
 
 	metadata := map[string]any{}
 	if nativeInteractionHasAudio(request["input"]) {
-		return nil, "", fmt.Errorf("audio input is not supported for %s video tasks", modelName)
+		return nil, modelName, fmt.Errorf("audio input is not supported for %s video tasks", modelName)
 	}
 	images, videos := nativeInteractionMedia(request["input"])
 	if len(images) == 1 {
@@ -271,6 +344,16 @@ func nativeInteractionPrompt(input any) string {
 		}
 		if text, ok := content["text"].(string); ok && text != "" {
 			parts = append(parts, text)
+		}
+		children, _ := content["content"].([]any)
+		for _, child := range children {
+			childContent, ok := child.(map[string]any)
+			if !ok {
+				continue
+			}
+			if text, ok := childContent["text"].(string); ok && text != "" {
+				parts = append(parts, text)
+			}
 		}
 	}
 	return strings.Join(parts, "\n")

@@ -2,20 +2,22 @@ package middleware
 
 import (
 	"fmt"
-	"github.com/QuantumNous/new-api/common"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestChannelMatchesExpectedTaskPluginUsesGenericChannelSetting(t *testing.T) {
@@ -174,6 +176,64 @@ func TestNoAvailableChannelMessageNamesClaimingTaskPlugin(t *testing.T) {
 	generic := noAvailableChannelMessage(plain, "default", "gpt-4o")
 	assert.NotContains(t, generic, "task plugin")
 	assert.Contains(t, generic, "gpt-4o")
+}
+
+func TestNativeInteractionsNoAvailableChannelWritesRequestPathErrorLog(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	previousDB, previousLogDB := model.DB, model.LOG_DB
+	previousRedisEnabled := common.RedisEnabled
+	previousErrorLogEnabled := constant.ErrorLogEnabled
+	previousMainDatabaseType := common.MainDatabaseType()
+	previousLogDatabaseType := common.LogDatabaseType()
+	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := database.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, database.AutoMigrate(&model.User{}, &model.Log{}))
+	model.DB, model.LOG_DB = database, database
+	common.RedisEnabled = false
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	constant.ErrorLogEnabled = true
+	require.NoError(t, database.Create(&model.User{Id: 7, Username: "interaction-user"}).Error)
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = previousDB, previousLogDB
+		common.RedisEnabled = previousRedisEnabled
+		constant.ErrorLogEnabled = previousErrorLogEnabled
+		common.SetDatabaseTypes(previousMainDatabaseType, previousLogDatabaseType)
+		require.NoError(t, sqlDB.Close())
+	})
+
+	for index, path := range []string{
+		"/v1beta/interactions",
+		"/v1beta1/projects/example/locations/global/interactions",
+	} {
+		requestID := fmt.Sprintf("interaction-no-channel-%d", index+1)
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+		ctx.Set("native_interactions_original_path", path)
+		ctx.Set("native_interactions", true)
+		ctx.Set("id", 7)
+		ctx.Set("token_id", 13)
+		ctx.Set("token_name", "test-token")
+		ctx.Set("username", "interaction-user")
+		ctx.Set(common.RequestIdKey, requestID)
+		common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "default")
+
+		recordNativeInteractionsNoChannelError(ctx, "gemini-future-model", "No available channel for model gemini-future-model")
+
+		var stored model.Log
+		require.NoError(t, database.Where("request_id = ?", requestID).First(&stored).Error)
+		assert.Equal(t, model.LogTypeError, stored.Type)
+		assert.Equal(t, "gemini-future-model", stored.ModelName)
+		assert.Equal(t, -1, stored.ChannelId)
+		assert.Equal(t, "default", stored.Group)
+		assert.Equal(t, requestID, stored.RequestId)
+		assert.Contains(t, stored.Content, "No available channel")
+		var other map[string]any
+		require.NoError(t, common.UnmarshalJsonStr(stored.Other, &other))
+		assert.Equal(t, path, other["request_path"])
+	}
 }
 
 func newModelLimitedDistributorRouter(t *testing.T) *gin.Engine {

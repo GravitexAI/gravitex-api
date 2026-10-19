@@ -1258,11 +1258,17 @@ type TaskInfo struct {
 	CompletionTokens int    `json:"completion_tokens,omitempty"` // 用于按倍率计费
 	TotalTokens      int    `json:"total_tokens,omitempty"`      // 用于按倍率计费
 	InputTokens      int    `json:"input_tokens,omitempty"`
+	// UsageAvailable distinguishes a provider-reported (possibly zero) usage
+	// record from a successful response that omitted or malformed usage.
+	UsageAvailable bool `json:"-"`
 	// Input modality breakdown is populated by providers that return it (currently Gemini Omni).
 	TextInputTokens   int `json:"text_input_tokens,omitempty"`
 	ImageInputTokens  int `json:"image_input_tokens,omitempty"`
 	VideoInputTokens  int `json:"video_input_tokens,omitempty"`
 	VideoOutputTokens int `json:"video_output_tokens,omitempty"`
+	AudioInputTokens  int `json:"audio_input_tokens,omitempty"`
+	AudioOutputTokens int `json:"audio_output_tokens,omitempty"`
+	ImageOutputTokens int `json:"image_output_tokens,omitempty"`
 	TextOutputTokens  int `json:"text_output_tokens,omitempty"`
 	// CachedTokens are prompt tokens served from provider-side context cache
 	// (subset of InputTokens, billed at the cache-read ratio). ThoughtTokens

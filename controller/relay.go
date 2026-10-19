@@ -645,6 +645,10 @@ func RelayTask(c *gin.Context) {
 			}
 		}
 
+		if err := middleware.PrepareNativeInteractionsChannelRequest(c, channel.Type); err != nil {
+			taskErr = service.TaskErrorWrapperLocal(err, "invalid_request", http.StatusBadRequest)
+			break
+		}
 		addUsedChannel(c, channel.Id)
 		c.Set("native_vertex_lyria_response", isVertexLyriaScope(relayInfo.NativeInteractions, channel.Type, relayInfo.OriginModelName))
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
@@ -714,19 +718,36 @@ func RelayTask(c *gin.Context) {
 			isPerSecondOrTokenRatio = false
 		}
 		interactionFailed := isFailedNativeInteractionSubmit(relayInfo.NativeInteractions, result)
+		terminalVideoTaskBilled := false
 
 		// 落库先于结算和响应：入库失败时预扣费还没结算，交给顶部 defer 的
 		// Billing.Refund 原样退回，上游任务同步取消，客户端收到 500 后可以安全重试。
-		if shouldPersistLyriaTask(relayInfo.NativeInteractions, relayInfo.OriginModelName, c.GetBool("native_interactions_background")) {
-			task := buildSubmittedTask(c, relayInfo, result, isPerSecondOrTokenRatio)
-			if insertErr := task.Insert(); insertErr != nil {
+		var submittedTask *model.Task
+		if shouldPersistLyriaTask(relayInfo.NativeInteractions, relayInfo.OriginModelName, c.GetBool("native_interactions_background"), relayInfo.ChannelType) {
+			submittedTask = buildSubmittedTask(c, relayInfo, result, isPerSecondOrTokenRatio)
+			if insertErr := submittedTask.Insert(); insertErr != nil {
 				persistFailed = true
-				handleTaskPersistFailure(c, relayInfo, task, insertErr)
+				handleTaskPersistFailure(c, relayInfo, submittedTask, insertErr)
 				// 丢弃 DoResponse 已缓冲的 200 + task id，客户端只应看到 500
 				buffered.reset()
 				taskErr = service.TaskErrorWrapperLocal(
 					fmt.Errorf("task was created upstream but could not be saved locally, please retry: %v", insertErr),
 					"task_persist_failed", http.StatusInternalServerError)
+			}
+		}
+		if !persistFailed && !interactionFailed && submittedTask != nil &&
+			isSuccessfulTerminalNativeInteractionTask(relayInfo.NativeInteractions, relayInfo.ChannelType, result) && isPerSecondOrTokenRatio {
+			var billingErr error
+			switch {
+			case isVideoPerSecondModel(relayInfo.OriginModelName):
+				billingErr = handleVideoPerSecondBilling(c, submittedTask)
+			case isVideoTokenRatioModel(relayInfo.OriginModelName):
+				billingErr = handleVideoTokenRatioBilling(c, submittedTask, result.InitialTaskInfo)
+			}
+			if billingErr != nil {
+				logger.LogError(c, fmt.Sprintf("[InteractionsBilling] model=%s task=%s immediate terminal settlement failed: %v", relayInfo.OriginModelName, submittedTask.TaskID, billingErr))
+			} else {
+				terminalVideoTaskBilled = isVideoPerSecondModel(relayInfo.OriginModelName) || isVideoTokenRatioModel(relayInfo.OriginModelName)
 			}
 		}
 
@@ -745,6 +766,10 @@ func RelayTask(c *gin.Context) {
 			if relayInfo.Billing != nil {
 				relayInfo.Billing.Refund(c)
 			}
+		case terminalVideoTaskBilled:
+			// Terminal task usage was settled through the existing video billing
+			// handlers; the async poller will no longer see this completed row.
+			relayInfo.Billing = nil
 		case !isPerSecondOrTokenRatio:
 			if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 				common.SysError("settle task billing error: " + settleErr.Error())
@@ -764,7 +789,7 @@ func RelayTask(c *gin.Context) {
 	// processChannelError records the error log and the deferred BillingSession
 	// refund remains responsible for the precharge.
 	if taskErr != nil && !persistFailed && result != nil && isNativeLyriaScope(relayInfo.NativeInteractions, relayInfo.OriginModelName) &&
-		shouldPersistLyriaTask(relayInfo.NativeInteractions, relayInfo.OriginModelName, c.GetBool("native_interactions_background")) {
+		shouldPersistLyriaTask(relayInfo.NativeInteractions, relayInfo.OriginModelName, c.GetBool("native_interactions_background"), relayInfo.ChannelType) {
 		task := buildSubmittedTask(c, relayInfo, result, false)
 		if insertErr := task.Insert(); insertErr != nil {
 			common.SysError("insert failed lyria task error: " + insertErr.Error())
@@ -776,11 +801,19 @@ func RelayTask(c *gin.Context) {
 	}
 }
 
+func isSuccessfulTerminalNativeInteractionTask(nativeInteractions bool, channelType int, result *relay.TaskSubmitResult) bool {
+	if !nativeInteractions || channelType != constant.ChannelTypeVertexAi || result == nil || result.InitialTaskInfo == nil || !constant.IsInteractionsTaskPlatform(result.Platform) {
+		return false
+	}
+	return model.TaskStatus(result.InitialTaskInfo.Status) == model.TaskStatusSuccess
+}
+
 func isSynchronousNativeGenerateContentResult(info *relaycommon.RelayInfo, result *relay.TaskSubmitResult) bool {
 	if info == nil || result == nil || result.InitialTaskInfo == nil {
 		return false
 	}
-	if !tasklyria.IsNativeInteractionGenerateContentModel(info.OriginModelName) {
+	if !tasklyria.IsNativeInteractionGenerateContentModel(info.OriginModelName) &&
+		!(info.ChannelType == constant.ChannelTypeVertexAi && tasklyria.IsVertexGenerateContentModelName(info.OriginModelName)) {
 		return false
 	}
 	return info.NativeInteractions || result.Platform == constant.TaskPlatformVertexInteractions
@@ -790,8 +823,9 @@ func shouldPersistSynchronousLyriaTask(nativeInteractions bool, modelName string
 	return !(nativeInteractions && (modelName == "lyria-3-pro-preview" || modelName == "lyria-3-clip-preview"))
 }
 
-func shouldPersistLyriaTask(nativeInteractions bool, modelName string, background bool) bool {
-	if nativeInteractions && tasklyria.IsNativeInteractionGenerateContentModel(modelName) {
+func shouldPersistLyriaTask(nativeInteractions bool, modelName string, background bool, channelType int) bool {
+	if nativeInteractions && (tasklyria.IsNativeInteractionGenerateContentModel(modelName) ||
+		(channelType == constant.ChannelTypeVertexAi && tasklyria.IsVertexGenerateContentModelName(modelName))) {
 		// GenerateContent is completed synchronously. Do not expose or persist
 		// it as a video task; billing is recorded directly in the consume log.
 		return false
@@ -867,13 +901,33 @@ func buildSubmittedTask(c *gin.Context, relayInfo *relaycommon.RelayInfo, result
 	task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
 	task.PrivateData.TokenId = relayInfo.TokenId
 	task.PrivateData.NodeName = common.NodeName
+	if relayInfo.NativeInteractions {
+		task.PrivateData.Execution = service.TaskExecutionSnapshotFromContext(c)
+	}
 	billingContext := &model.TaskBillingContext{
 		ModelPrice:      relayInfo.PriceData.ModelPrice,
 		GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
 		ModelRatio:      relayInfo.PriceData.ModelRatio,
 		OtherRatios:     relayInfo.PriceData.OtherRatios(),
 		OriginModelName: relayInfo.OriginModelName,
-		PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
+		PerCallBilling:  !(relayInfo.NativeInteractions && relayInfo.TieredBillingSnapshot != nil) && (common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice),
+	}
+	if relayInfo.NativeInteractions && relayInfo.TieredBillingSnapshot != nil {
+		billingContext.NativeInteractions = true
+		billingContext.TieredSnapshot = relayInfo.TieredBillingSnapshot
+		if relayInfo.BillingRequestInput != nil {
+			requestInput := *relayInfo.BillingRequestInput
+			requestInput.Body = append([]byte(nil), relayInfo.BillingRequestInput.Body...)
+			requestInput.Headers = make(map[string]string, len(relayInfo.BillingRequestInput.Headers))
+			for key, value := range relayInfo.BillingRequestInput.Headers {
+				lowerKey := strings.ToLower(strings.TrimSpace(key))
+				if lowerKey == "authorization" || lowerKey == "proxy-authorization" || lowerKey == "cookie" || lowerKey == "set-cookie" || strings.Contains(lowerKey, "api-key") || lowerKey == "x-goog-api-key" {
+					continue
+				}
+				requestInput.Headers[key] = value
+			}
+			billingContext.TieredRequestInput = &requestInput
+		}
 	}
 	task.PrivateData.BillingContext = billingContext
 	if isPerSecondOrTokenRatio {

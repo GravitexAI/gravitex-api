@@ -22,12 +22,22 @@ import (
 // while delegating task creation, persistence, retry and billing to RelayTask.
 func NativeInteractionsSubmit(c *gin.Context) {
 	nativeStream := c.GetBool("native_interactions_stream")
+	c.Set("native_interactions_affinity_success", false)
+	streamEventWritten := false
 	if nativeStream {
+		c.Set("native_interactions_stream_succeeded", false)
 		c.Header("Content-Type", "text/event-stream")
 		c.Header("Cache-Control", "no-cache")
 		c.Header("Connection", "keep-alive")
 		streamWriter := c.Writer
 		c.Set("native_interactions_sse_writer", func(event []byte) {
+			// Do not publish a terminal success until RelayTask has persisted the
+			// task and completed settlement/logging. Progress events are safe to
+			// stream while the upstream request is still running.
+			if isNativeInteractionTerminalSSEEvent(event) {
+				return
+			}
+			streamEventWritten = true
 			writeNativeSSEEventToWriter(streamWriter, event)
 		})
 	}
@@ -39,8 +49,40 @@ func NativeInteractionsSubmit(c *gin.Context) {
 	c.Writer = capture.ResponseWriter
 
 	if nativeStream {
-		if capture.status >= http.StatusBadRequest && capture.body.Len() > 0 {
-			writeNativeSSEToWriter(c.Writer, capture.body.Bytes())
+		if capture.status >= http.StatusBadRequest {
+			if capture.body.Len() > 0 {
+				writeNativeSSEErrorToWriter(c.Writer, capture.body.Bytes())
+			} else {
+				writeNativeSSEErrorToWriter(c.Writer, nativeInteractionStreamError("Interactions request failed without a response"))
+			}
+			return
+		}
+		if capture.body.Len() == 0 {
+			writeNativeSSEErrorToWriter(c.Writer, nativeInteractionStreamError("Interactions stream ended without a response"))
+			return
+		}
+		body, err := nativeInteractionResponse(capture.body.Bytes(), c.GetString("native_interactions_model"))
+		if err != nil {
+			writeNativeSSEErrorToWriter(c.Writer, nativeInteractionStreamError(err.Error()))
+			return
+		}
+		if shouldWaitNativeInteraction(c.GetString("native_interactions_model"), c.GetBool("native_interactions_background"), true, c.GetInt("channel_type")) {
+			if !streamEventWritten {
+				writeNativeInteractionSSE(c.Writer, body)
+			}
+			var terminal []byte
+			if terminal, err = waitNativeInteraction(c, body, true); err != nil {
+				writeNativeSSEErrorToWriter(c.Writer, nativeInteractionStreamError(err.Error()))
+			} else if nativeInteractionStreamSucceeded(terminal) {
+				c.Set("native_interactions_stream_succeeded", true)
+			}
+			return
+		}
+		if nativeInteractionStreamSucceeded(body) {
+			c.Set("native_interactions_stream_succeeded", true)
+		}
+		if nativeInteractionIsTerminal(body) || !streamEventWritten {
+			writeNativeInteractionSSE(c.Writer, body)
 		}
 		return
 	}
@@ -64,21 +106,90 @@ func NativeInteractionsSubmit(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, types.OpenAIError{Message: err.Error(), Type: "server_error"})
 		return
 	}
-	if shouldWaitNativeInteraction(c.GetString("native_interactions_model"), c.GetBool("native_interactions_background"), c.GetBool("native_interactions_stream")) {
+	if shouldWaitNativeInteraction(c.GetString("native_interactions_model"), c.GetBool("native_interactions_background"), c.GetBool("native_interactions_stream"), c.GetInt("channel_type")) {
 		body, err = waitNativeInteraction(c, body, false)
 		if err != nil {
 			c.JSON(http.StatusGatewayTimeout, types.OpenAIError{Message: err.Error(), Type: "timeout"})
 			return
 		}
 	}
+	c.Set("native_interactions_affinity_success", nativeInteractionBusinessSucceeded(body))
 	c.Data(capture.status, "application/json", body)
 }
 
-func shouldWaitNativeInteraction(modelName string, background, stream bool) bool {
-	if tasklyria.IsNativeInteractionGenerateContentModel(modelName) {
+func nativeInteractionBusinessSucceeded(body []byte) bool {
+	var interaction map[string]any
+	if common.Unmarshal(body, &interaction) != nil {
 		return false
 	}
-	if background || stream {
+	switch interaction["status"] {
+	case "completed", "queued", "in_progress":
+		return true
+	default:
+		return false
+	}
+}
+
+func isNativeInteractionTerminalSSEEvent(event []byte) bool {
+	eventType := ""
+	var data []byte
+	for _, line := range bytes.Split(event, []byte("\n")) {
+		line = bytes.TrimSuffix(line, []byte("\r"))
+		if bytes.HasPrefix(line, []byte("event:")) {
+			eventType = strings.TrimSpace(string(bytes.TrimPrefix(line, []byte("event:"))))
+		}
+		if bytes.HasPrefix(line, []byte("data:")) {
+			if len(data) > 0 {
+				data = append(data, '\n')
+			}
+			data = append(data, bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))...)
+		}
+	}
+	if eventType == "interaction.completed" || eventType == "interaction.failed" || eventType == "error" {
+		return true
+	}
+	var payload map[string]any
+	if len(data) == 0 || common.Unmarshal(data, &payload) != nil {
+		return false
+	}
+	if eventType, _ := payload["event_type"].(string); eventType == "interaction.completed" || eventType == "interaction.failed" {
+		return true
+	}
+	if interaction, ok := payload["interaction"].(map[string]any); ok {
+		return isNativeInteractionTerminalStatus(stringValue(interaction["status"]))
+	}
+	return isNativeInteractionTerminalStatus(stringValue(payload["status"]))
+}
+
+func nativeInteractionIsTerminal(body []byte) bool {
+	var interaction map[string]any
+	if common.Unmarshal(body, &interaction) != nil {
+		return false
+	}
+	return isNativeInteractionTerminalStatus(stringValue(interaction["status"]))
+}
+
+func nativeInteractionStreamSucceeded(body []byte) bool {
+	var interaction map[string]any
+	if common.Unmarshal(body, &interaction) != nil {
+		return false
+	}
+	status, _ := interaction["status"].(string)
+	return status == "completed"
+}
+
+func stringValue(value any) string {
+	status, _ := value.(string)
+	return status
+}
+
+func shouldWaitNativeInteraction(modelName string, background, stream bool, channelType int) bool {
+	if tasklyria.IsNativeInteractionGenerateContentModel(modelName) ||
+		channelType == constant.ChannelTypeGemini ||
+		(channelType == constant.ChannelTypeVertexAi && tasklyria.IsVertexGenerateContentModelName(modelName)) {
+		return false
+	}
+	if background && !stream {
 		return false
 	}
 	// Lyria 3 does not support background interactions. Its Vertex create call
@@ -100,6 +211,10 @@ func waitNativeInteraction(c *gin.Context, initial []byte, stream bool) ([]byte,
 	id, _ := interaction["id"].(string)
 	if id == "" {
 		return nil, fmt.Errorf("interaction id is missing")
+	}
+	status, _ := interaction["status"].(string)
+	if isNativeInteractionTerminalStatus(status) {
+		return initial, nil
 	}
 
 	originalMethod, originalPath, originalURI := c.Request.Method, c.Request.URL.Path, c.Request.RequestURI
@@ -148,7 +263,7 @@ func waitNativeInteraction(c *gin.Context, initial []byte, stream bool) ([]byte,
 				return nil, err
 			}
 			if stream {
-				writeNativeSSE(c, last)
+				writeNativeInteractionSSE(c.Writer, last)
 			}
 			var current map[string]any
 			_ = common.Unmarshal(last, &current)
@@ -162,12 +277,51 @@ func waitNativeInteraction(c *gin.Context, initial []byte, stream bool) ([]byte,
 	return last, fmt.Errorf("interaction did not complete within 180 seconds")
 }
 
+func isNativeInteractionTerminalStatus(status string) bool {
+	switch status {
+	case "completed", "failed", "cancelled", "incomplete":
+		return true
+	default:
+		return false
+	}
+}
+
+func nativeInteractionStreamError(message string) []byte {
+	body, err := common.Marshal(types.OpenAIError{Message: message, Type: "server_error"})
+	if err != nil {
+		return []byte(`{"message":"Interactions stream failed","type":"server_error"}`)
+	}
+	return body
+}
+
 func writeNativeSSE(c *gin.Context, value []byte) {
 	writeNativeSSEToWriter(c.Writer, value)
 }
 
 func writeNativeSSEToWriter(writer http.ResponseWriter, value []byte) {
 	_, _ = fmt.Fprintf(writer, "data: %s\n\n", value)
+	flushNativeSSEWriter(writer)
+}
+
+func writeNativeSSEErrorToWriter(writer http.ResponseWriter, value []byte) {
+	_, _ = fmt.Fprintf(writer, "event: error\ndata: %s\n\n", value)
+	flushNativeSSEWriter(writer)
+}
+
+func writeNativeInteractionSSE(writer http.ResponseWriter, body []byte) {
+	var interaction map[string]any
+	if common.Unmarshal(body, &interaction) != nil {
+		writeNativeSSEToWriter(writer, body)
+		return
+	}
+	event := "interaction.completed"
+	switch interaction["status"] {
+	case "in_progress", "queued":
+		event = "interaction.created"
+	case "failed", "cancelled", "incomplete":
+		event = "interaction.failed"
+	}
+	_, _ = fmt.Fprintf(writer, "event: %s\ndata: %s\n\n", event, body)
 	flushNativeSSEWriter(writer)
 }
 
@@ -332,6 +486,9 @@ func nativeInteractionResponse(raw []byte, fallbackModel string) ([]byte, error)
 	if wrapped, ok := envelope["data"].(map[string]any); ok {
 		data = wrapped
 	}
+	if data["object"] == "interaction" {
+		return append([]byte(nil), raw...), nil
+	}
 
 	interaction := map[string]any{
 		"id":     data["id"],
@@ -464,8 +621,6 @@ func convertVertexLyriaResponseToGoogle(raw []byte) ([]byte, error) {
 	if len(textParts) > 0 && response["output_text"] == nil {
 		response["output_text"] = strings.Join(textParts, "\n")
 	}
-	delete(response, "outputs")
-	delete(response, "steps")
 	return common.Marshal(response)
 }
 

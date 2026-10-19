@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -42,6 +43,106 @@ func TestConvertNativeInteractionRequestPreservesMediaAndExecutionMode(t *testin
 	require.Equal(t, "gs://bucket/source.mp4", metadata["video"])
 }
 
+func TestConvertNativeInteractionRequestReadsStructuredTtsInput(t *testing.T) {
+	raw := []byte(`{
+		"model":"gemini-3.8-flash-tts",
+		"input":[{"type":"user_input","content":[
+			{"type":"text","text":"Have a wonderful day!","annotations":[{"type":"speech_metadata","style":"cheerful and friendly"}]}
+		]}],
+		"response_format":{"type":"audio"}
+	}`)
+
+	converted, modelName, err := convertNativeInteractionRequest(raw)
+	require.NoError(t, err)
+	require.Equal(t, "gemini-3.8-flash-tts", modelName)
+	var request map[string]any
+	require.NoError(t, common.Unmarshal(converted, &request))
+	require.Equal(t, "Have a wonderful day!", request["prompt"])
+}
+
+func TestNativeInteractionsChannelDispatchRestoresLegacyBodyForOtherChannels(t *testing.T) {
+	raw := []byte(`{"model":"gemini-future-model","input":"legacy prompt"}`)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", bytes.NewReader(raw))
+	NativeInteractions()(c)
+	c.Set("channel_type", constant.ChannelTypeOpenAI)
+
+	NativeInteractionsChannelDispatch()(c)
+
+	storage, err := common.GetBodyStorage(c)
+	require.NoError(t, err)
+	body, err := storage.Bytes()
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"gemini-future-model","prompt":"legacy prompt","metadata":{"background":true}}`, string(body))
+}
+
+func TestNativeInteractionsStreamDefaultsToForegroundExecution(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", bytes.NewReader([]byte(`{"model":"veo-3.1-generate-001","input":"make a short video","stream":true}`)))
+	NativeInteractions()(c)
+	require.True(t, c.GetBool("native_interactions_stream"))
+	require.False(t, c.GetBool("native_interactions_background"))
+}
+
+func TestNativeInteractionsChannelDispatchKeepsOriginalForGemini(t *testing.T) {
+	original := []byte(`{"model":"gemini-future-model","input":[{"type":"audio","data":"YWJj"}]}`)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", bytes.NewReader([]byte(`{"model":"gemini-future-model","prompt":"placeholder"}`)))
+	c.Set("native_interactions_generic", true)
+	c.Set(common.KeyLyriaRawRequestBody, original)
+	c.Set("channel_type", constant.ChannelTypeGemini)
+
+	NativeInteractionsChannelDispatch()(c)
+
+	storage, err := common.GetBodyStorage(c)
+	require.NoError(t, err)
+	body, err := storage.Bytes()
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"gemini-future-model","prompt":"placeholder"}`, string(body))
+}
+
+func TestNativeInteractionsChannelPreparationUsesSelectedRetryChannel(t *testing.T) {
+	raw := []byte(`{"model":"gemini-future-model","input":"legacy prompt"}`)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", bytes.NewReader(raw))
+	NativeInteractions()(c)
+
+	require.NoError(t, PrepareNativeInteractionsChannelRequest(c, constant.ChannelTypeGemini))
+	require.NoError(t, PrepareNativeInteractionsChannelRequest(c, constant.ChannelTypeOpenAI))
+
+	storage, err := common.GetBodyStorage(c)
+	require.NoError(t, err)
+	body, err := storage.Bytes()
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"gemini-future-model","prompt":"legacy prompt","metadata":{"background":true}}`, string(body))
+}
+
+func TestNativeInteractionsKeepsLegacyAudioRejectionForOtherChannels(t *testing.T) {
+	raw := []byte(`{"model":"gemini-future-model","input":[{"type":"text","text":"transcribe"},{"type":"audio","data":"YWJj"}]}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", bytes.NewReader(raw))
+	NativeInteractions()(c)
+	c.Set("channel_type", constant.ChannelTypeOpenAI)
+
+	NativeInteractionsChannelDispatch()(c)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "audio input is not supported")
+}
+
+func TestNativeInteractionsFetchMarksProviderResponseAsRaw(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1beta/interactions/interaction-1", nil)
+	c.Params = gin.Params{{Key: "interaction_id", Value: "interaction-1"}}
+
+	NativeInteractions()(c)
+
+	require.True(t, c.GetBool(common.KeyNativeInteractionsRawMirror))
+	require.True(t, common.IsTaskRawMirror(c))
+	require.Equal(t, "/v1/video/generations/interaction-1", c.Request.URL.Path)
+}
+
 func TestNativeInteractionsPreservesVertexInteractionBodyForSupportedModel(t *testing.T) {
 	raw := []byte(`{"model":"gemini-nano-banana-2.1","input":"draw a cat"}`)
 	recorder := httptest.NewRecorder()
@@ -54,6 +155,76 @@ func TestNativeInteractionsPreservesVertexInteractionBodyForSupportedModel(t *te
 	stored, ok := c.Get(common.KeyLyriaRawRequestBody)
 	require.True(t, ok)
 	require.Equal(t, raw, stored)
+}
+
+func TestNativeInteractionsPreservesRawBodyForGenericModel(t *testing.T) {
+	raw := []byte(`{"model":"gemini-new-model","input":[{"type":"audio","mime_type":"audio/mpeg","data":"YWJj"}],"stream":true}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", bytes.NewReader(raw))
+
+	NativeInteractions()(c)
+
+	require.True(t, c.GetBool("native_interactions_generic"))
+	require.Equal(t, "/v1beta/interactions", c.GetString("native_interactions_original_path"))
+	body, ok := c.Get(common.KeyLyriaRawRequestBody)
+	require.True(t, ok)
+	require.Equal(t, raw, body)
+	require.True(t, c.GetBool("native_interactions_stream"))
+}
+
+func TestNativeInteractionsPreservesOriginalPathForOmniModel(t *testing.T) {
+	raw := []byte(`{"model":"gemini-omni-flash-preview","input":"summarize this clip"}`)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", bytes.NewReader(raw))
+
+	NativeInteractions()(c)
+
+	require.Equal(t, "/v1/video/generations", c.Request.URL.Path)
+	require.Equal(t, "/v1beta/interactions", c.GetString("native_interactions_original_path"))
+}
+
+func TestNativeInteractionsStreamFlagIsNotLimitedToOmniModels(t *testing.T) {
+	raw := []byte(`{"model":"gemini-3.6-flash","input":"hello","stream":true}`)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", bytes.NewReader(raw))
+
+	NativeInteractions()(c)
+
+	require.True(t, c.GetBool("native_interactions_stream"))
+}
+
+func TestChannelAffinityForInteractionsStreamRequiresSuccessfulTerminalResult(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("native_interactions_stream", true)
+	require.False(t, shouldRecordChannelAffinity(c))
+	c.Set("native_interactions_stream_succeeded", true)
+	require.True(t, shouldRecordChannelAffinity(c))
+}
+
+func TestChannelAffinityForNonInteractionsStreamKeepsExistingBehavior(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	require.True(t, shouldRecordChannelAffinity(c))
+}
+
+func TestChannelAffinityForNonStreamingInteractionsRequiresSuccessfulBusinessStatus(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("native_interactions", true)
+	require.False(t, shouldRecordChannelAffinity(c))
+	c.Set("native_interactions_affinity_success", true)
+	require.True(t, shouldRecordChannelAffinity(c))
+}
+
+func TestNativeInteractionsStillRejectsMalformedRequestBeforeChannelSelection(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", bytes.NewReader([]byte(`{"input":`)))
+
+	NativeInteractions()(c)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.False(t, c.GetBool("native_interactions_generic"))
+	require.Contains(t, recorder.Body.String(), "invalid JSON request body")
 }
 
 func TestConvertNativeInteractionRequestReadsOfficialResponseFormatArray(t *testing.T) {

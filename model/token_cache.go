@@ -10,11 +10,11 @@ import (
 )
 
 func getTokenCacheKey(key string) string {
-	return fmt.Sprintf("token:%s", common.GenerateHMAC(key))
+	return fmt.Sprintf("token:{%s}:data", common.GenerateHMAC(key))
 }
 
 func getTokenCacheFenceKey(key string) string {
-	return fmt.Sprintf("token:fence:%s", common.GenerateHMAC(key))
+	return fmt.Sprintf("token:fence:{%s}:guard", common.GenerateHMAC(key))
 }
 
 func tokenCacheTTLSeconds() int {

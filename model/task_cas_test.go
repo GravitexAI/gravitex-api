@@ -38,6 +38,8 @@ func TestMain(m *testing.M) {
 
 	if err := db.AutoMigrate(
 		&Task{},
+		&TaskBillingSettlement{},
+		&TaskBillingLogOutbox{},
 		&User{},
 		&Token{},
 		&PasskeyCredential{},

@@ -2,15 +2,18 @@ package gemini
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/tidwall/gjson"
 )
 
 const omniModelName = relaycommon.GeminiOmniFlashPreview
 const omniTaskIDPrefix = "omni:"
+const interactionTaskIDPrefix = "interaction:"
 
 type omniContent struct {
 	Type     string `json:"type"`
@@ -60,6 +63,14 @@ func markOmniTaskID(interactionID string) string {
 
 func unmarkOmniTaskID(taskID string) string {
 	return strings.TrimPrefix(taskID, omniTaskIDPrefix)
+}
+
+func markInteractionTaskID(interactionID string) string {
+	return interactionTaskIDPrefix + interactionID
+}
+
+func unmarkInteractionTaskID(taskID string) string {
+	return strings.TrimPrefix(taskID, interactionTaskIDPrefix)
 }
 
 func buildOmniRequestURL(baseURL string) string {
@@ -291,7 +302,17 @@ func ParseOmniTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
 	if err := common.Unmarshal(respBody, &interaction); err != nil {
 		return nil, fmt.Errorf("unmarshal Omni interaction failed: %w", err)
 	}
-	ti := &relaycommon.TaskInfo{TaskID: interaction.ID}
+	usageJSON := gjson.GetBytes(respBody, "usage")
+	usageAvailable := false
+	if usageJSON.IsObject() {
+		for _, key := range []string{"total_input_tokens", "total_output_tokens", "total_tokens", "total_thought_tokens", "input_tokens_by_modality", "output_tokens_by_modality"} {
+			if usageJSON.Get(key).Exists() && usageJSON.Get(key).Type != gjson.Null {
+				usageAvailable = true
+				break
+			}
+		}
+	}
+	ti := &relaycommon.TaskInfo{TaskID: interaction.ID, UsageAvailable: usageAvailable, UsageFacts: map[string]any{}}
 	switch strings.ToLower(interaction.Status) {
 	case "completed":
 		ti.Status = model.TaskStatusSuccess
@@ -358,6 +379,18 @@ func ParseOmniTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
 	if ti.TotalTokens == 0 {
 		ti.TotalTokens = ti.InputTokens + ti.VideoOutputTokens + ti.TextOutputTokens
 	}
+	if ti.UsageAvailable {
+		ti.ThoughtTokens = interaction.Usage.TotalThoughtTokens
+		ti.UsageFacts["input_tokens"] = ti.InputTokens
+		ti.UsageFacts["output_tokens"] = ti.CompletionTokens
+		ti.UsageFacts["total_tokens"] = ti.TotalTokens
+		ti.UsageFacts["text_input_tokens"] = ti.TextInputTokens
+		ti.UsageFacts["image_input_tokens"] = ti.ImageInputTokens
+		ti.UsageFacts["video_input_tokens"] = ti.VideoInputTokens
+		ti.UsageFacts["text_output_tokens"] = ti.TextOutputTokens
+		ti.UsageFacts["video_output_tokens"] = ti.VideoOutputTokens
+		ti.UsageFacts["thought_tokens"] = interaction.Usage.TotalThoughtTokens
+	}
 	if ti.Status != model.TaskStatusSuccess {
 		return ti, nil
 	}
@@ -380,6 +413,327 @@ func ParseOmniTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {
 		}
 	}
 	return ti, nil
+}
+
+// ParseNativeInteractionTaskResult normalizes usage from Gemini's native
+// Interactions response without changing the legacy Omni task parser used by
+// /v1/video/generations.
+func ParseNativeInteractionTaskResult(respBody []byte, modelNames ...string) (*relaycommon.TaskInfo, error) {
+	result, err := ParseOmniTaskResult(respBody)
+	if err != nil {
+		return nil, err
+	}
+	usage := gjson.GetBytes(respBody, "usage")
+	if !usage.IsObject() {
+		result.UsageAvailable = false
+		return result, nil
+	}
+	inputModalities, inputBreakdownAvailable := interactionUsageModalities(usage.Get("input_tokens_by_modality"))
+	outputModalities, outputBreakdownAvailable := interactionUsageModalities(usage.Get("output_tokens_by_modality"))
+	totalInput, hasTotalInput := interactionUsageCount(usage.Get("total_input_tokens"))
+	totalOutput, hasTotalOutput := interactionUsageCount(usage.Get("total_output_tokens"))
+	totalTokens, hasTotalTokens := interactionUsageCount(usage.Get("total_tokens"))
+	thoughtTokens, hasThoughtTokens := interactionUsageCount(usage.Get("total_thought_tokens"))
+	if !hasThoughtTokens {
+		thoughtTokens, hasThoughtTokens = outputModalities["thought"]
+	}
+	textInput, hasTextInput := interactionUsageCount(usage.Get("text_input_tokens"))
+	imageInput, hasImageInput := interactionUsageCount(usage.Get("image_input_tokens"))
+	videoInput, hasVideoInput := interactionUsageCount(usage.Get("video_input_tokens"))
+	audioInput, hasAudioInput := interactionUsageCount(usage.Get("audio_input_tokens"))
+	textOutput, hasTextOutput := interactionUsageCount(usage.Get("text_output_tokens"))
+	imageOutput, hasImageOutput := interactionUsageCount(usage.Get("image_output_tokens"))
+	videoOutput, hasVideoOutput := interactionUsageCount(usage.Get("video_output_tokens"))
+	audioOutput, hasAudioOutput := interactionUsageCount(usage.Get("audio_output_tokens"))
+	if !hasTextInput {
+		textInput = inputModalities["text"]
+	}
+	if !hasImageInput {
+		imageInput = inputModalities["image"]
+	}
+	if !hasVideoInput {
+		videoInput = inputModalities["video"]
+	}
+	if !hasAudioInput {
+		audioInput = inputModalities["audio"]
+	}
+	if !hasTextOutput {
+		textOutput = outputModalities["text"]
+	}
+	if !hasImageOutput {
+		imageOutput = outputModalities["image"]
+	}
+	if !hasVideoOutput {
+		videoOutput = outputModalities["video"]
+	}
+	if !hasAudioOutput {
+		audioOutput = outputModalities["audio"]
+	}
+	inputModalityTotal := textInput + imageInput + videoInput + audioInput
+	if !hasTotalInput || (totalInput == 0 && inputModalityTotal > 0) {
+		totalInput = inputModalityTotal
+		hasTotalInput = true
+	}
+	if !hasTotalOutput && (hasTextOutput || hasImageOutput || hasVideoOutput || hasAudioOutput || outputBreakdownAvailable) {
+		totalOutput = textOutput + imageOutput + videoOutput + audioOutput + thoughtTokens
+		hasTotalOutput = true
+	}
+	outputModality, hasOnlyOutputModality := nativeInteractionOutputModality(respBody)
+	hasScalarOutput := textOutput > 0 || imageOutput > 0 || videoOutput > 0 || audioOutput > 0
+	canDeriveTextOutput := hasOnlyOutputModality && outputModality == "text" &&
+		hasTotalInput && hasTotalTokens && !outputBreakdownAvailable && !hasScalarOutput && (!hasTotalOutput || totalOutput == 0)
+	canDeriveImageOutput := hasOnlyOutputModality && outputModality == "image" &&
+		hasTotalInput && hasTotalTokens && !outputBreakdownAvailable && !hasScalarOutput && (!hasTotalOutput || totalOutput == 0)
+	canDeriveAudioOutput := hasOnlyOutputModality && outputModality == "audio" &&
+		hasTotalInput && hasTotalTokens && !outputBreakdownAvailable && !hasScalarOutput && (!hasTotalOutput || totalOutput == 0)
+	canDeriveVideoOutput := hasOnlyOutputModality && outputModality == "video" &&
+		hasTotalInput && hasTotalTokens && !outputBreakdownAvailable && !hasScalarOutput && (!hasTotalOutput || totalOutput == 0)
+	hasInputUsage := hasTotalInput || inputBreakdownAvailable
+	hasOutputUsage := hasTotalOutput || outputBreakdownAvailable || hasThoughtTokens || canDeriveTextOutput || canDeriveImageOutput || canDeriveAudioOutput || canDeriveVideoOutput
+	result.UsageAvailable = hasInputUsage && hasOutputUsage
+	if !result.UsageAvailable {
+		return result, nil
+	}
+
+	result.TextInputTokens = textInput
+	result.ImageInputTokens = imageInput
+	result.VideoInputTokens = videoInput
+	result.AudioInputTokens = audioInput
+	result.InputTokens = totalInput
+	if !hasTotalInput {
+		result.InputTokens = result.TextInputTokens + result.ImageInputTokens + result.VideoInputTokens + result.AudioInputTokens
+	}
+	result.TextOutputTokens = textOutput
+	result.ImageOutputTokens = imageOutput
+	result.VideoOutputTokens = videoOutput
+	result.AudioOutputTokens = audioOutput
+	result.ThoughtTokens = thoughtTokens
+	result.CompletionTokens = totalOutput
+	if !hasTotalOutput || (totalOutput == 0 && (hasTextOutput || hasImageOutput || hasVideoOutput || hasAudioOutput || outputBreakdownAvailable || canDeriveTextOutput || canDeriveImageOutput || canDeriveAudioOutput || canDeriveVideoOutput)) {
+		result.CompletionTokens = result.TextOutputTokens + result.ImageOutputTokens + result.VideoOutputTokens + result.AudioOutputTokens + thoughtTokens
+		if canDeriveTextOutput || canDeriveImageOutput || canDeriveAudioOutput || canDeriveVideoOutput {
+			remaining := totalTokens - result.InputTokens - thoughtTokens
+			if remaining < 0 {
+				result.UsageAvailable = false
+				return result, nil
+			}
+			result.CompletionTokens = remaining + thoughtTokens
+			if canDeriveImageOutput {
+				result.ImageOutputTokens = remaining
+			} else if canDeriveAudioOutput {
+				result.AudioOutputTokens = remaining
+			} else if canDeriveVideoOutput {
+				result.VideoOutputTokens = remaining
+			} else {
+				result.TextOutputTokens = remaining
+			}
+		}
+	}
+	if result.ThoughtTokens > result.CompletionTokens {
+		result.ThoughtTokens = result.CompletionTokens
+	}
+	result.CompletionTokens -= result.ThoughtTokens
+	if hasOnlyOutputModality && !outputBreakdownAvailable && !hasScalarOutput && result.CompletionTokens > 0 {
+		// Match Gemini GenerateContent accounting: classify aggregate output by
+		// the actual returned modality, not the model name, so mixed-capability
+		// models receive the same billing and log treatment as their text peers.
+		switch outputModality {
+		case "text":
+			result.TextOutputTokens = result.CompletionTokens
+		case "image":
+			result.ImageOutputTokens = result.CompletionTokens
+		case "audio":
+			result.AudioOutputTokens = result.CompletionTokens
+		case "video":
+			result.VideoOutputTokens = result.CompletionTokens
+		}
+	}
+	result.TotalTokens = totalTokens
+	minimumTotalTokens := result.InputTokens + result.CompletionTokens + result.ThoughtTokens
+	if !hasTotalTokens || totalTokens < minimumTotalTokens {
+		result.TotalTokens = minimumTotalTokens
+	}
+	if nativeInteractionHasImageOutput(respBody) && result.ImageOutputTokens == 0 {
+		result.UsageAvailable = false
+		result.UsageFacts = map[string]any{}
+		return result, nil
+	}
+	if nativeInteractionHasAudioOutput(respBody) && result.AudioOutputTokens == 0 {
+		result.UsageAvailable = false
+		result.UsageFacts = map[string]any{}
+		return result, nil
+	}
+	result.CachedTokens = 0
+	if cached, ok := interactionUsageCount(usage.Get("cached_tokens")); ok {
+		result.CachedTokens = cached
+	}
+	if result.CachedTokens > result.InputTokens {
+		result.CachedTokens = result.InputTokens
+	}
+	result.UsageFacts = map[string]any{
+		"input_tokens":  result.InputTokens,
+		"output_tokens": result.CompletionTokens + result.ThoughtTokens,
+		"total_tokens":  result.TotalTokens,
+	}
+	if hasThoughtTokens {
+		result.UsageFacts["thought_tokens"] = result.ThoughtTokens
+	}
+	if result.TextInputTokens > 0 {
+		result.UsageFacts["text_input_tokens"] = result.TextInputTokens
+	}
+	if result.ImageInputTokens > 0 {
+		result.UsageFacts["image_input_tokens"] = result.ImageInputTokens
+	}
+	if result.VideoInputTokens > 0 {
+		result.UsageFacts["video_input_tokens"] = result.VideoInputTokens
+	}
+	if result.AudioInputTokens > 0 {
+		result.UsageFacts["audio_input_tokens"] = result.AudioInputTokens
+	}
+	if result.TextOutputTokens > 0 {
+		result.UsageFacts["text_output_tokens"] = result.TextOutputTokens
+	}
+	if result.ImageOutputTokens > 0 {
+		result.UsageFacts["image_output_tokens"] = result.ImageOutputTokens
+	}
+	if result.VideoOutputTokens > 0 {
+		result.UsageFacts["video_output_tokens"] = result.VideoOutputTokens
+	}
+	if result.AudioOutputTokens > 0 {
+		result.UsageFacts["audio_output_tokens"] = result.AudioOutputTokens
+	}
+	if result.CachedTokens > 0 {
+		result.UsageFacts["cached_tokens"] = result.CachedTokens
+	}
+	return result, nil
+}
+
+func nativeInteractionOutputModality(respBody []byte) (string, bool) {
+	var interaction struct {
+		OutputText  string `json:"output_text"`
+		OutputAudio *struct {
+			Type string `json:"type"`
+		} `json:"output_audio"`
+		Outputs []struct {
+			Type string `json:"type"`
+		} `json:"outputs"`
+		Steps []struct {
+			Content []struct {
+				Type string `json:"type"`
+			} `json:"content"`
+		} `json:"steps"`
+	}
+	if common.Unmarshal(respBody, &interaction) != nil {
+		return "", false
+	}
+	modalities := make([]string, 0, len(interaction.Outputs)+len(interaction.Steps))
+	if strings.TrimSpace(interaction.OutputText) != "" {
+		modalities = append(modalities, "text")
+	}
+	if interaction.OutputAudio != nil {
+		modality := strings.ToLower(strings.TrimSpace(interaction.OutputAudio.Type))
+		if modality == "" {
+			modality = "audio"
+		}
+		modalities = append(modalities, modality)
+	}
+	for _, output := range interaction.Outputs {
+		modalities = append(modalities, strings.ToLower(strings.TrimSpace(output.Type)))
+	}
+	for _, step := range interaction.Steps {
+		for _, content := range step.Content {
+			modalities = append(modalities, strings.ToLower(strings.TrimSpace(content.Type)))
+		}
+	}
+	if len(modalities) == 0 {
+		return "", false
+	}
+	modality := modalities[0]
+	switch modality {
+	case "text", "image", "audio", "video":
+	default:
+		return "", false
+	}
+	for _, current := range modalities[1:] {
+		if current != modality {
+			return "", false
+		}
+	}
+	return modality, true
+}
+
+func nativeInteractionHasImageOutput(respBody []byte) bool {
+	outputs := gjson.GetBytes(respBody, "outputs")
+	hasImage := false
+	outputs.ForEach(func(_, output gjson.Result) bool {
+		if strings.EqualFold(strings.TrimSpace(output.Get("type").String()), "image") {
+			hasImage = true
+		}
+		return true
+	})
+	gjson.GetBytes(respBody, "steps").ForEach(func(_, step gjson.Result) bool {
+		step.Get("content").ForEach(func(_, content gjson.Result) bool {
+			if strings.EqualFold(strings.TrimSpace(content.Get("type").String()), "image") {
+				hasImage = true
+			}
+			return true
+		})
+		return true
+	})
+	return hasImage
+}
+
+func nativeInteractionHasAudioOutput(respBody []byte) bool {
+	if gjson.GetBytes(respBody, "output_audio").Exists() {
+		return true
+	}
+	hasAudio := false
+	gjson.GetBytes(respBody, "outputs").ForEach(func(_, output gjson.Result) bool {
+		if strings.EqualFold(strings.TrimSpace(output.Get("type").String()), "audio") {
+			hasAudio = true
+		}
+		return true
+	})
+	gjson.GetBytes(respBody, "steps").ForEach(func(_, step gjson.Result) bool {
+		step.Get("content").ForEach(func(_, content gjson.Result) bool {
+			if strings.EqualFold(strings.TrimSpace(content.Get("type").String()), "audio") {
+				hasAudio = true
+			}
+			return true
+		})
+		return true
+	})
+	return hasAudio
+}
+
+func interactionUsageCount(value gjson.Result) (int, bool) {
+	if !value.Exists() || value.Type == gjson.Null {
+		return 0, false
+	}
+	count, err := strconv.ParseInt(value.Raw, 10, 64)
+	if err != nil || count < 0 || count > int64(^uint(0)>>1) {
+		return 0, false
+	}
+	return int(count), true
+}
+
+func interactionUsageModalities(value gjson.Result) (map[string]int, bool) {
+	modalities := make(map[string]int)
+	if !value.IsArray() {
+		return modalities, false
+	}
+	available := false
+	value.ForEach(func(_, item gjson.Result) bool {
+		count, valid := interactionUsageCount(item.Get("tokens"))
+		if !valid {
+			return true
+		}
+		modality := strings.ToLower(strings.TrimSpace(item.Get("modality").String()))
+		modalities[modality] += count
+		available = true
+		return true
+	})
+	return modalities, available
 }
 
 func defaultOmniMimeType(mime string) string {

@@ -42,6 +42,10 @@ const claudeCacheCreation1hMultiplier = 6 / 3.75
 // the pre-consumed quota still reflects a plausible output cost in paid groups.
 const defaultTieredPreConsumeMaxTokens = 8192
 
+// DefaultTieredPreConsumeMaxTokens exposes the existing bounded estimate to
+// the Interactions task billing adapter.
+const DefaultTieredPreConsumeMaxTokens = defaultTieredPreConsumeMaxTokens
+
 // HandleGroupRatio checks for "auto_group" in the context and updates the group ratio and relayInfo.UsingGroup if present
 func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hosttypes.GroupRatioInfo {
 	groupRatioInfo := hosttypes.GroupRatioInfo{

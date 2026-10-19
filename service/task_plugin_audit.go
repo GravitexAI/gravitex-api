@@ -19,6 +19,9 @@ func TaskExecutionSnapshotFromContext(ctx *gin.Context) *model.TaskExecutionSnap
 	if ctx.Request != nil && ctx.Request.URL != nil {
 		snapshot.RequestPath = ctx.Request.URL.Path
 	}
+	if originalPath := ctx.GetString("native_interactions_original_path"); originalPath != "" {
+		snapshot.RequestPath = originalPath
+	}
 
 	pinnedValue, exists := ctx.Get(pluginruntime.ContextKeyPinnedPlugin)
 	if exists {

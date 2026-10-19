@@ -1,6 +1,7 @@
 package lyria
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
@@ -72,6 +73,78 @@ func isGenerateContentImageModel(name string) bool {
 	return strings.Contains(modelName, "image") || strings.Contains(modelName, "nano-banana")
 }
 
+func nativeInteractionOutputModality(outputText string, outputAudio *lyriaOutputBlock, outputs []lyriaOutputBlock, steps []lyriaInteractionStep) (string, bool) {
+	modalities := make([]string, 0, len(outputs)+len(steps))
+	if strings.TrimSpace(outputText) != "" {
+		modalities = append(modalities, "text")
+	}
+	if outputAudio != nil {
+		modality := strings.ToLower(strings.TrimSpace(outputAudio.Type))
+		if modality == "" {
+			modality = "audio"
+		}
+		modalities = append(modalities, modality)
+	}
+	for _, output := range outputs {
+		modalities = append(modalities, strings.ToLower(strings.TrimSpace(output.Type)))
+	}
+	for _, step := range steps {
+		for _, content := range step.Content {
+			modalities = append(modalities, strings.ToLower(strings.TrimSpace(content.Type)))
+		}
+	}
+	if len(modalities) == 0 {
+		return "", false
+	}
+	modality := modalities[0]
+	switch modality {
+	case "text", "image", "audio", "video":
+	default:
+		return "", false
+	}
+	for _, current := range modalities[1:] {
+		if current != modality {
+			return "", false
+		}
+	}
+	return modality, true
+}
+
+func nativeInteractionHasImageOutput(outputs []lyriaOutputBlock, steps []lyriaInteractionStep) bool {
+	for _, output := range outputs {
+		if strings.EqualFold(strings.TrimSpace(output.Type), "image") {
+			return true
+		}
+	}
+	for _, step := range steps {
+		for _, content := range step.Content {
+			if strings.EqualFold(strings.TrimSpace(content.Type), "image") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func nativeInteractionHasAudioOutput(outputAudio *lyriaOutputBlock, outputs []lyriaOutputBlock, steps []lyriaInteractionStep) bool {
+	if outputAudio != nil {
+		return true
+	}
+	for _, output := range outputs {
+		if strings.EqualFold(strings.TrimSpace(output.Type), "audio") {
+			return true
+		}
+	}
+	for _, step := range steps {
+		for _, content := range step.Content {
+			if strings.EqualFold(strings.TrimSpace(content.Type), "audio") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func IsLyriaModel(name string) bool {
 	return name == ProModelName || name == ClipModelName
 }
@@ -97,7 +170,7 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 		return err
 	}
 	applyNativeInteractionVideoBillingMetadata(c)
-	info.Action = nativeInteractionTaskAction(info.OriginModelName)
+	info.Action = nativeInteractionTaskAction(info)
 	return nil
 }
 
@@ -108,7 +181,7 @@ func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycom
 // not persisted as tasks, so a chained reference can only resolve when it
 // points at a stored (background) interaction.
 func validatePreviousInteractionReference(c *gin.Context, info *relaycommon.RelayInfo) *taskdto.TaskError {
-	if !IsNativeInteractionGenerateContentModel(info.OriginModelName) {
+	if !IsNativeInteractionGenerateContentModel(info.OriginModelName) && !isVertexGenerateContentModel(info) {
 		return nil
 	}
 	raw, ok := c.Get(common.KeyLyriaRawRequestBody)
@@ -135,11 +208,12 @@ func validatePreviousInteractionReference(c *gin.Context, info *relaycommon.Rela
 	return nil
 }
 
-func nativeInteractionTaskAction(modelName string) string {
+func nativeInteractionTaskAction(info *relaycommon.RelayInfo) string {
+	modelName := info.OriginModelName
 	if IsLyriaModel(modelName) {
 		return "song"
 	}
-	if IsNativeInteractionGenerateContentModel(modelName) {
+	if IsNativeInteractionGenerateContentModel(modelName) || isVertexGenerateContentModel(info) {
 		// textGenerate is a legacy alias for text_to_video. Gemini
 		// GenerateContent models must remain non-video tasks for persistence,
 		// billing, and task-list classification.
@@ -242,6 +316,16 @@ func isServiceAccountJSON(key string) bool {
 	return strings.HasPrefix(strings.TrimSpace(key), "{") && strings.Contains(key, `"project_id"`)
 }
 
+func vertexExpressModeBaseURL(baseURL string) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	parsed, err := url.Parse(base)
+	if base == "" || strings.Contains(strings.ToLower(base), "generativelanguage.googleapis.com") ||
+		(err == nil && strings.HasSuffix(strings.ToLower(parsed.Hostname()), "aiplatform.googleapis.com")) {
+		return "https://aiplatform.googleapis.com"
+	}
+	return base
+}
+
 func isVertexLyriaInteraction(info *relaycommon.RelayInfo) bool {
 	if info == nil || !info.NativeInteractions || info.ChannelType != constant.ChannelTypeVertexAi {
 		return false
@@ -250,16 +334,38 @@ func isVertexLyriaInteraction(info *relaycommon.RelayInfo) bool {
 }
 
 func isVertexNativeInteraction(info *relaycommon.RelayInfo) bool {
-	return info != nil && info.NativeInteractions && info.ChannelType == constant.ChannelTypeVertexAi &&
-		IsNativeInteractionModel(info.OriginModelName)
+	if info == nil || !info.NativeInteractions || info.ChannelType != constant.ChannelTypeVertexAi {
+		return false
+	}
+	modelName := strings.ToLower(strings.TrimSpace(info.OriginModelName))
+	if IsNativeInteractionModel(modelName) {
+		return true
+	}
+	return modelName != "" && !relaycommon.IsGeminiOmniModel(modelName) && !strings.HasPrefix(modelName, "veo-")
 }
 
 func isVertexGenerateContentModel(info *relaycommon.RelayInfo) bool {
 	return info != nil && info.NativeInteractions && info.ChannelType == constant.ChannelTypeVertexAi &&
-		IsNativeInteractionGenerateContentModel(info.OriginModelName)
+		IsVertexGenerateContentModelName(info.OriginModelName)
+}
+
+// IsVertexGenerateContentModelName reports whether a Vertex Interactions
+// request should use the generic GenerateContent fallback. Models with an
+// existing dedicated task/Interactions adapter retain that path.
+func IsVertexGenerateContentModelName(modelName string) bool {
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	return modelName != "" && !IsLyriaModel(modelName) &&
+		!relaycommon.IsGeminiOmniModel(modelName) && !strings.HasPrefix(modelName, "veo-")
 }
 
 func buildVertexInteractionsURL(baseURL, key string) (string, error) {
+	if !isServiceAccountJSON(key) {
+		base := vertexExpressModeBaseURL(baseURL)
+		if versionIndex := strings.Index(strings.ToLower(base), "/v1beta1/"); versionIndex >= 0 {
+			base = base[:versionIndex]
+		}
+		return base + "/v1beta1/locations/global/interactions", nil
+	}
 	var credentials vertexcore.Credentials
 	if err := common.Unmarshal([]byte(key), &credentials); err != nil {
 		return "", fmt.Errorf("failed to decode Vertex credentials: %w", err)
@@ -290,11 +396,12 @@ func shouldUseVertexInteractions(info *relaycommon.RelayInfo, baseURL, key strin
 
 func buildVertexGenerateContentURL(baseURL, key, modelName string) (string, error) {
 	if !isServiceAccountJSON(key) {
-		base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-		if base == "" || strings.Contains(strings.ToLower(base), "aiplatform.googleapis.com") {
-			base = "https://generativelanguage.googleapis.com"
-		}
-		return fmt.Sprintf("%s/v1beta/models/%s:generateContent", base, url.PathEscape(modelName)), nil
+		// Vertex API keys are Express Mode credentials. They must be sent to
+		// the Vertex host and use the publisher-model resource path; forwarding
+		// them to generativelanguage.googleapis.com makes Vertex channel calls
+		// fail with API_KEY_INVALID.
+		base := vertexExpressModeBaseURL(baseURL)
+		return fmt.Sprintf("%s/v1/publishers/google/models/%s:generateContent", base, url.PathEscape(modelName)), nil
 	}
 	var credentials vertexcore.Credentials
 	if err := common.Unmarshal([]byte(key), &credentials); err != nil {
@@ -320,7 +427,7 @@ func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, erro
 	return a.baseURL + "/v1beta/interactions", nil
 }
 
-func (a *TaskAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, info *relaycommon.RelayInfo) error {
+func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info *relaycommon.RelayInfo) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	if isVertexGenerateContentModel(info) {
@@ -329,7 +436,14 @@ func (a *TaskAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, info
 			return nil
 		}
 	}
+	if c.GetBool("native_interactions_stream") && info.NativeInteractions && shouldUseVertexInteractions(info, a.baseURL, a.apiKey) {
+		req.Header.Set("Accept", "text/event-stream")
+	}
 	if shouldUseVertexInteractions(info, a.baseURL, a.apiKey) {
+		if !isServiceAccountJSON(a.apiKey) {
+			req.Header.Set("x-goog-api-key", a.apiKey)
+			return nil
+		}
 		var credentials vertexcore.Credentials
 		if err := common.Unmarshal([]byte(a.apiKey), &credentials); err != nil {
 			return fmt.Errorf("failed to decode Vertex credentials: %w", err)
@@ -367,6 +481,12 @@ func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayIn
 				converted, err := convertGoogleTextInputForVertex(body)
 				if err != nil {
 					return nil, err
+				}
+				if isVertexLyriaInteraction(info) {
+					converted, err = removeVertexLyriaResponseFormat(converted)
+					if err != nil {
+						return nil, err
+					}
 				}
 				if isGoogleLyriaAsyncCompatibilityRequest(c, info, converted) {
 					converted, err = normalizeVertexLyriaAsyncFlags(converted)
@@ -469,6 +589,20 @@ func normalizeVertexLyriaAsyncFlags(raw []byte) ([]byte, error) {
 	return common.Marshal(request)
 }
 
+// Vertex Lyria returns audio in its Interaction output and does not accept the
+// Gemini API's response_format field. Remove it only on the Vertex Lyria path.
+func removeVertexLyriaResponseFormat(raw []byte) ([]byte, error) {
+	var request map[string]any
+	if err := common.Unmarshal(raw, &request); err != nil {
+		return nil, err
+	}
+	if _, exists := request["response_format"]; !exists {
+		return raw, nil
+	}
+	delete(request, "response_format")
+	return common.Marshal(request)
+}
+
 // convertGoogleTextInputForVertex adapts the Google AI text-only Interactions
 // shape to Vertex Lyria's documented content-part shape. Multimodal input and
 // all other provider parameters remain untouched; provider validation stays
@@ -512,15 +646,19 @@ func convertNativeInteractionToGenerateContent(c *gin.Context, raw []byte) ([]by
 		// Official clients send camelCase; accept both spellings.
 		generationConfigInput = request["generationConfig"]
 	}
-	config := convertInteractionGenerationConfig(generationConfigInput)
+	modelName, _ := request["model"].(string)
+	config := convertInteractionGenerationConfig(generationConfigInput, modelName)
 	if config == nil {
 		config = map[string]any{}
 	}
 	result["generationConfig"] = config
 	if _, ok := config["responseModalities"]; !ok {
 		modalities := []string{"TEXT"}
-		if modelName, ok := request["model"].(string); ok && isGenerateContentImageModel(modelName) {
+		modelName, _ := request["model"].(string)
+		if isGenerateContentImageModel(modelName) {
 			modalities = []string{"TEXT", "IMAGE"}
+		} else if format, ok := request["response_format"].(map[string]any); ok && strings.EqualFold(fmt.Sprint(format["type"]), "audio") {
+			modalities = []string{"AUDIO"}
 		}
 		config["responseModalities"] = modalities
 	}
@@ -538,7 +676,7 @@ func convertNativeInteractionToGenerateContent(c *gin.Context, raw []byte) ([]by
 	if tools := convertInteractionTools(request["tools"]); len(tools) > 0 {
 		result["tools"] = tools
 	}
-	applyInteractionResponseFormat(config, request["response_format"])
+	applyInteractionResponseFormat(config, request["response_format"], modelName)
 	return common.Marshal(result)
 }
 
@@ -556,24 +694,69 @@ func convertInteractionInput(input any) ([]any, error) {
 		if !ok {
 			continue
 		}
-		typ, _ := part["type"].(string)
-		switch typ {
-		case "text":
-			if text, ok := part["text"].(string); ok && text != "" {
-				parts = append(parts, map[string]any{"text": text})
+		if content, ok := part["content"].([]any); ok {
+			for _, child := range content {
+				childPart, ok := child.(map[string]any)
+				if !ok {
+					continue
+				}
+				convertedPart, err := convertInteractionInputPart(childPart)
+				if err != nil {
+					return nil, err
+				}
+				if convertedPart != nil {
+					parts = append(parts, convertedPart)
+				}
 			}
-		case "image", "video", "audio", "document":
-			media, err := convertInteractionMediaPart(part)
-			if err != nil {
-				return nil, err
-			}
-			parts = append(parts, media)
+			continue
+		}
+		convertedPart, err := convertInteractionInputPart(part)
+		if err != nil {
+			return nil, err
+		}
+		if convertedPart != nil {
+			parts = append(parts, convertedPart)
 		}
 	}
 	if len(parts) == 0 {
 		return nil, errors.New("field input is required")
 	}
 	return []any{map[string]any{"role": "user", "parts": parts}}, nil
+}
+
+func convertInteractionInputPart(part map[string]any) (map[string]any, error) {
+	typ, _ := part["type"].(string)
+	switch typ {
+	case "text":
+		if text, ok := part["text"].(string); ok && text != "" {
+			converted := map[string]any{"text": text}
+			if annotations, ok := part["annotations"].([]any); ok {
+				for _, annotation := range annotations {
+					metadata, ok := annotation.(map[string]any)
+					if !ok || !strings.EqualFold(fmt.Sprint(metadata["type"]), "speech_metadata") {
+						continue
+					}
+					speechMetadata := map[string]any{}
+					for key, value := range metadata {
+						if key != "type" {
+							speechMetadata[key] = value
+						}
+					}
+					if len(speechMetadata) > 0 {
+						converted["speechMetadata"] = speechMetadata
+					}
+				}
+			}
+			return converted, nil
+		}
+	case "image", "video", "audio", "document":
+		media, err := convertInteractionMediaPart(part)
+		if err != nil {
+			return nil, err
+		}
+		return media, nil
+	}
+	return nil, nil
 }
 
 func convertInteractionMediaPart(part map[string]any) (map[string]any, error) {
@@ -700,7 +883,7 @@ func convertInteractionToolConfig(value any) map[string]any {
 	return result
 }
 
-func convertInteractionGenerationConfig(value any) map[string]any {
+func convertInteractionGenerationConfig(value any, modelName string) map[string]any {
 	input, ok := value.(map[string]any)
 	if !ok {
 		return map[string]any{}
@@ -725,6 +908,8 @@ func convertInteractionGenerationConfig(value any) map[string]any {
 				result[mapped] = convertThinkingConfig(item)
 			case "image_config":
 				result[mapped] = convertImageConfig(item)
+			case "speech_config":
+				result[mapped] = convertInteractionSpeechConfig(item, modelName)
 			default:
 				result[mapped] = item
 			}
@@ -744,6 +929,62 @@ func convertInteractionGenerationConfig(value any) map[string]any {
 		}
 	}
 	return result
+}
+
+func convertInteractionSpeechConfig(value any, modelName string) map[string]any {
+	input, ok := value.(map[string]any)
+	if !ok {
+		if speakers, ok := value.([]any); ok {
+			input = map[string]any{"speakers": speakers}
+		} else {
+			return nil
+		}
+	}
+	speakers, _ := input["speakers"].([]any)
+	voiceConfig := func(voice string) map[string]any {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(modelName)), "gemini-3.1-flash-tts") {
+			return map[string]any{"prebuiltVoiceConfig": map[string]any{"voiceName": voice}}
+		}
+		return map[string]any{"voice": voice}
+	}
+	if len(speakers) > 0 {
+		voiceConfigs := make([]any, 0, len(speakers))
+		isMultiSpeaker := false
+		for _, item := range speakers {
+			speaker, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := speaker["speaker"].(string)
+			voice, _ := speaker["voice"].(string)
+			if voice == "" {
+				continue
+			}
+			if name == "" {
+				continue
+			}
+			isMultiSpeaker = true
+			voiceConfigs = append(voiceConfigs, map[string]any{"speaker": name, "voiceConfig": voiceConfig(voice)})
+		}
+		if isMultiSpeaker && len(voiceConfigs) > 0 {
+			return map[string]any{"multiSpeakerVoiceConfig": map[string]any{"speakerVoiceConfigs": voiceConfigs}}
+		}
+		for _, item := range speakers {
+			first, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			voice, _ := first["voice"].(string)
+			if voice != "" {
+				return map[string]any{"voiceConfig": voiceConfig(voice)}
+			}
+		}
+		return nil
+	}
+	if voice, _ := input["voice"].(string); voice != "" {
+		return map[string]any{"voiceConfig": voiceConfig(voice)}
+	}
+	return nil
 }
 
 func convertThinkingConfig(value any) any {
@@ -790,7 +1031,7 @@ func convertImageConfig(value any) any {
 	return result
 }
 
-func applyInteractionResponseFormat(config map[string]any, value any) {
+func applyInteractionResponseFormat(config map[string]any, value any, modelName string) {
 	format, ok := value.(map[string]any)
 	if !ok {
 		if formats, ok := value.([]any); ok && len(formats) > 0 {
@@ -801,17 +1042,22 @@ func applyInteractionResponseFormat(config map[string]any, value any) {
 		return
 	}
 	formatType, _ := format["type"].(string)
+	if formatType == "audio" {
+		config["responseModalities"] = []string{"AUDIO"}
+		return
+	}
 	if formatType == "image" {
-		config["responseModalities"] = []string{"IMAGE"}
+		// Vertex GenerateContent requires text and image together for Gemini
+		// image generation; IMAGE-only requests are rejected as INVALID_ARGUMENT.
+		config["responseModalities"] = []string{"TEXT", "IMAGE"}
 		imageConfig := map[string]any{}
-		for from, to := range map[string]string{
-			"aspect_ratio":      "aspectRatio",
-			"image_size":        "imageSize",
-			"person_generation": "personGeneration",
-		} {
+		for from, to := range map[string]string{"aspect_ratio": "aspectRatio", "person_generation": "personGeneration"} {
 			if item, ok := format[from]; ok && item != nil {
 				imageConfig[to] = item
 			}
+		}
+		if imageSize, ok := format["image_size"].(string); ok && isGenerateContentImageSizeSupported(modelName, imageSize) {
+			imageConfig["imageSize"] = strings.ToUpper(strings.TrimSpace(imageSize))
 		}
 		if len(imageConfig) > 0 {
 			config["imageConfig"] = imageConfig
@@ -833,6 +1079,24 @@ func applyInteractionResponseFormat(config map[string]any, value any) {
 			return
 		}
 	}
+}
+
+func isGenerateContentImageSizeSupported(modelName, imageSize string) bool {
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	imageSize = strings.ToUpper(strings.TrimSpace(imageSize))
+	if imageSize != "512" && imageSize != "1K" && imageSize != "2K" && imageSize != "4K" {
+		return false
+	}
+	if strings.Contains(modelName, "2.5-flash-image") || strings.Contains(modelName, "2.0-flash-preview-image-generation") {
+		return false
+	}
+	if strings.Contains(modelName, "3.1-flash-lite-image") {
+		return imageSize == "1K"
+	}
+	if imageSize == "512" {
+		return strings.Contains(modelName, "3.1-flash-image")
+	}
+	return true
 }
 
 func convertInteractionTools(value any) []any {
@@ -1023,24 +1287,37 @@ func convertGenerateContentResponse(raw []byte, modelName string, imageEcho map[
 				} `json:"parts"`
 			} `json:"content"`
 		} `json:"candidates"`
-		Usage struct {
-			PromptTokenCount        int `json:"promptTokenCount"`
-			CandidatesTokenCount    int `json:"candidatesTokenCount"`
-			TotalTokenCount         int `json:"totalTokenCount"`
-			CachedContentTokenCount int `json:"cachedContentTokenCount"`
-			ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
-			PromptTokensDetails     []struct {
-				Modality   string `json:"modality"`
-				TokenCount int    `json:"tokenCount"`
-			} `json:"promptTokensDetails"`
-			CandidatesTokensDetails []struct {
-				Modality   string `json:"modality"`
-				TokenCount int    `json:"tokenCount"`
-			} `json:"candidatesTokensDetails"`
-		} `json:"usageMetadata"`
+		Usage json.RawMessage `json:"usageMetadata"`
 	}
 	if err := common.Unmarshal(raw, &response); err != nil {
 		return nil, err
+	}
+	var usageMetadata struct {
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		TotalTokenCount         int `json:"totalTokenCount"`
+		CachedContentTokenCount int `json:"cachedContentTokenCount"`
+		ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
+		PromptTokensDetails     []struct {
+			Modality   string `json:"modality"`
+			TokenCount int    `json:"tokenCount"`
+		} `json:"promptTokensDetails"`
+		CandidatesTokensDetails []struct {
+			Modality   string `json:"modality"`
+			TokenCount int    `json:"tokenCount"`
+		} `json:"candidatesTokensDetails"`
+	}
+	usageAvailable := false
+	var usageFields map[string]json.RawMessage
+	if len(response.Usage) > 0 && string(response.Usage) != "null" && common.Unmarshal(response.Usage, &usageMetadata) == nil {
+		if common.Unmarshal(response.Usage, &usageFields) == nil {
+			for _, name := range []string{"promptTokenCount", "candidatesTokenCount", "totalTokenCount", "cachedContentTokenCount", "thoughtsTokenCount", "promptTokensDetails", "candidatesTokensDetails"} {
+				if value, exists := usageFields[name]; exists && string(value) != "null" {
+					usageAvailable = true
+					break
+				}
+			}
+		}
 	}
 	outputs := []any{}
 	for _, candidate := range response.Candidates {
@@ -1049,6 +1326,14 @@ func convertGenerateContentResponse(raw []byte, modelName string, imageEcho map[
 				outputs = append(outputs, map[string]any{"type": "text", "text": part.Text})
 			}
 			if part.InlineData != nil && part.InlineData.Data != "" {
+				if strings.HasPrefix(strings.ToLower(part.InlineData.MimeType), "audio/") {
+					outputs = append(outputs, map[string]any{
+						"type":      "audio",
+						"data":      part.InlineData.Data,
+						"mime_type": part.InlineData.MimeType,
+					})
+					continue
+				}
 				block := map[string]any{
 					"type":      "image",
 					"data":      part.InlineData.Data,
@@ -1067,21 +1352,25 @@ func convertGenerateContentResponse(raw []byte, modelName string, imageEcho map[
 			}
 		}
 	}
-	usage := map[string]any{
-		"total_input_tokens":  response.Usage.PromptTokenCount,
-		"total_output_tokens": response.Usage.CandidatesTokenCount,
-		"total_tokens":        response.Usage.TotalTokenCount,
+	usage := map[string]any{}
+	if usageAvailable {
+		if value, exists := usageFields["promptTokenCount"]; exists && string(value) != "null" {
+			usage["total_input_tokens"] = usageMetadata.PromptTokenCount
+		}
+		if value, exists := usageFields["candidatesTokenCount"]; exists && string(value) != "null" {
+			usage["total_output_tokens"] = usageMetadata.CandidatesTokenCount
+		}
+		if value, exists := usageFields["totalTokenCount"]; exists && string(value) != "null" {
+			usage["total_tokens"] = usageMetadata.TotalTokenCount
+		}
 	}
-	if response.Usage.TotalTokenCount == 0 {
-		usage["total_tokens"] = response.Usage.PromptTokenCount + response.Usage.CandidatesTokenCount
+	if usageAvailable && usageMetadata.CachedContentTokenCount > 0 {
+		usage["cached_tokens"] = usageMetadata.CachedContentTokenCount
 	}
-	if response.Usage.CachedContentTokenCount > 0 {
-		usage["cached_tokens"] = response.Usage.CachedContentTokenCount
+	if usageAvailable && usageMetadata.ThoughtsTokenCount > 0 {
+		usage["thought_tokens"] = usageMetadata.ThoughtsTokenCount
 	}
-	if response.Usage.ThoughtsTokenCount > 0 {
-		usage["thought_tokens"] = response.Usage.ThoughtsTokenCount
-	}
-	for _, detail := range response.Usage.PromptTokensDetails {
+	for _, detail := range usageMetadata.PromptTokensDetails {
 		if detail.TokenCount <= 0 {
 			continue
 		}
@@ -1098,7 +1387,7 @@ func convertGenerateContentResponse(raw []byte, modelName string, imageEcho map[
 			usage["document_input_tokens"] = detail.TokenCount
 		}
 	}
-	for _, detail := range response.Usage.CandidatesTokensDetails {
+	for _, detail := range usageMetadata.CandidatesTokensDetails {
 		if detail.TokenCount <= 0 {
 			continue
 		}
@@ -1113,14 +1402,49 @@ func convertGenerateContentResponse(raw []byte, modelName string, imageEcho map[
 			usage["audio_output_tokens"] = detail.TokenCount
 		}
 	}
-	return common.Marshal(map[string]any{
+	if usageAvailable {
+		if _, hasTotalInput := usage["total_input_tokens"]; !hasTotalInput {
+			var totalInput int
+			for _, detail := range usageMetadata.PromptTokensDetails {
+				if detail.TokenCount > 0 {
+					totalInput += detail.TokenCount
+				}
+			}
+			if totalInput > 0 {
+				usage["total_input_tokens"] = totalInput
+			}
+		}
+		if _, hasTotalOutput := usage["total_output_tokens"]; !hasTotalOutput {
+			var totalOutput int
+			for _, detail := range usageMetadata.CandidatesTokensDetails {
+				if detail.TokenCount > 0 {
+					totalOutput += detail.TokenCount
+				}
+			}
+			if totalOutput > 0 {
+				usage["total_output_tokens"] = totalOutput
+			}
+		}
+		if total, hasTotal := usage["total_tokens"]; !hasTotal || total == 0 {
+			input, _ := usage["total_input_tokens"].(int)
+			output, _ := usage["total_output_tokens"].(int)
+			thought := usageMetadata.ThoughtsTokenCount
+			if input+output+thought > 0 {
+				usage["total_tokens"] = input + output + thought
+			}
+		}
+	}
+	result := map[string]any{
 		"id":      model.GenerateInteractionID(),
 		"object":  "interaction",
 		"model":   modelName,
 		"status":  "completed",
 		"outputs": outputs,
-		"usage":   usage,
-	})
+	}
+	if usageAvailable {
+		result["usage"] = usage
+	}
+	return common.Marshal(result)
 }
 
 func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, body io.Reader) (*http.Response, error) {
@@ -1131,13 +1455,21 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	if resp == nil || resp.Body == nil {
 		return "", nil, service.TaskErrorWrapper(errors.New("upstream response is empty"), "invalid_response", http.StatusBadGateway)
 	}
-	body, err := io.ReadAll(resp.Body)
+	var body []byte
+	var err error
+	if c.GetBool("native_interactions_stream") && info.NativeInteractions &&
+		shouldUseVertexInteractions(info, a.baseURL, a.apiKey) && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		body, err = readVertexInteractionStream(c, resp.Body)
+	} else {
+		body, err = io.ReadAll(resp.Body)
+	}
 	_ = resp.Body.Close()
 	if err != nil {
 		return "", nil, service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusBadGateway)
 	}
 	var interaction struct {
 		ID     string `json:"id"`
+		Model  string `json:"model"`
 		Status string `json:"status"`
 	}
 	preservedVertexUsage := false
@@ -1180,6 +1512,159 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	return interaction.ID, body, nil
 }
 
+func readVertexInteractionStream(c *gin.Context, body io.Reader) ([]byte, error) {
+	var emit func([]byte)
+	if value, ok := c.Get("native_interactions_sse_writer"); ok {
+		emit, _ = value.(func([]byte))
+	}
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	var event bytes.Buffer
+	var latest []byte
+	var idlessTerminal []byte
+	var upstreamErr error
+	var lyriaAudio []byte
+	lyriaAudioMimeType := ""
+	flushEvent := func() {
+		if event.Len() == 0 {
+			return
+		}
+		rawEvent := append([]byte(nil), event.Bytes()...)
+		if emit != nil {
+			emit(rawEvent)
+		}
+		var dataLines []string
+		for _, line := range strings.Split(string(rawEvent), "\n") {
+			line = strings.TrimSuffix(line, "\r")
+			if strings.HasPrefix(line, "event:") && strings.TrimSpace(strings.TrimPrefix(line, "event:")) == "error" {
+				upstreamErr = errors.New("Vertex Interactions stream returned an error")
+			}
+			if strings.HasPrefix(line, "data:") {
+				dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+			}
+		}
+		if len(dataLines) > 0 {
+			var payload map[string]any
+			if common.Unmarshal([]byte(strings.Join(dataLines, "\n")), &payload) == nil {
+				eventType, _ := payload["event_type"].(string)
+				if IsLyriaModel(c.GetString("native_interactions_model")) &&
+					(strings.EqualFold(eventType, "step.delta") || strings.EqualFold(eventType, "content.delta")) {
+					if delta, ok := payload["delta"].(map[string]any); ok && strings.EqualFold(fmt.Sprint(delta["type"]), "audio") {
+						if data, _ := delta["data"].(string); data != "" {
+							decoded, decodeErr := base64.StdEncoding.DecodeString(data)
+							if decodeErr != nil {
+								upstreamErr = fmt.Errorf("Vertex Lyria audio stream contained invalid base64 data: %w", decodeErr)
+							} else {
+								lyriaAudio = append(lyriaAudio, decoded...)
+								if mimeType, _ := delta["mime_type"].(string); mimeType != "" {
+									lyriaAudioMimeType = mimeType
+								}
+							}
+						}
+					}
+				}
+				if strings.EqualFold(eventType, "error") || upstreamErr != nil {
+					message := ""
+					code := ""
+					if providerError, ok := payload["error"].(map[string]any); ok {
+						message, _ = providerError["message"].(string)
+						code, _ = providerError["code"].(string)
+					}
+					if message == "" {
+						message, _ = payload["message"].(string)
+					}
+					if message != "" {
+						if code != "" {
+							upstreamErr = fmt.Errorf("Vertex Interactions stream error (%s): %s", code, message)
+						} else {
+							upstreamErr = fmt.Errorf("Vertex Interactions stream error: %s", message)
+						}
+					}
+				}
+				interaction := payload
+				if nested, ok := payload["interaction"].(map[string]any); ok {
+					interaction = nested
+				}
+				if id, _ := interaction["id"].(string); strings.TrimSpace(id) != "" {
+					if encoded, err := common.Marshal(interaction); err == nil {
+						latest = encoded
+					}
+				} else if IsLyriaModel(c.GetString("native_interactions_model")) {
+					status, _ := interaction["status"].(string)
+					terminal := strings.EqualFold(status, "completed") || strings.EqualFold(status, "failed") ||
+						strings.EqualFold(status, "cancelled") || strings.EqualFold(status, "canceled") ||
+						strings.EqualFold(status, "incomplete") || strings.EqualFold(status, "budget_exceeded")
+					if eventType == "interaction.completed" || eventType == "interaction.failed" {
+						terminal = true
+					}
+					for _, line := range strings.Split(string(rawEvent), "\n") {
+						line = strings.TrimSuffix(line, "\r")
+						if strings.HasPrefix(line, "event:") {
+							name := strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+							if name == "interaction.completed" || name == "interaction.failed" {
+								terminal = true
+							}
+						}
+					}
+					if terminal {
+						if encoded, err := common.Marshal(interaction); err == nil {
+							idlessTerminal = encoded
+						}
+					}
+				}
+			}
+		}
+		event.Reset()
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "" {
+			flushEvent()
+			continue
+		}
+		if event.Len() > 0 {
+			event.WriteByte('\n')
+		}
+		_, _ = event.WriteString(line)
+	}
+	flushEvent()
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if upstreamErr != nil {
+		return nil, upstreamErr
+	}
+	if len(idlessTerminal) > 0 {
+		latest = idlessTerminal
+	}
+	if len(latest) == 0 {
+		return nil, errors.New("Vertex Interactions stream did not contain an interaction")
+	}
+	if len(lyriaAudio) > 0 {
+		parsed, err := parseInteractionResult(latest, c.GetString("native_interactions_model"))
+		if err == nil && parsed.Url == "" {
+			var interaction map[string]any
+			if err := common.Unmarshal(latest, &interaction); err != nil {
+				return nil, err
+			}
+			outputs, _ := interaction["outputs"].([]any)
+			if lyriaAudioMimeType == "" {
+				lyriaAudioMimeType = "audio/mpeg"
+			}
+			outputs = append(outputs, map[string]any{
+				"type": "audio", "mime_type": lyriaAudioMimeType,
+				"data": base64.StdEncoding.EncodeToString(lyriaAudio),
+			})
+			interaction["outputs"] = outputs
+			latest, err = common.Marshal(interaction)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return latest, nil
+}
+
 func (a *TaskAdaptor) GetModelList() []string { return []string{ProModelName, ClipModelName} }
 func (a *TaskAdaptor) GetChannelName() string { return "lyria" }
 
@@ -1211,16 +1696,20 @@ func (a *TaskAdaptor) FetchTask(baseURL, key string, body map[string]any, proxy 
 	}
 	req.Header.Set("Accept", "application/json")
 	if useVertex {
-		var credentials vertexcore.Credentials
-		if err := common.Unmarshal([]byte(key), &credentials); err != nil {
-			return nil, fmt.Errorf("failed to decode Vertex credentials: %w", err)
+		if !isServiceAccountJSON(key) {
+			req.Header.Set("x-goog-api-key", key)
+		} else {
+			var credentials vertexcore.Credentials
+			if err := common.Unmarshal([]byte(key), &credentials); err != nil {
+				return nil, fmt.Errorf("failed to decode Vertex credentials: %w", err)
+			}
+			token, err := vertexcore.AcquireAccessToken(credentials, proxy)
+			if err != nil {
+				return nil, fmt.Errorf("failed to acquire Vertex access token: %w", err)
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("x-goog-user-project", credentials.ProjectID)
 		}
-		token, err := vertexcore.AcquireAccessToken(credentials, proxy)
-		if err != nil {
-			return nil, fmt.Errorf("failed to acquire Vertex access token: %w", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("x-goog-user-project", credentials.ProjectID)
 	} else {
 		req.Header.Set("x-goog-api-key", key)
 	}
@@ -1249,6 +1738,10 @@ func buildLyriaPollURL(baseURL, key, taskID string, useVertex bool) (string, boo
 
 func (a *TaskAdaptor) ParseTaskResult(body []byte) (*relaycommon.TaskInfo, error) {
 	return parseInteractionResult(body)
+}
+
+func (a *TaskAdaptor) ParseTaskResultWithModel(body []byte, modelName string) (*relaycommon.TaskInfo, error) {
+	return parseInteractionResult(body, modelName)
 }
 
 func buildLyriaRequestBody(request map[string]any) ([]byte, error) {
@@ -1286,6 +1779,11 @@ type lyriaOutputBlock struct {
 	MimeType string `json:"mime_type"`
 }
 
+type lyriaInteractionStep struct {
+	Type    string             `json:"type"`
+	Content []lyriaOutputBlock `json:"content"`
+}
+
 type lyriaInteractionError struct {
 	Code    any    `json:"code"`
 	Message string `json:"message"`
@@ -1307,66 +1805,256 @@ func lyriaErrorReason(providerError lyriaInteractionError) string {
 	return code + ": " + reason
 }
 
-func parseInteractionResult(body []byte) (*relaycommon.TaskInfo, error) {
+func parseInteractionResult(body []byte, modelNames ...string) (*relaycommon.TaskInfo, error) {
+	type interactionUsage struct {
+		TotalInputTokens   int `json:"total_input_tokens"`
+		TotalOutputTokens  int `json:"total_output_tokens"`
+		TotalTokens        int `json:"total_tokens"`
+		CachedTokens       int `json:"cached_tokens"`
+		ThoughtTokens      int `json:"thought_tokens"`
+		TotalThoughtTokens int `json:"total_thought_tokens"`
+		TextInputTokens    int `json:"text_input_tokens"`
+		ImageInputTokens   int `json:"image_input_tokens"`
+		VideoInputTokens   int `json:"video_input_tokens"`
+		AudioInputTokens   int `json:"audio_input_tokens"`
+		TextOutputTokens   int `json:"text_output_tokens"`
+		ImageOutputTokens  int `json:"image_output_tokens"`
+		VideoOutputTokens  int `json:"video_output_tokens"`
+		AudioOutputTokens  int `json:"audio_output_tokens"`
+		InputByModality    []struct {
+			Modality string `json:"modality"`
+			Tokens   int    `json:"tokens"`
+		} `json:"input_tokens_by_modality"`
+		OutputByModality []struct {
+			Modality string `json:"modality"`
+			Tokens   int    `json:"tokens"`
+		} `json:"output_tokens_by_modality"`
+	}
 	var interaction struct {
-		ID     string `json:"id"`
-		Status string `json:"status"`
-		Steps  []struct {
-			Type    string             `json:"type"`
-			Content []lyriaOutputBlock `json:"content"`
-		} `json:"steps"`
-		Outputs     []lyriaOutputBlock `json:"outputs"`
-		OutputAudio *lyriaOutputBlock  `json:"output_audio"`
-		OutputText  string             `json:"output_text"`
-		Usage       struct {
-			TotalInputTokens  int `json:"total_input_tokens"`
-			TotalOutputTokens int `json:"total_output_tokens"`
-			TotalTokens       int `json:"total_tokens"`
-			CachedTokens      int `json:"cached_tokens"`
-			ThoughtTokens     int `json:"thought_tokens"`
-			TextInputTokens   int `json:"text_input_tokens"`
-			ImageInputTokens  int `json:"image_input_tokens"`
-			VideoInputTokens  int `json:"video_input_tokens"`
-			TextOutputTokens  int `json:"text_output_tokens"`
-			ImageOutputTokens int `json:"image_output_tokens"`
-			VideoOutputTokens int `json:"video_output_tokens"`
-		} `json:"usage"`
-		Error  lyriaInteractionError   `json:"error"`
-		Errors []lyriaInteractionError `json:"errors"`
+		ID          string                  `json:"id"`
+		Model       string                  `json:"model"`
+		Status      string                  `json:"status"`
+		Steps       []lyriaInteractionStep  `json:"steps"`
+		Outputs     []lyriaOutputBlock      `json:"outputs"`
+		OutputAudio *lyriaOutputBlock       `json:"output_audio"`
+		OutputText  string                  `json:"output_text"`
+		Usage       json.RawMessage         `json:"usage"`
+		Error       lyriaInteractionError   `json:"error"`
+		Errors      []lyriaInteractionError `json:"errors"`
 	}
 	if err := common.Unmarshal(body, &interaction); err != nil {
 		return nil, err
 	}
+	var usage interactionUsage
+	var usageFields map[string]json.RawMessage
+	usageAvailable := false
+	hasInputTokenUsage := false
+	if len(interaction.Usage) > 0 && string(interaction.Usage) != "null" {
+		if err := common.Unmarshal(interaction.Usage, &usage); err == nil {
+			if err := common.Unmarshal(interaction.Usage, &usageFields); err == nil {
+				// A completed interaction with input usage only is not a complete
+				// billing record. In particular, Vertex can expose an early/partial
+				// usage snapshot while the generated output is still unavailable.
+				// Do not settle that snapshot as if output usage were zero; explicit
+				// zero output remains valid because key presence is preserved here.
+				hasInputUsage := false
+				for _, name := range []string{
+					"total_input_tokens", "cached_tokens", "text_input_tokens", "image_input_tokens",
+					"video_input_tokens", "audio_input_tokens", "input_tokens_by_modality",
+				} {
+					if value, exists := usageFields[name]; exists && string(value) != "null" {
+						hasInputUsage = true
+						break
+					}
+				}
+				for _, name := range []string{
+					"total_input_tokens", "text_input_tokens", "image_input_tokens",
+					"video_input_tokens", "audio_input_tokens", "input_tokens_by_modality",
+				} {
+					if value, exists := usageFields[name]; exists && string(value) != "null" {
+						hasInputTokenUsage = true
+						break
+					}
+				}
+				outputModality, hasOnlyOutputModality := nativeInteractionOutputModality(interaction.OutputText, interaction.OutputAudio, interaction.Outputs, interaction.Steps)
+				_, hasTotalTokens := usageFields["total_tokens"]
+				canDeriveAggregateOutput := hasOnlyOutputModality && hasInputTokenUsage && hasTotalTokens &&
+					(outputModality == "text" || outputModality == "image" || outputModality == "audio" || outputModality == "video")
+				hasOutputUsage := false
+				for _, name := range []string{
+					"total_output_tokens", "thought_tokens", "total_thought_tokens",
+					"text_output_tokens", "image_output_tokens", "video_output_tokens", "audio_output_tokens",
+					"output_tokens_by_modality",
+				} {
+					if value, exists := usageFields[name]; exists && string(value) != "null" {
+						hasOutputUsage = true
+						break
+					}
+				}
+				if !hasOutputUsage && canDeriveAggregateOutput {
+					hasOutputUsage = true
+				}
+				usageAvailable = hasInputUsage && hasOutputUsage
+			}
+		}
+	}
+	var modalityTextInput, modalityImageInput, modalityVideoInput, modalityAudioInput int
+	var modalityTextOutput, modalityImageOutput, modalityVideoOutput, modalityAudioOutput, modalityThoughtOutput int
+	for _, item := range usage.InputByModality {
+		switch strings.ToLower(strings.TrimSpace(item.Modality)) {
+		case "text":
+			modalityTextInput += item.Tokens
+		case "image":
+			modalityImageInput += item.Tokens
+		case "video":
+			modalityVideoInput += item.Tokens
+		case "audio":
+			modalityAudioInput += item.Tokens
+		}
+	}
+	for _, item := range usage.OutputByModality {
+		switch strings.ToLower(strings.TrimSpace(item.Modality)) {
+		case "text":
+			modalityTextOutput += item.Tokens
+		case "image":
+			modalityImageOutput += item.Tokens
+		case "video":
+			modalityVideoOutput += item.Tokens
+		case "audio":
+			modalityAudioOutput += item.Tokens
+		case "thought":
+			modalityThoughtOutput += item.Tokens
+		}
+	}
+	modalityInputTotal := modalityTextInput + modalityImageInput + modalityVideoInput + modalityAudioInput
+	if _, exists := usageFields["total_input_tokens"]; !exists || (usage.TotalInputTokens == 0 && modalityInputTotal > 0) {
+		usage.TotalInputTokens = modalityTextInput + modalityImageInput + modalityVideoInput + modalityAudioInput
+	}
+	modalityOutputTotal := modalityTextOutput + modalityImageOutput + modalityVideoOutput + modalityAudioOutput
+	hasScalarOutput := usage.TextOutputTokens > 0 || usage.ImageOutputTokens > 0 || usage.VideoOutputTokens > 0 || usage.AudioOutputTokens > 0
+	outputModality, hasOnlyOutputModality := nativeInteractionOutputModality(interaction.OutputText, interaction.OutputAudio, interaction.Outputs, interaction.Steps)
+	_, hasTotalAggregate := usageFields["total_tokens"]
+	canDeriveAggregateOutput := hasInputTokenUsage && hasTotalAggregate && hasOnlyOutputModality
+	if _, exists := usageFields["total_output_tokens"]; !exists || (usage.TotalOutputTokens == 0 && (modalityOutputTotal > 0 || (canDeriveAggregateOutput && len(usage.OutputByModality) == 0 && !hasScalarOutput))) {
+		// Thought tokens are reported separately from generated candidate tokens
+		// in the gateway billing model, so do not fold them into completion.
+		usage.TotalOutputTokens = modalityOutputTotal
+		if canDeriveAggregateOutput && len(usage.OutputByModality) == 0 && !hasScalarOutput {
+			thoughtTokens := usage.ThoughtTokens
+			if thoughtTokens == 0 {
+				thoughtTokens = usage.TotalThoughtTokens
+			}
+			inputTokensForDerivation := usage.TotalInputTokens
+			if inputTokensForDerivation == 0 {
+				inputTokensForDerivation = usage.TextInputTokens + usage.ImageInputTokens + usage.VideoInputTokens + usage.AudioInputTokens
+			}
+			if inputTokensForDerivation == 0 {
+				inputTokensForDerivation = modalityInputTotal
+			}
+			derived := usage.TotalTokens - inputTokensForDerivation - thoughtTokens
+			if derived >= 0 {
+				usage.TotalOutputTokens = derived
+				switch outputModality {
+				case "image":
+					usage.ImageOutputTokens = derived
+				case "audio":
+					usage.AudioOutputTokens = derived
+				case "video":
+					usage.VideoOutputTokens = derived
+				default:
+					usage.TextOutputTokens = derived
+				}
+			} else {
+				usageAvailable = false
+			}
+		}
+	}
+	if _, exists := usageFields["text_input_tokens"]; !exists {
+		usage.TextInputTokens = modalityTextInput
+	}
+	if _, exists := usageFields["image_input_tokens"]; !exists {
+		usage.ImageInputTokens = modalityImageInput
+	}
+	if _, exists := usageFields["video_input_tokens"]; !exists {
+		usage.VideoInputTokens = modalityVideoInput
+	}
+	if _, exists := usageFields["audio_input_tokens"]; !exists {
+		usage.AudioInputTokens = modalityAudioInput
+	}
+	if _, exists := usageFields["text_output_tokens"]; !exists && len(usage.OutputByModality) > 0 {
+		usage.TextOutputTokens = modalityTextOutput
+	}
+	if _, exists := usageFields["image_output_tokens"]; !exists && len(usage.OutputByModality) > 0 {
+		usage.ImageOutputTokens = modalityImageOutput
+	}
+	if _, exists := usageFields["video_output_tokens"]; !exists {
+		usage.VideoOutputTokens = modalityVideoOutput
+	}
+	if _, exists := usageFields["audio_output_tokens"]; !exists {
+		usage.AudioOutputTokens = modalityAudioOutput
+	}
+	if _, exists := usageFields["thought_tokens"]; !exists {
+		if _, exists := usageFields["total_thought_tokens"]; exists {
+			usage.ThoughtTokens = usage.TotalThoughtTokens
+		} else {
+			usage.ThoughtTokens = modalityThoughtOutput
+		}
+	}
+	modalityInputTotal = usage.TextInputTokens + usage.ImageInputTokens + usage.VideoInputTokens + usage.AudioInputTokens
+	if _, exists := usageFields["total_input_tokens"]; !exists || (usage.TotalInputTokens == 0 && modalityInputTotal > 0) {
+		usage.TotalInputTokens = usage.TextInputTokens + usage.ImageInputTokens + usage.VideoInputTokens + usage.AudioInputTokens
+	}
+	modalityOutputTotal = usage.TextOutputTokens + usage.ImageOutputTokens + usage.VideoOutputTokens + usage.AudioOutputTokens
+	if _, exists := usageFields["total_output_tokens"]; !exists || (usage.TotalOutputTokens == 0 && modalityOutputTotal > 0) {
+		usage.TotalOutputTokens = usage.TextOutputTokens + usage.ImageOutputTokens + usage.VideoOutputTokens + usage.AudioOutputTokens
+	}
 	result := &relaycommon.TaskInfo{TaskID: interaction.ID, Metadata: map[string]any{}}
 	result.UsageFacts = map[string]any{}
-	result.InputTokens = interaction.Usage.TotalInputTokens
-	result.CompletionTokens = interaction.Usage.TotalOutputTokens
-	result.TotalTokens = interaction.Usage.TotalTokens
-	if result.TotalTokens == 0 {
+	result.UsageAvailable = usageAvailable
+	result.InputTokens = usage.TotalInputTokens
+	result.CompletionTokens = usage.TotalOutputTokens
+	result.TotalTokens = usage.TotalTokens
+	if result.TotalTokens == 0 || (result.TotalTokens < result.InputTokens+result.CompletionTokens+usage.ThoughtTokens) {
 		result.TotalTokens = result.InputTokens + result.CompletionTokens
+		if usage.ThoughtTokens > 0 {
+			result.TotalTokens += usage.ThoughtTokens
+		}
 	}
-	result.UsageFacts["total_input_tokens"] = result.InputTokens
-	result.UsageFacts["total_output_tokens"] = result.CompletionTokens
-	result.UsageFacts["total_tokens"] = result.TotalTokens
-	result.CachedTokens = interaction.Usage.CachedTokens
+	if usageAvailable {
+		result.UsageFacts["total_input_tokens"] = result.InputTokens
+		result.UsageFacts["total_output_tokens"] = result.CompletionTokens
+		result.UsageFacts["total_tokens"] = result.TotalTokens
+	}
+	result.CachedTokens = usage.CachedTokens
 	if result.CachedTokens > result.InputTokens {
 		result.CachedTokens = result.InputTokens
 	}
-	if result.CachedTokens > 0 {
-		result.UsageFacts["cached_tokens"] = result.CachedTokens
-	}
-	result.TextInputTokens = interaction.Usage.TextInputTokens
-	result.ImageInputTokens = interaction.Usage.ImageInputTokens
-	result.VideoInputTokens = interaction.Usage.VideoInputTokens
-	result.TextOutputTokens = interaction.Usage.TextOutputTokens
+	result.TextInputTokens = usage.TextInputTokens
+	result.ImageInputTokens = usage.ImageInputTokens
+	result.VideoInputTokens = usage.VideoInputTokens
+	result.AudioInputTokens = usage.AudioInputTokens
+	result.TextOutputTokens = usage.TextOutputTokens
 	if result.TextOutputTokens > result.CompletionTokens {
 		result.TextOutputTokens = result.CompletionTokens
 	}
-	result.VideoOutputTokens = interaction.Usage.VideoOutputTokens
-	if interaction.Usage.ImageOutputTokens > 0 {
-		result.UsageFacts["image_output_tokens"] = interaction.Usage.ImageOutputTokens
+	result.ImageOutputTokens = usage.ImageOutputTokens
+	result.VideoOutputTokens = usage.VideoOutputTokens
+	result.AudioOutputTokens = usage.AudioOutputTokens
+	if hasOnlyOutputModality && len(usage.OutputByModality) == 0 && !hasScalarOutput && result.CompletionTokens > 0 {
+		// Keep aggregate-only output visible in billing logs, matching Gemini
+		// GenerateContent's response-driven modality split across model families.
+		switch outputModality {
+		case "text":
+			result.TextOutputTokens = result.CompletionTokens
+		case "image":
+			result.ImageOutputTokens = result.CompletionTokens
+		case "audio":
+			result.AudioOutputTokens = result.CompletionTokens
+		case "video":
+			result.VideoOutputTokens = result.CompletionTokens
+		}
 	}
-	result.ThoughtTokens = interaction.Usage.ThoughtTokens
+	result.ThoughtTokens = usage.ThoughtTokens
 	if result.ThoughtTokens == 0 {
 		// Gemini reports thinking tokens only inside total_tokens; derive them
 		// when the explicit count is absent so billing and the consume log
@@ -1375,7 +2063,29 @@ func parseInteractionResult(body []byte) (*relaycommon.TaskInfo, error) {
 			result.ThoughtTokens = derived
 		}
 	}
+	if usageAvailable && nativeInteractionHasImageOutput(interaction.Outputs, interaction.Steps) && result.ImageOutputTokens == 0 {
+		usageAvailable = false
+		result.UsageAvailable = false
+		result.UsageFacts = map[string]any{}
+	}
+	if usageAvailable && nativeInteractionHasAudioOutput(interaction.OutputAudio, interaction.Outputs, interaction.Steps) && result.AudioOutputTokens == 0 {
+		usageAvailable = false
+		result.UsageAvailable = false
+		result.UsageFacts = map[string]any{}
+	}
 	if result.ThoughtTokens > 0 {
+		result.UsageFacts["thought_tokens"] = result.ThoughtTokens
+	}
+	if usageAvailable {
+		result.UsageFacts["cached_tokens"] = result.CachedTokens
+		result.UsageFacts["text_input_tokens"] = result.TextInputTokens
+		result.UsageFacts["image_input_tokens"] = result.ImageInputTokens
+		result.UsageFacts["video_input_tokens"] = result.VideoInputTokens
+		result.UsageFacts["audio_input_tokens"] = result.AudioInputTokens
+		result.UsageFacts["text_output_tokens"] = result.TextOutputTokens
+		result.UsageFacts["image_output_tokens"] = result.ImageOutputTokens
+		result.UsageFacts["video_output_tokens"] = result.VideoOutputTokens
+		result.UsageFacts["audio_output_tokens"] = result.AudioOutputTokens
 		result.UsageFacts["thought_tokens"] = result.ThoughtTokens
 	}
 	providerError := interaction.Error
@@ -1424,10 +2134,6 @@ func parseInteractionResult(body []byte) (*relaycommon.TaskInfo, error) {
 	switch status {
 	case "COMPLETED", "SUCCEEDED":
 		result.Status, result.Progress = model.TaskStatusSuccess, "100%"
-		if result.Url == "" && len(outputBlocks) == 0 && len(lyrics) == 0 {
-			result.Status = model.TaskStatusFailure
-			result.Reason = "completed_without_audio: Vertex returned COMPLETED without audio output"
-		}
 	case "FAILED":
 		result.Status, result.Progress = model.TaskStatusFailure, "100%"
 		result.Reason = "failed: Vertex interaction failed without error details"

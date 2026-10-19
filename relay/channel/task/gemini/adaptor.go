@@ -165,6 +165,9 @@ func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, erro
 	if isOmniModel(info.OriginModelName) {
 		return buildOmniRequestURL(a.baseURL), nil
 	}
+	if info.NativeInteractions && info.ChannelType == constant.ChannelTypeGemini && !strings.HasPrefix(strings.ToLower(info.OriginModelName), "veo-") {
+		return buildOmniRequestURL(a.baseURL), nil
+	}
 	modelName := info.OriginModelName
 	version := model_setting.GetGeminiVersionSetting(modelName)
 
@@ -180,7 +183,8 @@ func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, erro
 func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info *relaycommon.RelayInfo) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	if c.GetBool("native_interactions_stream") && isOmniModel(info.OriginModelName) {
+	if c.GetBool("native_interactions_stream") && info.NativeInteractions && info.ChannelType == constant.ChannelTypeGemini &&
+		!strings.HasPrefix(strings.ToLower(info.OriginModelName), "veo-") {
 		req.Header.Set("Accept", "text/event-stream")
 	}
 	req.Header.Set("x-goog-api-key", a.apiKey)
@@ -189,6 +193,15 @@ func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info
 
 // BuildRequestBody converts request into Gemini specific format.
 func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
+	if info.NativeInteractions && info.ChannelType == constant.ChannelTypeGemini && !isOmniModel(info.OriginModelName) &&
+		!strings.HasPrefix(strings.ToLower(info.OriginModelName), "veo-") {
+		if raw, ok := c.Get(common.KeyLyriaRawRequestBody); ok {
+			if body, ok := raw.([]byte); ok {
+				return bytes.NewReader(append([]byte(nil), body...)), nil
+			}
+		}
+		return nil, errors.New("raw Interactions request body not found")
+	}
 	v, ok := c.Get("task_request")
 	if !ok {
 		return nil, fmt.Errorf("request not found in context")
@@ -280,7 +293,8 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	}
 	var responseBody []byte
 	var err error
-	if isOmniModel(info.OriginModelName) && c.GetBool("native_interactions_stream") {
+	if c.GetBool("native_interactions_stream") && (isOmniModel(info.OriginModelName) ||
+		(info.NativeInteractions && info.ChannelType == constant.ChannelTypeGemini && !strings.HasPrefix(strings.ToLower(info.OriginModelName), "veo-"))) {
 		responseBody, err = a.readOmniStream(c, resp, info)
 	} else {
 		responseBody, err = io.ReadAll(resp.Body)
@@ -307,6 +321,24 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		c.JSON(http.StatusOK, video)
 		taskID = markOmniTaskID(interaction.ID)
 		return taskID, responseBody, nil
+	}
+	if info.NativeInteractions && info.ChannelType == constant.ChannelTypeGemini && !strings.HasPrefix(strings.ToLower(info.OriginModelName), "veo-") {
+		var interaction omniInteraction
+		if err := common.Unmarshal(responseBody, &interaction); err != nil || strings.TrimSpace(interaction.ID) == "" {
+			if err == nil {
+				err = fmt.Errorf("missing interaction id")
+			}
+			return "", nil, service.TaskErrorWrapper(err, "invalid_response", http.StatusBadGateway)
+		}
+		var usageEnvelope map[string]any
+		if common.Unmarshal(responseBody, &usageEnvelope) == nil {
+			if usage, ok := usageEnvelope["usage"].(map[string]any); ok {
+				info.SetUpstreamResponsesField("usage", usage)
+			}
+		}
+		info.PublicTaskID = interaction.ID
+		c.Data(resp.StatusCode, "application/json", responseBody)
+		return markInteractionTaskID(interaction.ID), responseBody, nil
 	}
 
 	var s submitResponse
@@ -338,12 +370,25 @@ func (a *TaskAdaptor) readOmniStream(c *gin.Context, resp *http.Response, info *
 	if value, ok := c.Get("native_interactions_sse_writer"); ok {
 		emit, _ = value.(func([]byte))
 	}
+	return ReadOmniStream(resp.Body, emit, func(interactionID string) (*http.Response, error) {
+		return a.FetchTask(a.baseURL, a.apiKey, map[string]any{
+			"task_id": markOmniTaskID(interactionID),
+		}, info.ChannelSetting.Proxy)
+	})
+}
 
-	scanner := bufio.NewScanner(resp.Body)
+// ReadOmniStream collects a streamed Interaction and retrieves its final
+// resource when the completion event only carries an ID. Some providers
+// include the complete interaction in the terminal event, in which case that
+// authoritative snapshot is used directly.
+func ReadOmniStream(body io.Reader, emit func([]byte), fetch func(string) (*http.Response, error)) ([]byte, error) {
+	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	var event bytes.Buffer
 	interactionID := ""
 	completed := false
+	eventType := ""
+	var completedInteraction []byte
 	flushEvent := func() {
 		if event.Len() == 0 {
 			return
@@ -354,6 +399,10 @@ func (a *TaskAdaptor) readOmniStream(c *gin.Context, resp *http.Response, info *
 		}
 		for _, line := range strings.Split(string(rawEvent), "\n") {
 			line = strings.TrimSuffix(line, "\r")
+			if strings.HasPrefix(line, "event:") {
+				eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+				continue
+			}
 			if !strings.HasPrefix(line, "data:") {
 				continue
 			}
@@ -372,9 +421,15 @@ func (a *TaskAdaptor) readOmniStream(c *gin.Context, resp *http.Response, info *
 				if status, ok := interaction["status"].(string); ok && isOmniTerminalStatus(status) {
 					completed = true
 				}
+				if payload["event_type"] == "interaction.completed" && hasOmniInteractionSnapshot(interaction) {
+					completedInteraction, _ = common.Marshal(interaction)
+				}
 			}
-			if eventType, ok := payload["event_type"].(string); ok && eventType == "interaction.completed" {
+			if payloadEventType, ok := payload["event_type"].(string); ok && payloadEventType == "interaction.completed" {
 				completed = true
+				if hasOmniInteractionSnapshot(payload) {
+					completedInteraction, _ = common.Marshal(payload)
+				}
 			}
 			if id, ok := payload["id"].(string); ok && id != "" {
 				interactionID = id
@@ -383,6 +438,24 @@ func (a *TaskAdaptor) readOmniStream(c *gin.Context, resp *http.Response, info *
 				completed = true
 			}
 		}
+		if eventType == "interaction.completed" {
+			completed = true
+			var payload map[string]any
+			for _, line := range strings.Split(string(rawEvent), "\n") {
+				if strings.HasPrefix(line, "data:") {
+					_ = common.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &payload)
+					break
+				}
+			}
+			if interaction, ok := payload["interaction"].(map[string]any); ok {
+				if hasOmniInteractionSnapshot(interaction) {
+					completedInteraction, _ = common.Marshal(interaction)
+				}
+			} else if hasOmniInteractionSnapshot(payload) {
+				completedInteraction, _ = common.Marshal(payload)
+			}
+		}
+		eventType = ""
 		event.Reset()
 	}
 
@@ -407,10 +480,14 @@ func (a *TaskAdaptor) readOmniStream(c *gin.Context, resp *http.Response, info *
 	if !completed {
 		return nil, errors.New("upstream SSE ended before interaction.completed")
 	}
+	if len(completedInteraction) > 0 {
+		return completedInteraction, nil
+	}
 
-	finalResp, err := a.FetchTask(a.baseURL, a.apiKey, map[string]any{
-		"task_id": markOmniTaskID(interactionID),
-	}, info.ChannelSetting.Proxy)
+	if fetch == nil {
+		return nil, errors.New("interaction fetch callback is not configured")
+	}
+	finalResp, err := fetch(interactionID)
 	if err != nil {
 		return nil, fmt.Errorf("fetch completed interaction: %w", err)
 	}
@@ -422,7 +499,26 @@ func (a *TaskAdaptor) readOmniStream(c *gin.Context, resp *http.Response, info *
 		body, _ := io.ReadAll(finalResp.Body)
 		return nil, fmt.Errorf("fetch completed interaction returned HTTP %d: %s", finalResp.StatusCode, string(body))
 	}
-	return io.ReadAll(finalResp.Body)
+	finalBody, err := io.ReadAll(finalResp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var finalInteraction map[string]any
+	if common.Unmarshal(finalBody, &finalInteraction) == nil {
+		if id, ok := finalInteraction["id"].(string); ok && id != "" {
+			return finalBody, nil
+		}
+	}
+	return nil, errors.New("completed interaction response is not valid JSON and completion event had no interaction")
+}
+
+func hasOmniInteractionSnapshot(interaction map[string]any) bool {
+	for _, key := range []string{"steps", "outputs", "output", "output_text", "output_audio", "usage", "error", "errors"} {
+		if _, exists := interaction[key]; exists {
+			return true
+		}
+	}
+	return false
 }
 
 func isOmniTerminalStatus(status string) bool {
@@ -448,8 +544,12 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	if !ok {
 		return nil, fmt.Errorf("invalid task_id")
 	}
-	if strings.HasPrefix(taskID, omniTaskIDPrefix) || strings.HasPrefix(taskID, "v1_") {
-		url := omniInteractionURL(baseUrl, unmarkOmniTaskID(taskID))
+	if strings.HasPrefix(taskID, omniTaskIDPrefix) || strings.HasPrefix(taskID, interactionTaskIDPrefix) || strings.HasPrefix(taskID, "v1_") {
+		interactionID := unmarkOmniTaskID(taskID)
+		if strings.HasPrefix(taskID, interactionTaskIDPrefix) {
+			interactionID = unmarkInteractionTaskID(taskID)
+		}
+		url := omniInteractionURL(baseUrl, interactionID)
 		req, err := http.NewRequest(http.MethodGet, url, nil)
 		if err != nil {
 			return nil, err

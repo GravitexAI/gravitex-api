@@ -2,11 +2,14 @@ package controller
 
 import (
 	"encoding/json"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -19,6 +22,19 @@ func TestNativeInteractionResponseUsesPublicTaskIDForLyriaTask(t *testing.T) {
 	require.NoError(t, json.Unmarshal(result, &response))
 	require.Equal(t, "fVaOav3tM6O47PkPx_z90A8", response["id"])
 	require.Equal(t, "completed", response["status"])
+}
+
+func TestSuccessfulTerminalInteractionsTaskIsSettledAtSubmit(t *testing.T) {
+	result := &relay.TaskSubmitResult{
+		Platform:        constant.TaskPlatformVertexInteractions,
+		InitialTaskInfo: &relaycommon.TaskInfo{Status: model.TaskStatusSuccess},
+	}
+
+	require.True(t, isSuccessfulTerminalNativeInteractionTask(true, constant.ChannelTypeVertexAi, result))
+	require.False(t, isSuccessfulTerminalNativeInteractionTask(false, constant.ChannelTypeVertexAi, result))
+	require.False(t, isSuccessfulTerminalNativeInteractionTask(true, constant.ChannelTypeGemini, result))
+	result.InitialTaskInfo.Status = model.TaskStatusInProgress
+	require.False(t, isSuccessfulTerminalNativeInteractionTask(true, constant.ChannelTypeVertexAi, result))
 }
 
 func TestNativeInteractionResponseKeepsDatabaseIDForOtherTaskPlatforms(t *testing.T) {
@@ -77,11 +93,15 @@ func TestNativeInteractionResponseReturnsUsageFromVideoMetadata(t *testing.T) {
 }
 
 func TestShouldWaitNativeInteractionSkipsLyriaForegroundWait(t *testing.T) {
-	require.False(t, shouldWaitNativeInteraction("lyria-3-pro-preview", false, false))
-	require.False(t, shouldWaitNativeInteraction("lyria-3-clip-preview", false, false))
-	require.True(t, shouldWaitNativeInteraction("gemini-omni-flash-preview", false, false))
-	require.False(t, shouldWaitNativeInteraction("gemini-omni-flash-preview", true, false))
-	require.False(t, shouldWaitNativeInteraction("gemini-omni-flash-preview", false, true))
+	require.False(t, shouldWaitNativeInteraction("lyria-3-pro-preview", false, false, constant.ChannelTypeVertexAi))
+	require.False(t, shouldWaitNativeInteraction("lyria-3-clip-preview", false, false, constant.ChannelTypeVertexAi))
+	require.True(t, shouldWaitNativeInteraction("gemini-omni-flash-preview", false, false, constant.ChannelTypeVertexAi))
+	require.False(t, shouldWaitNativeInteraction("gemini-omni-flash-preview", true, false, constant.ChannelTypeVertexAi))
+	require.True(t, shouldWaitNativeInteraction("gemini-omni-flash-preview", true, true, constant.ChannelTypeVertexAi))
+	require.True(t, shouldWaitNativeInteraction("veo-3.1-generate-001", false, true, constant.ChannelTypeVertexAi))
+	require.False(t, shouldWaitNativeInteraction("gemini-2.5-flash", false, true, constant.ChannelTypeVertexAi))
+	require.False(t, shouldWaitNativeInteraction("gemini-future-model", false, false, constant.ChannelTypeVertexAi))
+	require.False(t, shouldWaitNativeInteraction("gemini-future-model", false, false, constant.ChannelTypeGemini))
 }
 
 func TestNativeInteractionResponsePreservesLyriaOutputs(t *testing.T) {
@@ -108,6 +128,49 @@ func TestNativeInteractionResponseReturnsLyriaSubmitBodyVerbatim(t *testing.T) {
 	require.Equal(t, raw, body)
 }
 
+func TestNativeInteractionSSEErrorHasTerminalErrorEvent(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeNativeSSEErrorToWriter(recorder, []byte(`{"code":"invalid_request","message":"bad request"}`))
+	require.Equal(t, "event: error\ndata: {\"code\":\"invalid_request\",\"message\":\"bad request\"}\n\n", recorder.Body.String())
+}
+
+func TestNativeInteractionResponsePreservesGeminiInteractionEnvelope(t *testing.T) {
+	raw := []byte(`{"id":"interaction-1","object":"interaction","status":"completed","model":"gemini-future-model","outputs":[{"type":"text","text":"hello"}],"usage":{"total_input_tokens":3},"provider_future_field":true}`)
+
+	body, err := nativeInteractionResponse(raw, "gemini-future-model")
+
+	require.NoError(t, err)
+	require.Equal(t, raw, body)
+}
+
+func TestWriteNativeInteractionSSEUsesTerminalEventFromInteractionStatus(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeNativeInteractionSSE(recorder, []byte(`{"id":"interaction-1","object":"interaction","status":"completed"}`))
+
+	require.Equal(t, "event: interaction.completed\ndata: {\"id\":\"interaction-1\",\"object\":\"interaction\",\"status\":\"completed\"}\n\n", recorder.Body.String())
+}
+
+func TestNativeInteractionTerminalSSEEventIsNotForwardedBeforePersistence(t *testing.T) {
+	require.True(t, isNativeInteractionTerminalSSEEvent([]byte("event: interaction.completed\ndata: {\"id\":\"i-1\",\"status\":\"completed\"}")))
+	require.True(t, isNativeInteractionTerminalSSEEvent([]byte("event: interaction.failed\ndata: {\"id\":\"i-1\",\"status\":\"failed\"}")))
+	require.False(t, isNativeInteractionTerminalSSEEvent([]byte("event: interaction.delta\ndata: {\"text\":\"hello\"}")))
+}
+
+func TestNativeInteractionStreamAffinityRequiresSuccessfulTerminalResult(t *testing.T) {
+	require.True(t, nativeInteractionStreamSucceeded([]byte(`{"status":"completed"}`)))
+	require.False(t, nativeInteractionStreamSucceeded([]byte(`{"status":"failed"}`)))
+	require.False(t, nativeInteractionStreamSucceeded([]byte(`{"status":"in_progress"}`)))
+}
+
+func TestNativeInteractionBusinessAffinityRejectsNonSuccessfulTerminalStatuses(t *testing.T) {
+	for _, status := range []string{"failed", "cancelled", "incomplete", "unknown"} {
+		require.False(t, nativeInteractionBusinessSucceeded([]byte(`{"status":"`+status+`"}`)), status)
+	}
+	for _, status := range []string{"completed", "queued", "in_progress"} {
+		require.True(t, nativeInteractionBusinessSucceeded([]byte(`{"status":"`+status+`"}`)), status)
+	}
+}
+
 func TestConvertVertexLyriaResponseToGoogleShape(t *testing.T) {
 	raw := []byte(`{
 		"id":"interaction-1",
@@ -116,7 +179,8 @@ func TestConvertVertexLyriaResponseToGoogleShape(t *testing.T) {
 		"outputs":[
 			{"type":"text","text":"[Verse] Hello"},
 			{"type":"audio","mime_type":"audio/mpeg","data":"SUQz"}
-		]
+		],
+		"steps":[{"type":"model_output","content":[{"type":"text","text":"[Verse] Hello"}]}]
 	}`)
 
 	body, err := convertVertexLyriaResponseToGoogle(raw)
@@ -127,8 +191,8 @@ func TestConvertVertexLyriaResponseToGoogleShape(t *testing.T) {
 	audio := response["output_audio"].(map[string]any)
 	require.Equal(t, "audio/mpeg", audio["mime_type"])
 	require.Equal(t, "SUQz", audio["data"])
-	require.NotContains(t, response, "outputs")
-	require.NotContains(t, response, "steps")
+	require.Len(t, response["outputs"], 2)
+	require.Len(t, response["steps"], 1)
 }
 
 func TestConvertVertexLyriaResponseLeavesNonVertexResponseUnchanged(t *testing.T) {

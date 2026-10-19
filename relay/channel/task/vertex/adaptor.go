@@ -189,6 +189,9 @@ func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, erro
 func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info *relaycommon.RelayInfo) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	if c.GetBool("native_interactions_stream") && isVertexOmniModel(info.OriginModelName) {
+		req.Header.Set("Accept", "text/event-stream")
+	}
 
 	// API Key 模式：通过 x-goog-api-key 头部认证（与 Gemini task adaptor 一致）
 	if info.ChannelOtherSettings.VertexKeyType == dto.VertexKeyTypeAPIKey || isAPIKey(a.apiKey) {
@@ -308,7 +311,19 @@ func (a *TaskAdaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, req
 
 // DoResponse handles upstream response, returns taskID etc.
 func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (taskID string, taskData []byte, taskErr *taskdto.TaskError) {
-	responseBody, err := io.ReadAll(resp.Body)
+	var responseBody []byte
+	var err error
+	if c.GetBool("native_interactions_stream") && isVertexOmniModel(info.OriginModelName) {
+		var emit func([]byte)
+		if value, ok := c.Get("native_interactions_sse_writer"); ok {
+			emit, _ = value.(func([]byte))
+		}
+		responseBody, err = taskgemini.ReadOmniStream(resp.Body, emit, func(interactionID string) (*http.Response, error) {
+			return fetchVertexOmniTask(a.baseURL, a.apiKey, interactionID, info.ChannelSetting.Proxy)
+		})
+	} else {
+		responseBody, err = io.ReadAll(resp.Body)
+	}
 	if err != nil {
 		return "", nil, service.TaskErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError)
 	}

@@ -279,11 +279,11 @@ func TestParseInteractionResultClassifiesEveryVertexTerminalAndNonTerminalStatus
 	}
 }
 
-func TestParseInteractionResultRejectsCompletedResponseWithoutAudio(t *testing.T) {
+func TestParseInteractionResultAllowsCompletedResponseWithoutOutput(t *testing.T) {
 	result, err := parseInteractionResult([]byte(`{"id":"interaction-empty","status":"COMPLETED","outputs":[]}`))
 	require.NoError(t, err)
-	require.Equal(t, model.TaskStatusFailure, result.Status)
-	require.Equal(t, "completed_without_audio: Vertex returned COMPLETED without audio output", result.Reason)
+	require.Equal(t, model.TaskStatusSuccess, result.Status)
+	require.Empty(t, result.Reason)
 	require.Equal(t, "100%", result.Progress)
 }
 

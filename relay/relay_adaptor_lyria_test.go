@@ -82,6 +82,17 @@ func TestGetTaskAdaptorForRequestUsesInteractionsAdaptorForSupportedVertexModels
 	}
 }
 
+func TestGetTaskAdaptorForRequestUsesInteractionsAdaptorForUncataloguedVertexModel(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:        &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeVertexAi},
+		NativeInteractions: true,
+	}
+
+	adaptor := GetTaskAdaptorForRequest(constant.TaskPlatform("41"), "gemini-future-model", info)
+	require.NotNil(t, adaptor)
+	require.Equal(t, "lyria", adaptor.GetChannelName())
+}
+
 func TestNativeInteractionTaskPlatformKeepsLyriaBillingScopeSeparate(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		ChannelMeta:        &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeVertexAi},
@@ -96,14 +107,47 @@ func TestNativeInteractionTaskPlatformKeepsLyriaBillingScopeSeparate(t *testing.
 	require.Equal(t, constant.TaskPlatform("24"), nativeInteractionTaskPlatform(constant.TaskPlatform("24"), info, "gemini-nano-banana-2.1"))
 }
 
-func TestNativeGenerateContentBillingDoesNotDependOnChannelType(t *testing.T) {
+func TestNativeGenerateContentBillingIncludesUncataloguedInteractionsModelsByChannel(t *testing.T) {
 	info := &relaycommon.RelayInfo{NativeInteractions: true}
 	require.True(t, isNativeGenerateContentBilling(info, "gemini-nano-banana-2.1"))
+	require.False(t, isNativeGenerateContentBilling(info, "gemini-future-model"))
+
+	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeGemini}
+	require.True(t, isNativeGenerateContentBilling(info, "gemini-3.6-flash"))
+	require.False(t, isNativeGenerateContentBilling(info, "gemini-omni-1.1-flash-preview"))
+	require.False(t, isNativeGenerateContentBilling(info, "veo-3.1-generate-001"))
+
+	info.ChannelMeta = &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeVertexAi}
+	require.True(t, isNativeGenerateContentBilling(info, "gemini-future-model"))
 
 	info.NativeInteractions = false
 	require.False(t, isNativeGenerateContentBilling(info, "gemini-nano-banana-2.1"))
 	info.NativeInteractions = true
 	require.False(t, isNativeGenerateContentBilling(info, "lyria-3-pro-preview"))
+}
+
+func TestGeminiInteractionsUsesReportedUsageForFinalQuota(t *testing.T) {
+	originalQuotaPerUnit := common.QuotaPerUnit
+	common.QuotaPerUnit = 500000
+	t.Cleanup(func() { common.QuotaPerUnit = originalQuotaPerUnit })
+
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:        &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeGemini},
+		NativeInteractions: true,
+		OriginModelName:    "gemini-3.6-flash",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:     0.375, // $0.75 / 1M input tokens
+			GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+
+	quota, ok := nativeGenerateContentUsageQuota(info, &relaycommon.TaskInfo{
+		Status:         model.TaskStatusSuccess,
+		UsageAvailable: true,
+		InputTokens:    7,
+	})
+	require.True(t, ok)
+	require.Equal(t, 3, quota) // 7 * $0.75 / 1M * 500,000, rounded to quota units.
 }
 
 func TestVertexVeoKeepsExistingTaskAdaptor(t *testing.T) {
@@ -133,6 +177,7 @@ func TestNativeGenerateContentUsageQuotaBillsThoughtTokensAtTextRatio(t *testing
 	}
 	taskInfo := &relaycommon.TaskInfo{
 		Status:           model.TaskStatusSuccess,
+		UsageAvailable:   true,
 		InputTokens:      5,
 		CompletionTokens: 1680,
 		TotalTokens:      2589, // 904 thinking tokens only visible in the total
@@ -168,6 +213,7 @@ func TestNativeGenerateContentUsageQuotaDiscountsCachedInputTokens(t *testing.T)
 	}
 	taskInfo := &relaycommon.TaskInfo{
 		Status:           model.TaskStatusSuccess,
+		UsageAvailable:   true,
 		InputTokens:      1000,
 		CachedTokens:     600,
 		CompletionTokens: 1680,
@@ -204,6 +250,7 @@ func TestNativeGenerateContentUsageQuotaSplitsMixedOutputByModality(t *testing.T
 	}
 	taskInfo := &relaycommon.TaskInfo{
 		Status:           model.TaskStatusSuccess,
+		UsageAvailable:   true,
 		InputTokens:      5,
 		CompletionTokens: 1680,
 		TextOutputTokens: 80, // candidatesTokensDetails reported a text share
@@ -220,4 +267,22 @@ func TestNativeGenerateContentUsageQuotaSplitsMixedOutputByModality(t *testing.T
 	undetailed, ok := nativeGenerateContentUsageQuota(info, taskInfo)
 	require.True(t, ok)
 	require.Equal(t, 25204, undetailed)
+}
+
+func TestNativeGenerateContentUsageQuotaFallsBackWhenUpstreamUsageIsMissing(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		NativeInteractions: true,
+		OriginModelName:    "gemini-2.5-flash",
+		PriceData: hosttypes.PriceData{
+			ModelRatio:     1,
+			GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1},
+			Quota:          1234,
+		},
+	}
+	taskInfo := &relaycommon.TaskInfo{Status: model.TaskStatusSuccess}
+
+	quota, ok := nativeGenerateContentUsageQuota(info, taskInfo)
+
+	require.False(t, ok)
+	require.Zero(t, quota)
 }

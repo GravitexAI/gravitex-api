@@ -393,7 +393,9 @@ func Distribute() func(c *gin.Context) {
 					}
 					if channel == nil {
 						c.Set(channelAffinityBindingContextKey, service.ChannelAffinityBinding{})
-						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, noAvailableChannelMessage(c, usingGroup, modelRequest.Model), types.ErrorCodeModelNotFound)
+						message := noAvailableChannelMessage(c, usingGroup, modelRequest.Model)
+						recordNativeInteractionsNoChannelError(c, modelRequest.Model, message)
+						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, message, types.ErrorCodeModelNotFound)
 						return
 					}
 				}
@@ -404,17 +406,60 @@ func Distribute() func(c *gin.Context) {
 				if kind == taskdto.FilterTaskPluginIdentity {
 					logTaskPluginChannelDecision(c, channel, modelRequest.Model, "channel_rejected", "identity_mismatch")
 				}
-				abortWithOpenAiMessage(c, http.StatusServiceUnavailable, noAvailableChannelMessage(c, common.GetContextKeyString(c, constant.ContextKeyUsingGroup), modelRequest.Model), types.ErrorCodeModelNotFound)
+				message := noAvailableChannelMessage(c, common.GetContextKeyString(c, constant.ContextKeyUsingGroup), modelRequest.Model)
+				recordNativeInteractionsNoChannelError(c, modelRequest.Model, message)
+				abortWithOpenAiMessage(c, http.StatusServiceUnavailable, message, types.ErrorCodeModelNotFound)
 				return
 			}
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
 		c.Next()
-		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
+		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest && shouldRecordChannelAffinity(c) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+func recordNativeInteractionsNoChannelError(c *gin.Context, modelName, message string) {
+	if c == nil || !isNativeInteractionsPath(c.GetString("native_interactions_original_path")) ||
+		!constant.ErrorLogEnabled || c.GetInt("id") <= 0 {
+		return
+	}
+	requestPath := c.GetString("native_interactions_original_path")
+	other := map[string]interface{}{
+		"request_path": requestPath,
+		"error_type":   "api_error",
+		"error_code":   string(types.ErrorCodeModelNotFound),
+		"status_code":  http.StatusServiceUnavailable,
+		"channel_id":   types.ChannelIdNotApplicable,
+	}
+	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
+	if startTime.IsZero() {
+		startTime = time.Now()
+	}
+	group := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	model.RecordErrorLog(c, c.GetInt("id"), types.ChannelIdNotApplicable, modelName,
+		c.GetString("token_name"), message, c.GetInt("token_id"), int(time.Since(startTime).Seconds()),
+		common.GetContextKeyBool(c, constant.ContextKeyIsStream), group, other)
+}
+
+func isNativeInteractionsPath(path string) bool {
+	return path == "/v1beta/interactions" ||
+		(strings.HasPrefix(path, "/v1beta1/projects/") && strings.HasSuffix(path, "/interactions"))
+}
+
+func shouldRecordChannelAffinity(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	if c.GetBool("native_interactions_stream") {
+		return c.GetBool("native_interactions_stream_succeeded")
+	}
+	if c.GetBool("native_interactions") {
+		return c.GetBool("native_interactions_affinity_success")
+	}
+	return true
 }
 
 // noAvailableChannelMessage explains a 503 for a task-plugin-claimed model.

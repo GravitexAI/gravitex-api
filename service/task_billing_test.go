@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -55,6 +56,8 @@ func TestMain(m *testing.M) {
 		&model.UserSubscription{},
 		&model.SystemTask{},
 		&model.SystemTaskLock{},
+		&model.TaskBillingSettlement{},
+		&model.TaskBillingLogOutbox{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -79,6 +82,8 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM user_subscriptions")
 		model.DB.Exec("DELETE FROM system_task_locks")
 		model.DB.Exec("DELETE FROM system_tasks")
+		model.DB.Exec("DELETE FROM task_billing_settlements")
+		model.DB.Exec("DELETE FROM task_billing_log_outbox")
 	})
 }
 
@@ -285,6 +290,27 @@ func TestTaskBillingOtherOmitsEmptyUsageFacts(t *testing.T) {
 	assert.NotContains(t, other, "usage_facts")
 }
 
+func TestTaskBillingOtherPreservesNativeInteractionsRequestPath(t *testing.T) {
+	task := makeTask(1, 1, 100, 0, BillingSourceWallet, 0)
+	task.Platform = constant.TaskPlatformVertexInteractions
+	task.PrivateData.Execution = &model.TaskExecutionSnapshot{RequestPath: "/v1beta/interactions"}
+
+	other := taskBillingOther(task).Snapshot()
+
+	assert.Equal(t, "/v1beta/interactions", other["request_path"])
+}
+
+func TestTaskExecutionSnapshotUsesOriginalInteractionsPath(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+	ctx.Set("native_interactions_original_path", "/v1beta/interactions")
+
+	snapshot := TaskExecutionSnapshotFromContext(ctx)
+
+	require.NotNil(t, snapshot)
+	assert.Equal(t, "/v1beta/interactions", snapshot.RequestPath)
+}
+
 func callLogTaskConsumption(t *testing.T, info *relaycommon.RelayInfo, task *model.Task) *model.Log {
 	return callLogTaskConsumptionWithPath(t, info, task, "/v1/videos")
 }
@@ -311,6 +337,7 @@ func TestLogTaskConsumptionPreservesNativeInteractionRequestPath(t *testing.T) {
 		UserId:             userID,
 		OriginModelName:    "gemini-nano-banana-2.1",
 		NativeInteractions: true,
+		TaskRelayInfo:      &relaycommon.TaskRelayInfo{Action: "generate_content"},
 		UsingGroup:         "default",
 		ChannelMeta:        &relaycommon.ChannelMeta{ChannelId: channelID},
 		PriceData: types.PriceData{
@@ -325,6 +352,7 @@ func TestLogTaskConsumptionPreservesNativeInteractionRequestPath(t *testing.T) {
 	ctx.Set("token_name", "test_token")
 	ctx.Set("native_interactions_original_path", "/v1beta/interactions")
 	LogTaskConsumptionWithTaskInfo(ctx, info, &relaycommon.TaskInfo{
+		UsageAvailable:   true,
 		InputTokens:      22,
 		CompletionTokens: 1_680,
 		TotalTokens:      1_702,
@@ -335,10 +363,42 @@ func TestLogTaskConsumptionPreservesNativeInteractionRequestPath(t *testing.T) {
 	var other map[string]any
 	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
 	assert.Equal(t, "/v1beta/interactions", other["request_path"])
+	assert.Equal(t, "upstream", other["billing_process"].(map[string]any)["source"])
+	assert.Equal(t, "upstream", other["admin_info"].(map[string]any)["usage_billing_path"])
 	assert.Equal(t, 22, log.PromptTokens)
 	assert.Equal(t, 0, log.CompletionTokens)
 	assert.Equal(t, float64(1_680), other["image_output_tokens"])
 	assert.Equal(t, float64(0), other["text_output_tokens"])
+}
+
+func TestLogTaskConsumptionMarksMissingInteractionUsageAsConfiguredBilling(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 44, 44
+	seedUser(t, userID, 10_000)
+	seedChannel(t, channelID)
+
+	info := &relaycommon.RelayInfo{
+		UserId:             userID,
+		OriginModelName:    "gemini-2.5-flash",
+		NativeInteractions: true,
+		TaskRelayInfo:      &relaycommon.TaskRelayInfo{Action: "generate_content"},
+		UsingGroup:         "default",
+		ChannelMeta:        &relaycommon.ChannelMeta{ChannelId: channelID},
+		PriceData:          types.PriceData{ModelPrice: 0.75, Quota: 100, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+	}
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", nil)
+	ctx.Set("token_name", "test_token")
+	LogTaskConsumptionWithTaskInfo(ctx, info, &relaycommon.TaskInfo{Status: model.TaskStatusSuccess})
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	assert.Equal(t, "configured", other["billing_process"].(map[string]any)["source"])
+	assert.Equal(t, "configured", other["admin_info"].(map[string]any)["usage_billing_path"])
+	assert.Equal(t, true, other["admin_info"].(map[string]any)["usage_missing"])
+	assert.NotContains(t, other, "usage_facts")
 }
 
 func TestLogTaskConsumptionWritesFlatModalityKeysForJavaLayer(t *testing.T) {
@@ -351,6 +411,7 @@ func TestLogTaskConsumptionWritesFlatModalityKeysForJavaLayer(t *testing.T) {
 		UserId:             userID,
 		OriginModelName:    "gemini-nano-banana-2.1",
 		NativeInteractions: true,
+		TaskRelayInfo:      &relaycommon.TaskRelayInfo{Action: "generate_content"},
 		UsingGroup:         "default",
 		ChannelMeta:        &relaycommon.ChannelMeta{ChannelId: channelID},
 		PriceData: types.PriceData{
@@ -358,6 +419,8 @@ func TestLogTaskConsumptionWritesFlatModalityKeysForJavaLayer(t *testing.T) {
 			CompletionRatio:      5,
 			ImageCompletionRatio: 20,
 			CacheRatio:           0.1,
+			AudioRatio:           1.5,
+			AudioCompletionRatio: 2,
 			Quota:                100,
 			GroupRatioInfo:       types.GroupRatioInfo{GroupRatio: 1},
 		},
@@ -368,11 +431,15 @@ func TestLogTaskConsumptionWritesFlatModalityKeysForJavaLayer(t *testing.T) {
 	ctx.Set("token_name", "test_token")
 	ctx.Set("native_interactions_original_path", "/v1beta/interactions")
 	LogTaskConsumptionWithTaskInfo(ctx, info, &relaycommon.TaskInfo{
-		InputTokens:      1231,
-		ImageInputTokens: 1120,
-		CachedTokens:     100,
-		CompletionTokens: 1120,
-		TotalTokens:      2351,
+		UsageAvailable:    true,
+		InputTokens:       1231,
+		ImageInputTokens:  1120,
+		CachedTokens:      100,
+		CompletionTokens:  1120,
+		TotalTokens:       2351,
+		TextInputTokens:   11,
+		TextOutputTokens:  7,
+		AudioOutputTokens: 13,
 	})
 
 	log := getLastLog(t)
@@ -387,6 +454,15 @@ func TestLogTaskConsumptionWritesFlatModalityKeysForJavaLayer(t *testing.T) {
 	assert.Equal(t, 0.1, other["cache_ratio"])
 	assert.Equal(t, 5.0, other["completion_ratio"])
 	assert.Equal(t, 1.5, other["input_text_price"])
+	assert.Equal(t, true, other["audio"])
+	assert.Equal(t, 1.5, other["audio_ratio"])
+	assert.Equal(t, 2.0, other["audio_completion_ratio"])
+	assert.Equal(t, float64(11), other["text_input"])
+	assert.Equal(t, float64(7), other["text_output"])
+	assert.Equal(t, float64(13), other["audio_output"])
+	billingProcess := other["billing_process"].(map[string]any)
+	assert.Equal(t, 1.5, billingProcess["audio_ratio"])
+	assert.Equal(t, 2.0, billingProcess["audio_completion_ratio"])
 }
 
 func TestTaskBillingProcessReportsModalityRatiosSeparately(t *testing.T) {
@@ -398,6 +474,8 @@ func TestTaskBillingProcessReportsModalityRatiosSeparately(t *testing.T) {
 			CompletionRatio:      1,
 			ImageCompletionRatio: 20,
 			CacheRatio:           0.2,
+			AudioRatio:           1.5,
+			AudioCompletionRatio: 2,
 		},
 	}
 
@@ -407,6 +485,8 @@ func TestTaskBillingProcessReportsModalityRatiosSeparately(t *testing.T) {
 	require.Equal(t, 1.0, billing["completion_ratio"])
 	require.Equal(t, 20.0, billing["image_completion_ratio"])
 	require.Equal(t, 0.2, billing["cache_ratio"])
+	require.Equal(t, 1.5, billing["audio_ratio"])
+	require.Equal(t, 2.0, billing["audio_completion_ratio"])
 }
 
 func TestLogTaskConsumptionIncludesTieredSnapshotUsageFacts(t *testing.T) {
@@ -455,6 +535,242 @@ func TestLogTaskConsumptionIncludesTieredSnapshotUsageFacts(t *testing.T) {
 	assert.Contains(t, log.Content, "计算参数：")
 	assert.Contains(t, log.Content, "resolution: 720P")
 	assert.Contains(t, log.Content, "seconds: 5")
+}
+
+func TestLogTaskConsumptionIncludesNativeInteractionsTieredBillingDetail(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 46, 46
+	seedUser(t, userID, 10_000)
+	seedChannel(t, channelID)
+	info := &relaycommon.RelayInfo{
+		NativeInteractions: true,
+		UserId:             userID, OriginModelName: "gemini-3-pro-image", UsingGroup: "default",
+		ChannelMeta:   &relaycommon.ChannelMeta{ChannelId: channelID},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "GENERATE"},
+		PriceData:     types.PriceData{Quota: 100, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode: "tiered_expr", ExprString: `tier("base", p * 2 + c * 8)`, ExprHash: "expr-hash", EstimatedTier: "base",
+		},
+	}
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", nil)
+	ctx.Set("token_name", "test_token")
+	logTaskConsumption(ctx, info, &relaycommon.TaskInfo{Status: model.TaskStatusSuccess})
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	adminInfo, ok := other["admin_info"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, adminInfo["tiered_usage_unavailable"])
+	assert.Equal(t, "expr-hash", adminInfo["expression_hash"])
+	assert.Equal(t, "configured", adminInfo["usage_billing_path"])
+	assert.Equal(t, "tiered_expr", other["billing_mode"])
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte(`tier("base", p * 2 + c * 8)`)), other["expr_b64"])
+	assert.Equal(t, "base", other["matched_tier"])
+}
+
+func TestLogNativeInteractionsTieredImageKeepsAggregateOutputForBillingDetail(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 48, 48
+	seedUser(t, userID, 10_000)
+	seedChannel(t, channelID)
+	expression := `tier("base", p * 2 + c * 8 + img_o * 20)`
+	info := &relaycommon.RelayInfo{
+		NativeInteractions: true, UserId: userID, OriginModelName: "gemini-3.5-flash",
+		UsingGroup: "default", ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channelID},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "GENERATE"},
+		PriceData:     types.PriceData{Quota: 100, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1}},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode: "tiered_expr", ExprString: expression, ExprHash: billingexpr.ExprHashString(expression),
+			EstimatedTier: "base",
+		},
+	}
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", nil)
+	ctx.Set("token_name", "test_token")
+	LogTaskConsumptionWithTaskInfo(ctx, info, &relaycommon.TaskInfo{
+		Status: model.TaskStatusSuccess, UsageAvailable: true, InputTokens: 13,
+		CompletionTokens: 1120, ImageOutputTokens: 1120,
+	})
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	assert.Equal(t, 13, log.PromptTokens)
+	assert.Equal(t, 1120, log.CompletionTokens)
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	assert.Equal(t, "tiered_expr", other["billing_mode"])
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte(expression)), other["expr_b64"])
+	assert.Equal(t, float64(1120), other["image_output_tokens"])
+}
+
+func TestLogNativeInteractionsAggregateTextOutputForBillingDetail(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 49, 49
+	seedUser(t, userID, 10_000)
+	seedChannel(t, channelID)
+	expression := `tier("short context", p * 1.5 + c * 1.5)`
+	info := &relaycommon.RelayInfo{
+		NativeInteractions: true, UserId: userID, OriginModelName: "gemini-3.5-flash",
+		UsingGroup: "default", ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channelID},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "GENERATE"},
+		PriceData: types.PriceData{
+			ModelRatio: 0.75, CompletionRatio: 1,
+			Quota: 407, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode: "tiered_expr", ExprString: expression, ExprHash: billingexpr.ExprHashString(expression),
+			EstimatedTier: "short context",
+		},
+	}
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", nil)
+	ctx.Set("token_name", "test_token")
+	LogTaskConsumptionWithTaskInfo(ctx, info, &relaycommon.TaskInfo{
+		Status: model.TaskStatusSuccess, UsageAvailable: true, InputTokens: 7, CompletionTokens: 264,
+		TotalTokens: 271, TextInputTokens: 7, TextOutputTokens: 264,
+		UsageFacts: map[string]any{"input_tokens": 7, "output_tokens": 264, "total_tokens": 271, "text_output_tokens": 264},
+	})
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	assert.Equal(t, float64(264), other["text_output_tokens"])
+	assert.Equal(t, float64(264), other["usage_facts"].(map[string]any)["text_output_tokens"])
+}
+
+func TestLogNativeInteractionsIncludesThoughtTokensInCompletionColumn(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 46, 46
+	seedUser(t, userID, 10_000)
+	seedChannel(t, channelID)
+
+	info := &relaycommon.RelayInfo{
+		UserId:             userID,
+		OriginModelName:    "gemini-3.6-flash",
+		NativeInteractions: true,
+		TaskRelayInfo:      &relaycommon.TaskRelayInfo{Action: "generate_content"},
+		UsingGroup:         "default",
+		ChannelMeta:        &relaycommon.ChannelMeta{ChannelId: channelID},
+		PriceData: types.PriceData{
+			ModelRatio:      0.375,
+			CompletionRatio: 5,
+			Quota:           85,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", nil)
+	ctx.Set("token_name", "test_token")
+	LogTaskConsumptionWithTaskInfo(ctx, info, &relaycommon.TaskInfo{
+		UsageAvailable:   true,
+		InputTokens:      7,
+		ThoughtTokens:    44,
+		CompletionTokens: 0,
+		TotalTokens:      51,
+	})
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	assert.Equal(t, 7, log.PromptTokens)
+	assert.Equal(t, 44, log.CompletionTokens)
+	assert.Equal(t, float64(44), other["reasoning_tokens"])
+	assert.Equal(t, 0.75, other["input_text_price"])
+	assert.Equal(t, 3.75, other["output_text_price"])
+	billingProcess, ok := other["billing_process"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "upstream", billingProcess["source"])
+}
+
+func TestLogNativeInteractionsDerivesUnreportedThoughtTokensForBillingDetail(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 47, 47
+	seedUser(t, userID, 10_000)
+	seedChannel(t, channelID)
+
+	info := &relaycommon.RelayInfo{
+		UserId:             userID,
+		OriginModelName:    "gemini-3.6-flash",
+		NativeInteractions: true,
+		TaskRelayInfo:      &relaycommon.TaskRelayInfo{Action: "generate_content"},
+		UsingGroup:         "default",
+		ChannelMeta:        &relaycommon.ChannelMeta{ChannelId: channelID},
+		PriceData: types.PriceData{
+			ModelRatio:      0.375,
+			CompletionRatio: 5,
+			Quota:           85,
+			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", nil)
+	ctx.Set("token_name", "test_token")
+	LogTaskConsumptionWithTaskInfo(ctx, info, &relaycommon.TaskInfo{
+		UsageAvailable:   true,
+		InputTokens:      7,
+		CompletionTokens: 0,
+		TotalTokens:      51,
+	})
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	assert.Equal(t, 7, log.PromptTokens)
+	assert.Equal(t, 44, log.CompletionTokens)
+	assert.Equal(t, float64(44), other["reasoning_tokens"])
+	assert.Equal(t, 0.75, other["input_text_price"])
+	assert.Equal(t, 3.75, other["output_text_price"])
+	billingProcess, ok := other["billing_process"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "upstream", billingProcess["source"])
+}
+
+func TestLogNativeInteractionsAudioVideoUsageAsFlatBillingDetails(t *testing.T) {
+	truncate(t)
+	const userID, channelID = 50, 50
+	seedUser(t, userID, 10_000)
+	seedChannel(t, channelID)
+	info := &relaycommon.RelayInfo{
+		NativeInteractions: true, UserId: userID, OriginModelName: "gemini-omni-flash-preview",
+		UsingGroup: "default", ChannelMeta: &relaycommon.ChannelMeta{ChannelId: channelID},
+		TaskRelayInfo: &relaycommon.TaskRelayInfo{Action: "GENERATE"},
+		PriceData: types.PriceData{
+			ModelRatio: 0.75, CompletionRatio: 1,
+			Quota: 407, GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		},
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode: "tiered_expr", ExprString: `tier("base", p + c + ao)`,
+			ExprHash: billingexpr.ExprHashString(`tier("base", p + c + ao)`), EstimatedTier: "base",
+		},
+	}
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1beta/interactions", nil)
+	ctx.Set("token_name", "test_token")
+	LogTaskConsumptionWithTaskInfo(ctx, info, &relaycommon.TaskInfo{
+		Status: model.TaskStatusSuccess, UsageAvailable: true, InputTokens: 7, CompletionTokens: 264,
+		TotalTokens: 271, TextInputTokens: 7, TextOutputTokens: 120,
+		VideoOutputTokens: 100, AudioInputTokens: 3, AudioOutputTokens: 44,
+		UsageFacts: map[string]any{
+			"input_tokens": 7, "output_tokens": 264, "total_tokens": 271,
+			"text_output_tokens": 120, "video_output_tokens": 100,
+			"audio_input_tokens": 3, "audio_output_tokens": 44,
+		},
+	})
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	var other map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	assert.Equal(t, float64(120), other["text_output_tokens"])
+	assert.Equal(t, float64(100), other["video_output_tokens"])
+	assert.Equal(t, float64(3), other["audio_input"])
+	assert.Equal(t, float64(44), other["audio_output"])
+	assert.Equal(t, float64(44), other["audio_output_tokens"])
 }
 
 func TestLogTaskConsumptionWithoutSnapshotKeepsRatioMode(t *testing.T) {
@@ -1613,6 +1929,10 @@ type mockAdaptor struct {
 	adjustReturn int
 }
 
+type recoveryTaskAdaptor struct {
+	result *relaycommon.TaskInfo
+}
+
 func (m *mockAdaptor) Init(_ *relaycommon.RelayInfo) {}
 func (m *mockAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
 	return nil, nil
@@ -1622,6 +1942,17 @@ func (m *mockAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
 }
 func (m *mockAdaptor) AdjustBillingOnComplete(_ *model.Task, _ *relaycommon.TaskInfo) int {
 	return m.adjustReturn
+}
+
+func (a *recoveryTaskAdaptor) Init(_ *relaycommon.RelayInfo) {}
+func (a *recoveryTaskAdaptor) FetchTask(string, string, map[string]any, string) (*http.Response, error) {
+	return nil, nil
+}
+func (a *recoveryTaskAdaptor) ParseTaskResult([]byte) (*relaycommon.TaskInfo, error) {
+	return a.result, nil
+}
+func (a *recoveryTaskAdaptor) AdjustBillingOnComplete(_ *model.Task, _ *relaycommon.TaskInfo) int {
+	return 0
 }
 
 // ===========================================================================
@@ -1824,6 +2155,291 @@ func TestSettle_TieredSuccessStillRecomputes(t *testing.T) {
 	facts, ok := other["usage_facts"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, map[string]any{"seconds": float64(8), "clips": float64(2)}, facts)
+}
+
+func TestSettle_TieredTokenSnapshotUsesTaskUsageAndFrozenRequest(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+	const userID, preConsumed = 39, 500
+	const initialQuota = 10_000
+	seedUser(t, userID, initialQuota)
+
+	expression := `param("tier") == "fast" ? tier("fast", p * 10 + c * 20) : tier("base", p + c)`
+	task := makeTask(userID, 0, preConsumed, 0, BillingSourceWallet, 0)
+	task.Status = model.TaskStatusSuccess
+	task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{
+		BillingMode: "tiered_expr", ExprString: expression, ExprHash: billingexpr.ExprHashString(expression),
+		GroupRatio: 1, QuotaPerUnit: 500_000, ExprVersion: 1, EstimatedTier: "fast",
+	}
+	task.PrivateData.BillingContext.NativeInteractions = true
+	task.PrivateData.BillingContext.TieredRequestInput = &billingexpr.RequestInput{Body: []byte(`{"tier":"fast"}`)}
+
+	settled := settleTaskBillingOnComplete(ctx, &mockAdaptor{}, task, &relaycommon.TaskInfo{
+		Status: model.TaskStatusSuccess, UsageAvailable: true, InputTokens: 100, CompletionTokens: 50, TotalTokens: 150,
+	})
+
+	assert.True(t, settled)
+	assert.Equal(t, 1_000, task.Quota)
+	assert.Equal(t, initialQuota+(preConsumed-1_000), getUserQuota(t, userID))
+	assert.Equal(t, "fast", task.PrivateData.BillingContext.TieredSnapshot.EstimatedTier)
+}
+
+func TestSettle_TieredTokenSnapshotKeepsPreconsumeWhenUsageMissing(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+	const userID, preConsumed = 45, 500
+	seedUser(t, userID, 10_000)
+	task := makeTask(userID, 0, preConsumed, 0, BillingSourceWallet, 0)
+	task.Status = model.TaskStatusSuccess
+	task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{
+		BillingMode: "tiered_expr", ExprString: `tier("base", p * 10)`,
+		ExprHash:   billingexpr.ExprHashString(`tier("base", p * 10)`),
+		GroupRatio: 1, QuotaPerUnit: 500_000, ExprVersion: 1,
+	}
+	task.PrivateData.BillingContext.NativeInteractions = true
+
+	settled := settleTaskBillingOnComplete(ctx, &mockAdaptor{adjustReturn: 1}, task, &relaycommon.TaskInfo{Status: model.TaskStatusSuccess})
+
+	assert.False(t, settled)
+	assert.Equal(t, preConsumed, task.Quota)
+	assert.Equal(t, 10_000, getUserQuota(t, userID))
+}
+
+func TestBuildTieredTokenParamsForImageInteractionTaskNormalizesModalities(t *testing.T) {
+	taskInfo := &relaycommon.TaskInfo{
+		InputTokens: 100, CompletionTokens: 40, TextOutputTokens: 10, CachedTokens: 10, ImageInputTokens: 20,
+		AudioInputTokens: 5, AudioOutputTokens: 8,
+	}
+	params := BuildTieredTokenParamsForTask(taskInfo, "gemini-3-pro-image", `p + c + cr + img + img_o + ai + ao`)
+	assert.Equal(t, float64(65), params.P)
+	assert.Equal(t, float64(2), params.C)
+	assert.Equal(t, float64(10), params.CR)
+	assert.Equal(t, float64(20), params.Img)
+	assert.Equal(t, float64(30), params.ImgO)
+	assert.Equal(t, float64(5), params.AI)
+	assert.Equal(t, float64(8), params.AO)
+}
+
+func TestBuildTieredTokenParamsForObservedImageOutputDoesNotDependOnModelName(t *testing.T) {
+	taskInfo := &relaycommon.TaskInfo{
+		InputTokens: 7, CompletionTokens: 1120, TotalTokens: 1127,
+		ImageOutputTokens: 1120,
+	}
+	params := BuildTieredTokenParamsForTask(taskInfo, "gemini-3.5-flash", `p + c + img_o`)
+	require.Equal(t, float64(7), params.P)
+	require.Zero(t, params.C)
+	require.Equal(t, float64(1120), params.ImgO)
+}
+
+func TestBuildTieredTokenParamsForTaskUsesAggregateOutputIncludingThoughts(t *testing.T) {
+	params := BuildTieredTokenParamsForTask(&relaycommon.TaskInfo{
+		InputTokens: 12, CompletionTokens: 90, TotalTokens: 112, ThoughtTokens: 10,
+	}, "gemini-omni-flash-preview", `p + c`)
+	assert.Equal(t, float64(100), params.C)
+}
+
+func TestSettle_NativeInteractionsUsageExpressionRequiresAllValidatedFacts(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+	const userID, preConsumed = 47, 500
+	seedUser(t, userID, 10_000)
+	task := makeTask(userID, 0, preConsumed, 0, BillingSourceWallet, 0)
+	task.Status = model.TaskStatusSuccess
+	task.PrivateData.BillingContext.NativeInteractions = true
+	task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{
+		BillingMode: "tiered_expr",
+		ExprString:  `u("mode") == "fast" ? tier("fast", u("seconds") * 10) : tier("base", 1)`,
+		ExprHash:    billingexpr.ExprHashString(`u("mode") == "fast" ? tier("fast", u("seconds") * 10) : tier("base", 1)`),
+		GroupRatio:  1, QuotaPerUnit: 1_000, ExprVersion: 1, TaskUsageBilling: true,
+	}
+
+	settled := settleTaskBillingOnComplete(ctx, &mockAdaptor{adjustReturn: 1}, task, &relaycommon.TaskInfo{
+		Status: model.TaskStatusSuccess, UsageAvailable: true,
+	})
+
+	assert.False(t, settled)
+	assert.True(t, task.PrivateData.BillingContext.TieredUsageMissing)
+	assert.Equal(t, preConsumed, task.Quota)
+	assert.Equal(t, 10_000, getUserQuota(t, userID))
+}
+
+func TestSettle_NativeInteractionsTieredUsesAtomicJournalForQuotaDelta(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+	const userID, tokenID, channelID, preConsumed = 647, 647, 647, 500
+	seedUser(t, userID, 9_500)
+	seedToken(t, tokenID, userID, "sk-interactions-atomic", 9_500)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, tokenID, preConsumed, 1)
+	task := makeTask(userID, channelID, preConsumed, tokenID, "wallet", 0)
+	task.Status = model.TaskStatusSuccess
+	task.PrivateData.BillingContext.NativeInteractions = true
+	task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{
+		BillingMode: "tiered_expr", ExprString: `tier("base", p * 1)`,
+		ExprHash:   billingexpr.ExprHashString(`tier("base", p * 1)`),
+		GroupRatio: 1, QuotaPerUnit: 1_000_000, ExprVersion: 1,
+	}
+	require.NoError(t, task.Insert())
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id = ?", task.TaskID).Update("status", model.TaskStatusSuccess).Error)
+
+	settled := settleTaskBillingOnComplete(ctx, &mockAdaptor{}, task, &relaycommon.TaskInfo{
+		Status: model.TaskStatusSuccess, UsageAvailable: true, InputTokens: 100, TotalTokens: 100,
+	})
+	require.True(t, settled)
+	require.Equal(t, 100, task.Quota)
+	assert.Equal(t, 9_900, getUserQuota(t, userID))
+	var savedTask model.Task
+	require.NoError(t, model.DB.Where("task_id = ?", task.TaskID).First(&savedTask).Error)
+	assert.Equal(t, 100, savedTask.Quota)
+	var settlement model.TaskBillingSettlement
+	require.NoError(t, model.DB.Where("task_id = ?", task.TaskID).First(&settlement).Error)
+	assert.Equal(t, model.TaskBillingSettlementSettled, settlement.Status)
+	var outboxCount int64
+	require.NoError(t, model.DB.Model(&model.TaskBillingLogOutbox{}).Where("task_id = ?", task.TaskID).Count(&outboxCount).Error)
+	assert.EqualValues(t, 1, outboxCount)
+	var outbox model.TaskBillingLogOutbox
+	require.NoError(t, model.DB.Where("task_id = ?", task.TaskID).First(&outbox).Error)
+	var payload map[string]any
+	require.NoError(t, common.Unmarshal([]byte(outbox.Payload), &payload))
+	other, ok := payload["other"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "tiered_expr", other["billing_mode"])
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte(`tier("base", p * 1)`)), other["expr_b64"])
+	assert.Equal(t, "base", other["matched_tier"])
+	assert.Equal(t, float64(100), other["input_tokens"])
+	assert.Equal(t, float64(100), payload["prompt_tokens"])
+}
+
+func TestRecoverPendingInteractionsTieredSettlementFromStoredTaskResult(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+	const userID, channelID, preConsumed = 650, 650, 500
+	seedUser(t, userID, 9_500)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, 0, preConsumed, 1)
+	task := makeTask(userID, channelID, preConsumed, 0, "wallet", 0)
+	task.Platform = constant.TaskPlatformVertexInteractions
+	task.Data = json.RawMessage(`{"stored":"terminal-response"}`)
+	task.PrivateData.BillingContext.NativeInteractions = true
+	task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{
+		BillingMode: "tiered_expr", ExprString: `tier("base", p * 1)`,
+		ExprHash:   billingexpr.ExprHashString(`tier("base", p * 1)`),
+		GroupRatio: 1, QuotaPerUnit: 1_000_000, ExprVersion: 1,
+	}
+	require.NoError(t, task.Insert())
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id = ?", task.TaskID).Update("status", model.TaskStatusSuccess).Error)
+	previousFactory := GetTaskAdaptorFunc
+	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor {
+		return &recoveryTaskAdaptor{result: &relaycommon.TaskInfo{
+			Status: model.TaskStatusSuccess, UsageAvailable: true, InputTokens: 100, TotalTokens: 100,
+		}}
+	}
+	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
+
+	recoverPendingInteractionsTaskSettlements(ctx, 100)
+	var settlement model.TaskBillingSettlement
+	require.NoError(t, model.DB.Where("task_id = ?", task.TaskID).First(&settlement).Error)
+	assert.Equal(t, model.TaskBillingSettlementSettled, settlement.Status)
+	var saved model.Task
+	require.NoError(t, model.DB.Where("task_id = ?", task.TaskID).First(&saved).Error)
+	assert.Equal(t, 100, saved.Quota)
+}
+
+func TestUsageUnavailableSettlementCanRecoverWithLaterUsageAndDistinctLogEvent(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+	const userID, channelID, preConsumed = 651, 651, 500
+	seedUser(t, userID, 9_500)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, 0, preConsumed, 1)
+	expression := `tier("base", u("seconds") * 10)`
+	task := makeTask(userID, channelID, preConsumed, 0, "wallet", 0)
+	task.Platform = constant.TaskPlatformVertexInteractions
+	task.Data = json.RawMessage(`{"stored":"terminal-response"}`)
+	task.Status = model.TaskStatusSuccess
+	task.PrivateData.BillingContext.NativeInteractions = true
+	task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{
+		BillingMode: "tiered_expr", ExprString: expression, ExprHash: billingexpr.ExprHashString(expression),
+		GroupRatio: 1, QuotaPerUnit: 100, ExprVersion: 1, TaskUsageBilling: true,
+	}
+	require.NoError(t, task.Insert())
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id = ?", task.TaskID).Update("status", model.TaskStatusSuccess).Error)
+	assert.True(t, settleTaskBillingOnComplete(ctx, &mockAdaptor{}, task, &relaycommon.TaskInfo{
+		Status: model.TaskStatusSuccess,
+	}))
+	var settlement model.TaskBillingSettlement
+	require.NoError(t, model.DB.Where("task_id = ?", task.TaskID).First(&settlement).Error)
+	assert.Equal(t, model.TaskBillingSettlementUsageUnavailable, settlement.Status)
+	deliverPendingTaskBillingLogs(ctx, 100) // acknowledges the zero-delta audit without a customer log
+
+	previousFactory := GetTaskAdaptorFunc
+	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor {
+		return &recoveryTaskAdaptor{result: &relaycommon.TaskInfo{
+			Status: model.TaskStatusSuccess, UsageAvailable: true, UsageFacts: map[string]any{"seconds": float64(0.2)},
+		}}
+	}
+	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
+	require.NoError(t, model.DB.Model(&model.TaskBillingSettlement{}).Where("id = ?", settlement.ID).Update("updated_at", 1).Error)
+	recoverPendingInteractionsTaskSettlements(ctx, 100)
+	deliverPendingTaskBillingLogs(ctx, 100)
+	require.NoError(t, model.DB.Where("id = ?", settlement.ID).First(&settlement).Error)
+	assert.Equal(t, model.TaskBillingSettlementSettled, settlement.Status)
+	assert.Equal(t, 200, settlement.ActualQuota)
+	assert.Equal(t, 9_800, getUserQuota(t, userID))
+	var correctionLogCount int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("request_id = ?", "interactions-settlement:"+task.TaskID+":settled").Count(&correctionLogCount).Error)
+	assert.EqualValues(t, 1, correctionLogCount)
+}
+
+func TestTaskBillingOutboxDeliveryUsesStableRequestIDForRetry(t *testing.T) {
+	truncate(t)
+	seedUser(t, 648, 10_000)
+	payload, err := model.EncodeTaskBillingPayload(map[string]any{
+		"user_id": 648, "log_type": model.LogTypeRefund, "content": "settlement",
+		"channel_id": 0, "model_name": "gemini-3-pro-image", "quota": 25,
+		"token_id": 0, "group": "default", "other": map[string]any{"task_id": "outbox-retry"},
+	})
+	require.NoError(t, err)
+	_, err = model.CreateTaskBillingLogOutbox("interactions-settlement:outbox-retry", "outbox-retry", payload)
+	require.NoError(t, err)
+	deliverPendingTaskBillingLogs(context.Background(), 100)
+	var logs int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("request_id = ?", "interactions-settlement:outbox-retry").Count(&logs).Error)
+	assert.EqualValues(t, 1, logs)
+
+	// Simulate the outbox acknowledgement being lost after the log write.
+	require.NoError(t, model.DB.Model(&model.TaskBillingLogOutbox{}).
+		Where("operation_id = ?", "interactions-settlement:outbox-retry").
+		Updates(map[string]any{"status": model.TaskBillingLogOutboxPending, "updated_at": time.Now().Unix()}).Error)
+	deliverPendingTaskBillingLogs(context.Background(), 100)
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("request_id = ?", "interactions-settlement:outbox-retry").Count(&logs).Error)
+	assert.EqualValues(t, 1, logs)
+}
+
+func TestSettle_NativeInteractionsMixedUsageAndTokenExpression(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+	const userID, channelID, preConsumed = 649, 649, 2_000
+	seedUser(t, userID, 8_000)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, 0, preConsumed, 1)
+	task := makeTask(userID, channelID, preConsumed, 0, "wallet", 0)
+	task.Status = model.TaskStatusSuccess
+	task.PrivateData.BillingContext.NativeInteractions = true
+	task.PrivateData.BillingContext.TieredSnapshot = &billingexpr.BillingSnapshot{
+		BillingMode: "tiered_expr", ExprString: `tier("base", u("seconds") * 0.4 + p * 9.8 / 1000000)`,
+		ExprHash:   billingexpr.ExprHashString(`tier("base", u("seconds") * 0.4 + p * 9.8 / 1000000)`),
+		GroupRatio: 1, QuotaPerUnit: 1_000, ExprVersion: 1, TaskUsageBilling: true,
+	}
+	require.NoError(t, task.Insert())
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("task_id = ?", task.TaskID).Update("status", model.TaskStatusSuccess).Error)
+	settled := settleTaskBillingOnComplete(ctx, &mockAdaptor{}, task, &relaycommon.TaskInfo{
+		Status: model.TaskStatusSuccess, UsageAvailable: true, InputTokens: 100_000, TotalTokens: 100_000,
+		UsageFacts: map[string]any{"seconds": float64(2)},
+	})
+	require.True(t, settled)
+	assert.Equal(t, 1_780, task.Quota)
+	assert.Equal(t, 8_220, getUserQuota(t, userID))
 }
 
 func TestSettle_TieredUsageFactsMergeCompletionOverSubmission(t *testing.T) {

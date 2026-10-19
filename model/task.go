@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	commonRelay "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"gorm.io/gorm"
 )
 
 type TaskStatus string
@@ -156,13 +157,17 @@ type TaskPluginAuthorSnapshot struct {
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {
-	TieredSnapshot  *billingexpr.BillingSnapshot `json:"tiered_snapshot,omitempty"`
-	ModelPrice      float64                      `json:"model_price,omitempty"`       // 模型单价
-	GroupRatio      float64                      `json:"group_ratio,omitempty"`       // 分组倍率
-	ModelRatio      float64                      `json:"model_ratio,omitempty"`       // 模型倍率
-	OtherRatios     map[string]float64           `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
-	OriginModelName string                       `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
-	PerCallBilling  bool                         `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
+	TieredSnapshot     *billingexpr.BillingSnapshot `json:"tiered_snapshot,omitempty"`
+	TieredRequestInput *billingexpr.RequestInput    `json:"tiered_request_input,omitempty"`
+	NativeInteractions bool                         `json:"native_interactions,omitempty"`
+	TieredUsageMissing bool                         `json:"tiered_usage_missing,omitempty"`
+	TieredUsageSource  string                       `json:"tiered_usage_source,omitempty"`
+	ModelPrice         float64                      `json:"model_price,omitempty"`       // 模型单价
+	GroupRatio         float64                      `json:"group_ratio,omitempty"`       // 分组倍率
+	ModelRatio         float64                      `json:"model_ratio,omitempty"`       // 模型倍率
+	OtherRatios        map[string]float64           `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
+	OriginModelName    string                       `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
+	PerCallBilling     bool                         `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
 	// CostDiscount snapshots the effective channel cost discount selected at
 	// submission time. Keep this optional so historical and unconfigured tasks
 	// retain their original serialized shape and settlement behavior.
@@ -251,7 +256,9 @@ func (p *TaskPrivateData) Scan(val interface{}) error {
 }
 
 func (p TaskPrivateData) Value() (driver.Value, error) {
-	if p.Key == "" && p.UpstreamTaskID == "" && p.ResultURL == "" && p.Execution == nil && p.BillingContext == nil && len(p.PluginState) == 0 && !p.LocalAsync && !p.ResponsesBackground && p.PollFailures == 0 {
+	if p.Key == "" && p.UpstreamTaskID == "" && p.ResultURL == "" && p.Execution == nil && p.BillingContext == nil &&
+		p.BillingSource == "" && p.SubscriptionId == 0 && p.TokenId == 0 && p.NodeName == "" &&
+		len(p.PluginState) == 0 && !p.LocalAsync && !p.ResponsesBackground && p.PollFailures == 0 {
 		return nil, nil
 	}
 	return common.Marshal(p)
@@ -513,9 +520,26 @@ func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
 
 func (Task *Task) Insert() error {
 	Task.dropInvalidJSONColumns()
-	var err error
-	err = DB.Create(Task).Error
-	return err
+	billingContext := Task.PrivateData.BillingContext
+	if billingContext == nil || !billingContext.NativeInteractions || billingContext.TieredSnapshot == nil {
+		return DB.Create(Task).Error
+	}
+	payload, err := EncodeTaskBillingPayload(billingContext)
+	if err != nil {
+		return err
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(Task).Error; err != nil {
+			return err
+		}
+		now := time.Now().Unix()
+		settlement := TaskBillingSettlement{
+			TaskKey: taskBillingKey(Task.TaskID), TaskID: Task.TaskID,
+			Status: TaskBillingSettlementPending, Payload: payload,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		return tx.Create(&settlement).Error
+	})
 }
 
 // dropInvalidJSONColumns 清空 data / upstream_request_body 里非法的 JSON 字节。
@@ -534,13 +558,15 @@ func (Task *Task) dropInvalidJSONColumns() {
 }
 
 type taskSnapshot struct {
-	Status     TaskStatus
-	Progress   string
-	StartTime  int64
-	FinishTime int64
-	FailReason string
-	ResultURL  string
-	Data       json.RawMessage
+	Status       TaskStatus
+	Progress     string
+	StartTime    int64
+	FinishTime   int64
+	FailReason   string
+	ResultURL    string
+	PluginState  json.RawMessage
+	PollFailures int
+	Data         json.RawMessage
 }
 
 func (s taskSnapshot) Equal(other taskSnapshot) bool {
@@ -550,18 +576,22 @@ func (s taskSnapshot) Equal(other taskSnapshot) bool {
 		s.FinishTime == other.FinishTime &&
 		s.FailReason == other.FailReason &&
 		s.ResultURL == other.ResultURL &&
+		s.PollFailures == other.PollFailures &&
+		bytes.Equal(s.PluginState, other.PluginState) &&
 		bytes.Equal(s.Data, other.Data)
 }
 
 func (t *Task) Snapshot() taskSnapshot {
 	return taskSnapshot{
-		Status:     t.Status,
-		Progress:   t.Progress,
-		StartTime:  t.StartTime,
-		FinishTime: t.FinishTime,
-		FailReason: t.FailReason,
-		ResultURL:  t.PrivateData.ResultURL,
-		Data:       t.Data,
+		Status:       t.Status,
+		Progress:     t.Progress,
+		StartTime:    t.StartTime,
+		FinishTime:   t.FinishTime,
+		FailReason:   t.FailReason,
+		ResultURL:    t.PrivateData.ResultURL,
+		PluginState:  append(json.RawMessage(nil), t.PrivateData.PluginState...),
+		PollFailures: t.PrivateData.PollFailures,
+		Data:         t.Data,
 	}
 }
 

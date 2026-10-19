@@ -72,7 +72,7 @@ func SetVideoRouter(router *gin.Engine) {
 	// existing video task pipeline and therefore share its billing/polling.
 	nativeInteractionsRouter := router.Group("/v1beta")
 	nativeInteractionsRouter.Use(middleware.RouteTag("relay"))
-	nativeInteractionsRouter.Use(middleware.TokenAuth(), middleware.NativeInteractions(), middleware.AssetResolveChannel(), middleware.Distribute())
+	nativeInteractionsRouter.Use(middleware.TokenAuth(), middleware.NativeInteractions(), middleware.AssetResolveChannel(), middleware.Distribute(), middleware.NativeInteractionsChannelDispatch())
 	{
 		nativeInteractionsRouter.POST("/interactions", controller.NativeInteractionsSubmit)
 		nativeInteractionsRouter.GET("/interactions/:interaction_id", controller.NativeInteractionsFetch)
@@ -80,7 +80,7 @@ func SetVideoRouter(router *gin.Engine) {
 	// Vertex AI's resource-shaped Interactions API uses the same adapter.
 	vertexInteractionsRouter := router.Group("/v1beta1/projects/:project/locations/:location/interactions")
 	vertexInteractionsRouter.Use(middleware.RouteTag("relay"))
-	vertexInteractionsRouter.Use(middleware.TokenAuth(), middleware.NativeInteractions(), middleware.AssetResolveChannel(), middleware.Distribute())
+	vertexInteractionsRouter.Use(middleware.TokenAuth(), middleware.NativeInteractions(), middleware.AssetResolveChannel(), middleware.Distribute(), middleware.NativeInteractionsChannelDispatch())
 	{
 		vertexInteractionsRouter.POST("", controller.NativeInteractionsSubmit)
 		vertexInteractionsRouter.GET("/:interaction_id", controller.NativeInteractionsFetch)

@@ -11,7 +11,9 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relaydto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -21,6 +23,59 @@ import (
 // 实际扣费已由 BillingSession（PreConsumeBilling + SettleBilling）完成。
 func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	logTaskConsumption(c, info, nil)
+}
+
+// BuildTieredTokenParamsForTask normalizes the validated usage dimensions
+// emitted by task adapters into the shared tiered token-expression contract.
+func BuildTieredTokenParamsForTask(taskInfo *relaycommon.TaskInfo, modelName, expr string) billingexpr.TokenParams {
+	if taskInfo == nil {
+		return billingexpr.TokenParams{}
+	}
+	input := max(taskInfo.InputTokens, 0)
+	completion := max(taskInfo.CompletionTokens, 0)
+	thoughts := max(taskInfo.ThoughtTokens, 0)
+	if totalOutput := taskInfo.TotalTokens - input; totalOutput > completion && totalOutput > 0 {
+		completion = totalOutput
+		thoughts = 0 // The aggregate total already includes reasoning/thought tokens.
+	} else {
+		completion += thoughts
+	}
+	textOutput := completion
+	imageOutput := 0
+	if taskInfo.ImageOutputTokens > 0 || isNativeInteractionImageModel(modelName) {
+		textOutput = min(max(taskInfo.TextOutputTokens, 0), completion)
+		imageOutput = max(taskInfo.ImageOutputTokens, 0)
+		if imageOutput == 0 {
+			imageOutput = max(completion-textOutput-thoughts, 0)
+		}
+	}
+	usage := &relaydto.Usage{
+		PromptTokens:     input,
+		CompletionTokens: completion,
+		TotalTokens:      input + completion,
+		PromptTokensDetails: relaydto.InputTokenDetails{
+			CachedTokens: max(taskInfo.CachedTokens, 0),
+			ImageTokens:  max(taskInfo.ImageInputTokens, 0),
+			VideoTokens:  max(taskInfo.VideoInputTokens, 0),
+			AudioTokens:  max(taskInfo.AudioInputTokens, 0),
+		},
+		CompletionTokenDetails: relaydto.OutputTokenDetails{
+			TextTokens:  textOutput,
+			ImageTokens: imageOutput,
+			AudioTokens: max(taskInfo.AudioOutputTokens, 0),
+		},
+	}
+	return BuildTieredTokenParamsForModel(usage, false, billingexpr.UsedVars(expr), modelName)
+}
+
+func HasTieredTaskUsageFacts(expr string, usageFacts map[string]any) bool {
+	for key := range billingexpr.UsedUsageKeys(expr) {
+		value, ok := usageFacts[key]
+		if !ok || value == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // LogTaskConsumptionWithTaskInfo records the upstream usage returned by a
@@ -50,6 +105,30 @@ func logTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, taskInfo *r
 		}
 	}
 	other := make(map[string]interface{})
+	billingSource := "configured"
+	usageAvailable := taskInfo != nil && taskInfo.UsageAvailable
+	loggedThoughtTokens := 0
+	if taskInfo != nil {
+		loggedThoughtTokens = max(taskInfo.ThoughtTokens, 0)
+		if info.NativeInteractions && loggedThoughtTokens == 0 {
+			if derived := taskInfo.TotalTokens - taskInfo.InputTokens - taskInfo.CompletionTokens; derived > 0 {
+				loggedThoughtTokens = derived
+			}
+		}
+	}
+	if usageAvailable && info.NativeInteractions && info.TieredBillingSnapshot != nil && info.TieredBillingSnapshot.TaskUsageBilling {
+		facts := make(map[string]any, len(info.TieredBillingSnapshot.UsageFacts)+len(taskInfo.UsageFacts))
+		for key, value := range info.TieredBillingSnapshot.UsageFacts {
+			facts[key] = value
+		}
+		for key, value := range taskInfo.UsageFacts {
+			facts[key] = value
+		}
+		usageAvailable = HasTieredTaskUsageFacts(info.TieredBillingSnapshot.ExprString, facts)
+	}
+	if taskInfo != nil && (!info.NativeInteractions || usageAvailable) {
+		billingSource = "upstream"
+	}
 	other["is_task"] = true
 	requestPath := c.Request.URL.Path
 	if originalPath := c.GetString("native_interactions_original_path"); originalPath != "" {
@@ -57,22 +136,42 @@ func logTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, taskInfo *r
 	}
 	other["request_path"] = requestPath
 	other["model_price"] = info.PriceData.ModelPrice
-	other["billing_process"] = taskBillingProcess(info, "configured")
+	other["billing_process"] = taskBillingProcess(info, billingSource)
+	if info.NativeInteractions && info.TieredBillingSnapshot != nil {
+		other["billing_mode"] = "tiered_expr"
+		other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(info.TieredBillingSnapshot.ExprString))
+		other["matched_tier"] = info.TieredBillingSnapshot.EstimatedTier
+	}
 	if taskInfo != nil {
 		usageFacts := make(map[string]any)
+		if info.NativeInteractions && info.TieredBillingSnapshot != nil {
+			for key, value := range info.TieredBillingSnapshot.UsageFacts {
+				usageFacts[key] = value
+			}
+		}
 		if taskInfo.InputTokens > 0 {
 			usageFacts["input_tokens"] = taskInfo.InputTokens
 		}
-		if taskInfo.CompletionTokens > 0 {
-			usageFacts["output_tokens"] = taskInfo.CompletionTokens
+		outputTokens := taskInfo.CompletionTokens
+		if info.NativeInteractions {
+			outputTokens += loggedThoughtTokens
+		}
+		if outputTokens > 0 {
+			usageFacts["output_tokens"] = outputTokens
 		}
 		if taskInfo.TotalTokens > 0 {
 			usageFacts["total_tokens"] = taskInfo.TotalTokens
 		}
+		if taskInfo.AudioInputTokens > 0 {
+			usageFacts["audio_input_tokens"] = taskInfo.AudioInputTokens
+		}
+		if taskInfo.AudioOutputTokens > 0 {
+			usageFacts["audio_output_tokens"] = taskInfo.AudioOutputTokens
+		}
 		for key, value := range taskInfo.UsageFacts {
 			usageFacts[key] = value
 		}
-		if info.NativeInteractions && isNativeInteractionImageModel(info.OriginModelName) && taskInfo.CompletionTokens > 0 {
+		if info.NativeInteractions && (taskInfo.ImageOutputTokens > 0 || isNativeInteractionImageModel(info.OriginModelName)) && taskInfo.CompletionTokens > 0 {
 			// Vertex GenerateContent returns image tokens in the aggregate
 			// output count. Preserve the modality explicitly so the log API and
 			// admin UI do not classify image output as text output. When the
@@ -87,7 +186,26 @@ func logTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, taskInfo *r
 		if len(usageFacts) > 0 {
 			other["usage_facts"] = usageFacts
 		}
-		other["admin_info"] = map[string]any{"usage_billing_path": "upstream"}
+		adminInfo := map[string]any{"usage_billing_path": billingSource}
+		if info.NativeInteractions && info.TieredBillingSnapshot != nil {
+			adminInfo["billing_mode"] = "tiered_expr"
+			adminInfo["matched_tier"] = info.TieredBillingSnapshot.EstimatedTier
+			adminInfo["expression_hash"] = info.TieredBillingSnapshot.ExprHash
+			availableFacts := make(map[string]any, len(info.TieredBillingSnapshot.UsageFacts)+len(taskInfo.UsageFacts))
+			for key, value := range info.TieredBillingSnapshot.UsageFacts {
+				availableFacts[key] = value
+			}
+			for key, value := range taskInfo.UsageFacts {
+				availableFacts[key] = value
+			}
+			if !taskInfo.UsageAvailable || (info.TieredBillingSnapshot.TaskUsageBilling && !HasTieredTaskUsageFacts(info.TieredBillingSnapshot.ExprString, availableFacts)) {
+				adminInfo["tiered_usage_unavailable"] = true
+			}
+		}
+		if info.NativeInteractions && !taskInfo.UsageAvailable {
+			adminInfo["usage_missing"] = true
+		}
+		other["admin_info"] = adminInfo
 	}
 	structuredOther := model.NewLogOtherFromMap(other)
 	appendRequestConversionChain(info, structuredOther)
@@ -102,10 +220,6 @@ func logTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, taskInfo *r
 	// Keep this assignment after LogOther normalization as a defense-in-depth
 	// guarantee for task logs. The billing process is an audit record and must
 	// reach RecordConsumeLog even when other metadata is filtered or merged.
-	billingSource := "configured"
-	if taskInfo != nil {
-		billingSource = "upstream"
-	}
 	other["billing_process"] = taskBillingProcess(info, billingSource)
 	if info.NativeInteractions && info.PriceData.ModelRatio > 0 &&
 		!strings.HasPrefix(strings.ToLower(strings.TrimSpace(info.OriginModelName)), "lyria-") {
@@ -126,7 +240,7 @@ func logTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, taskInfo *r
 		if info.PriceData.CacheRatio > 0 {
 			other["cache_read_price"] = inputTextPrice * info.PriceData.CacheRatio
 		}
-		if isNativeInteractionImageModel(info.OriginModelName) && info.PriceData.ImageCompletionRatio > 0 {
+		if info.PriceData.ImageCompletionRatio > 0 {
 			other["image_completion_ratio"] = info.PriceData.ImageCompletionRatio
 			other["output_image_price"] = inputTextPrice * info.PriceData.ImageCompletionRatio
 		}
@@ -137,6 +251,30 @@ func logTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, taskInfo *r
 			// image/video input is folded into plain input in the formula.
 			if taskInfo.TextOutputTokens > 0 {
 				other["text_output_tokens"] = taskInfo.TextOutputTokens
+			}
+			if taskInfo.ImageOutputTokens > 0 {
+				other["image_output_tokens"] = taskInfo.ImageOutputTokens
+			}
+			if taskInfo.VideoOutputTokens > 0 {
+				other["video_output_tokens"] = taskInfo.VideoOutputTokens
+			}
+			if taskInfo.AudioInputTokens > 0 {
+				other["audio_input"] = taskInfo.AudioInputTokens
+			}
+			if taskInfo.AudioOutputTokens > 0 {
+				// The Java log billing renderer consumes `audio_output`; keep the
+				// canonical token-suffixed fact alongside that compatibility key.
+				other["audio_output"] = taskInfo.AudioOutputTokens
+				other["audio_output_tokens"] = taskInfo.AudioOutputTokens
+			}
+			if info.NativeInteractions && (taskInfo.AudioInputTokens > 0 || taskInfo.AudioOutputTokens > 0) {
+				// Match GenerateAudioOtherInfo: this marker selects Java's audio
+				// billing renderer, which separates audio tokens from text tokens.
+				other["audio"] = true
+				other["audio_ratio"] = info.PriceData.AudioRatio
+				other["audio_completion_ratio"] = info.PriceData.AudioCompletionRatio
+				other["text_input"] = taskInfo.TextInputTokens
+				other["text_output"] = taskInfo.TextOutputTokens
 			}
 			if taskInfo.ImageInputTokens > 0 {
 				other["input_image_tokens"] = taskInfo.ImageInputTokens
@@ -155,9 +293,9 @@ func logTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, taskInfo *r
 					other["cache_ratio"] = info.PriceData.CacheRatio
 				}
 			}
-			if taskInfo.ThoughtTokens > 0 {
+			if loggedThoughtTokens > 0 {
 				// The Java renderer bills reasoning tokens as text output.
-				other["reasoning_tokens"] = taskInfo.ThoughtTokens
+				other["reasoning_tokens"] = loggedThoughtTokens
 			}
 		}
 	}
@@ -193,8 +331,8 @@ func logTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, taskInfo *r
 			other["frt"] = float64(elapsed.Milliseconds())
 		}
 		promptTokens = taskInfo.InputTokens
-		completionTokens = taskInfo.CompletionTokens
-		if isNativeInteractionImageModel(info.OriginModelName) {
+		completionTokens = taskInfo.CompletionTokens + loggedThoughtTokens
+		if taskInfo.ImageOutputTokens > 0 || isNativeInteractionImageModel(info.OriginModelName) {
 			textOut := taskInfo.TextOutputTokens
 			if textOut > taskInfo.CompletionTokens {
 				textOut = taskInfo.CompletionTokens
@@ -203,7 +341,15 @@ func logTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, taskInfo *r
 			other["text_output_tokens"] = textOut
 			// completion_tokens is the legacy text-output column. Keep only the
 			// upstream-reported text share there; image output stays in Other.
-			completionTokens = textOut
+			completionTokens = textOut + loggedThoughtTokens
+			if info.NativeInteractions && info.TieredBillingSnapshot != nil {
+				// Tiered billing details split image output from the aggregate
+				// completion count using image_output_tokens. Keep the aggregate,
+				// including separately reported thought tokens, in the legacy
+				// completion column so the detail formula can subtract the image
+				// share without losing billable output.
+				completionTokens = taskInfo.CompletionTokens + loggedThoughtTokens
+			}
 		}
 	}
 	// Legacy task platforms (MJ/Suno/video/kling…) have always exported the
@@ -245,6 +391,9 @@ func taskBillingMode(info *relaycommon.RelayInfo) string {
 	if info == nil {
 		return "unknown"
 	}
+	if info.NativeInteractions && info.TieredBillingSnapshot != nil {
+		return "tiered_expr"
+	}
 	if info.PriceData.ModelPrice > 0 || info.PriceData.UsePrice {
 		return "per_call"
 	}
@@ -257,12 +406,14 @@ func taskBillingProcess(info *relaycommon.RelayInfo, source string) map[string]a
 	}
 	completionRatio := info.PriceData.CompletionRatio
 	imageCompletionRatio := info.PriceData.ImageCompletionRatio
+	audioRatio := info.PriceData.AudioRatio
+	audioCompletionRatio := info.PriceData.AudioCompletionRatio
 	// Mixed output is now billed per modality (text at completion_ratio, image
 	// at image_completion_ratio, thoughts at completion_ratio), so both ratios
 	// are reported as-is. Historically completion_ratio was overridden with the
 	// image ratio for image models; that would misprice the text share in the
 	// rendered billing process now that the split exists.
-	return map[string]any{
+	result := map[string]any{
 		"mode":                   taskBillingMode(info),
 		"model_price":            info.PriceData.ModelPrice,
 		"model_ratio":            info.PriceData.ModelRatio,
@@ -275,6 +426,11 @@ func taskBillingProcess(info *relaycommon.RelayInfo, source string) map[string]a
 		"final_quota":            info.PriceData.Quota,
 		"source":                 source,
 	}
+	if info.NativeInteractions {
+		result["audio_ratio"] = audioRatio
+		result["audio_completion_ratio"] = audioCompletionRatio
+	}
+	return result
 }
 
 // isNativeInteractionImageModel mirrors
@@ -368,14 +524,35 @@ func taskBillingOther(task *model.Task) taskBillingOtherMap {
 		}
 		if snap := bc.TieredSnapshot; snap != nil {
 			other["billing_mode"] = "tiered_expr"
-			other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
-			other["matched_tier"] = snap.EstimatedTier
+			if bc.NativeInteractions {
+				other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
+				other["matched_tier"] = snap.EstimatedTier
+				adminInfo := map[string]any{
+					"billing_mode": "tiered_expr", "matched_tier": snap.EstimatedTier,
+					"expression_hash": snap.ExprHash, "expr_b64": base64.StdEncoding.EncodeToString([]byte(snap.ExprString)),
+				}
+				usageSource := bc.TieredUsageSource
+				if usageSource == "" {
+					usageSource = "configured"
+				}
+				adminInfo["usage_billing_path"] = usageSource
+				if bc.TieredUsageMissing {
+					adminInfo["tiered_usage_unavailable"] = true
+				}
+				other["admin_info"] = adminInfo
+			} else {
+				other["expr_b64"] = base64.StdEncoding.EncodeToString([]byte(snap.ExprString))
+				other["matched_tier"] = snap.EstimatedTier
+			}
 			if len(snap.UsageFacts) > 0 {
 				other["usage_facts"] = snap.UsageFacts
 			}
 		}
 	}
 	props := task.Properties
+	if constant.IsInteractionsTaskPlatform(task.Platform) && task.PrivateData.Execution != nil && task.PrivateData.Execution.RequestPath != "" {
+		other["request_path"] = task.PrivateData.Execution.RequestPath
+	}
 	if props.UpstreamModelName != "" && props.UpstreamModelName != props.OriginModelName {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = props.UpstreamModelName

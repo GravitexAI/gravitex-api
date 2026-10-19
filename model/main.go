@@ -291,6 +291,8 @@ func migrateDB() error {
 		&TopUp{},
 		&QuotaData{},
 		&Task{},
+		&TaskBillingSettlement{},
+		&TaskBillingLogOutbox{},
 		&Model{},
 		&Vendor{},
 		&PrefillGroup{},

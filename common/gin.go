@@ -28,6 +28,10 @@ const KeyBodyStorage = "key_body_storage"
 // docs/byteplus/seedance-2.0-official-api-mirror-design.md.
 const KeySeedanceRawMirror = "seedance_raw_mirror"
 
+// KeyNativeInteractionsRawMirror keeps provider Interaction responses intact
+// when the public fetch route reuses the legacy task polling pipeline.
+const KeyNativeInteractionsRawMirror = "native_interactions_raw_mirror"
+
 // KeyLyriaRawMirror marks native Lyria Interactions requests whose provider
 // request and response bodies must pass through without gateway normalization.
 const KeyLyriaRawMirror = "lyria_raw_mirror"
@@ -37,7 +41,7 @@ const KeyLyriaRawMirror = "lyria_raw_mirror"
 const KeyLyriaRawRequestBody = "lyria_raw_request_body"
 
 func IsTaskRawMirror(c *gin.Context) bool {
-	return c != nil && (c.GetBool(KeySeedanceRawMirror) || c.GetBool(KeyLyriaRawMirror))
+	return c != nil && (c.GetBool(KeySeedanceRawMirror) || c.GetBool(KeyLyriaRawMirror) || c.GetBool(KeyNativeInteractionsRawMirror))
 }
 
 var ErrRequestBodyTooLarge = errors.New("request body too large")

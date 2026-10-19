@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
@@ -33,6 +34,30 @@ func TestApplyInitialTaskSubmitResultCompletesLyriaFromCreateResponse(t *testing
 	require.Equal(t, int64(100), task.StartTime)
 	require.Equal(t, int64(120), task.FinishTime)
 	require.Empty(t, task.PrivateData.ResultURL)
+}
+
+func TestBuildSubmittedTaskPersistsNativeInteractionsTieredSnapshot(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	snapshot := &billingexpr.BillingSnapshot{
+		BillingMode: "tiered_expr",
+		ModelName:   "gemini-3-pro-image",
+		ExprString:  `tier("base", p * 2 + c * 8)`,
+		ExprHash:    billingexpr.ExprHashString(`tier("base", p * 2 + c * 8)`),
+	}
+	info := &relaycommon.RelayInfo{
+		NativeInteractions:    true,
+		OriginModelName:       "gemini-3-pro-image",
+		TieredBillingSnapshot: snapshot,
+		BillingRequestInput:   &billingexpr.RequestInput{Body: []byte(`{"input":"prompt"}`), Headers: map[string]string{"x-tier": "fast", "Authorization": "secret"}},
+		PriceData:             types.PriceData{Quota: 123},
+		ChannelMeta:           &relaycommon.ChannelMeta{ChannelType: 41},
+	}
+	task := buildSubmittedTask(c, info, &relay.TaskSubmitResult{Platform: constant.TaskPlatformLyria, Quota: 123}, false)
+	require.Same(t, snapshot, task.PrivateData.BillingContext.TieredSnapshot)
+	require.Equal(t, `{"input":"prompt"}`, string(task.PrivateData.BillingContext.TieredRequestInput.Body))
+	require.Equal(t, "fast", task.PrivateData.BillingContext.TieredRequestInput.Headers["x-tier"])
+	require.NotContains(t, task.PrivateData.BillingContext.TieredRequestInput.Headers, "Authorization")
+	require.False(t, task.PrivateData.BillingContext.PerCallBilling)
 }
 
 func TestBuildSubmittedTaskKeepsRawVertexLyriaResponseAndFailureState(t *testing.T) {
@@ -91,15 +116,17 @@ func TestApplyInitialTaskSubmitResultPersistsLyriaCancellation(t *testing.T) {
 }
 
 func TestShouldPersistLyriaTaskOnlyForExplicitBackgroundRequest(t *testing.T) {
-	require.True(t, shouldPersistLyriaTask(true, "lyria-3-pro-preview", true))
-	require.True(t, shouldPersistLyriaTask(true, "lyria-3-clip-preview", true))
-	require.False(t, shouldPersistLyriaTask(true, "lyria-3-pro-preview", false))
-	require.False(t, shouldPersistLyriaTask(true, "lyria-3-clip-preview", false))
+	require.True(t, shouldPersistLyriaTask(true, "lyria-3-pro-preview", true, constant.ChannelTypeVertexAi))
+	require.True(t, shouldPersistLyriaTask(true, "lyria-3-clip-preview", true, constant.ChannelTypeVertexAi))
+	require.False(t, shouldPersistLyriaTask(true, "lyria-3-pro-preview", false, constant.ChannelTypeVertexAi))
+	require.False(t, shouldPersistLyriaTask(true, "lyria-3-clip-preview", false, constant.ChannelTypeVertexAi))
+	require.False(t, shouldPersistLyriaTask(true, "gemini-future-model", false, constant.ChannelTypeVertexAi))
+	require.True(t, shouldPersistLyriaTask(true, "gemini-future-model", false, constant.ChannelTypeGemini))
 }
 
 func TestShouldPersistGoogleLyriaTaskForExplicitBackgroundRequest(t *testing.T) {
-	require.True(t, shouldPersistLyriaTask(true, "lyria-3-pro-preview", true))
-	require.True(t, shouldPersistLyriaTask(true, "lyria-3-clip-preview", true))
+	require.True(t, shouldPersistLyriaTask(true, "lyria-3-pro-preview", true, constant.ChannelTypeVertexAi))
+	require.True(t, shouldPersistLyriaTask(true, "lyria-3-clip-preview", true, constant.ChannelTypeVertexAi))
 }
 
 func TestLyriaSubmitOutcomeOnlyFailsExactVertexLyriaScope(t *testing.T) {
@@ -136,6 +163,7 @@ func TestNativeInteractionSubmitFailureIncludesGenericVertexInteractionsPlatform
 
 func TestNativeGenerateContentSubmitAlwaysUsesSynchronousBillingLog(t *testing.T) {
 	info := &relaycommon.RelayInfo{
+		ChannelMeta:        &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeVertexAi},
 		NativeInteractions: true,
 		OriginModelName:    "gemini-nano-banana-2.1",
 	}
@@ -149,6 +177,20 @@ func TestNativeGenerateContentSubmitAlwaysUsesSynchronousBillingLog(t *testing.T
 
 	// Even if stale video pricing marked the result as token-ratio billing,
 	// this completed GenerateContent response must reach LogTaskConsumption.
+	require.True(t, isSynchronousNativeGenerateContentResult(info, result))
+}
+
+func TestUncataloguedVertexGenerateContentSubmitUsesSynchronousBillingLog(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:        &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeVertexAi},
+		NativeInteractions: true,
+		OriginModelName:    "gemini-future-model",
+	}
+	result := &relay.TaskSubmitResult{
+		Platform:                 constant.TaskPlatformVertexInteractions,
+		IsVideoTokenRatioBilling: true,
+		InitialTaskInfo:          &relaycommon.TaskInfo{Status: model.TaskStatusSuccess},
+	}
 	require.True(t, isSynchronousNativeGenerateContentResult(info, result))
 }
 

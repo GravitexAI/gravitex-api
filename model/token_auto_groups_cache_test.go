@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -49,6 +50,17 @@ func TestTokenAutoGroupsRoundTripThroughRedisHashCache(t *testing.T) {
 	groups, err := cached.GetAutoGroups()
 	require.NoError(t, err)
 	assert.Equal(t, []string{"vip", "default"}, groups)
+}
+
+func TestTokenCacheKeysShareRedisClusterHashTag(t *testing.T) {
+	tokenKey := "cluster-slot-token-key"
+	cacheKey := getTokenCacheKey(tokenKey)
+	fenceKey := getTokenCacheFenceKey(tokenKey)
+
+	cacheTag := strings.TrimPrefix(strings.Split(cacheKey, "}")[0], "token:{")
+	fenceTag := strings.TrimPrefix(strings.Split(fenceKey, "}")[0], "token:fence:{")
+	require.NotEmpty(t, cacheTag)
+	assert.Equal(t, cacheTag, fenceTag, "Lua keys must share a Redis Cluster hash slot")
 }
 
 func TestTokenUpdateSynchronouslyNarrowsPreheatedAutoGroupsCache(t *testing.T) {
