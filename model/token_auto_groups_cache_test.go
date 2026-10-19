@@ -52,6 +52,27 @@ func TestTokenAutoGroupsRoundTripThroughRedisHashCache(t *testing.T) {
 	assert.Equal(t, []string{"vip", "default"}, groups)
 }
 
+func TestTokenVendorLimitsRoundTripThroughRedisHashCache(t *testing.T) {
+	useUserCacheMiniRedis(t)
+	// 复现 2026-10-19 线上事故形态：model_limits 为空、vendor_limits 有值的
+	// 厂商限制 token。缓存缺 VendorLimits 字段时读回为空串，鉴权会全拒。
+	token := Token{
+		Id:                 43,
+		UserId:             7,
+		Key:                "token-vendor-limits-cache-key",
+		Name:               "vendor-limit-cache",
+		Group:              "default",
+		ModelLimitsEnabled: true,
+		VendorLimits:       "2,3,6,11,4,23,29,19,5,36,14,39",
+	}
+
+	require.NoError(t, cacheSetTokenForTest(token))
+	cached, err := cacheGetTokenByKey(token.Key)
+	require.NoError(t, err)
+	assert.True(t, cached.ModelLimitsEnabled)
+	assert.Equal(t, token.VendorLimits, cached.VendorLimits)
+}
+
 func TestTokenCacheKeysShareRedisClusterHashTag(t *testing.T) {
 	tokenKey := "cluster-slot-token-key"
 	cacheKey := getTokenCacheKey(tokenKey)
