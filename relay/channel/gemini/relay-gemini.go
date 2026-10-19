@@ -989,6 +989,7 @@ func cleanFunctionParametersWithDepth(params interface{}, depth int) interface{}
 		}
 
 		normalizeGeminiSchemaTypeAndNullable(cleanedMap)
+		normalizeGeminiSchemaEnum(cleanedMap)
 
 		// Clean properties
 		if props, ok := cleanedMap["properties"].(map[string]interface{}); ok && props != nil {
@@ -1010,11 +1011,47 @@ func cleanFunctionParametersWithDepth(params interface{}, depth int) interface{}
 
 		// Recursively clean anyOf
 		if nested, ok := cleanedMap["anyOf"].([]interface{}); ok && nested != nil {
-			cleanedNested := make([]interface{}, len(nested))
-			for i, item := range nested {
-				cleanedNested[i] = cleanFunctionParametersWithDepth(item, depth+1)
+			cleanedNested := make([]interface{}, 0, len(nested))
+			for _, item := range nested {
+				cleaned := cleanFunctionParametersWithDepth(item, depth+1)
+				// A JSON Schema {"type":"null"} branch normalizes to a bare nullable marker.
+				// Gemini has no null type, so such a branch would reach the API carrying no
+				// type at all and make it reject the whole declaration with "didn't specify
+				// the schema type field"; the nullability belongs on the parent instead.
+				if branch, isMap := cleaned.(map[string]interface{}); isMap {
+					nullable, _ := branch["nullable"].(bool)
+					_, hasType := branch["type"]
+					_, hasAnyOf := branch["anyOf"]
+					_, hasProperties := branch["properties"]
+					_, hasItems := branch["items"]
+					if nullable && !hasType && !hasAnyOf && !hasProperties && !hasItems {
+						cleanedMap["nullable"] = true
+						continue
+					}
+				}
+				cleanedNested = append(cleanedNested, cleaned)
 			}
-			cleanedMap["anyOf"] = cleanedNested
+
+			branch, singleIsMap := map[string]interface{}(nil), false
+			if len(cleanedNested) == 1 {
+				branch, singleIsMap = cleanedNested[0].(map[string]interface{})
+			}
+			_, parentHasType := cleanedMap["type"]
+			switch {
+			case len(cleanedNested) == 0:
+				delete(cleanedMap, "anyOf")
+			case singleIsMap && !parentHasType:
+				// The sole remaining branch carries the type this node is missing, so fold it
+				// in rather than leaving a one-way anyOf around a typeless parent.
+				delete(cleanedMap, "anyOf")
+				for key, val := range branch {
+					if _, exists := cleanedMap[key]; !exists {
+						cleanedMap[key] = val
+					}
+				}
+			default:
+				cleanedMap["anyOf"] = cleanedNested
+			}
 		}
 
 		return cleanedMap
@@ -1043,6 +1080,7 @@ func cleanFunctionParametersShallow(params interface{}) interface{} {
 			}
 		}
 		normalizeGeminiSchemaTypeAndNullable(cleanedMap)
+		normalizeGeminiSchemaEnum(cleanedMap)
 		// Stop recursion and avoid retaining huge nested structures.
 		delete(cleanedMap, "properties")
 		delete(cleanedMap, "items")
@@ -1054,6 +1092,47 @@ func cleanFunctionParametersShallow(params interface{}) interface{} {
 	default:
 		return params
 	}
+}
+
+// normalizeGeminiSchemaEnum rewrites enum members into the repeated-string form Gemini's
+// Schema requires. Google's function-calling docs keep the declared type and ask for
+// "integer (or any other type) values as strings", so only the members are rewritten.
+// Without this, a tool declaring {"type":"integer","enum":[10,20]} makes the upstream
+// reject the whole request with "Invalid value at '...enum[0]' (TYPE_STRING)".
+func normalizeGeminiSchemaEnum(schema map[string]interface{}) {
+	raw, ok := schema["enum"]
+	if !ok {
+		return
+	}
+
+	members, ok := raw.([]interface{})
+	if !ok {
+		delete(schema, "enum")
+		return
+	}
+
+	normalized := make([]interface{}, 0, len(members))
+	for _, member := range members {
+		switch v := member.(type) {
+		case string:
+			normalized = append(normalized, v)
+		case bool:
+			normalized = append(normalized, strconv.FormatBool(v))
+		case float64:
+			normalized = append(normalized, strconv.FormatFloat(v, 'f', -1, 64))
+		case nil:
+			// JSON Schema spells an optional value as a null enum member; Gemini has no such
+			// enum member and expresses the same thing with the nullable flag.
+			schema["nullable"] = true
+		}
+		// Objects and arrays have no Gemini enum representation, so they are dropped.
+	}
+
+	if len(normalized) == 0 {
+		delete(schema, "enum")
+		return
+	}
+	schema["enum"] = normalized
 }
 
 func normalizeGeminiSchemaTypeAndNullable(schema map[string]interface{}) {
