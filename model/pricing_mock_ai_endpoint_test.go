@@ -38,6 +38,11 @@ func TestMockAIPricingEndpointTypes(t *testing.T) {
 			want: []constant.EndpointType{constant.EndpointTypeOpenAI, constant.EndpointTypeOpenAIResponse},
 		},
 		{
+			name:    "no endpoint enabled yields empty list",
+			configs: map[int]*dto.MockAIConfig{7: {}},
+			want:    []constant.EndpointType{},
+		},
+		{
 			name:    "missing config falls back to full set",
 			configs: map[int]*dto.MockAIConfig{},
 			want:    common.GetEndpointTypesByChannelType(constant.ChannelTypeMockAI, "mock-model"),
