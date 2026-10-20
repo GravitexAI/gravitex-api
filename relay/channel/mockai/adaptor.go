@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/QuantumNous/new-api/relay/channel/claude"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -183,6 +184,19 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 			return nil, err
 		}
 		return usage, nil
+	case types.RelayFormatClaude:
+		if info.IsStream {
+			usage, err := claude.ClaudeStreamHandler(c, resp, info)
+			if err != nil {
+				return nil, err
+			}
+			return usage, nil
+		}
+		usage, err := claude.ClaudeHandler(c, resp, info)
+		if err != nil {
+			return nil, err
+		}
+		return usage, nil
 	}
 	// 不可达：上面的 wireBuilderFor 守卫已经把不支持的格式挡成 404。
 	return nil, types.NewError(fmt.Errorf("mock_ai: unsupported relay format %q", info.RelayFormat), types.ErrorCodeInvalidApiType)
@@ -214,6 +228,11 @@ func wireBuilderFor(format types.RelayFormat, relayMode int, endpoints dto.MockA
 		// Responses 格式只对应 /v1/responses 一条路由，不需要再判 RelayMode。
 		if endpoints.Responses {
 			return buildResponsesFrames
+		}
+	case types.RelayFormatClaude:
+		// Claude 格式只对应 /v1/messages 一条路由，不需要再判 RelayMode。
+		if endpoints.Messages {
+			return buildClaudeMessagesFrames
 		}
 	}
 	return nil
