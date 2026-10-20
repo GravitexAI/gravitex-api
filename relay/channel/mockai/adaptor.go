@@ -170,6 +170,19 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 			return nil, err
 		}
 		return usage, nil
+	case types.RelayFormatOpenAIResponses:
+		if info.IsStream {
+			usage, err := openai.OaiResponsesStreamHandler(c, info, resp)
+			if err != nil {
+				return nil, err
+			}
+			return usage, nil
+		}
+		usage, err := openai.OaiResponsesHandler(c, info, resp)
+		if err != nil {
+			return nil, err
+		}
+		return usage, nil
 	}
 	// 不可达：上面的 wireBuilderFor 守卫已经把不支持的格式挡成 404。
 	return nil, types.NewError(fmt.Errorf("mock_ai: unsupported relay format %q", info.RelayFormat), types.ErrorCodeInvalidApiType)
@@ -196,6 +209,11 @@ func wireBuilderFor(format types.RelayFormat, relayMode int, endpoints dto.MockA
 		// 去冒充 text_completion —— 那会直接破坏「与真实上游逐字节同构」这条核心契约。
 		if relayMode == relayconstant.RelayModeChatCompletions && endpoints.ChatCompletions {
 			return buildOpenAIChatFrames
+		}
+	case types.RelayFormatOpenAIResponses:
+		// Responses 格式只对应 /v1/responses 一条路由，不需要再判 RelayMode。
+		if endpoints.Responses {
+			return buildResponsesFrames
 		}
 	}
 	return nil
