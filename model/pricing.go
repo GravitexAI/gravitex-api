@@ -111,12 +111,26 @@ func GetModelSupportEndpointTypes(model string) []constant.EndpointType {
 	return make([]constant.EndpointType, 0)
 }
 
-func getPricingEndpointTypesForAbility(ability AbilityWithChannel, advancedCustomConfigs map[int]*dto.AdvancedCustomConfig) []constant.EndpointType {
-	if ability.ChannelType != constant.ChannelTypeAdvancedCustom {
-		return common.GetEndpointTypesByChannelType(ability.ChannelType, ability.Model)
-	}
-	if config := advancedCustomConfigs[ability.ChannelId]; config != nil {
-		return config.SupportedEndpointTypesForModel(ability.Model)
+func getPricingEndpointTypesForAbility(ability AbilityWithChannel, advancedCustomConfigs map[int]*dto.AdvancedCustomConfig, mockAIConfigs map[int]*dto.MockAIConfig) []constant.EndpointType {
+	switch ability.ChannelType {
+	case constant.ChannelTypeAdvancedCustom:
+		if config := advancedCustomConfigs[ability.ChannelId]; config != nil {
+			return config.SupportedEndpointTypesForModel(ability.Model)
+		}
+	case constant.ChannelTypeMockAI:
+		if config := mockAIConfigs[ability.ChannelId]; config != nil {
+			endpoints := make([]constant.EndpointType, 0, 3)
+			if config.Endpoints.ChatCompletions {
+				endpoints = append(endpoints, constant.EndpointTypeOpenAI)
+			}
+			if config.Endpoints.Responses {
+				endpoints = append(endpoints, constant.EndpointTypeOpenAIResponse)
+			}
+			if config.Endpoints.Messages {
+				endpoints = append(endpoints, constant.EndpointTypeAnthropic)
+			}
+			return endpoints
+		}
 	}
 	return common.GetEndpointTypesByChannelType(ability.ChannelType, ability.Model)
 }
@@ -169,6 +183,39 @@ func loadPricingAdvancedCustomConfigs(enableAbilities []AbilityWithChannel) map[
 		}
 		if config := channel.GetOtherSettings().AdvancedCustom; config != nil {
 			configs[channelID] = config
+		}
+	}
+	return configs
+}
+
+// loadPricingMockAIConfigs follows the same lock order as
+// loadPricingAdvancedCustomConfigs (updatePricingLock -> channelSyncLock):
+// CacheGetChannel takes channelSyncLock.RLock only for the map lookup and
+// releases it before returning, so no lock is held while parsing settings.
+func loadPricingMockAIConfigs(enableAbilities []AbilityWithChannel) map[int]*dto.MockAIConfig {
+	var configs map[int]*dto.MockAIConfig
+	seen := make(map[int]struct{})
+	for _, ability := range enableAbilities {
+		if ability.ChannelType != constant.ChannelTypeMockAI {
+			continue
+		}
+		if _, exists := seen[ability.ChannelId]; exists {
+			continue
+		}
+		seen[ability.ChannelId] = struct{}{}
+		channel, err := CacheGetChannel(ability.ChannelId)
+		if err != nil {
+			common.SysLog(fmt.Sprintf("load mock ai channel settings error: channel_id=%d, error=%v", ability.ChannelId, err))
+			continue
+		}
+		if channel.Type != constant.ChannelTypeMockAI {
+			continue
+		}
+		if config := channel.GetOtherSettings().MockAI; config != nil {
+			if configs == nil {
+				configs = make(map[int]*dto.MockAIConfig)
+			}
+			configs[ability.ChannelId] = config
 		}
 	}
 	return configs
@@ -276,11 +323,12 @@ func updatePricing() {
 	//这里使用切片而不是Set，因为一个模型可能支持多个端点类型，并且第一个端点是优先使用端点
 	modelSupportEndpointsStr := make(map[string][]string)
 	advancedCustomConfigs := loadPricingAdvancedCustomConfigs(enableAbilities)
+	mockAIConfigs := loadPricingMockAIConfigs(enableAbilities)
 
 	// 先根据已有能力填充原生端点
 	for _, ability := range enableAbilities {
 		endpoints := modelSupportEndpointsStr[ability.Model]
-		channelTypes := getPricingEndpointTypesForAbility(ability, advancedCustomConfigs)
+		channelTypes := getPricingEndpointTypesForAbility(ability, advancedCustomConfigs, mockAIConfigs)
 		for _, channelType := range channelTypes {
 			if !common.StringsContains(endpoints, string(channelType)) {
 				endpoints = append(endpoints, string(channelType))
