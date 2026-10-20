@@ -49,6 +49,19 @@ func normalizeChannelTestEndpoint(channel *model.Channel, endpointType string) s
 	if channel != nil && channel.Type == constant.ChannelTypeCodex {
 		return string(constant.EndpointTypeOpenAIResponse)
 	}
+	if channel != nil && channel.Type == constant.ChannelTypeMockAI {
+		// Probe the first endpoint the channel actually serves; a disabled one returns 404.
+		if mock := channel.GetOtherSettings().MockAI; mock != nil {
+			switch {
+			case mock.Endpoints.ChatCompletions:
+				return string(constant.EndpointTypeOpenAI)
+			case mock.Endpoints.Responses:
+				return string(constant.EndpointTypeOpenAIResponse)
+			case mock.Endpoints.Messages:
+				return string(constant.EndpointTypeAnthropic)
+			}
+		}
+	}
 	return normalized
 }
 
