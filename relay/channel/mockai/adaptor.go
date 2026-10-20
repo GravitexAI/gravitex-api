@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -125,6 +127,12 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 		for _, frame := range frames {
 			contentLength += int64(len(frame))
 		}
+	}
+
+	// 渠道测试与定时健康检查按墙钟耗时判定并可能自动禁用渠道，
+	// 模拟时延在这两条路径上必须跳过。
+	if common.GetContextKeyBool(c, constant.ContextKeyChannelTesting) {
+		firstDelay, totalDelay = 0, 0
 	}
 
 	header := http.Header{}

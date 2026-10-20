@@ -82,4 +82,9 @@ const (
 	// fallback in authHelper (finishAdminAudit) skips its record to avoid
 	// duplicate entries.
 	ContextKeyAuditLogged ContextKey = "audit_logged"
+
+	// ContextKeyChannelTesting marks a request issued by the channel test or the
+	// scheduled health check. Adaptors that simulate latency (mock_ai) must skip
+	// the simulated delay so wall-clock based health judgement is not affected.
+	ContextKeyChannelTesting ContextKey = "channel_testing"
 )

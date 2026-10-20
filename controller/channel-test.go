@@ -172,6 +172,9 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	c.Set("base_url", channel.GetBaseURL())
 	group, _ := model.GetUserGroup(testUserID, false)
 	c.Set("group", group)
+	// Mark as channel test so latency-simulating adaptors (mock_ai) skip their delay;
+	// the scheduled health check reuses testChannel, so this covers both paths.
+	common.SetContextKey(c, constant.ContextKeyChannelTesting, true)
 
 	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, testModel)
 	if newAPIError != nil {
