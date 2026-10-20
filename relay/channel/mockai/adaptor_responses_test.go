@@ -106,6 +106,22 @@ func TestResponsesStreamEventOrder(t *testing.T) {
 		require.NoError(t, common.UnmarshalJsonStr(strings.TrimPrefix(lines[1], "data: "), &ev))
 		assert.Equal(t, "event: "+ev.Type, lines[0], "event line must match payload type")
 		types_ = append(types_, ev.Type)
+		if ev.Type == "response.completed" {
+			// 流式的 total_tokens / reasoning 经处理器后会被重算或丢弃，只能在字节层锁。
+			var completed struct {
+				Response struct {
+					Usage map[string]any `json:"usage"`
+				} `json:"response"`
+			}
+			require.NoError(t, common.UnmarshalJsonStr(strings.TrimPrefix(lines[1], "data: "), &completed))
+			u := completed.Response.Usage
+			require.NotNil(t, u)
+			assert.EqualValues(t, 140, u["input_tokens"])
+			assert.EqualValues(t, 25, u["output_tokens"])
+			assert.EqualValues(t, 165, u["total_tokens"])
+			assert.EqualValues(t, 40, u["input_tokens_details"].(map[string]any)["cached_tokens"])
+			assert.EqualValues(t, 5, u["output_tokens_details"].(map[string]any)["reasoning_tokens"])
+		}
 		if ev.Type == "response.output_text.delta" {
 			text.WriteString(ev.Delta)
 		}
