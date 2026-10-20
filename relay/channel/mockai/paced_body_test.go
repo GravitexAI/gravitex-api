@@ -28,6 +28,36 @@ func TestPacedBodyCancellation(t *testing.T) {
 	assert.Less(t, elapsed, time.Second)
 }
 
+// TestPacedBodyCloseUnblocksPendingRead 守护一条被定性为「不能退化」的契约：
+// Close() 必须能打断一个正在等待中的 Read。StreamScannerHandler 的 cleanup()
+// 先 resp.Body.Close() 再 wg.Wait()，若 Read 卡在不可打断的等待里，scanner
+// goroutine 永远不退出，整个 handler 死锁。
+// 这条和 TestPacedBodyCancellation 不同：那条验的是父 ctx 传播。
+func TestPacedBodyCloseUnblocksPendingRead(t *testing.T) {
+	body := newPacedBody(context.Background(), [][]byte{[]byte("first"), []byte("second")},
+		10*time.Second, 30*time.Second, nil)
+
+	type readResult struct {
+		err error
+	}
+	done := make(chan readResult, 1)
+	go func() {
+		_, err := io.ReadAll(body)
+		done <- readResult{err: err}
+	}()
+
+	// 让 Read 先进入等待，再关闭。
+	time.Sleep(20 * time.Millisecond)
+	require.NoError(t, body.Close())
+
+	select {
+	case got := <-done:
+		require.ErrorIs(t, got.err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close() did not unblock the pending Read")
+	}
+}
+
 // TestPacedBodyEmitsAllFrames 锁住两条契约：读出的字节恰好是所有 frame 的拼接，
 // 且首片等到 firstDelay、末片等到 totalDelay，中间均匀铺开。
 func TestPacedBodyEmitsAllFrames(t *testing.T) {
@@ -51,13 +81,14 @@ func TestPacedBodyEmitsAllFrames(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "data: one\n\ndata: two\n\ndata: three\n\ndata: [DONE]\n\n", string(got))
 
-	require.Len(t, waited, len(frames))
-	assert.Equal(t, 300*time.Millisecond, waited[0])
-	var total time.Duration
-	for _, d := range waited {
-		total += d
-	}
-	assert.Equal(t, 900*time.Millisecond, total)
+	// 首片等到 300ms，其余三片把剩下的 600ms 均分 —— 逐项断言，
+	// 否则任何「首 300、总 900」的单调排程都能蒙混过关，「均匀铺开」零保护。
+	assert.Equal(t, []time.Duration{
+		300 * time.Millisecond,
+		200 * time.Millisecond,
+		200 * time.Millisecond,
+		200 * time.Millisecond,
+	}, waited)
 }
 
 // TestPacedBodySingleFrame 覆盖非流式形态：只有一片时不得除零 panic，

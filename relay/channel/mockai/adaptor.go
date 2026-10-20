@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 
@@ -29,13 +30,12 @@ var defaultRollSource rollSource = globalRollSource{}
 
 // Adaptor 是 Mock AI 渠道的适配器。它不发任何上游请求，而是就地合成与真实上游
 // 逐字节同构的响应，再交给未经改动的真实响应处理器去解析、聚合、计费。
-type Adaptor struct {
-	// endpointDisabled 由 DoRequest 置位、DoResponse 消费。
-	// DoRequest 返回的 error 会被 relay handler 无条件包成 500
-	// （见 relay/compatible_handler.go），404 出不去，所以端点门禁的拒绝
-	// 必须留到 DoResponse —— 那里的返回类型本就是 *types.NewAPIError。
-	endpointDisabled bool
-}
+//
+// 刻意不持有任何可变状态：端点门禁由 DoRequest 与 DoResponse 各自调用纯函数
+// wireBuilderFor 判定，而不是靠 DoRequest 置位、DoResponse 消费的字段。
+// 后者会隐式要求 GetAdaptor 每次返回新实例（今天成立，但没有任何东西拦住将来
+// 有人加 adaptor 缓存），也会让两处的 case 集合可能不同步。
+type Adaptor struct{}
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {}
 
@@ -98,9 +98,11 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 		}
 	}
 
-	build := wireBuilderFor(info.RelayFormat, endpointsOf(cfg))
+	// 端点未启用时返回 (nil, nil)，由 DoResponse 返 404：DoRequest 返回的 error
+	// 会被 relay handler 无条件包成 500（见 relay/compatible_handler.go），
+	// 404 出不去，而 DoResponse 的返回类型本就是 *types.NewAPIError。
+	build := wireBuilderFor(info.RelayFormat, info.RelayMode, endpointsOf(cfg))
 	if build == nil {
-		a.endpointDisabled = true
 		return nil, nil
 	}
 
@@ -140,7 +142,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 
 // DoResponse 把合成的字节交给真实的响应处理器，Mock 自己不解析、不聚合、不算用量。
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (any, *types.NewAPIError) {
-	if a.endpointDisabled {
+	if wireBuilderFor(info.RelayFormat, info.RelayMode, endpointsOf(info.ChannelOtherSettings.MockAI)) == nil {
 		// 形态照 relay/responses_handler.go 的先例：这是预期内的端点能力缺失，
 		// 不是供应商故障，所以不记错误日志、不重试。
 		return nil, types.WithOpenAIError(types.OpenAIError{
@@ -169,7 +171,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		}
 		return usage, nil
 	}
-	// 不可达：DoRequest 对不支持的格式已经置位 endpointDisabled。
+	// 不可达：上面的 wireBuilderFor 守卫已经把不支持的格式挡成 404。
 	return nil, types.NewError(fmt.Errorf("mock_ai: unsupported relay format %q", info.RelayFormat), types.ErrorCodeInvalidApiType)
 }
 
@@ -183,11 +185,16 @@ func endpointsOf(cfg *dto.MockAIConfig) dto.MockAIEndpoints {
 }
 
 // wireBuilderFor 把请求格式映射到字节合成器。格式不支持、或对应端点没勾选时返回 nil，
-// 调用方据此返回 404。新增端点时在这里加一个 case。
-func wireBuilderFor(format types.RelayFormat, endpoints dto.MockAIEndpoints) wireBuilder {
+// 调用方据此返回 404。这是一个纯函数，DoRequest 与 DoResponse 各自调用它判定门禁，
+// 因此不存在两处 case 集合不同步的可能。新增端点时在这里加一个 case 即可。
+func wireBuilderFor(format types.RelayFormat, relayMode int, endpoints dto.MockAIEndpoints) wireBuilder {
 	switch format {
 	case types.RelayFormatOpenAI:
-		if endpoints.ChatCompletions {
+		// RelayFormatOpenAI 同时覆盖 /v1/chat/completions 与 /v1/completions
+		// （router/relay-router.go 两条路由传的是同一个 format），必须再看 RelayMode。
+		// /v1/completions 不在支持范围内（设计 §2），不能拿 chat.completion 的形状
+		// 去冒充 text_completion —— 那会直接破坏「与真实上游逐字节同构」这条核心契约。
+		if relayMode == relayconstant.RelayModeChatCompletions && endpoints.ChatCompletions {
 			return buildOpenAIChatFrames
 		}
 	}

@@ -119,7 +119,28 @@ func TestOpenAIChatStreamEndToEndUsage(t *testing.T) {
 	assert.Equal(t, 165, usage.TotalTokens)
 	// 合成的字节确实流过了真实的 StreamScannerHandler，而不是被 Mock 自己解析掉。
 	assert.Positive(t, info.ReceivedResponseCount)
-	assert.True(t, info.StreamStatus.IsNormalEnd())
+	// 必须断到 Done 而不是 IsNormalEnd()：后者把 EOF 也算正常结束
+	// （relay/common/stream_status.go），删掉 data: [DONE] 收尾帧它照样绿。
+	assert.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
+}
+
+// TestCompletionsEndpointNotSupported 锁住 §2 的端点范围：RelayFormatOpenAI 同时
+// 覆盖 /v1/chat/completions 与 /v1/completions，后者不在支持范围内，必须 404，
+// 而不是拿 chat.completion 的形状去冒充 text_completion。
+func TestCompletionsEndpointNotSupported(t *testing.T) {
+	c, _, info := newMockRelayContext(t, mockChatConfig(), false)
+	info.RelayMode = relayconstant.RelayModeCompletions
+	info.RequestURLPath = "/v1/completions"
+
+	a := &Adaptor{}
+	raw, err := a.DoRequest(c, info, nil)
+	require.NoError(t, err)
+	require.Nil(t, raw, "/v1/completions must not synthesize a chat.completion response")
+
+	_, apiErr := a.DoResponse(c, nil, info)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusNotFound, apiErr.StatusCode)
+	assert.Equal(t, types.ErrorCode("endpoint_not_found"), apiErr.GetErrorCode())
 }
 
 // TestEndpointNotEnabled 锁住端点门禁：未勾选的端点返回 404 endpoint_not_found
