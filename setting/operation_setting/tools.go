@@ -32,7 +32,7 @@ const (
 	defaultWebSearchPreviewToolPrice = 10.0
 	defaultFileSearchToolPrice       = 2.5
 	defaultGoogleSearchToolPrice     = 14.0
-	defaultImageGenerationToolPrice  = 150.0
+	defaultImageGenerationToolPrice  = 200.0
 	defaultSearchPreviewModelPrice   = 25.0
 )
 
