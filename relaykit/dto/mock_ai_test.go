@@ -46,8 +46,8 @@ func TestMockAIConfigValidate(t *testing.T) {
 		{"text input max above token limit", func(c *MockAIConfig) {
 			c.Default.TextInput = MockAIRange{Min: 0, Max: MockAIMaxTokens + 1}
 		}, true},
-		{"latency max above 600000", func(c *MockAIConfig) {
-			c.Default.LatencyMs = MockAIRange{Min: 800, Max: 600001}
+		{"latency max above latency limit", func(c *MockAIConfig) {
+			c.Default.LatencyMs = MockAIRange{Min: 800, Max: MockAIMaxLatencyMs + 1}
 		}, true},
 		{"per-model profile invalid", func(c *MockAIConfig) {
 			p := c.Models["gpt-x"]

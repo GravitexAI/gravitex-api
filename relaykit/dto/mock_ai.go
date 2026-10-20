@@ -11,7 +11,16 @@ const (
 
 	// MockAIMaxLatencyMs caps simulated latency so a misconfigured channel
 	// cannot hold a connection open for an unreasonable time.
-	MockAIMaxLatencyMs = 600000
+	//
+	// The bound is derived from the streaming idle watchdog in
+	// relay/helper/stream_scanner.go: StreamScannerHandler arms a ticker of
+	// constant.StreamingTimeout seconds (STREAMING_TIMEOUT, default 300) and
+	// resets it on every upstream SSE line, so a first-token delay or an
+	// inter-frame gap above that threshold ends the stream as a timeout.
+	// 240000ms stays below the 300s default with headroom. relaykit must not
+	// import the root module, so the relation is documented instead of
+	// referenced; revisit this if the watchdog default changes.
+	MockAIMaxLatencyMs = 240000
 )
 
 // MockAIConfig configures a Mock AI channel (stored in ChannelOtherSettings.MockAI).
