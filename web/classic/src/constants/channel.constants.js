@@ -224,6 +224,11 @@ export const CHANNEL_OPTIONS = [
     color: 'green',
     label: 'New API',
   },
+  {
+    value: 66,
+    color: 'orange',
+    label: 'Mock AI',
+  },
 ];
 
 // 不再允许新建的渠道类型：仍保留在 CHANNEL_OPTIONS 里，让存量渠道的表格标签、

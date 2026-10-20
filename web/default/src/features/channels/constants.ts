@@ -91,6 +91,7 @@ export const CHANNEL_TYPES = {
   63: 'Sub2API',
   64: 'New API',
   65: 'Task Plugin',
+  66: 'Mock AI',
 } as const
 
 const CHANNEL_TYPE_DISPLAY_ORDER: number[] = [

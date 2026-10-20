@@ -65,6 +65,11 @@ import ModelSelectModal from './ModelSelectModal';
 import SingleModelSelectModal from './SingleModelSelectModal';
 import OllamaModelModal from './OllamaModelModal';
 import ParamOverrideEditorModal from './ParamOverrideEditorModal';
+import MockAISettingsPanel, {
+  MOCK_AI_SETTINGS_KEY,
+  normalizeMockAIConfig,
+  validateMockAIConfig,
+} from './MockAISettingsPanel';
 import JSONEditor from '../../../common/ui/JSONEditor';
 import SecureVerificationModal from '../../../common/modals/SecureVerificationModal';
 import StatusCodeRiskGuardModal from './StatusCodeRiskGuardModal';
@@ -92,6 +97,9 @@ import {
 } from '@douyinfe/semi-icons';
 
 const { Text, Title } = Typography;
+
+// Mock AI 渠道类型，配置写入 settings.mock_ai
+const CHANNEL_TYPE_MOCK_AI = 66;
 
 const MODEL_MAPPING_EXAMPLE = {
   'gpt-3.5-turbo': 'gpt-3.5-turbo-0125',
@@ -608,6 +616,21 @@ const EditChannelModal = (props) => {
     const settingsJson = JSON.stringify(settings);
     handleInputChange('settings', settingsJson);
   };
+
+  // Mock AI 配置以 settings.mock_ai 为唯一数据源，这里解析成编辑器可渲染的结构，
+  // 写回统一走 handleChannelOtherSettingsChange('mock_ai', ...)
+  const mockAIConfig = useMemo(() => {
+    if (inputs.type !== CHANNEL_TYPE_MOCK_AI) return null;
+    let settings = {};
+    if (inputs.settings) {
+      try {
+        settings = JSON.parse(inputs.settings);
+      } catch (error) {
+        console.error('解析设置失败:', error);
+      }
+    }
+    return normalizeMockAIConfig(settings[MOCK_AI_SETTINGS_KEY]);
+  }, [inputs.type, inputs.settings]);
 
   const handleAzureModelApiVersionsChange = (value) => {
     if (formApiRef.current) {
@@ -1653,6 +1676,25 @@ const EditChannelModal = (props) => {
       setStatusCodeRiskConfirmVisible(true);
     });
 
+  const confirmMockAIDefaultGroup = () =>
+    new Promise((resolve) => {
+      Modal.confirm({
+        title: t('Mock 渠道使用了 default 分组'),
+        content: (
+          <div className='text-sm leading-6'>
+            {t(
+              'Mock 渠道必须放在独立分组，不要与真实渠道共用分组，否则真实用户请求会被路由到此渠道。仍要保存吗？',
+            )}
+          </div>
+        ),
+        centered: true,
+        okText: t('仍然保存'),
+        cancelText: t('返回修改'),
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+
   const hasModelConfigChanged = (normalizedModels, modelMappingStr) => {
     if (!isEdit) return true;
     const initialModels = initialModelsRef.current;
@@ -1969,6 +2011,19 @@ const EditChannelModal = (props) => {
       delete settings.vertex_key_type;
     }
 
+    // type === 66 (Mock AI): 后端要求 settings.mock_ai 必填，未动过编辑器时写入默认档位
+    if (localInputs.type === CHANNEL_TYPE_MOCK_AI) {
+      const mockConfig = normalizeMockAIConfig(settings[MOCK_AI_SETTINGS_KEY]);
+      const mockErrors = validateMockAIConfig(mockConfig);
+      if (mockErrors.messages.length > 0) {
+        showError(`${t('Mock AI 配置有误')}: ${mockErrors.messages[0]}`);
+        return;
+      }
+      settings[MOCK_AI_SETTINGS_KEY] = mockConfig;
+    } else if (MOCK_AI_SETTINGS_KEY in settings) {
+      delete settings[MOCK_AI_SETTINGS_KEY];
+    }
+
     // type === 1 (OpenAI) 或 type === 14 (Claude): 设置字段透传控制（显式保存布尔值）
     if (localInputs.type === 1 || localInputs.type === 14) {
       settings.allow_service_tier = localInputs.allow_service_tier === true;
@@ -2053,6 +2108,20 @@ const EditChannelModal = (props) => {
     delete localInputs.upstream_model_update_last_check_time;
     delete localInputs.upstream_model_update_last_detected_models;
     delete localInputs.upstream_model_update_ignored_models;
+    // 顶层的 mock_ai 不应发送给后端（已序列化到 settings）
+    delete localInputs[MOCK_AI_SETTINGS_KEY];
+
+    // Mock 渠道与真实渠道共用分组会把真实流量路由到 Mock 上，但隔离环境里
+    // 可能就是这么用的，所以只做二次确认、不硬拦。
+    if (
+      localInputs.type === CHANNEL_TYPE_MOCK_AI &&
+      (localInputs.groups || []).includes('default')
+    ) {
+      const confirmed = await confirmMockAIDefaultGroup();
+      if (!confirmed) {
+        return;
+      }
+    }
 
     let res;
     localInputs.auto_ban = localInputs.auto_ban ? 1 : 0;
@@ -3970,6 +4039,20 @@ const EditChannelModal = (props) => {
                     showClear
                   />
                 </Card>
+
+                {/* Mock AI Settings Card */}
+                {inputs.type === CHANNEL_TYPE_MOCK_AI && mockAIConfig && (
+                  <MockAISettingsPanel
+                    channelModels={inputs.models || []}
+                    config={mockAIConfig}
+                    onChange={(next) =>
+                      handleChannelOtherSettingsChange(
+                        MOCK_AI_SETTINGS_KEY,
+                        next,
+                      )
+                    }
+                  />
+                )}
 
                 {/* Channel Cost Settings Card */}
                 <Card className='!rounded-2xl shadow-sm border-0 mb-6'>
