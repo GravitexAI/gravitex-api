@@ -162,7 +162,8 @@ const validateProfile = (profile) => {
 };
 
 // 与 relaykit/dto/mock_ai.go 的 MockAIConfig.Validate() 等价的前端校验。
-// 返回结构化错误供就地红字提示，messages 为扁平化后的提示语供提交时拦截。
+// 返回结构化错误供就地红字提示，messages 为扁平化后的提示语
+// （{ scope, params, message }，两段分别可翻译）供提交时拦截。
 export const validateMockAIConfig = (rawConfig) => {
   const config = normalizeMockAIConfig(rawConfig);
   const endpoints =
@@ -180,16 +181,22 @@ export const validateMockAIConfig = (rawConfig) => {
     };
   });
 
+  // messages 的每一项都拆成 scope + message 两段可翻译文案，提交失败提示在
+  // 渲染处分别过 t()，避免拼成一整句之后没法翻译。
   const messages = [];
-  if (endpoints) messages.push(endpoints);
+  if (endpoints) messages.push({ scope: '', params: null, message: endpoints });
   Object.values(defaultErrors).forEach((message) => {
-    messages.push(`默认档位：${message}`);
+    messages.push({ scope: '默认档位：', params: null, message });
   });
   Object.entries(models).forEach(([name, modelErrors]) => {
-    const prefix = name.trim() ? `模型 ${name}：` : '按模型配置：';
-    if (modelErrors.name) messages.push(`${prefix}${modelErrors.name}`);
+    const named = name.trim() !== '';
+    const scope = named ? '模型 {{model}}：' : '按模型配置：';
+    const params = named ? { model: name } : null;
+    if (modelErrors.name) {
+      messages.push({ scope, params, message: modelErrors.name });
+    }
     Object.values(modelErrors.fields).forEach((message) => {
-      messages.push(`${prefix}${message}`);
+      messages.push({ scope, params, message });
     });
   });
 

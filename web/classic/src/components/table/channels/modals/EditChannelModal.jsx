@@ -2016,7 +2016,9 @@ const EditChannelModal = (props) => {
       const mockConfig = normalizeMockAIConfig(settings[MOCK_AI_SETTINGS_KEY]);
       const mockErrors = validateMockAIConfig(mockConfig);
       if (mockErrors.messages.length > 0) {
-        showError(`${t('Mock AI 配置有误')}: ${mockErrors.messages[0]}`);
+        const { scope, params, message } = mockErrors.messages[0];
+        const scopeText = scope ? t(scope, params || {}) : '';
+        showError(`${t('Mock AI 配置有误')}: ${scopeText}${t(message)}`);
         return;
       }
       settings[MOCK_AI_SETTINGS_KEY] = mockConfig;
