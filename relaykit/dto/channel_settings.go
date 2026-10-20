@@ -110,6 +110,7 @@ type ChannelOtherSettings struct {
 	EnableModerationQuery bool `json:"enable_moderation_query,omitempty"`
 
 	AdvancedCustom *AdvancedCustomConfig `json:"advanced_custom,omitempty"`
+	MockAI         *MockAIConfig         `json:"mock_ai,omitempty"`
 }
 
 func (s ChannelOtherSettings) ValidateModelCostDiscount() error {

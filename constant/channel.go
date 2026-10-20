@@ -66,6 +66,7 @@ const (
 	ChannelTypeSub2API    = 63
 	ChannelTypeNewAPI     = 64
 	ChannelTypeTaskPlugin = 65
+	ChannelTypeMockAI     = 66
 	ChannelTypeDummy      // this one is only for count, do not add any channel after this
 
 )
@@ -143,6 +144,8 @@ var ChannelBaseURLs = []string{
 	"",                                          //62 Seedance Gateway
 	"",                                          //63 Sub2API
 	"",                                          //64 New API
+	"",                                          //65 Task Plugin
+	"",                                          //66 Mock AI
 }
 
 var ChannelTypeNames = map[int]string{
@@ -207,6 +210,7 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeSeedanceGateway: "SeedanceGateway",
 	ChannelTypeSub2API:         "Sub2API",
 	ChannelTypeNewAPI:          "New API",
+	ChannelTypeMockAI:          "Mock AI",
 }
 
 func GetChannelTypeName(channelType int) string {
