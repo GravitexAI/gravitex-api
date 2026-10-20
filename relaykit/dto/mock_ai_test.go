@@ -3,7 +3,7 @@ package dto
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // validMockAIConfig returns a fully valid config used as the base for each case.
@@ -62,9 +62,9 @@ func TestMockAIConfigValidate(t *testing.T) {
 			tt.mutate(&cfg)
 			err := cfg.Validate()
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 			}
 		})
 	}
