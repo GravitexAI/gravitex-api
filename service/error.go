@@ -107,7 +107,14 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		if showBodyWhenFail {
 			newApiErr.Err = buildErrWithBody("")
 		} else {
-			logger.LogError(ctx, fmt.Sprintf("bad response status code %d, body: %s", resp.StatusCode, responseBodyPreview))
+			logMsg := fmt.Sprintf("bad response status code %d, body: %s", resp.StatusCode, responseBodyPreview)
+			// Bot protection (e.g. Cloudflare error 1010) judges requests by the
+			// client fingerprint actually forwarded upstream, so log the upstream
+			// User-Agent on 403 to keep such blocks diagnosable.
+			if resp.StatusCode == http.StatusForbidden && resp.Request != nil {
+				logMsg += fmt.Sprintf(", upstream User-Agent: %s", resp.Request.Header.Get("User-Agent"))
+			}
+			logger.LogError(ctx, logMsg)
 			newApiErr.Err = fmt.Errorf("bad response status code %d", resp.StatusCode)
 		}
 		return
