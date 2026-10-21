@@ -15,7 +15,7 @@ import (
 // 否则 GORM 会按 Go 侧的结构体去 ALTER 一张不归自己管的表。
 type ModelExtension struct {
 	Id              int     `gorm:"column:id;primaryKey"`
-	ModelId         int     `gorm:"column:model_id"`
+	ModelName       string  `gorm:"column:model_name"`
 	IoSchema        string  `gorm:"column:io_schema"`
 	Capabilities    string  `gorm:"column:capabilities"`
 	ContextWindow   *int    `gorm:"column:context_window"`
@@ -147,10 +147,10 @@ func loadModelExtensions() (map[string]ModelExtensionInfo, error) {
 		Capabilities    string
 	}
 	err := DB.Table("t_extension_models AS e").
-		Select("m.model_name AS model_name, m.model_nick_name AS model_nick_name, "+
+		Select("e.model_name AS model_name, m.model_nick_name AS model_nick_name, "+
 			"m.description AS description, e.context_window AS context_window, "+
 			"e.max_output_tokens AS max_output_tokens, e.io_schema AS io_schema, e.capabilities AS capabilities").
-		Joins("JOIN models AS m ON m.id = e.model_id").
+		Joins("JOIN models AS m ON LOWER(m.model_name) = LOWER(e.model_name)").
 		Where("e.status = ?", 1).
 		Where("e.deleted_at IS NULL OR e.deleted_at = ?", "").
 		Where("m.deleted_at IS NULL").
