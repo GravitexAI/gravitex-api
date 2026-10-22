@@ -1477,8 +1477,39 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		var upstreamResponse map[string]any
 		if common.Unmarshal(body, &upstreamResponse) == nil {
 			if usage, ok := upstreamResponse["usageMetadata"].(map[string]any); ok && info != nil {
-				// Preserve the exact Vertex usage object before converting the
-				// response to the Interactions usage shape.
+				// Preserve the exact Vertex usage object and refusal diagnostics
+				// before converting to the Interactions usage shape.
+				if feedback, ok := upstreamResponse["promptFeedback"].(map[string]any); ok && len(feedback) > 0 {
+					usage["promptFeedback"] = feedback
+				}
+				if candidates, ok := upstreamResponse["candidates"].([]any); ok {
+					finishDetails := make([]map[string]any, 0, len(candidates))
+					for _, item := range candidates {
+						candidate, ok := item.(map[string]any)
+						if !ok {
+							continue
+						}
+						detail := make(map[string]any, 2)
+						reason, _ := candidate["finishReason"].(string)
+						reason = strings.TrimSpace(reason)
+						message, _ := candidate["finishMessage"].(string)
+						if message == "" && (reason == "" || strings.EqualFold(reason, "STOP")) {
+							continue
+						}
+						if reason != "" {
+							detail["finishReason"] = reason
+						}
+						if message != "" {
+							detail["finishMessage"] = message
+						}
+						if len(detail) > 0 {
+							finishDetails = append(finishDetails, detail)
+						}
+					}
+					if len(finishDetails) > 0 {
+						usage["candidates"] = finishDetails
+					}
+				}
 				info.SetUpstreamResponsesField("usageMetadata", usage)
 				preservedVertexUsage = true
 			}

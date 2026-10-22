@@ -1434,6 +1434,61 @@ func geminiFinishReason(candidates []dto.GeminiChatCandidate) string {
 	return ""
 }
 
+// recordGeminiFinishAudit keeps refusal diagnostics beside the original
+// upstream usageMetadata. Candidate content can contain prompts, generated
+// text, or base64 images and is deliberately excluded.
+func recordGeminiFinishAudit(info *relaycommon.RelayInfo, response *dto.GeminiChatResponse) {
+	if info == nil || response == nil {
+		return
+	}
+	var usageMetadata map[string]any
+	if len(response.RawUsageMetadata) > 0 && string(response.RawUsageMetadata) != "null" {
+		if err := common.Unmarshal(response.RawUsageMetadata, &usageMetadata); err != nil {
+			usageMetadata = nil
+		}
+	}
+	if usageMetadata == nil {
+		usageJSON, err := common.Marshal(response.UsageMetadata)
+		if err != nil || common.Unmarshal(usageJSON, &usageMetadata) != nil {
+			return
+		}
+	}
+	var promptFeedback any
+	if len(response.RawPromptFeedback) > 0 && string(response.RawPromptFeedback) != "null" {
+		if err := common.Unmarshal(response.RawPromptFeedback, &promptFeedback); err != nil {
+			promptFeedback = nil
+		}
+	}
+	finishDetails := make([]map[string]any, 0, len(response.Candidates))
+	for _, candidate := range response.Candidates {
+		finishReason := ""
+		if candidate.FinishReason != nil {
+			finishReason = strings.TrimSpace(*candidate.FinishReason)
+		}
+		if candidate.FinishMessage == "" && (finishReason == "" || strings.EqualFold(finishReason, "STOP")) {
+			continue
+		}
+		detail := make(map[string]any, 2)
+		if finishReason != "" {
+			detail["finishReason"] = finishReason
+		}
+		if candidate.FinishMessage != "" {
+			detail["finishMessage"] = candidate.FinishMessage
+		}
+		finishDetails = append(finishDetails, detail)
+	}
+	if len(finishDetails) == 0 && promptFeedback == nil {
+		return
+	}
+	if len(finishDetails) > 0 {
+		usageMetadata["candidates"] = finishDetails
+	}
+	if promptFeedback != nil {
+		usageMetadata["promptFeedback"] = promptFeedback
+	}
+	info.SetUpstreamResponsesField("usageMetadata", usageMetadata)
+}
+
 // applyGeminiOutputTokenSplit classifies candidate output tokens into
 // image/audio/text buckets for billing and records the split on the context.
 //
@@ -1755,6 +1810,9 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	// 供下方 candidatesTokenCount 兜底归类时判断是图片输出还是文本输出
 	var hasImagePart bool
 	responseText := strings.Builder{}
+	finishAuditCandidates := make([]dto.GeminiChatCandidate, 0, 1)
+	var latestUsageAuditResponse *dto.GeminiChatResponse
+	var latestPromptFeedback json.RawMessage
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var geminiResponse dto.GeminiChatResponse
@@ -1799,6 +1857,27 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			// 流式按全流累计的 hasImagePart 判定是否真的交付了图片：末包的 candidate
 			// 通常已经没有 inlineData，只看末包会把正常出图误判成被拦。
 			applyGeminiOutputTokenSplit(c, usage, geminiResponse.UsageMetadata, hasImagePart)
+		}
+		if geminiResponse.HasUsageMetadata {
+			usageAuditCopy := geminiResponse
+			latestUsageAuditResponse = &usageAuditCopy
+		}
+		if len(geminiResponse.RawPromptFeedback) > 0 && string(geminiResponse.RawPromptFeedback) != "null" {
+			latestPromptFeedback = append(latestPromptFeedback[:0], geminiResponse.RawPromptFeedback...)
+		}
+		for _, candidate := range geminiResponse.Candidates {
+			if candidate.FinishReason != nil || candidate.FinishMessage != "" {
+				finishAuditCandidates = append(finishAuditCandidates, candidate)
+			}
+		}
+		if len(finishAuditCandidates) > 0 || len(latestPromptFeedback) > 0 {
+			auditResponse := geminiResponse
+			if latestUsageAuditResponse != nil && !geminiResponse.HasUsageMetadata {
+				auditResponse = *latestUsageAuditResponse
+			}
+			auditResponse.Candidates = finishAuditCandidates
+			auditResponse.RawPromptFeedback = latestPromptFeedback
+			recordGeminiFinishAudit(info, &auditResponse)
 		}
 		if reason := geminiFinishReason(geminiResponse.Candidates); reason != "" {
 			c.Set("gemini_finish_reason", reason)
@@ -1959,6 +2038,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
 		info.SetUpstreamResponsesField("usageMetadata", geminiResponse.UsageMetadata)
 	}
+	recordGeminiFinishAudit(info, &geminiResponse)
 
 	// CHZ-PATCH(gemini-usage-fix): 打印上游 usageMetadata 原文，便于对账核对
 	// prompt/candidates/thoughts/modality 拆分是否准确
@@ -2336,6 +2416,7 @@ func GeminiImagineImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
 		info.SetUpstreamResponsesField("usageMetadata", geminiResponse.UsageMetadata)
 	}
+	recordGeminiFinishAudit(info, &geminiResponse)
 
 	// 与 GeminiChatHandler 保持一致：打印上游 usageMetadata 原文便于对账
 	if metaJSON, jerr := common.Marshal(geminiResponse.UsageMetadata); jerr == nil {

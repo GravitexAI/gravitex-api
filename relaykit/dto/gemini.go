@@ -489,6 +489,7 @@ type MediaResolution string
 type GeminiChatCandidate struct {
 	Content           GeminiChatContent        `json:"content"`
 	FinishReason      *string                  `json:"finishReason"`
+	FinishMessage     string                   `json:"finishMessage,omitempty"`
 	Index             int64                    `json:"index"`
 	SafetyRatings     []GeminiChatSafetyRating `json:"safetyRatings"`
 	GroundingMetadata *GeminiGroundingMetadata `json:"groundingMetadata,omitempty"`
@@ -516,11 +517,13 @@ type GeminiChatPromptFeedback struct {
 }
 
 type GeminiChatResponse struct {
-	Candidates       []GeminiChatCandidate     `json:"candidates"`
-	PromptFeedback   *GeminiChatPromptFeedback `json:"promptFeedback,omitempty"`
-	UsageMetadata    GeminiUsageMetadata       `json:"usageMetadata"`
-	ResponseId       string                    `json:"responseId,omitempty"`
-	HasUsageMetadata bool                      `json:"-"`
+	Candidates        []GeminiChatCandidate     `json:"candidates"`
+	PromptFeedback    *GeminiChatPromptFeedback `json:"promptFeedback,omitempty"`
+	UsageMetadata     GeminiUsageMetadata       `json:"usageMetadata"`
+	ResponseId        string                    `json:"responseId,omitempty"`
+	HasUsageMetadata  bool                      `json:"-"`
+	RawUsageMetadata  json.RawMessage           `json:"-"`
+	RawPromptFeedback json.RawMessage           `json:"-"`
 }
 
 // UnmarshalJSON records whether Gemini returned usageMetadata while preserving
@@ -531,11 +534,19 @@ type GeminiChatResponse struct {
 // is silently dropped during unmarshal.
 func (r *GeminiChatResponse) UnmarshalJSON(data []byte) error {
 	var aux struct {
-		Candidates     []GeminiChatCandidate     `json:"candidates"`
-		PromptFeedback *GeminiChatPromptFeedback `json:"promptFeedback,omitempty"`
-		UsageMetadata  *GeminiUsageMetadata      `json:"usageMetadata"`
-		ResponseId     string                    `json:"responseId,omitempty"`
+		Candidates        []GeminiChatCandidate     `json:"candidates"`
+		PromptFeedback    *GeminiChatPromptFeedback `json:"promptFeedback,omitempty"`
+		UsageMetadata     *GeminiUsageMetadata      `json:"usageMetadata"`
+		RawUsageMetadata  json.RawMessage           `json:"-"`
+		RawPromptFeedback json.RawMessage           `json:"-"`
+		ResponseId        string                    `json:"responseId,omitempty"`
 	}
+	var rawFields map[string]json.RawMessage
+	if err := kitutil.Unmarshal(data, &rawFields); err != nil {
+		return err
+	}
+	aux.RawUsageMetadata = rawFields["usageMetadata"]
+	aux.RawPromptFeedback = rawFields["promptFeedback"]
 	if err := kitutil.Unmarshal(data, &aux); err != nil {
 		return err
 	}
@@ -543,6 +554,8 @@ func (r *GeminiChatResponse) UnmarshalJSON(data []byte) error {
 	r.PromptFeedback = aux.PromptFeedback
 	r.ResponseId = aux.ResponseId
 	r.HasUsageMetadata = aux.UsageMetadata != nil
+	r.RawUsageMetadata = append(r.RawUsageMetadata[:0], aux.RawUsageMetadata...)
+	r.RawPromptFeedback = append(r.RawPromptFeedback[:0], aux.RawPromptFeedback...)
 	if aux.UsageMetadata != nil {
 		r.UsageMetadata = *aux.UsageMetadata
 	} else {

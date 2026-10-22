@@ -25,7 +25,7 @@ func isLogUsageConversionEnabled() bool {
 }
 
 func appendUpstreamResponses(other map[string]interface{}, relayInfo *relaycommon.RelayInfo) {
-	if other == nil || relayInfo == nil || (!isLogUpstreamResponsesEnabled() && !ShouldPersistSeedreamImageUsage(relayInfo)) {
+	if other == nil || relayInfo == nil || (!isLogUpstreamResponsesEnabled() && !ShouldPersistSeedreamImageUsage(relayInfo) && !hasUpstreamGeminiRefusalAudit(relayInfo)) {
 		return
 	}
 	if len(relayInfo.UpstreamResponses) == 0 && len(relayInfo.RawUpstreamUsage) == 0 {
@@ -39,6 +39,26 @@ func appendUpstreamResponses(other map[string]interface{}, relayInfo *relaycommo
 		upstreamResponses["usage"] = json.RawMessage(relayInfo.RawUpstreamUsage)
 	}
 	other["upstream_responses"] = upstreamResponses
+}
+
+func hasUpstreamGeminiRefusalAudit(relayInfo *relaycommon.RelayInfo) bool {
+	if relayInfo == nil {
+		return false
+	}
+	usageMetadata, ok := relayInfo.UpstreamResponses["usageMetadata"].(map[string]any)
+	if !ok {
+		return false
+	}
+	candidates, ok := usageMetadata["candidates"].([]any)
+	if ok && len(candidates) > 0 {
+		return true
+	}
+	promptFeedback, ok := usageMetadata["promptFeedback"].(map[string]any)
+	return ok && len(promptFeedback) > 0
+}
+
+func AppendUpstreamResponsesToMap(other map[string]interface{}, relayInfo *relaycommon.RelayInfo) {
+	appendUpstreamResponses(other, relayInfo)
 }
 
 func ShouldPersistSeedreamImageUsage(relayInfo *relaycommon.RelayInfo) bool {

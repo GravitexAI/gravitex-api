@@ -219,3 +219,54 @@ func TestGeminiNativeHandlerBillsTextRefusalAsTextOutput(t *testing.T) {
 	assert.Equal(t, 48, c.GetInt("gemini_text_output_tokens"))
 	assert.Equal(t, 48, usage.CompletionTokens)
 }
+
+func TestGeminiFinishAuditPreservesUsageAndExcludesCandidateContent(t *testing.T) {
+	payload := `{"candidates":[{"content":{"role":"model","parts":[{"text":"private generated content"}]},"finishReason":"IMAGE_PROHIBITED_CONTENT","finishMessage":"filtered by policy"}],"usageMetadata":{"promptTokenCount":58,"candidatesTokenCount":1120,"totalTokenCount":1178,"vendorField":"preserved"}}`
+	var response dto.GeminiChatResponse
+	require.NoError(t, common.Unmarshal([]byte(payload), &response))
+	info := &relaycommon.RelayInfo{}
+
+	recordGeminiFinishAudit(info, &response)
+
+	metadata, ok := info.UpstreamResponses["usageMetadata"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(58), metadata["promptTokenCount"])
+	assert.Equal(t, "preserved", metadata["vendorField"])
+	assert.Equal(t, "IMAGE_PROHIBITED_CONTENT", metadata["candidates"].([]any)[0].(map[string]any)["finishReason"])
+	assert.Equal(t, "filtered by policy", metadata["candidates"].([]any)[0].(map[string]any)["finishMessage"])
+	assert.NotContains(t, common.MapToJsonStr(metadata), "private generated content")
+	assert.Equal(t, 1120, response.UsageMetadata.CandidatesTokenCount, "audit metadata must not alter billing usage")
+}
+
+func TestGeminiFinishAuditOmitsStopWithoutFinishMessage(t *testing.T) {
+	stop := "STOP"
+	response := dto.GeminiChatResponse{
+		Candidates: []dto.GeminiChatCandidate{{FinishReason: &stop}},
+		UsageMetadata: dto.GeminiUsageMetadata{
+			PromptTokenCount: 58,
+			TotalTokenCount:  58,
+		},
+	}
+	info := &relaycommon.RelayInfo{}
+
+	recordGeminiFinishAudit(info, &response)
+
+	assert.Empty(t, info.UpstreamResponses)
+}
+
+func TestGeminiPromptFeedbackAuditPreservesBlockedRequestMetadata(t *testing.T) {
+	payload := `{"promptFeedback":{"blockReason":"IMAGE_SAFETY","blockReasonMessage":"The input image contains content that has been blocked by your current PersonGeneration setting. If you think this was an error, send feedback. Support code: 17301594."},"usageMetadata":{"trafficType":"ON_DEMAND"},"modelVersion":"gemini-3.1-flash-image","responseId":"K7nZaoztMPSN88EPpMTOYA"}`
+	var response dto.GeminiChatResponse
+	require.NoError(t, common.Unmarshal([]byte(payload), &response))
+	info := &relaycommon.RelayInfo{}
+
+	recordGeminiFinishAudit(info, &response)
+
+	metadata, ok := info.UpstreamResponses["usageMetadata"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "ON_DEMAND", metadata["trafficType"])
+	feedback, ok := metadata["promptFeedback"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "IMAGE_SAFETY", feedback["blockReason"])
+	assert.Contains(t, feedback["blockReasonMessage"], "PersonGeneration")
+}

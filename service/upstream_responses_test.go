@@ -93,3 +93,60 @@ func TestAppendUpstreamResponsesPersistsTargetImageModelsForImageEndpointsWhenGl
 		})
 	}
 }
+
+func TestAppendUpstreamResponsesPersistsGeminiCandidateFinishAuditWhenGlobalLoggingIsDisabled(t *testing.T) {
+	common.OptionMapRWMutex.Lock()
+	previousOptions := common.OptionMap
+	common.OptionMap = map[string]string{logUpstreamResponsesEnabledOption: "false"}
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = previousOptions
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	info := &relaycommon.RelayInfo{
+		UpstreamResponses: map[string]any{
+			"usageMetadata": map[string]any{
+				"promptTokenCount": float64(58),
+				"candidates":       []any{map[string]any{"finishReason": "IMAGE_PROHIBITED_CONTENT"}},
+			},
+		},
+	}
+	other := map[string]interface{}{}
+	appendUpstreamResponses(other, info)
+
+	responses, ok := other["upstream_responses"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, info.UpstreamResponses["usageMetadata"], responses["usageMetadata"])
+}
+
+func TestAppendUpstreamResponsesPersistsGeminiPromptFeedbackWhenGlobalLoggingIsDisabled(t *testing.T) {
+	common.OptionMapRWMutex.Lock()
+	previousOptions := common.OptionMap
+	common.OptionMap = map[string]string{logUpstreamResponsesEnabledOption: "false"}
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = previousOptions
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	info := &relaycommon.RelayInfo{
+		UpstreamResponses: map[string]any{
+			"usageMetadata": map[string]any{
+				"trafficType": "ON_DEMAND",
+				"promptFeedback": map[string]any{
+					"blockReason":        "IMAGE_SAFETY",
+					"blockReasonMessage": "blocked by PersonGeneration",
+				},
+			},
+		},
+	}
+	other := map[string]interface{}{}
+	appendUpstreamResponses(other, info)
+
+	responses, ok := other["upstream_responses"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, info.UpstreamResponses["usageMetadata"], responses["usageMetadata"])
+}

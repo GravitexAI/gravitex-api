@@ -43,6 +43,7 @@ func GeminiTextGenerationHandler(c *gin.Context, info *relaycommon.RelayInfo, re
 	if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
 		info.SetUpstreamResponsesField("usageMetadata", geminiResponse.UsageMetadata)
 	}
+	recordGeminiFinishAudit(info, &geminiResponse)
 
 	if len(geminiResponse.Candidates) == 0 && geminiResponse.PromptFeedback != nil && geminiResponse.PromptFeedback.BlockReason != nil {
 		common.SetContextKey(c, constant.ContextKeyAdminRejectReason, fmt.Sprintf("gemini_block_reason=%s", *geminiResponse.PromptFeedback.BlockReason))
