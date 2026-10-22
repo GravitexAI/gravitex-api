@@ -1369,6 +1369,21 @@ func buildUsageFromGeminiMetadata(metadata dto.GeminiUsageMetadata, fallbackProm
 			usage.PromptTokensDetails.VideoTokens += detail.TokenCount
 		}
 	}
+	// 缓存命中量的模态拆分。它与 PromptTokensDetails 描述的是同一批 token 的两
+	// 种切法，计费时用来还原「未命中缓存的各模态有多少」，不能相加。
+	for _, detail := range metadata.CacheTokensDetails {
+		mod := strings.TrimSpace(detail.Modality)
+		switch {
+		case strings.EqualFold(mod, "AUDIO"):
+			usage.PromptTokensDetails.CachedAudioTokens += detail.TokenCount
+		case strings.EqualFold(mod, "TEXT"):
+			usage.PromptTokensDetails.CachedTextTokens += detail.TokenCount
+		case strings.EqualFold(mod, "IMAGE"):
+			usage.PromptTokensDetails.CachedImageTokens += detail.TokenCount
+		case strings.EqualFold(mod, "VIDEO"):
+			usage.PromptTokensDetails.CachedVideoTokens += detail.TokenCount
+		}
+	}
 	for _, detail := range metadata.ToolUsePromptTokensDetails {
 		mod := strings.TrimSpace(detail.Modality)
 		switch {

@@ -80,6 +80,14 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 
 	img := float64(usage.PromptTokensDetails.ImageTokens)
 	ai := float64(usage.PromptTokensDetails.AudioTokens)
+	if !isClaudeUsageSemantic {
+		// 非 Claude 语义下 prompt_tokens 含缓存，模态拆分与缓存拆分切的是同一批
+		// token。只有未命中缓存的部分才按模态单价计价，否则重叠部分会先被扣减
+		// 两次、再按缓存价和模态价各计费一次。
+		fresh := resolveFreshModalityTokens(usage.PromptTokensDetails, usage.PromptTokens)
+		img = float64(fresh.Image)
+		ai = float64(fresh.Audio)
+	}
 	imgO := float64(usage.CompletionTokenDetails.ImageTokens)
 	ao := float64(usage.CompletionTokenDetails.AudioTokens)
 

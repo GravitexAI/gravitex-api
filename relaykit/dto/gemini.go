@@ -571,6 +571,9 @@ type GeminiUsageMetadata struct {
 	PromptTokensDetails        []GeminiPromptTokensDetails `json:"promptTokensDetails"`
 	ToolUsePromptTokensDetails []GeminiPromptTokensDetails `json:"toolUsePromptTokensDetails"`
 	CandidatesTokensDetails    []GeminiPromptTokensDetails `json:"candidatesTokensDetails"`
+	// CacheTokensDetails 是 CachedContentTokenCount 的模态拆分。只有当上游
+	// 对不同模态的输入分别定价时才需要它：同价时缓存由哪些模态构成不影响金额。
+	CacheTokensDetails []GeminiPromptTokensDetails `json:"cacheTokensDetails"`
 	// BillingUsage 只在进程内传递上游原始用量给计费链路，绝不下发给客户端。
 	BillingUsage *BillingUsage `json:"-"`
 }

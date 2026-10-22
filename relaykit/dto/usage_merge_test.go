@@ -232,3 +232,21 @@ func TestMergeUsageNonZeroKeepsPositiveValuesAndTakesMaxTotal(t *testing.T) {
 	assert.Equal(t, 5, merged.CompletionTokens)
 	assert.Equal(t, 20, merged.TotalTokens)
 }
+
+// 流式响应逐片合并用量时，缓存的模态拆分和其它 details 一样必须保留，
+// 否则异价模型在流式下会退化成按占比估算。
+func TestMergeGeminiUsageMetadataKeepsCacheTokensDetails(t *testing.T) {
+	merged := MergeGeminiUsageMetadataNonZero(
+		&GeminiUsageMetadata{PromptTokenCount: 35537},
+		&GeminiUsageMetadata{
+			CachedContentTokenCount: 32689,
+			CacheTokensDetails: []GeminiPromptTokensDetails{
+				{Modality: "TEXT", TokenCount: 1000},
+				{Modality: "IMAGE", TokenCount: 31689},
+			},
+		},
+	)
+
+	require.Len(t, merged.CacheTokensDetails, 2)
+	require.Equal(t, 32689, merged.CachedContentTokenCount)
+}

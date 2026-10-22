@@ -348,6 +348,21 @@ func (usage *BillingUsage) canonicalGeminiUsage() *Usage {
 	canonical.CompletionTokenDetails.ReasoningTokens = metadata.ThoughtsTokenCount
 	canonical.PromptTokensDetails.CachedTokens = metadata.CachedContentTokenCount
 
+	// 缓存命中量的模态拆分：与 PromptTokensDetails 切的是同一批 token，计费时
+	// 用来还原各模态未命中缓存的部分，丢了就只能按占比估算。
+	for _, detail := range metadata.CacheTokensDetails {
+		switch normalizeGeminiModality(detail.Modality) {
+		case "IMAGE":
+			canonical.PromptTokensDetails.CachedImageTokens += detail.TokenCount
+		case "AUDIO":
+			canonical.PromptTokensDetails.CachedAudioTokens += detail.TokenCount
+		case "VIDEO":
+			canonical.PromptTokensDetails.CachedVideoTokens += detail.TokenCount
+		case "TEXT":
+			canonical.PromptTokensDetails.CachedTextTokens += detail.TokenCount
+		}
+	}
+
 	for _, detail := range metadata.PromptTokensDetails {
 		addGeminiInputTokenDetail(&canonical.PromptTokensDetails, detail)
 	}
@@ -426,6 +441,7 @@ func cloneGeminiUsageMetadata(metadata GeminiUsageMetadata) GeminiUsageMetadata 
 	metadata.PromptTokensDetails = append([]GeminiPromptTokensDetails{}, metadata.PromptTokensDetails...)
 	metadata.ToolUsePromptTokensDetails = append([]GeminiPromptTokensDetails{}, metadata.ToolUsePromptTokensDetails...)
 	metadata.CandidatesTokensDetails = append([]GeminiPromptTokensDetails{}, metadata.CandidatesTokensDetails...)
+	metadata.CacheTokensDetails = append([]GeminiPromptTokensDetails{}, metadata.CacheTokensDetails...)
 	metadata.BillingUsage = nil
 	return metadata
 }

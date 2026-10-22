@@ -570,3 +570,28 @@ func TestGeminiStreamHandlerEmptyUsageMetadataBuildsEstimatedBillingUsage(t *tes
 	require.Equal(t, usage.CompletionTokens, usage.BillingUsage.GeminiUsageMetadata.CandidatesTokenCount)
 	require.True(t, common.GetContextKeyBool(c, constant.ContextKeyLocalCountTokens))
 }
+
+// cacheTokensDetails 是 cachedContentTokenCount 的模态拆分。上游只在各模态输入
+// 单价不同时才需要给出它，但一旦给出就是计费拆分的权威依据，不能在转换成内部
+// usage 时丢掉。
+func TestBuildUsageFromGeminiMetadataKeepsCacheTokensDetails(t *testing.T) {
+	usage := buildUsageFromGeminiMetadata(dto.GeminiUsageMetadata{
+		PromptTokenCount:        35537,
+		CachedContentTokenCount: 32689,
+		PromptTokensDetails: []dto.GeminiPromptTokensDetails{
+			{Modality: "TEXT", TokenCount: 1967},
+			{Modality: "IMAGE", TokenCount: 33570},
+		},
+		CacheTokensDetails: []dto.GeminiPromptTokensDetails{
+			{Modality: "TEXT", TokenCount: 1000},
+			{Modality: "image", TokenCount: 31689},
+		},
+	}, 0)
+
+	require.Equal(t, 32689, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 1000, usage.PromptTokensDetails.CachedTextTokens)
+	require.Equal(t, 31689, usage.PromptTokensDetails.CachedImageTokens)
+	// 模态总量仍然是整个输入的拆分，不因缓存而缩水。
+	require.Equal(t, 1967, usage.PromptTokensDetails.TextTokens)
+	require.Equal(t, 33570, usage.PromptTokensDetails.ImageTokens)
+}

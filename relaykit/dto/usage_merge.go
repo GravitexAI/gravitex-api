@@ -252,6 +252,7 @@ func MergeGeminiUsageMetadataNonZero(current *GeminiUsageMetadata, incoming *Gem
 	if incoming.CachedContentTokenCount > 0 {
 		merged.CachedContentTokenCount = incoming.CachedContentTokenCount
 	}
+	merged.CacheTokensDetails = mergeGeminiTokenDetails(merged.CacheTokensDetails, incoming.CacheTokensDetails)
 	merged.PromptTokensDetails = mergeGeminiTokenDetails(merged.PromptTokensDetails, incoming.PromptTokensDetails)
 	merged.ToolUsePromptTokensDetails = mergeGeminiTokenDetails(merged.ToolUsePromptTokensDetails, incoming.ToolUsePromptTokensDetails)
 	merged.CandidatesTokensDetails = mergeGeminiTokenDetails(merged.CandidatesTokensDetails, incoming.CandidatesTokensDetails)
