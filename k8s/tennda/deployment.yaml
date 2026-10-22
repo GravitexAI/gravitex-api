@@ -4,8 +4,6 @@ metadata:
   name: api-gateway
   namespace: prod
 spec:
-  imagePullSecrets:
-    - name: regcred
   progressDeadlineSeconds: 1800
   minReadySeconds: 15
   strategy:
@@ -21,6 +19,8 @@ spec:
       labels:
         app: api-gateway
     spec:
+      imagePullSecrets:
+        - name: regcred
       topologySpreadConstraints:
       - maxSkew: 1
         topologyKey: kubernetes.io/hostname
