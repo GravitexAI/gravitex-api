@@ -4,6 +4,8 @@ metadata:
   name: api-gateway
   namespace: prod
 spec:
+  imagePullSecrets:
+    - name: regcred
   progressDeadlineSeconds: 1800
   minReadySeconds: 15
   strategy:
