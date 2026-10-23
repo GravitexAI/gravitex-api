@@ -114,11 +114,12 @@ metadata:
   name: api-gateway-svc
   namespace: prod
 spec:
+  type: NodePort             #  改为 NodePort
   selector:
     app: api-gateway
   ports:
   - name: http
     protocol: TCP
-    port: 3000
-    targetPort: 3000
-  type: ClusterIP
+    port: 3000               
+    targetPort: 3000         
+    nodePort: 30000         
