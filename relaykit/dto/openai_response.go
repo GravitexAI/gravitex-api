@@ -303,6 +303,14 @@ type InputTokenDetails struct {
 	AudioTokens         int                  `json:"audio_tokens"`
 	ImageTokens         int                  `json:"image_tokens"`
 	VideoTokens         int                  `json:"video_tokens,omitempty"`
+	// Cached*Tokens 是 CachedTokens 在各模态上的分布（Gemini 的
+	// cacheTokensDetails）。TextTokens/ImageTokens 等按模态切的是整个输入，
+	// 含已命中缓存的部分，所以这两组字段描述的是同一批 token 的两种切法，
+	// 相加没有意义。上游未给出该拆分时这些字段为 0。
+	CachedTextTokens  int `json:"cached_text_tokens,omitempty"`
+	CachedAudioTokens int `json:"cached_audio_tokens,omitempty"`
+	CachedImageTokens int `json:"cached_image_tokens,omitempty"`
+	CachedVideoTokens int `json:"cached_video_tokens,omitempty"`
 }
 
 // CacheCreationTokensTotal returns the cache-write token count regardless of

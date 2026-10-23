@@ -56,6 +56,7 @@ type textQuotaSummary struct {
 	CacheRatio               float64
 	ImageRatio               float64
 	ImageCompletionRatio     float64
+	AudioRatio               float64
 	VideoRatio               float64
 	ModelRatio               float64
 	GroupRatio               float64
@@ -252,6 +253,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		CacheRatio:           relayInfo.PriceData.CacheRatio,
 		ImageRatio:           relayInfo.PriceData.ImageRatio,
 		ImageCompletionRatio: relayInfo.PriceData.ImageCompletionRatio,
+		AudioRatio:           relayInfo.PriceData.AudioRatio,
 		ModelRatio:           relayInfo.PriceData.ModelRatio,
 		GroupRatio:           relayInfo.PriceData.GroupRatioInfo.GroupRatio,
 		ModelPrice:           relayInfo.PriceData.ModelPrice,
@@ -283,6 +285,14 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.ImageTokens = usage.PromptTokensDetails.ImageTokens
 	summary.AudioTokens = usage.PromptTokensDetails.AudioTokens
 	summary.VideoTokens = usage.PromptTokensDetails.VideoTokens
+	if !summary.IsClaudeUsageSemantic {
+		// prompt_tokens 含缓存时，模态拆分与缓存拆分切的是同一批 token。按模态
+		// 单价计费的只能是未命中缓存的那部分，否则重叠的 token 会先被扣减两次
+		// 把 baseTokens 打成负数，再按缓存价和模态价各计费一次。Claude 语义的
+		// input_tokens 本就不含缓存，无需再扣。
+		fresh := resolveFreshModalityTokens(usage.PromptTokensDetails, usage.PromptTokens)
+		summary.ImageTokens, summary.AudioTokens, summary.VideoTokens = fresh.Image, fresh.Audio, fresh.Video
+	}
 	summary.VideoRatio = relayInfo.PriceData.VideoRatio
 	summary.ReasoningTokens = usage.CompletionTokenDetails.ReasoningTokens
 	// Gemini image/text output split: prefer context values, fallback to usage details
@@ -371,7 +381,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		}
 
 		var imageTokensWithRatio decimal.Decimal
-		if !dImageTokens.IsZero() {
+		if !dImageTokens.IsZero() && summary.ImageRatio > 0 {
 			baseTokens = baseTokens.Sub(dImageTokens)
 			imageTokensWithRatio = dImageTokens.Mul(dImageRatio)
 		}
@@ -382,7 +392,14 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 			videoTokensWithRatio = dVideoTokens.Mul(decimal.NewFromFloat(summary.VideoRatio))
 		}
 
-		if !dAudioTokens.IsZero() {
+		// 音频输入单价优先走模型配置的 AudioRatio，与图片/视频同一套倍率口径；
+		// 未配置时回退到按绝对价计价的旧特例（只覆盖少数 gemini-2.x 前缀），两者
+		// 都没有时音频等同普通文本输入，留在 baseTokens 里。
+		var audioTokensWithRatio decimal.Decimal
+		if !dAudioTokens.IsZero() && summary.AudioRatio > 0 && summary.AudioRatio != 1 {
+			baseTokens = baseTokens.Sub(dAudioTokens)
+			audioTokensWithRatio = dAudioTokens.Mul(decimal.NewFromFloat(summary.AudioRatio))
+		} else if !dAudioTokens.IsZero() {
 			summary.AudioInputPrice = operation_setting.GetGeminiInputAudioPricePerMillionTokens(summary.ModelName)
 			if summary.AudioInputPrice > 0 {
 				baseTokens = baseTokens.Sub(dAudioTokens)
@@ -399,13 +416,19 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 			baseTokens = decimal.Zero
 		}
 
-		promptQuota := baseTokens.Add(cachedTokensWithRatio).Add(imageTokensWithRatio).Add(videoTokensWithRatio).Add(cachedCreationTokensWithRatio)
+		promptQuota := baseTokens.Add(cachedTokensWithRatio).Add(imageTokensWithRatio).Add(videoTokensWithRatio).Add(audioTokensWithRatio).Add(cachedCreationTokensWithRatio)
 		var completionQuota decimal.Decimal
 		if summary.GeminiImageOutputTokens > 0 && summary.EffectiveImageOutputRatio > 0 {
 			// Gemini image/text output split billing
 			textOutputTokens := int64(summary.ReasoningTokens + summary.GeminiTextOutputTokens)
 			if textOutputTokens == 0 && summary.CompletionTokens >= summary.GeminiImageOutputTokens {
 				textOutputTokens = int64(summary.CompletionTokens - summary.GeminiImageOutputTokens)
+			}
+			// candidatesTokensDetails 还可能带回 AUDIO 等模态，它们既不属于文本档
+			// 也不属于图片档，没有自己的档位就会被整段漏掉、等于白送。统一落回文
+			// 本输出档；归档数反超 completion_tokens 时差额为负，不得冲抵。
+			if unaccounted := int64(summary.CompletionTokens-summary.GeminiImageOutputTokens) - textOutputTokens; unaccounted > 0 {
+				textOutputTokens += unaccounted
 			}
 			if textOutputTokens < 0 {
 				textOutputTokens = 0
