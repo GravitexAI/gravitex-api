@@ -373,7 +373,12 @@ func runQuotaDataPendingReclaimer() {
 			Count:    int64(maxInt(common.QuotaDataStreamBatchSize, 1)),
 		}).Result()
 		if err != nil && err != redis.Nil {
-			if isRedisUnknownCommandErr(err, "xautoclaim") {
+			// go-redis v8 按 Redis 6.2 的固定 2 元素格式解析 XAUTOCLAIM 回复；Redis 7.x 及兼容服务
+			// （如阿里云 Tair）返回 3 元素（多一个 deleted ID 列表），会触发 "got N, wanted 2" 解析报错。
+			// 这类错误同样视为 XAUTOCLAIM 不可用，降级走 XPENDING + XCLAIM。
+			unsupported := isRedisUnknownCommandErr(err, "xautoclaim") ||
+				strings.Contains(strings.ToLower(err.Error()), "wanted 2")
+			if unsupported {
 				quotaStreamAutoClaimUnsupported.Do(func() {
 					common.SysLog("[QuotaStream][Reclaimer] XAUTOCLAIM is not supported by current Redis, fallback to XPENDING + XCLAIM")
 				})
