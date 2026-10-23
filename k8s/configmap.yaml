@@ -6,28 +6,24 @@ metadata:
 data:
   PORT: |-
     3000
+  FRONTEND_BASE_URL: |-
+    https://tenndamaas.mrpoola.asia
   DEBUG: |-
     false
   ERROR_LOG_ENABLED: |-
     true
-  DISABLE_PERFORMANCE_CHECK: |-
-    true
-  ENABLE_TASK_POLLING: |-
-    true
   ENABLE_PPROF: |-
     false
-  SA_TOKEN_SECRET: |-
-    abcdefghijklmnopqrstuvwxyz
+  ENABLE_TASK_POLLING: |-
+    false
+  DISABLE_PERFORMANCE_CHECK: |-
+    true
   RUOYI_AUTH_ENABLED: |-
     true
   RUOYI_JWT_SECRET: |-
     abcdefghijklmnopqrstuvwxyz
-  GRAVITEX_API_END: |-
-    https://maas.gravitex.ai/prod-api
   SQL_DSN: |-
-    root:Gravitex2026@tcp(mysql-1c3abdf6bcb0-public.rds.bytepluses.com:3306)/gravitex_api?parseTime=true
-  LOG_SQL_DSN: |-
-    clickhouse://bytehouse:5t22Pibedd%3ARm3VWfws0z@tenant-3000990276-ap-southeast-1-public.bytehouse.bytepluses.com:19000/gravitex_api?secure=true&dial_timeout=10s
+    tennda:tennda@2026@tcp(mr-v1xrg3ho5bav1nbk3m.rwlb.singapore.rds.aliyuncs.com:3306)/tennda_api?charset=utf8mb4&parseTime=true&loc=Local&tls=false
   SQL_MAX_IDLE_CONNS: |-
     800
   SQL_MAX_OPEN_CONNS: |-
@@ -35,22 +31,20 @@ data:
   DISABLE_PREPARE_STMT: |-
     true
   REDIS_CONN_STRING: |-
-    redis://:h7j4kab0wt5@redis-mlrfidzhj48zhy87a.redis.ibytepluses.com:6379/0
+    redis://tennda:tennda%402026@r-t4nzjg0l2z8u3nx6s2.redis.singapore.rds.aliyuncs.com:6379/0
   REDIS_POOL_SIZE: |-
-    500
+    100
   BATCH_UPDATE_ENABLED: |-
     true
   BATCH_UPDATE_INTERVAL: |-
     5
-  SQL_SKIP_MIGRATION: |-
-    true
   SESSION_SECRET: |-
-    your_random_session_secret_for_development_12345
-  STREAMING_TIMEOUT: |-
-    600
+    20e750a77aaeeb023b98b02b231400484be0ea372c0430f5a398e996066bee18
   NODE_TYPE: |-
     master
   RELAY_MAX_IDLE_CONNS: |-
     1000
   RELAY_MAX_IDLE_CONNS_PER_HOST: |-
     500
+  GRAVITEX_API_END: |-
+    https://tenndamaas.mrpoola.asia/prod-api
