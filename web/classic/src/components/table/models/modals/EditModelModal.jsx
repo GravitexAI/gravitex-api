@@ -48,6 +48,7 @@ const ENDPOINT_TEMPLATE = {
   'openai-response-compact': { path: '/v1/responses/compact', method: 'POST' },
   anthropic: { path: '/v1/messages', method: 'POST' },
   gemini: { path: '/v1beta/models/{model}:generateContent', method: 'POST' },
+  'gemini-interactions': { path: '/v1beta/interactions', method: 'POST' },
   'jina-rerank': { path: '/v1/rerank', method: 'POST' },
   'image-generation': { path: '/v1/images/generations', method: 'POST' },
 };
@@ -128,6 +129,7 @@ const EditModelModal = (props) => {
 
   const getInitValues = () => ({
     model_name: props.editingModel?.model_name || '',
+    model_nick_name: '',
     description: '',
     description_en: '',
     icon: '',
@@ -222,6 +224,7 @@ const EditModelModal = (props) => {
     try {
       const submitData = {
         ...values,
+        model_nick_name: values.model_nick_name || '',
         tags: Array.isArray(values.tags) ? values.tags.join(',') : values.tags,
         tags_en: Array.isArray(values.tags_en)
           ? values.tags_en.join(',')
@@ -341,6 +344,14 @@ const EditModelModal = (props) => {
                       label={t('模型名称')}
                       placeholder={t('请输入模型名称，如：gpt-4')}
                       rules={[{ required: true, message: t('请输入模型名称') }]}
+                      showClear
+                    />
+                  </Col>
+
+                  <Col span={24}>
+                    <Form.Input
+                      field='model_nick_name'
+                      label={t('Model Nickname')}
                       showClear
                     />
                   </Col>
