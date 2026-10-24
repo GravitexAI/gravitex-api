@@ -19,7 +19,7 @@ data:
   DISABLE_PERFORMANCE_CHECK: |-
     true
   RUOYI_AUTH_ENABLED: |-
-    true
+    false
   RUOYI_JWT_SECRET: |-
     abcdefghijklmnopqrstuvwxyz
   SQL_DSN: |-
@@ -42,8 +42,6 @@ data:
     20e750a77aaeeb023b98b02b231400484be0ea372c0430f5a398e996066bee18
   NODE_TYPE: |-
     slave
-  RUOYI_AUTH_ENABLED: |-
-    false
   RELAY_MAX_IDLE_CONNS: |-
     1000
   RELAY_MAX_IDLE_CONNS_PER_HOST: |-
