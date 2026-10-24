@@ -5282,25 +5282,6 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
-    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "Disabled channels will be marked as deleted; their records and keys will remain in the database.",
-    "Proxy": "Proxy",
-    "Proxy mode": "Proxy mode",
-    "No proxy": "No proxy",
-    "Fixed proxy": "Fixed proxy",
-    "Failed to load proxy list": "Failed to load proxy list",
-    "Requests go out directly without any proxy.": "Requests go out directly without any proxy.",
-    "Rotates over the proxy pool by time slice (5 minutes by default, independent per channel). Falls back to a direct connection when the pool is empty.": "Rotates over the proxy pool by time slice (5 minutes by default, independent per channel). Falls back to a direct connection when the pool is empty.",
-    "Proxy pool scope": "Proxy pool scope",
-    "Public only": "Public only",
-    "All proxies": "All proxies",
-    "All regions": "All regions",
-    "Test proxy pool": "Test proxy pool",
-    "{{count}} proxies in the pool": "{{count}} proxies in the pool",
-    "Only the first {{limit}} will be tested": "Only the first {{limit}} will be tested",
-    "Select a proxy": "Select a proxy",
-    "Current value (not in proxy list)": "Current value (not in proxy list)",
-    "Internal": "Internal",
-    "This proxy is not in the proxy list. It is kept as long as you do not change it; picking another option replaces it.": "This proxy is not in the proxy list. It is kept as long as you do not change it; picking another option replaces it.",
-    "Test proxy": "Test proxy"
+    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "Disabled channels will be marked as deleted; their records and keys will remain in the database."
   }
 }

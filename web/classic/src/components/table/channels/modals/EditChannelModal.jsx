@@ -65,11 +65,6 @@ import ModelSelectModal from './ModelSelectModal';
 import SingleModelSelectModal from './SingleModelSelectModal';
 import OllamaModelModal from './OllamaModelModal';
 import ParamOverrideEditorModal from './ParamOverrideEditorModal';
-import ChannelProxyPanel, {
-  PROXY_RANDOM,
-  PROXY_RANDOM_SCOPE_ALL,
-  PROXY_RANDOM_SCOPE_PUBLIC,
-} from './ChannelProxyPanel';
 import MockAISettingsPanel, {
   MOCK_AI_SETTINGS_KEY,
   normalizeMockAIConfig,
@@ -235,8 +230,6 @@ const EditChannelModal = (props) => {
     force_format: false,
     thinking_to_content: false,
     proxy: '',
-    proxy_random_regions: [],
-    proxy_random_scope: PROXY_RANDOM_SCOPE_PUBLIC,
     pass_through_body_enabled: false,
     system_prompt: '',
     system_prompt_override: false,
@@ -573,8 +566,6 @@ const EditChannelModal = (props) => {
     force_format: false,
     thinking_to_content: false,
     proxy: '',
-    proxy_random_regions: [],
-    proxy_random_scope: PROXY_RANDOM_SCOPE_PUBLIC,
     pass_through_body_enabled: false,
     system_prompt: '',
   });
@@ -998,13 +989,6 @@ const EditChannelModal = (props) => {
           data.thinking_to_content =
             parsedSettings.thinking_to_content || false;
           data.proxy = parsedSettings.proxy || '';
-          data.proxy_random_regions = Array.isArray(parsedSettings.proxy_random_regions)
-            ? parsedSettings.proxy_random_regions
-            : [];
-          data.proxy_random_scope =
-            parsedSettings.proxy_random_scope === PROXY_RANDOM_SCOPE_ALL
-              ? PROXY_RANDOM_SCOPE_ALL
-              : PROXY_RANDOM_SCOPE_PUBLIC;
           data.pass_through_body_enabled =
             parsedSettings.pass_through_body_enabled || false;
           data.system_prompt = parsedSettings.system_prompt || '';
@@ -1015,8 +999,6 @@ const EditChannelModal = (props) => {
           data.force_format = false;
           data.thinking_to_content = false;
           data.proxy = '';
-          data.proxy_random_regions = [];
-          data.proxy_random_scope = PROXY_RANDOM_SCOPE_PUBLIC;
           data.pass_through_body_enabled = false;
           data.system_prompt = '';
           data.system_prompt_override = false;
@@ -1025,8 +1007,6 @@ const EditChannelModal = (props) => {
         data.force_format = false;
         data.thinking_to_content = false;
         data.proxy = '';
-        data.proxy_random_regions = [];
-        data.proxy_random_scope = PROXY_RANDOM_SCOPE_PUBLIC;
         data.pass_through_body_enabled = false;
         data.system_prompt = '';
         data.system_prompt_override = false;
@@ -1168,8 +1148,6 @@ const EditChannelModal = (props) => {
         force_format: data.force_format,
         thinking_to_content: data.thinking_to_content,
         proxy: data.proxy,
-        proxy_random_regions: data.proxy_random_regions,
-        proxy_random_scope: data.proxy_random_scope,
         pass_through_body_enabled: data.pass_through_body_enabled,
         system_prompt: data.system_prompt,
         system_prompt_override: data.system_prompt_override || false,
@@ -1554,8 +1532,6 @@ const EditChannelModal = (props) => {
       force_format: false,
       thinking_to_content: false,
       proxy: '',
-      proxy_random_regions: [],
-      proxy_random_scope: PROXY_RANDOM_SCOPE_PUBLIC,
       pass_through_body_enabled: false,
       system_prompt: '',
       system_prompt_override: false,
@@ -1945,21 +1921,11 @@ const EditChannelModal = (props) => {
     const channelExtraSettings = {
       force_format: localInputs.force_format || false,
       thinking_to_content: localInputs.thinking_to_content || false,
-      proxy: (channelSettings.proxy || '').trim(),
+      proxy: localInputs.proxy || '',
       pass_through_body_enabled: localInputs.pass_through_body_enabled || false,
       system_prompt: localInputs.system_prompt || '',
       system_prompt_override: localInputs.system_prompt_override || false,
     };
-    // 随机池筛选只对随机渠道有意义。后端更新时会合并 setting JSON，只有值为 null 的 key 才会被删除，
-    // 所以用不到的筛选必须显式传 null，否则旧值会残留
-    const isRandomProxy = channelExtraSettings.proxy === PROXY_RANDOM;
-    channelExtraSettings.proxy_random_regions =
-      isRandomProxy && channelSettings.proxy_random_regions?.length
-        ? channelSettings.proxy_random_regions
-        : null;
-    channelExtraSettings.proxy_random_scope = isRandomProxy
-      ? channelSettings.proxy_random_scope || PROXY_RANDOM_SCOPE_PUBLIC
-      : null;
     localInputs.setting = JSON.stringify(channelExtraSettings);
 
     // 处理 settings 字段（包括企业账户设置和字段透传控制）
@@ -2112,8 +2078,6 @@ const EditChannelModal = (props) => {
     delete localInputs.force_format;
     delete localInputs.thinking_to_content;
     delete localInputs.proxy;
-    delete localInputs.proxy_random_regions;
-    delete localInputs.proxy_random_scope;
     delete localInputs.pass_through_body_enabled;
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
@@ -2860,12 +2824,7 @@ const EditChannelModal = (props) => {
                   <Form.Switch field='thinking_to_content' label={t('思考内容转换')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('thinking_to_content', value)} extraText={t('将 reasoning_content 转换为 <think> 标签拼接到内容中')} />
                   <Form.Switch field='pass_through_body_enabled' label={t('透传请求体')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('pass_through_body_enabled', value)} extraText={t('启用请求体透传功能')} />
 
-                  <ChannelProxyPanel
-                    proxy={channelSettings.proxy}
-                    regions={channelSettings.proxy_random_regions}
-                    scope={channelSettings.proxy_random_scope}
-                    onChange={handleChannelSettingsChange}
-                  />
+                  <Form.Input field='proxy' label={t('代理地址')} placeholder={t('例如: socks5://user:pass@host:port')} onChange={(value) => handleChannelSettingsChange('proxy', value)} showClear extraText={t('用于配置网络代理，支持 socks5 协议')} />
 
                   <Form.TextArea field='system_prompt' label={t('系统提示词')} placeholder={t('输入系统提示词，用户的系统提示词将优先于此设置')} onChange={(value) => handleChannelSettingsChange('system_prompt', value)} autosize showClear extraText={t('用户优先：如果用户在请求中指定了系统提示词，将优先使用用户的设置')} />
                   <Form.Switch field='system_prompt_override' label={t('系统提示词拼接')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('system_prompt_override', value)} extraText={t('如果用户请求中包含系统提示词，则使用此设置拼接到用户的系统提示词前面')} />

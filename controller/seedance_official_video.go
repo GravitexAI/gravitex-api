@@ -50,7 +50,7 @@ func RelayTaskCancel(c *gin.Context) {
 		return
 	}
 
-	proxy := ch.GetEffectiveProxy()
+	proxy := ch.GetSetting().Proxy
 	resp, err := cancelAdaptor.CancelTask(ch.GetBaseURL(), ch.Key, task.GetUpstreamTaskID(), proxy)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"message": err.Error(), "code": "UpstreamError"}})

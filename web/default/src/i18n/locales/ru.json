@@ -5282,25 +5282,6 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
-    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "Отключённые каналы будут помечены как удалённые; их записи и ключи останутся в базе данных.",
-    "Proxy": "Прокси",
-    "Proxy mode": "Режим прокси",
-    "No proxy": "Без прокси",
-    "Fixed proxy": "Фиксированный прокси",
-    "Failed to load proxy list": "Не удалось загрузить список прокси",
-    "Requests go out directly without any proxy.": "Запросы отправляются напрямую, без прокси.",
-    "Rotates over the proxy pool by time slice (5 minutes by default, independent per channel). Falls back to a direct connection when the pool is empty.": "Прокси из пула меняются по временным интервалам (по умолчанию 5 минут, отдельно для каждого канала). Если пул пуст, используется прямое подключение.",
-    "Proxy pool scope": "Область пула",
-    "Public only": "Только публичные",
-    "All proxies": "Все прокси",
-    "All regions": "Все регионы",
-    "Test proxy pool": "Проверить пул прокси",
-    "{{count}} proxies in the pool": "Прокси в пуле: {{count}}",
-    "Only the first {{limit}} will be tested": "Будут проверены только первые {{limit}}",
-    "Select a proxy": "Выберите прокси",
-    "Current value (not in proxy list)": "Текущее значение (нет в списке прокси)",
-    "Internal": "Внутренний",
-    "This proxy is not in the proxy list. It is kept as long as you do not change it; picking another option replaces it.": "Этого прокси нет в списке. Он сохранится, если его не менять; выбор другого варианта заменит его.",
-    "Test proxy": "Проверить прокси"
+    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "Отключённые каналы будут помечены как удалённые; их записи и ключи останутся в базе данных."
   }
 }

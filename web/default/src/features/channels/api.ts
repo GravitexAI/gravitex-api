@@ -19,7 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { getGroups as getUserGroups } from '@/features/users/api'
 import { api, type ApiRequestConfig } from '@/lib/api'
 
-import type { ChannelProxyOption } from './lib/channel-proxy'
 import type {
   AddChannelRequest,
   BatchDeleteParams,
@@ -50,36 +49,6 @@ const channelActionConfig = (
 })
 
 export type TaskPluginOption = { key: string; name: string; models: string[] }
-
-export type ChannelProxyOptionsResponse = {
-  success: boolean
-  message?: string
-  data?: { items: ChannelProxyOption[]; regions: string[] }
-}
-
-export type ChannelProxyTestResponse = {
-  success: boolean
-  message?: string
-  data?: { ok: boolean; latency_ms: number; error: string }
-}
-
-/** Proxy list (public and internal) for the channel proxy selector. */
-export async function getChannelProxyOptions(): Promise<ChannelProxyOptionsResponse> {
-  const res = await api.get('/api/channel/proxy_options', channelActionConfig())
-  return res.data
-}
-
-/** Validate a proxy URL and measure one request through it. */
-export async function testChannelProxy(
-  proxy: string
-): Promise<ChannelProxyTestResponse> {
-  const res = await api.post(
-    '/api/channel/test_proxy',
-    { proxy },
-    channelActionConfig()
-  )
-  return res.data
-}
 
 export async function getTaskPluginOptions(): Promise<TaskPluginOption[]> {
   const response = await api.get<{

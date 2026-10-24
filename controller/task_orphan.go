@@ -84,7 +84,7 @@ func cancelOrphanUpstreamTask(c *gin.Context, info *relaycommon.RelayInfo, task 
 
 	proxy := ""
 	if channel, err := model.CacheGetChannel(info.ChannelId); err == nil && channel != nil {
-		proxy = channel.GetEffectiveProxy()
+		proxy = channel.GetSetting().Proxy
 	}
 	resp, err := cancelAdaptor.CancelTask(info.ChannelBaseUrl, info.ApiKey, upstreamTaskID, proxy)
 	if err != nil {

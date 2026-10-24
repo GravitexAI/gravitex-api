@@ -909,10 +909,7 @@ func setupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelName, channel.Name)
 	common.SetContextKey(c, constant.ContextKeyChannelType, channel.Type)
 	common.SetContextKey(c, constant.ContextKeyChannelCreateTime, channel.CreatedTime)
-	// Resolve the random proxy once per request so a long stream stays on one proxy.
-	channelSetting := channel.GetSetting()
-	channelSetting.Proxy = model.ResolveChannelProxy(channel.Id, channelSetting)
-	common.SetContextKey(c, constant.ContextKeyChannelSetting, channelSetting)
+	common.SetContextKey(c, constant.ContextKeyChannelSetting, channel.GetSetting())
 	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, channel.GetOtherSettings())
 	if channel.Type == constant.ChannelTypeTaskPlugin {
 		c.Set("task_plugin_key", channel.GetSetting().TaskPluginKey)

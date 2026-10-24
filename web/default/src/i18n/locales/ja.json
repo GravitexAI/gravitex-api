@@ -5282,25 +5282,6 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
     "Zoom": "ズーム",
-    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "無効なチャネルは削除済みとしてマークされます。チャネル情報とキーはデータベースに保持されます。",
-    "Proxy": "プロキシ",
-    "Proxy mode": "プロキシモード",
-    "No proxy": "設定しない",
-    "Fixed proxy": "固定プロキシ",
-    "Failed to load proxy list": "プロキシ一覧の読み込みに失敗しました",
-    "Requests go out directly without any proxy.": "プロキシを使わず直接接続します。",
-    "Rotates over the proxy pool by time slice (5 minutes by default, independent per channel). Falls back to a direct connection when the pool is empty.": "プロキシプールをタイムスライスごとに切り替えます（既定 5 分、チャネルごとに独立）。プールが空の場合は直接接続にフォールバックします。",
-    "Proxy pool scope": "プール範囲",
-    "Public only": "公開のみ",
-    "All proxies": "すべてのプロキシ",
-    "All regions": "すべての地域",
-    "Test proxy pool": "プロキシプールをテスト",
-    "{{count}} proxies in the pool": "プール内のプロキシ {{count}} 件",
-    "Only the first {{limit}} will be tested": "先頭の {{limit}} 件のみテストします",
-    "Select a proxy": "プロキシを選択",
-    "Current value (not in proxy list)": "現在の値（プロキシ一覧にありません）",
-    "Internal": "内部",
-    "This proxy is not in the proxy list. It is kept as long as you do not change it; picking another option replaces it.": "このプロキシは一覧にありません。変更しなければそのまま保持され、別の項目を選ぶと置き換わります。",
-    "Test proxy": "このプロキシをテスト"
+    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "無効なチャネルは削除済みとしてマークされます。チャネル情報とキーはデータベースに保持されます。"
   }
 }

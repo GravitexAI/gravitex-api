@@ -3920,24 +3920,6 @@
     "默认档位：": "Default profile: ",
     "默认测试模型": "Default Test Model",
     "默认用户消息": "Default User Message",
-    "默认补全倍率": "Default completion ratio",
-    "代理": "Proxy",
-    "不设置": "No proxy",
-    "指定代理机": "Fixed proxy",
-    "加载代理列表失败": "Failed to load proxy list",
-    "出站直连，不走任何代理。": "Requests go out directly without any proxy.",
-    "从代理池按时间片轮换（默认 5 分钟/片，每渠道独立）；池为空时降级直连。": "Rotates over the proxy pool by time slice (5 minutes by default, independent per channel). Falls back to a direct connection when the pool is empty.",
-    "池范围": "Pool scope",
-    "仅对外": "Public only",
-    "全部代理": "All proxies",
-    "全部地区": "All regions",
-    "测试随机池": "Test proxy pool",
-    "当前池子 {{count}} 条": "{{count}} proxies in the pool",
-    "池子过大，仅测试前 {{limit}} 个": "Only the first {{limit}} will be tested",
-    "请选择代理机": "Select a proxy",
-    "当前值（不在代理表）": "Current value (not in proxy list)",
-    "内部": "Internal",
-    "当前值不在代理表里，不改动即保留；切换其他选项即替换。": "This proxy is not in the proxy list. It is kept as long as you do not change it; picking another option replaces it.",
-    "测试该代理": "Test proxy"
+    "默认补全倍率": "Default completion ratio"
   }
 }

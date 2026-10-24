@@ -186,7 +186,6 @@ import { ParamOverrideEditorDialog } from '../dialogs/param-override-editor-dial
 import { StatusCodeRiskDialog } from '../dialogs/status-code-risk-dialog'
 import { ModelCostDiscountEditor } from '../model-cost-discount-editor'
 import { ModelMappingEditor } from '../model-mapping-editor'
-import { ChannelProxyField } from './channel-proxy-field'
 import {
   ChannelAdvancedSection,
   ChannelApiAccessSection,
@@ -289,8 +288,6 @@ const SENSITIVE_FORM_FIELDS = [
   'force_format',
   'thinking_to_content',
   'proxy',
-  'proxy_random_regions',
-  'proxy_random_scope',
   'http_protocol',
   'http2_connection_shards',
   'pass_through_body_enabled',
@@ -4341,9 +4338,28 @@ export function ChannelMutateDrawer({
                               />
                             </div>
 
-                            <ChannelProxyField
-                              form={form}
-                              disabled={sensitiveLocked}
+                            <FormField
+                              control={form.control}
+                              name='proxy'
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>{t('Proxy Address')}</FormLabel>
+                                  <FormControl>
+                                    <Input
+                                      placeholder={t(
+                                        'socks5://user:pass@host:port'
+                                      )}
+                                      {...field}
+                                    />
+                                  </FormControl>
+                                  <FormDescription>
+                                    {t(
+                                      'Network proxy for this channel (supports HTTP, HTTPS, SOCKS5, and SOCKS5H)'
+                                    )}
+                                  </FormDescription>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
                             />
 
                             <FormField

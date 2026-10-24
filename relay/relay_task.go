@@ -1017,7 +1017,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool, rawMirror bool) [
 	if channelModel.GetBaseURL() != "" {
 		baseURL = channelModel.GetBaseURL()
 	}
-	proxy := channelModel.GetEffectiveProxy()
+	proxy := channelModel.GetSetting().Proxy
 	adaptor := GetTaskAdaptor(constant.TaskPlatform(strconv.Itoa(channelModel.Type)))
 	if adaptor == nil {
 		return nil

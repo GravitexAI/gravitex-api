@@ -5282,25 +5282,6 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
-    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "Các kênh bị vô hiệu hóa sẽ được đánh dấu là đã xóa; bản ghi và khóa vẫn được giữ trong cơ sở dữ liệu.",
-    "Proxy": "Proxy",
-    "Proxy mode": "Chế độ proxy",
-    "No proxy": "Không dùng proxy",
-    "Fixed proxy": "Proxy cố định",
-    "Failed to load proxy list": "Không tải được danh sách proxy",
-    "Requests go out directly without any proxy.": "Yêu cầu được gửi trực tiếp, không qua proxy.",
-    "Rotates over the proxy pool by time slice (5 minutes by default, independent per channel). Falls back to a direct connection when the pool is empty.": "Luân phiên proxy trong pool theo khung thời gian (mặc định 5 phút, độc lập theo từng kênh). Khi pool trống sẽ chuyển sang kết nối trực tiếp.",
-    "Proxy pool scope": "Phạm vi pool",
-    "Public only": "Chỉ công khai",
-    "All proxies": "Tất cả proxy",
-    "All regions": "Tất cả khu vực",
-    "Test proxy pool": "Kiểm tra pool proxy",
-    "{{count}} proxies in the pool": "{{count}} proxy trong pool",
-    "Only the first {{limit}} will be tested": "Chỉ kiểm tra {{limit}} proxy đầu tiên",
-    "Select a proxy": "Chọn proxy",
-    "Current value (not in proxy list)": "Giá trị hiện tại (không có trong danh sách proxy)",
-    "Internal": "Nội bộ",
-    "This proxy is not in the proxy list. It is kept as long as you do not change it; picking another option replaces it.": "Proxy này không có trong danh sách. Nếu không thay đổi thì sẽ được giữ nguyên; chọn mục khác sẽ thay thế.",
-    "Test proxy": "Kiểm tra proxy"
+    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "Các kênh bị vô hiệu hóa sẽ được đánh dấu là đã xóa; bản ghi và khóa vẫn được giữ trong cơ sở dữ liệu."
   }
 }
