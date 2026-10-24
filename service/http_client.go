@@ -185,7 +185,11 @@ func warnLegacyProxyURLOnce(config *proxyURLConfig) {
 }
 
 // NormalizeProxyURL validates a proxy URL using runtime-compatible rules and returns its canonical cache key.
+// The random sentinel is returned as-is so change detection still works for random channels.
 func NormalizeProxyURL(rawProxyURL string) (string, error) {
+	if strings.TrimSpace(rawProxyURL) == dto.ProxyRandom {
+		return dto.ProxyRandom, nil
+	}
 	parsedURL, legacySuffixStripped, err := common.ParseProxyURLRuntime(rawProxyURL)
 	if err != nil {
 		return "", err

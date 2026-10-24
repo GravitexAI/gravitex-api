@@ -1208,7 +1208,13 @@ func (channel *Channel) ValidateSettings() error {
 			return err
 		}
 	}
-	if _, err := common.ParseProxyURLStrict(channelParams.Proxy); err != nil {
+	if strings.TrimSpace(channelParams.Proxy) == dto.ProxyRandom {
+		switch channelParams.ProxyRandomScope {
+		case "", dto.ProxyRandomScopePublic, dto.ProxyRandomScopeAll:
+		default:
+			return fmt.Errorf("invalid proxy_random_scope: must be %q or %q", dto.ProxyRandomScopePublic, dto.ProxyRandomScopeAll)
+		}
+	} else if _, err := common.ParseProxyURLStrict(channelParams.Proxy); err != nil {
 		return fmt.Errorf("invalid channel proxy: %w", err)
 	}
 	if err := channelParams.ValidateHTTPTransport(); err != nil {

@@ -34,6 +34,12 @@ import {
   stringifyAdvancedCustomConfig,
   validateAdvancedCustomConfig,
 } from './advanced-custom'
+import {
+  PROXY_RANDOM,
+  PROXY_RANDOM_SCOPE_ALL,
+  PROXY_RANDOM_SCOPE_PUBLIC,
+  type ProxyRandomScope,
+} from './channel-proxy'
 
 // ============================================================================
 // Form Validation Schema
@@ -48,7 +54,7 @@ const SUPPORTED_PROXY_PROTOCOLS = new Set([
 
 function isOptionalProxyURL(value: string | undefined): boolean {
   const trimmedValue = value?.trim() || ''
-  if (!trimmedValue) return true
+  if (!trimmedValue || trimmedValue === PROXY_RANDOM) return true
 
   const schemeSeparatorIndex = trimmedValue.indexOf('://')
   if (schemeSeparatorIndex <= 0) return false
@@ -290,6 +296,8 @@ export const channelFormSchema = z
       .string()
       .optional()
       .refine(isOptionalProxyURL, ERROR_MESSAGES.INVALID_PROXY),
+    proxy_random_regions: z.array(z.string()).optional(),
+    proxy_random_scope: z.enum(['public', 'all']).optional(),
     http_protocol: z.enum(['auto', 'http1']).optional(),
     http2_connection_shards: z.number().int().optional(),
     pass_through_body_enabled: z.boolean().optional(),
@@ -478,6 +486,8 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   force_format: false,
   thinking_to_content: false,
   proxy: '',
+  proxy_random_regions: [],
+  proxy_random_scope: PROXY_RANDOM_SCOPE_PUBLIC,
   http_protocol: HTTP_PROTOCOL_AUTO,
   http2_connection_shards: 1,
   pass_through_body_enabled: false,
@@ -520,6 +530,8 @@ export function transformChannelToFormDefaults(
     force_format: false,
     thinking_to_content: false,
     proxy: '',
+    proxy_random_regions: [] as string[],
+    proxy_random_scope: PROXY_RANDOM_SCOPE_PUBLIC as ProxyRandomScope,
     http_protocol: HTTP_PROTOCOL_AUTO as 'auto' | 'http1',
     http2_connection_shards: 1,
     pass_through_body_enabled: false,
@@ -539,6 +551,15 @@ export function transformChannelToFormDefaults(
         force_format: parsed.force_format || false,
         thinking_to_content: parsed.thinking_to_content || false,
         proxy: parsed.proxy || '',
+        proxy_random_regions: Array.isArray(parsed.proxy_random_regions)
+          ? parsed.proxy_random_regions.filter(
+              (region: unknown): region is string => typeof region === 'string'
+            )
+          : [],
+        proxy_random_scope:
+          parsed.proxy_random_scope === PROXY_RANDOM_SCOPE_ALL
+            ? PROXY_RANDOM_SCOPE_ALL
+            : PROXY_RANDOM_SCOPE_PUBLIC,
         http_protocol: protocol,
         http2_connection_shards: protocol === HTTP_PROTOCOL_HTTP1 ? 1 : shards,
         pass_through_body_enabled: parsed.pass_through_body_enabled || false,
@@ -692,6 +713,18 @@ export function buildSettingJSON(formData: ChannelFormValues): string {
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,
   }
+
+  // Random-pool filters only mean something for random channels. The backend
+  // merges setting JSON on update and only deletes keys sent as null, so unused
+  // filters must be sent as null explicitly or stale values survive.
+  const isRandomProxy = settingObj.proxy === PROXY_RANDOM
+  settingObj.proxy_random_regions =
+    isRandomProxy && formData.proxy_random_regions?.length
+      ? formData.proxy_random_regions
+      : null
+  settingObj.proxy_random_scope = isRandomProxy
+    ? formData.proxy_random_scope || PROXY_RANDOM_SCOPE_PUBLIC
+    : null
 
   const protocol = normalizeHttpProtocol(formData.http_protocol)
   const shards =

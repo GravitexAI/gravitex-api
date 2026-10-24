@@ -12,10 +12,16 @@ import (
 )
 
 type ChannelSettings struct {
-	TaskPluginKey          string `json:"task_plugin_key,omitempty"`
-	ForceFormat            bool   `json:"force_format,omitempty"`
-	ThinkingToContent      bool   `json:"thinking_to_content,omitempty"`
-	Proxy                  string `json:"proxy"`
+	TaskPluginKey     string `json:"task_plugin_key,omitempty"`
+	ForceFormat       bool   `json:"force_format,omitempty"`
+	ThinkingToContent bool   `json:"thinking_to_content,omitempty"`
+	// Proxy: "" = direct, "random" = rotate over the supplier_channel_proxy pool,
+	// any other value = a fixed proxy URL.
+	Proxy string `json:"proxy"`
+	// ProxyRandomRegions limits the random pool to these regions; empty = all regions.
+	ProxyRandomRegions []string `json:"proxy_random_regions,omitempty"`
+	// ProxyRandomScope selects the random pool: "public" (default) or "all".
+	ProxyRandomScope       string `json:"proxy_random_scope,omitempty"`
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
@@ -26,6 +32,13 @@ type ChannelSettings struct {
 	// (1-8). Zero/unset means 1. Ignored when HTTPProtocol is "http1".
 	HTTP2ConnectionShards int `json:"http2_connection_shards,omitempty"`
 }
+
+const (
+	// ProxyRandom is the ChannelSettings.Proxy sentinel for random pool rotation.
+	ProxyRandom            = "random"
+	ProxyRandomScopePublic = "public"
+	ProxyRandomScopeAll    = "all"
+)
 
 const (
 	HTTPProtocolAuto         = "auto"

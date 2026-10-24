@@ -194,12 +194,14 @@ func initTaskArtifactAdaptor(task *model.Task) (relaychannel.TaskAdaptor, error)
 	if baseURL == "" {
 		baseURL = constant.GetChannelBaseURL(channelModel.Type)
 	}
+	channelSetting := channelModel.GetSetting()
+	channelSetting.Proxy = channelModel.GetEffectiveProxy()
 	adaptor.Init(&relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelType:    channelModel.Type,
 			ChannelBaseUrl: baseURL,
 			ApiKey:         pluginKey,
-			ChannelSetting: channelModel.GetSetting(),
+			ChannelSetting: channelSetting,
 		},
 	})
 	return adaptor, nil

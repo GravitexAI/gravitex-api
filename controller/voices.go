@@ -129,8 +129,7 @@ func buildVoicesUpstreamRequest(channel *model.Channel) (string, http.Header, er
 			base = ""
 		}
 		upstreamURL := vertex.BuildAPIBaseURL(base, "v1beta1", credentials.ProjectID, "global") + "/voices"
-		setting := channel.GetSetting()
-		accessToken, err := voicesAccessToken(channel, credentials, setting.Proxy)
+		accessToken, err := voicesAccessToken(channel, credentials, channel.GetEffectiveProxy())
 		if err != nil {
 			return "", nil, fmt.Errorf("acquire vertex access token failed: %w", err)
 		}

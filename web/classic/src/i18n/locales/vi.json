@@ -4299,6 +4299,24 @@
     "默认档位：": "Hồ sơ mặc định: ",
     "默认测试模型": "Mô hình kiểm tra mặc định",
     "默认用户消息": "Xin chào",
-    "默认补全倍率": "Tỷ lệ hoàn thành mặc định"
+    "默认补全倍率": "Tỷ lệ hoàn thành mặc định",
+    "代理": "Proxy",
+    "不设置": "Không dùng proxy",
+    "指定代理机": "Proxy cố định",
+    "加载代理列表失败": "Không tải được danh sách proxy",
+    "出站直连，不走任何代理。": "Yêu cầu được gửi trực tiếp, không qua proxy.",
+    "从代理池按时间片轮换（默认 5 分钟/片，每渠道独立）；池为空时降级直连。": "Luân phiên proxy trong pool theo khung thời gian (mặc định 5 phút, độc lập theo từng kênh). Khi pool trống sẽ chuyển sang kết nối trực tiếp.",
+    "池范围": "Phạm vi pool",
+    "仅对外": "Chỉ công khai",
+    "全部代理": "Tất cả proxy",
+    "全部地区": "Tất cả khu vực",
+    "测试随机池": "Kiểm tra pool proxy",
+    "当前池子 {{count}} 条": "{{count}} proxy trong pool",
+    "池子过大，仅测试前 {{limit}} 个": "Chỉ kiểm tra {{limit}} proxy đầu tiên",
+    "请选择代理机": "Chọn proxy",
+    "当前值（不在代理表）": "Giá trị hiện tại (không có trong danh sách proxy)",
+    "内部": "Nội bộ",
+    "当前值不在代理表里，不改动即保留；切换其他选项即替换。": "Proxy này không có trong danh sách. Nếu không thay đổi thì sẽ được giữ nguyên; chọn mục khác sẽ thay thế.",
+    "测试该代理": "Kiểm tra proxy"
   }
 }

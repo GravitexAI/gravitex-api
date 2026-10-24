@@ -119,7 +119,7 @@ func getAssetChannelBaseURL(ch *model.Channel) string {
 }
 
 func assetHTTPClient(ch *model.Channel) (*http.Client, error) {
-	proxy := ch.GetSetting().Proxy
+	proxy := ch.GetEffectiveProxy()
 	return service.GetHttpClientWithProxy(proxy)
 }
 

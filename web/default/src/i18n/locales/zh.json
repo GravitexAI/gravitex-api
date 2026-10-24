@@ -5282,6 +5282,25 @@
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
     "Zoom": "缩放",
-    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。"
+    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。",
+    "Proxy": "代理",
+    "Proxy mode": "代理模式",
+    "No proxy": "不设置",
+    "Fixed proxy": "指定代理机",
+    "Failed to load proxy list": "加载代理列表失败",
+    "Requests go out directly without any proxy.": "出站直连，不走任何代理。",
+    "Rotates over the proxy pool by time slice (5 minutes by default, independent per channel). Falls back to a direct connection when the pool is empty.": "从代理池按时间片轮换（默认 5 分钟/片，每渠道独立）；池为空时降级直连。",
+    "Proxy pool scope": "池范围",
+    "Public only": "仅对外",
+    "All proxies": "全部代理",
+    "All regions": "全部地区",
+    "Test proxy pool": "测试随机池",
+    "{{count}} proxies in the pool": "当前池子 {{count}} 条",
+    "Only the first {{limit}} will be tested": "池子过大，仅测试前 {{limit}} 个",
+    "Select a proxy": "请选择代理机",
+    "Current value (not in proxy list)": "当前值（不在代理表）",
+    "Internal": "内部",
+    "This proxy is not in the proxy list. It is kept as long as you do not change it; picking another option replaces it.": "当前值不在代理表里，不改动即保留；切换其他选项即替换。",
+    "Test proxy": "测试该代理"
   }
 }

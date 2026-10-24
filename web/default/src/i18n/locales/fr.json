@@ -5282,6 +5282,25 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom",
-    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "Les canaux désactivés seront marqués comme supprimés ; leurs enregistrements et clés resteront dans la base de données."
+    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "Les canaux désactivés seront marqués comme supprimés ; leurs enregistrements et clés resteront dans la base de données.",
+    "Proxy": "Proxy",
+    "Proxy mode": "Mode proxy",
+    "No proxy": "Aucun proxy",
+    "Fixed proxy": "Proxy fixe",
+    "Failed to load proxy list": "Échec du chargement de la liste des proxys",
+    "Requests go out directly without any proxy.": "Les requêtes sortent directement, sans proxy.",
+    "Rotates over the proxy pool by time slice (5 minutes by default, independent per channel). Falls back to a direct connection when the pool is empty.": "Alterne entre les proxys du pool par tranche de temps (5 minutes par défaut, indépendamment pour chaque canal). Bascule en connexion directe si le pool est vide.",
+    "Proxy pool scope": "Portée du pool",
+    "Public only": "Publics uniquement",
+    "All proxies": "Tous les proxys",
+    "All regions": "Toutes les régions",
+    "Test proxy pool": "Tester le pool de proxys",
+    "{{count}} proxies in the pool": "{{count}} proxys dans le pool",
+    "Only the first {{limit}} will be tested": "Seuls les {{limit}} premiers seront testés",
+    "Select a proxy": "Sélectionnez un proxy",
+    "Current value (not in proxy list)": "Valeur actuelle (absente de la liste)",
+    "Internal": "Interne",
+    "This proxy is not in the proxy list. It is kept as long as you do not change it; picking another option replaces it.": "Ce proxy n'est pas dans la liste. Il est conservé tant que vous ne le modifiez pas ; choisir une autre option le remplace.",
+    "Test proxy": "Tester le proxy"
   }
 }
