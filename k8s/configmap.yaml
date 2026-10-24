@@ -15,7 +15,7 @@ data:
   ENABLE_PPROF: |-
     false
   ENABLE_TASK_POLLING: |-
-    false
+    true
   DISABLE_PERFORMANCE_CHECK: |-
     true
   RUOYI_AUTH_ENABLED: |-
@@ -33,7 +33,7 @@ data:
   REDIS_CONN_STRING: |-
     redis://tennda:tennda%402026@r-t4nzjg0l2z8u3nx6s2.redis.singapore.rds.aliyuncs.com:6379/0
   REDIS_POOL_SIZE: |-
-    100
+    500
   BATCH_UPDATE_ENABLED: |-
     true
   BATCH_UPDATE_INTERVAL: |-
@@ -41,7 +41,9 @@ data:
   SESSION_SECRET: |-
     20e750a77aaeeb023b98b02b231400484be0ea372c0430f5a398e996066bee18
   NODE_TYPE: |-
-    master
+    slave
+  RUOYI_AUTH_ENABLED: |-
+    false
   RELAY_MAX_IDLE_CONNS: |-
     1000
   RELAY_MAX_IDLE_CONNS_PER_HOST: |-
