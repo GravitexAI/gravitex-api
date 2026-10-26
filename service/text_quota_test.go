@@ -1048,6 +1048,19 @@ func TestCalculateTextToolCallSurchargeKeepsSearchPreviewFallbackWithCustomFunct
 	assert.True(t, expected.Equal(surcharge), "got %s want %s", surcharge, expected)
 }
 
+func TestCollectToolSurchargeItemSkipsBlankToolNames(t *testing.T) {
+	operation_setting.SetToolPriceForTest("", 5)
+	operation_setting.SetToolPriceForTest(" ", 5)
+	t.Cleanup(func() {
+		operation_setting.DeleteToolPriceForTest("")
+		operation_setting.DeleteToolPriceForTest(" ")
+	})
+
+	items := collectToolSurchargeItem(nil, "", 1, "model")
+	items = collectToolSurchargeItem(items, "  ", 1, "model")
+	require.Empty(t, items)
+}
+
 func TestCalculateTextToolCallSurchargeDoesNotInferSearchForResponses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())

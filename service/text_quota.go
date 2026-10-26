@@ -117,7 +117,7 @@ func isLegacyClaudeDerivedOpenAIUsage(relayInfo *relaycommon.RelayInfo, usage *d
 }
 
 func collectToolSurchargeItem(items []ToolSurchargeItem, name string, count int, modelName string) []ToolSurchargeItem {
-	if count <= 0 {
+	if strings.TrimSpace(name) == "" || count <= 0 {
 		return items
 	}
 	price := operation_setting.GetToolPriceForModel(name, modelName)
