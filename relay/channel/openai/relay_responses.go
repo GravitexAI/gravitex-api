@@ -1,9 +1,13 @@
 package openai
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -36,7 +40,8 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	}
 	info.UpstreamResponseId = responsesResponse.ID
 
-	// 写入新的 response body
+	// 写入新的 response body（Meta 的整数值浮点时间戳先归一化为整数再透传）
+	responseBody = normalizeResponsesTimestamps(responseBody)
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	// compute usage
@@ -226,4 +231,91 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 
 	return usage, nil
+}
+
+// responsesTimestampFields 是 /v1/responses 响应中需要归一化为整数编码的时间戳字段。
+// Meta 等上游会把它们编码成整数值浮点（例：1792990141.0），与 OpenAI 规范以及
+// Meta 自己文档示例中的 integer Unix 秒都不一致，严格解析的客户端会解析失败。
+var responsesTimestampFields = [...]string{"created_at", "completed_at"}
+
+var (
+	responsesCreatedAtMarker   = []byte("created_at")
+	responsesCompletedAtMarker = []byte("completed_at")
+)
+
+// normalizeResponsesTimestamps 把响应对象顶层的 created_at / completed_at
+// 从整数值浮点改写为标准整数编码，其余字段的值保持原始字节不变。
+// 解析失败或值已是整数编码时原样返回，对 OpenAI 等上游零影响。
+func normalizeResponsesTimestamps(body []byte) []byte {
+	if !bytes.Contains(body, responsesCreatedAtMarker) && !bytes.Contains(body, responsesCompletedAtMarker) {
+		return body
+	}
+	var top map[string]json.RawMessage
+	if err := common.Unmarshal(body, &top); err != nil {
+		return body
+	}
+	changed := false
+	for _, field := range responsesTimestampFields {
+		raw, ok := top[field]
+		if !ok {
+			continue
+		}
+		norm, ok := normalizeTimestampBytes(raw)
+		if !ok {
+			continue
+		}
+		top[field] = norm
+		changed = true
+	}
+	if !changed {
+		return body
+	}
+	if out, err := common.Marshal(top); err == nil {
+		return out
+	}
+	return body
+}
+
+// normalizeResponsesEventTimestamps 处理流式事件：时间戳位于 response 子对象内。
+// 不含时间戳的事件（如 output_text.delta）原样返回，不产生额外分配。
+func normalizeResponsesEventTimestamps(data string) string {
+	if !strings.Contains(data, "created_at") && !strings.Contains(data, "completed_at") {
+		return data
+	}
+	var top map[string]json.RawMessage
+	if err := common.Unmarshal([]byte(data), &top); err != nil {
+		return data
+	}
+	respRaw, ok := top["response"]
+	if !ok {
+		return data
+	}
+	patched := normalizeResponsesTimestamps(respRaw)
+	if bytes.Equal(patched, respRaw) {
+		return data
+	}
+	top["response"] = patched
+	if out, err := common.Marshal(top); err == nil {
+		return string(out)
+	}
+	return data
+}
+
+// normalizeTimestampBytes 把单个时间戳字段从整数值浮点归一化为整数编码。
+// null、字符串、布尔、已是整数编码、非整数或超出 int 范围的浮点都不改写，
+// 只有整数值浮点（例：1792990141.0、1.792987007e9）会被改写。
+func normalizeTimestampBytes(raw []byte) ([]byte, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	var num json.Number
+	if err := common.Unmarshal(trimmed, &num); err != nil {
+		return nil, false
+	}
+	if _, err := num.Int64(); err == nil {
+		return nil, false
+	}
+	f, err := num.Float64()
+	if err != nil || f != math.Trunc(f) || f >= math.MaxInt64 || f < math.MinInt64 {
+		return nil, false
+	}
+	return []byte(strconv.FormatInt(int64(f), 10)), true
 }

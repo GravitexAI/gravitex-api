@@ -351,7 +351,9 @@ type OutputTokenDetails struct {
 type OpenAIResponsesResponse struct {
 	ID                 string             `json:"id"`
 	Object             string             `json:"object"`
-	CreatedAt          int                `json:"created_at"`
+	// CreatedAt 用 IntValue：部分上游（如 Meta /v1/responses）把时间戳编码成
+	// 整数值浮点（例：1792987007.0），std json 无法直接解进 int 会导致整个响应解析失败。
+	CreatedAt          IntValue           `json:"created_at"`
 	Status             json.RawMessage    `json:"status"`
 	Error              any                `json:"error,omitempty"`
 	IncompleteDetails  *IncompleteDetails `json:"incomplete_details,omitempty"`
