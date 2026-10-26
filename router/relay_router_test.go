@@ -89,6 +89,79 @@ func TestListModelsSupportsOpenAIAndGeminiAuthentication(t *testing.T) {
 	}
 }
 
+func TestListModelsAllowsExhaustedTokenOnlyForCatalog(t *testing.T) {
+	setupRelayRouterTestDB(t)
+
+	user := model.User{
+		Username: "exhausted-models-user",
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+		Quota:    100,
+	}
+	require.NoError(t, model.DB.Create(&user).Error)
+	tokens := []model.Token{
+		{UserId: user.Id, Key: "exhaustedmodelkey", Status: common.TokenStatusExhausted, ExpiredTime: -1},
+		{UserId: user.Id, Key: "enabledzeromodelkey", Status: common.TokenStatusEnabled, ExpiredTime: -1, RemainQuota: 0},
+		{UserId: user.Id, Key: "expiredmodelkey", Status: common.TokenStatusExhausted, ExpiredTime: common.GetTimestamp() - 1},
+		{UserId: user.Id, Key: "disabledmodelkey", Status: common.TokenStatusDisabled, ExpiredTime: -1},
+	}
+	for i := range tokens {
+		require.NoError(t, model.DB.Create(&tokens[i]).Error)
+	}
+
+	engine := gin.New()
+	SetRelayRouter(engine)
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		headerName string
+		key        string
+		wantStatus int
+	}{
+		{name: "OpenAI catalog", path: "/v1/models", headerName: "Authorization", key: "exhaustedmodelkey", wantStatus: http.StatusOK},
+		{name: "enabled token with zero quota transitions to exhausted", path: "/v1/models", headerName: "Authorization", key: "enabledzeromodelkey", wantStatus: http.StatusOK},
+		{name: "Gemini catalog with API key header", path: "/v1/models", headerName: "x-goog-api-key", key: "exhaustedmodelkey", wantStatus: http.StatusOK},
+		{name: "Gemini catalog with API key query", path: "/v1/models?key=exhaustedmodelkey", key: "exhaustedmodelkey", wantStatus: http.StatusOK},
+		{name: "Gemini v1beta catalog", path: "/v1beta/models", headerName: "x-goog-api-key", key: "exhaustedmodelkey", wantStatus: http.StatusOK},
+		{name: "Gemini OpenAI-compatible catalog", path: "/v1beta/openai/models", headerName: "Authorization", key: "exhaustedmodelkey", wantStatus: http.StatusOK},
+		{name: "expired token", path: "/v1/models", headerName: "Authorization", key: "expiredmodelkey", wantStatus: http.StatusUnauthorized},
+		{name: "disabled token", path: "/v1/models", headerName: "Authorization", key: "disabledmodelkey", wantStatus: http.StatusUnauthorized},
+		{name: "model detail", path: "/v1/models/gpt-4o", headerName: "Authorization", key: "exhaustedmodelkey", wantStatus: http.StatusUnauthorized},
+		{name: "billable relay", method: http.MethodPost, path: "/v1/chat/completions", headerName: "Authorization", key: "exhaustedmodelkey", wantStatus: http.StatusUnauthorized},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			method := test.method
+			if method == "" {
+				method = http.MethodGet
+			}
+			var request *http.Request
+			if method == http.MethodPost {
+				request = httptest.NewRequest(method, test.path, strings.NewReader(`{"model":"gpt-4o"}`))
+			} else {
+				request = httptest.NewRequest(method, test.path, nil)
+			}
+			if test.headerName != "" {
+				value := test.key
+				if test.headerName == "Authorization" {
+					value = "Bearer " + value
+				}
+				request.Header.Set(test.headerName, value)
+			}
+			engine.ServeHTTP(recorder, request)
+			require.Equal(t, test.wantStatus, recorder.Code)
+			if test.key == "enabledzeromodelkey" {
+				token, err := model.GetTokenByKey(test.key, true)
+				require.NoError(t, err)
+				assert.Equal(t, common.TokenStatusExhausted, token.Status)
+			}
+		})
+	}
+}
+
 func setupRelayRouterTestDB(t *testing.T) {
 	t.Helper()
 

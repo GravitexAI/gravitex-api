@@ -584,6 +584,15 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 }
 
 func TokenAuth() func(c *gin.Context) {
+	return tokenAuth(false)
+}
+
+// TokenAuthForModelList permits exhausted tokens to read model catalogs.
+func TokenAuthForModelList() func(c *gin.Context) {
+	return tokenAuth(true)
+}
+
+func tokenAuth(allowExhausted bool) func(c *gin.Context) {
 	return func(c *gin.Context) {
 		// 先检测是否为ws
 		if c.Request.Header.Get("Sec-WebSocket-Protocol") != "" {
@@ -641,7 +650,13 @@ func TokenAuth() func(c *gin.Context) {
 			parts = strings.Split(key, "-")
 			key = parts[0]
 		}
-		token, err := model.ValidateUserToken(key)
+		var token *model.Token
+		var err error
+		if allowExhausted {
+			token, err = model.ValidateUserTokenForModelList(key)
+		} else {
+			token, err = model.ValidateUserToken(key)
+		}
 		if token != nil {
 			id := c.GetInt("id")
 			if id == 0 {

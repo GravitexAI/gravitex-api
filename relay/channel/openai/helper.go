@@ -244,5 +244,6 @@ func sendResponsesStreamData(c *gin.Context, streamResponse dto.ResponsesStreamR
 	if data == "" {
 		return
 	}
-	_ = helper.ResponseChunkData(c, streamResponse, data)
+	// Meta 的整数值浮点时间戳归一化为整数后透传
+	_ = helper.ResponseChunkData(c, streamResponse, normalizeResponsesEventTimestamps(data))
 }

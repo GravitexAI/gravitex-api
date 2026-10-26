@@ -50,7 +50,7 @@ spec:
               sysctl -w net.ipv4.tcp_keepalive_probes=3
       containers:
         - name: api-gateway
-          image: tennda-registry-vpc.ap-southeast-1.cr.aliyuncs.com/tennda-maas-pro/api-gateway:1.0.11
+          image: tennda-registry-vpc.ap-southeast-1.cr.aliyuncs.com/tennda-maas-pro/api-gateway:1.0.12
           ports:
             - containerPort: 3000
           env:
@@ -134,7 +134,7 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: api-gateway
-  minReplicas: 8
+  minReplicas: 5
   maxReplicas: 14
   metrics:
     - type: Resource

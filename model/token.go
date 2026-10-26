@@ -220,14 +220,22 @@ func SearchUserTokens(userId int, keyword string, token string, offset int, limi
 }
 
 func ValidateUserToken(key string) (token *Token, err error) {
+	return validateUserToken(key, false)
+}
+
+// ValidateUserTokenForModelList validates a token for read-only model discovery.
+func ValidateUserTokenForModelList(key string) (token *Token, err error) {
+	return validateUserToken(key, true)
+}
+
+func validateUserToken(key string, allowExhausted bool) (token *Token, err error) {
 	if key == "" {
 		return nil, ErrTokenNotProvided
 	}
 	token, err = GetTokenByKey(key, false)
 	if err == nil {
-		if token.Status == common.TokenStatusExhausted ||
-			token.Status == common.TokenStatusExpired ||
-			token.Status != common.TokenStatusEnabled {
+		if token.Status == common.TokenStatusExpired ||
+			(token.Status != common.TokenStatusEnabled && !(allowExhausted && token.Status == common.TokenStatusExhausted)) {
 			return token, ErrTokenInvalid
 		}
 		if token.ExpiredTime != -1 && token.ExpiredTime < common.GetTimestamp() {
@@ -248,7 +256,9 @@ func ValidateUserToken(key string) (token *Token, err error) {
 					common.SysLog("failed to update token status" + err.Error())
 				}
 			}
-			return token, ErrTokenInvalid
+			if !allowExhausted {
+				return token, ErrTokenInvalid
+			}
 		}
 		return token, nil
 	}
