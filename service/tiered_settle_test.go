@@ -1108,3 +1108,71 @@ func BenchmarkRatioBilling_Parallel(b *testing.B) {
 		}
 	})
 }
+
+// ---------------------------------------------------------------------------
+// OpenAI 12h cache writes (cache_write_tokens_details.ttl_12h_tokens)
+// ---------------------------------------------------------------------------
+
+// gpt-6.1-terra style expression: official 30m write 1.25x input, 12h 2.5x.
+const terraCacheExpr = `p <= 272000 ? tier("short", p * 1 + c * 5 + cr * 0.05 + cc * 1.25) : tier("long", p * 2 + c * 7.5 + cr * 0.1 + cc * 2.5)`
+
+func TestBuildTieredTokenParamsWeights12hCacheWritesDouble(t *testing.T) {
+	usage := &dto.Usage{PromptTokens: 10_000}
+	usage.PromptTokensDetails.CachedTokens = 2_000
+	usage.PromptTokensDetails.CacheWriteTokens = 3_000
+	usage.PromptTokensDetails.CacheWriteTokensDetails = &dto.CacheWriteTokensDetails{
+		Ttl30mTokens: 1_000,
+		Ttl12hTokens: 2_000,
+	}
+
+	params := BuildTieredTokenParams(usage, false, billingexpr.UsedVars(terraCacheExpr))
+	// cc is the priced (weighted) count: 1000 + 2*2000 = 5000.
+	assert.Equal(t, 5000.0, params.CC)
+	// p keeps the raw deduction: 10000 - 2000 cr - 3000 cc = 5000.
+	assert.Equal(t, 5000.0, params.P)
+	assert.Equal(t, 2000.0, params.CR)
+
+	// cost = p*1 + cr*0.05 + cc*1.25 = 5000 + 100 + 6250 = 11350 ($/1M)
+	cost, _, err := billingexpr.RunExpr(terraCacheExpr, params)
+	require.NoError(t, err)
+	assert.Equal(t, 11350.0, cost)
+}
+
+func TestBuildTieredTokenParamsWithoutTTTDetailsBillsRawCC(t *testing.T) {
+	// Azure-style usage: cache_write_tokens total only, no TTL breakdown.
+	usage := &dto.Usage{PromptTokens: 10_000}
+	usage.PromptTokensDetails.CachedTokens = 2_000
+	usage.PromptTokensDetails.CacheWriteTokens = 3_000
+
+	params := BuildTieredTokenParams(usage, false, billingexpr.UsedVars(terraCacheExpr))
+	assert.Equal(t, 3000.0, params.CC)
+	assert.Equal(t, 5000.0, params.P)
+}
+
+func TestBuildTieredTokenParamsClampsOversized12hDetail(t *testing.T) {
+	// Defensive: an upstream reporting 12h tokens beyond the reported total
+	// must not inflate billing; the weight is capped by the raw total.
+	usage := &dto.Usage{PromptTokens: 10_000}
+	usage.PromptTokensDetails.CacheWriteTokens = 3_000
+	usage.PromptTokensDetails.CacheWriteTokensDetails = &dto.CacheWriteTokensDetails{
+		Ttl12hTokens: 9_999,
+	}
+
+	params := BuildTieredTokenParams(usage, false, billingexpr.UsedVars(terraCacheExpr))
+	assert.Equal(t, 3000.0, params.CC)
+}
+
+func TestBuildTieredTokenParamsClaudeSemanticIgnoresOpenAIDetails(t *testing.T) {
+	// Claude semantics price cc/cc1h from Claude fields; OpenAI TTL details
+	// leaked into the struct must not affect them.
+	usage := &dto.Usage{PromptTokens: 1_000}
+	usage.UsageSemantic = "anthropic"
+	usage.ClaudeCacheCreation5mTokens = 500
+	usage.PromptTokensDetails.CacheWriteTokensDetails = &dto.CacheWriteTokensDetails{
+		Ttl12hTokens: 400,
+	}
+
+	params := BuildTieredTokenParams(usage, true, billingexpr.UsedVars(cacheExpr))
+	assert.Equal(t, 500.0, params.CC)
+	assert.Equal(t, 0.0, params.CC1h)
+}

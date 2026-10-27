@@ -290,6 +290,15 @@ type CachedTokensDetails struct {
 	ImageTokens int `json:"image_tokens"`
 }
 
+// CacheWriteTokensDetails is OpenAI's TTL breakdown of cache_write_tokens
+// (gpt-5.6+). ttl_30m_tokens and ttl_12h_tokens never overlap and always sum
+// to cache_write_tokens. The 12h tier exists since 2026-10-20 (Responses API
+// only); Azure reports cache writes but not this breakdown.
+type CacheWriteTokensDetails struct {
+	Ttl30mTokens int `json:"ttl_30m_tokens"`
+	Ttl12hTokens int `json:"ttl_12h_tokens"`
+}
+
 type InputTokenDetails struct {
 	CachedTokens         int `json:"cached_tokens"`
 	CachedCreationTokens int `json:"cached_creation_tokens,omitempty"`
@@ -297,12 +306,13 @@ type InputTokenDetails struct {
 	// prompt_tokens_details.cache_write_tokens (Chat Completions) or
 	// input_tokens_details.cache_write_tokens (Responses). It is billed at the
 	// cache-creation price. (gpt-5.6+)
-	CacheWriteTokens    int                  `json:"cache_write_tokens,omitempty"`
-	CachedTokensDetails *CachedTokensDetails `json:"cached_tokens_details,omitempty"`
-	TextTokens          int                  `json:"text_tokens"`
-	AudioTokens         int                  `json:"audio_tokens"`
-	ImageTokens         int                  `json:"image_tokens"`
-	VideoTokens         int                  `json:"video_tokens,omitempty"`
+	CacheWriteTokens        int                      `json:"cache_write_tokens,omitempty"`
+	CacheWriteTokensDetails *CacheWriteTokensDetails `json:"cache_write_tokens_details,omitempty"`
+	CachedTokensDetails     *CachedTokensDetails     `json:"cached_tokens_details,omitempty"`
+	TextTokens              int                      `json:"text_tokens"`
+	AudioTokens             int                      `json:"audio_tokens"`
+	ImageTokens             int                      `json:"image_tokens"`
+	VideoTokens             int                      `json:"video_tokens,omitempty"`
 	// Cached*Tokens 是 CachedTokens 在各模态上的分布（Gemini 的
 	// cacheTokensDetails）。TextTokens/ImageTokens 等按模态切的是整个输入，
 	// 含已命中缓存的部分，所以这两组字段描述的是同一批 token 的两种切法，
@@ -349,8 +359,8 @@ type OutputTokenDetails struct {
 }
 
 type OpenAIResponsesResponse struct {
-	ID                 string             `json:"id"`
-	Object             string             `json:"object"`
+	ID     string `json:"id"`
+	Object string `json:"object"`
 	// CreatedAt 用 IntValue：部分上游（如 Meta /v1/responses）把时间戳编码成
 	// 整数值浮点（例：1792987007.0），std json 无法直接解进 int 会导致整个响应解析失败。
 	CreatedAt          IntValue           `json:"created_at"`

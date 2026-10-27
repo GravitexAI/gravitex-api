@@ -39,13 +39,17 @@ func appendToolSurchargeLogInfo(other *model.LogOther, items []ToolSurchargeItem
 }
 
 type textQuotaSummary struct {
-	PromptTokens             int
-	CompletionTokens         int
-	TotalTokens              int
-	CacheTokens              int
-	CacheCreationTokens      int
-	CacheCreationTokens5m    int
-	CacheCreationTokens1h    int
+	PromptTokens          int
+	CompletionTokens      int
+	TotalTokens           int
+	CacheTokens           int
+	CacheCreationTokens   int
+	CacheCreationTokens5m int
+	CacheCreationTokens1h int
+	// CacheCreationTokens12h 是 OpenAI cache_write_tokens_details 里 12h 档的
+	// 写入数，按 CacheCreationRatio 的 2 倍计费（官方 12h 写入 = 2 × 30m 写入）。
+	// 已含在 CacheCreationTokens 里，不要重复扣 prompt。
+	CacheCreationTokens12h   int
 	ImageTokens              int
 	AudioTokens              int
 	VideoTokens              int
@@ -282,6 +286,12 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.CacheCreationTokens = usage.PromptTokensDetails.CacheCreationTokensTotal()
 	summary.CacheCreationTokens5m = usage.ClaudeCacheCreation5mTokens
 	summary.CacheCreationTokens1h = usage.ClaudeCacheCreation1hTokens
+	// OpenAI 12h 写入拆档（gpt-5.6+，Responses API；Azure 不返回）。 defensive：
+	// 上游异常放大时以 CacheCreationTokens 为上限，避免多扣。
+	if d := usage.PromptTokensDetails.CacheWriteTokensDetails; d != nil &&
+		d.Ttl12hTokens > 0 && d.Ttl12hTokens <= summary.CacheCreationTokens {
+		summary.CacheCreationTokens12h = d.Ttl12hTokens
+	}
 	summary.ImageTokens = usage.PromptTokensDetails.ImageTokens
 	summary.AudioTokens = usage.PromptTokensDetails.AudioTokens
 	summary.VideoTokens = usage.PromptTokensDetails.VideoTokens
@@ -369,6 +379,12 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 			if !summary.IsClaudeUsageSemantic && !legacyClaudeDerived {
 				baseTokens = baseTokens.Sub(dCachedCreationTokens)
 				cachedCreationTokensWithRatio = dCachedCreationTokens.Mul(dCacheCreationRatio)
+				// 12h 写入额外补一档写入价（合计 12h × 2 × CacheCreationRatio），
+				// 对齐官方 12h 写入价 = 2 × 30m 写入价。token 已含在
+				// CacheCreationTokens 里并已从 baseTokens 扣除，这里只补差价。
+				if summary.CacheCreationTokens12h > 0 {
+					cachedCreationTokensWithRatio = cachedCreationTokensWithRatio.Add(decimal.NewFromInt(int64(summary.CacheCreationTokens12h)).Mul(dCacheCreationRatio))
+				}
 			} else {
 				remaining := summary.CacheCreationTokens - summary.CacheCreationTokens5m - summary.CacheCreationTokens1h
 				if remaining < 0 {
@@ -717,6 +733,10 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if summary.CacheCreationTokens1h > 0 {
 		other.SetPublic("cache_creation_tokens_1h", summary.CacheCreationTokens1h)
 		other.SetPublic("cache_creation_ratio_1h", summary.CacheCreationRatio1h)
+	}
+	if summary.CacheCreationTokens12h > 0 {
+		// 12h 写入已含在 cache_creation_tokens 里，这里仅拆分展示。
+		other.SetPublic("cache_creation_tokens_12h", summary.CacheCreationTokens12h)
 	}
 	cacheWriteTokens := cacheWriteTokensTotal(summary)
 	if cacheWriteTokens > 0 {

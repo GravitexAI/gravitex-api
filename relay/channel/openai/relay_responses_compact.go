@@ -38,6 +38,7 @@ func OaiResponsesCompactionHandler(c *gin.Context, resp *http.Response) (*dto.Us
 		if compactResp.Usage.InputTokensDetails != nil {
 			usage.PromptTokensDetails.CachedTokens = compactResp.Usage.InputTokensDetails.CachedTokens
 			usage.PromptTokensDetails.CacheWriteTokens = compactResp.Usage.InputTokensDetails.CacheWriteTokens
+			usage.PromptTokensDetails.CacheWriteTokensDetails = compactResp.Usage.InputTokensDetails.CacheWriteTokensDetails
 			usage.PromptTokensDetails.TextTokens = compactResp.Usage.InputTokensDetails.TextTokens
 			usage.PromptTokensDetails.AudioTokens = compactResp.Usage.InputTokensDetails.AudioTokens
 			usage.PromptTokensDetails.ImageTokens = compactResp.Usage.InputTokensDetails.ImageTokens

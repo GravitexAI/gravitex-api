@@ -78,6 +78,18 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		cc5m = float64(usage.ClaudeCacheCreation5mTokens)
 	}
 
+	// OpenAI 12h 缓存写入（cache_write_tokens_details.ttl_12h_tokens）按 30m
+	// 写入价的 2 倍计费：官方定价 12h 写入恒为 30m 写入的 2 倍（2.5x vs 1.25x
+	// input，短/长上下文两档都成立）。只加权计价变量 cc——下方 p 的扣减仍用
+	// 原始 token 数，虚拟权重不能再从新鲜输入 token 里扣一次。
+	ccPriced := cc5m
+	if usage.UsageSemantic != "anthropic" {
+		if d := usage.PromptTokensDetails.CacheWriteTokensDetails; d != nil &&
+			d.Ttl12hTokens > 0 && float64(d.Ttl12hTokens) <= cc5m {
+			ccPriced += float64(d.Ttl12hTokens)
+		}
+	}
+
 	img := float64(usage.PromptTokensDetails.ImageTokens)
 	ai := float64(usage.PromptTokensDetails.AudioTokens)
 	if !isClaudeUsageSemantic {
@@ -137,7 +149,7 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		C:    c,
 		Len:  inputLen,
 		CR:   cr,
-		CC:   cc5m,
+		CC:   ccPriced,
 		CC1h: cc1h,
 		Img:  img,
 		ImgO: imgO,

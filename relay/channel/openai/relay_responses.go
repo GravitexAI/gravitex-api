@@ -53,6 +53,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		if responsesResponse.Usage.InputTokensDetails != nil {
 			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
 			usage.PromptTokensDetails.CacheWriteTokens = responsesResponse.Usage.InputTokensDetails.CacheWriteTokens
+			usage.PromptTokensDetails.CacheWriteTokensDetails = responsesResponse.Usage.InputTokensDetails.CacheWriteTokensDetails
 			usage.PromptTokensDetails.TextTokens = responsesResponse.Usage.InputTokensDetails.TextTokens
 			usage.PromptTokensDetails.AudioTokens = responsesResponse.Usage.InputTokensDetails.AudioTokens
 			usage.PromptTokensDetails.ImageTokens = responsesResponse.Usage.InputTokensDetails.ImageTokens
@@ -151,6 +152,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					if streamResponse.Response.Usage.InputTokensDetails != nil {
 						usage.PromptTokensDetails.CachedTokens = streamResponse.Response.Usage.InputTokensDetails.CachedTokens
 						usage.PromptTokensDetails.CacheWriteTokens = streamResponse.Response.Usage.InputTokensDetails.CacheWriteTokens
+						usage.PromptTokensDetails.CacheWriteTokensDetails = streamResponse.Response.Usage.InputTokensDetails.CacheWriteTokensDetails
 						usage.PromptTokensDetails.TextTokens = streamResponse.Response.Usage.InputTokensDetails.TextTokens
 						usage.PromptTokensDetails.AudioTokens = streamResponse.Response.Usage.InputTokensDetails.AudioTokens
 						usage.PromptTokensDetails.ImageTokens = streamResponse.Response.Usage.InputTokensDetails.ImageTokens
