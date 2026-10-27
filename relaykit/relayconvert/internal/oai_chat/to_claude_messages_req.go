@@ -2,6 +2,7 @@ package oaichat
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	"context"
@@ -122,10 +123,13 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 	}
 
 	formatMessages := make([]dto.Message, 0)
+	// sourceIndexes[i] 为 formatMessages[i] 在客户端原始 messages 中的下标，
+	// 同角色字符串合并会改变下标，报错定位需用原始下标。
+	sourceIndexes := make([]int, 0, len(textRequest.Messages))
 	lastMessage := dto.Message{
 		Role: "tool",
 	}
-	for _, message := range textRequest.Messages {
+	for sourceIndex, message := range textRequest.Messages {
 		switch message.Role {
 		case "":
 			message.Role = "user"
@@ -159,12 +163,14 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 			if lastMessage.IsStringContent() && message.IsStringContent() {
 				fmtMessage.SetStringContent(fmt.Sprintf("%s %s", lastMessage.StringContent(), message.StringContent()))
 				formatMessages = formatMessages[:len(formatMessages)-1]
+				sourceIndexes = sourceIndexes[:len(sourceIndexes)-1]
 			}
 		}
 		if fmtMessage.Content == nil || (fmtMessage.IsStringContent() && fmtMessage.StringContent() == "") {
 			fmtMessage.SetStringContent("...")
 		}
 		formatMessages = append(formatMessages, fmtMessage)
+		sourceIndexes = append(sourceIndexes, sourceIndex)
 		lastMessage = fmtMessage
 	}
 
@@ -214,6 +220,10 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 			Role: message.Role,
 		}
 		if message.Role == "tool" {
+			toolResultContent, err := claudeToolResultContent(c, message.Content, sourceIndexes[messageIndex])
+			if err != nil {
+				return nil, err
+			}
 			if len(claudeMessages) > 0 && claudeMessages[len(claudeMessages)-1].Role == "user" {
 				lastClaudeMessage := claudeMessages[len(claudeMessages)-1]
 				if content, ok := lastClaudeMessage.Content.(string); ok {
@@ -227,7 +237,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 				lastClaudeMessage.Content = append(lastClaudeMessage.Content.([]dto.ClaudeMediaMessage), dto.ClaudeMediaMessage{
 					Type:      "tool_result",
 					ToolUseId: message.ToolCallId,
-					Content:   message.Content,
+					Content:   toolResultContent,
 				})
 				claudeMessages[len(claudeMessages)-1] = lastClaudeMessage
 				continue
@@ -238,7 +248,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 				{
 					Type:      "tool_result",
 					ToolUseId: message.ToolCallId,
-					Content:   message.Content,
+					Content:   toolResultContent,
 				},
 			}
 		} else if message.IsStringContent() && message.ToolCalls == nil {
@@ -322,4 +332,102 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		return nil, sharedclaude.ErrMissingMaxTokens
 	}
 	return &claudeRequest, nil
+}
+
+// claudeToolResultContent 把 OpenAI 工具消息内容转换为 Claude tool_result.content。
+//
+// OpenAI 官方工具消息只允许文本，部分客户端会扩展放入 image_url / file 块（截图、读取的文件）。
+// 只转换这两类块为 Claude image / document；其余块（text、Claude 原生块、未知类型）
+// 保持原始 map 透传，cache_control 等字段不丢失，合法性交由上游裁决。
+// 不含需转换块的内容（字符串、纯文本数组）原样返回，与改动前行为一致。
+func claudeToolResultContent(c context.Context, content any, sourceIndex int) (any, error) {
+	parts, ok := content.([]any)
+	if !ok {
+		return content, nil
+	}
+	needsConversion := false
+	for _, part := range parts {
+		if partType := toolResultPartType(part); partType == dto.ContentTypeImageURL || partType == dto.ContentTypeFile {
+			needsConversion = true
+			break
+		}
+	}
+	if !needsConversion {
+		return content, nil
+	}
+
+	converted := make([]any, 0, len(parts))
+	for partIndex, part := range parts {
+		partType := toolResultPartType(part)
+		if partType != dto.ContentTypeImageURL && partType != dto.ContentTypeFile {
+			converted = append(converted, part)
+			continue
+		}
+		location := fmt.Sprintf("messages[%d](tool).content[%d]", sourceIndex, partIndex)
+
+		// 复用 ParseContent 解析单个块，与普通 user 消息的字段解析规则保持一致
+		partMessage := dto.Message{Content: []any{part}}
+		parsed := partMessage.ParseContent()
+		var source types.FileSource
+		if len(parsed) == 1 {
+			source = parsed[0].ToFileSource()
+		}
+		if source == nil {
+			return nil, types.NewErrorWithStatusCode(
+				fmt.Errorf("invalid %s block at %s: missing url or file_data", partType, location),
+				types.ErrorCodeInvalidRequest,
+				http.StatusBadRequest,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
+		base64Data, mimeType, err := relaymedia.ResolveBase64Data(c, source, "formatting tool result media for Claude")
+		if err != nil {
+			return nil, types.NewFileSourceError(err, location, partType, source)
+		}
+
+		// Claude tool_result 仅接受 image（jpeg/png/gif/webp）与 document（pdf）
+		mediaType := strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
+		blockType := ""
+		switch mediaType {
+		case "image/jpeg", "image/png", "image/gif", "image/webp":
+			blockType = "image"
+		case "application/pdf":
+			blockType = "document"
+		default:
+			return nil, types.NewErrorWithStatusCode(
+				fmt.Errorf("unsupported media type %q in tool result at %s: only jpeg/png/gif/webp images and pdf documents are allowed", mimeType, location),
+				types.ErrorCodeInvalidRequest,
+				http.StatusBadRequest,
+				types.ErrOptionWithSkipRetry(),
+			)
+		}
+
+		block := dto.ClaudeMediaMessage{
+			Type: blockType,
+			Source: &dto.ClaudeMessageSource{
+				Type:      "base64",
+				MediaType: mediaType,
+				Data:      base64Data,
+			},
+		}
+		if cacheControl, ok := part.(map[string]any)["cache_control"]; ok && cacheControl != nil {
+			raw, err := kitutil.Marshal(cacheControl)
+			if err != nil {
+				return nil, err
+			}
+			block.CacheControl = raw
+		}
+		converted = append(converted, block)
+	}
+	return converted, nil
+}
+
+// toolResultPartType 返回原始工具结果块的 type 字段，非对象或无 type 时返回空串。
+func toolResultPartType(part any) string {
+	partMap, ok := part.(map[string]any)
+	if !ok {
+		return ""
+	}
+	partType, _ := partMap["type"].(string)
+	return partType
 }
