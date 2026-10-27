@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	hosttypes "github.com/QuantumNous/new-api/types"
+	"github.com/tidwall/gjson"
 
 	"github.com/gin-gonic/gin"
 )
@@ -405,6 +406,20 @@ func InjectTieredBillingInfo(other *model.LogOther, relayInfo *relaycommon.Relay
 	}
 	other.SetPublic("billing_mode", "tiered_expr")
 	other.SetPublic("expr_b64", base64.StdEncoding.EncodeToString([]byte(snap.ExprString)))
+	if strings.Contains(snap.ExprString, `param("prompt_cache_options.ttl")`) {
+		// Preserve the request value used by param("prompt_cache_options.ttl") so
+		// Java's billing explanation can select the same cache-write price branch.
+		// Use the API default when omitted so Java can render the default cache-write
+		// price even when the endpoint response does not echo prompt_cache_options.
+		promptCacheTTL := "30m"
+		if relayInfo.BillingRequestInput != nil && len(relayInfo.BillingRequestInput.Body) > 0 {
+			ttl := gjson.GetBytes(relayInfo.BillingRequestInput.Body, "prompt_cache_options.ttl")
+			if ttl.Type == gjson.String {
+				promptCacheTTL = ttl.String()
+			}
+		}
+		other.SetPublic("billing_prompt_cache_ttl", promptCacheTTL)
+	}
 	if result != nil {
 		other.SetPublic("matched_tier", result.MatchedTier)
 		if len(result.RequestRules) > 0 {
