@@ -48,6 +48,7 @@ spec:
               sysctl -w net.ipv4.tcp_keepalive_time=120
               sysctl -w net.ipv4.tcp_keepalive_intvl=30
               sysctl -w net.ipv4.tcp_keepalive_probes=3
+
       containers:
         - name: api-gateway
           image: tennda-registry-vpc.ap-southeast-1.cr.aliyuncs.com/tennda-maas-pro/api-gateway:1.0.12
@@ -103,6 +104,64 @@ spec:
             - name: api-gateway-stg
               mountPath: /data/logs
               subPathExpr: $(NODE_NAME)
+
+        - name: loongcollector
+          image: aliyun-observability-release-registry.ap-southeast-1.cr.aliyuncs.com/loongcollector/loongcollector:v3.1.1.0-20fa5eb-aliyun
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: api-gateway-stg
+              mountPath: /data/logs
+              subPathExpr: $(NODE_NAME)
+          env:
+      
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+
+          
+            - name: ALIYUN_LOGTAIL_USER_ID
+              value: "1180674537960318"
+
+          
+            - name: ALIYUN_LOGTAIL_USER_DEFINED_ID
+              value: "api-gateway-k8s"
+
+       
+            - name: ALIYUN_LOGTAIL_CONFIG
+              value: "/etc/ilogtail/conf/ap-southeast-1/ilogtail_config.json"
+              # value: "/etc/ilogtail/conf/ap-southeast-1-internet/ilogtail_config.json"
+
+       
+            - name: enable_full_drain_mode
+              value: "true"
+
+        
+            - name: ALIYUN_LOG_ENV_TAGS
+              value: "_pod_name_|_pod_ip_|_namespace_|_node_name_"
+            - name: _pod_name_
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: _pod_ip_
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: _namespace_
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: _node_name_
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
       volumes:
         - name: api-gateway-stg
           persistentVolumeClaim:
