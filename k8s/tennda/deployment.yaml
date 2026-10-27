@@ -193,7 +193,7 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: api-gateway
-  minReplicas: 5
+  minReplicas: 10
   maxReplicas: 14
   metrics:
     - type: Resource
