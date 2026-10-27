@@ -130,6 +130,10 @@ type ClaudeMessageSource struct {
 type ClaudeMessage struct {
 	Role    string `json:"role"`
 	Content any    `json:"content"`
+	// Per-message effort (beta mid-conversation-output-config-2026-07-01)：
+	// role: "system" 消息上携带的 output_config，与顶层 ClaudeRequest.OutputConfig
+	// 同为 json.RawMessage，原样透传给上游，平台不解析、不校验。
+	OutputConfig json.RawMessage `json:"output_config,omitempty"`
 }
 
 func (c *ClaudeMessage) IsStringContent() bool {

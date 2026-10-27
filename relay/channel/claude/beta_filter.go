@@ -98,6 +98,9 @@ var vertexBetaRename = map[string]string{
 // Anthropic 官方已知的全部 beta flag（直连透传时用于识别"未知新 flag"）。
 // 同步源：anthropic-sdk-python anthropic_beta_param.py + LiteLLM anthropic mapping。
 var anthropicKnownBetas = map[string]bool{
+	// Per-message effort（消息级 output_config）
+	"mid-conversation-output-config-2026-07-01": true,
+
 	"claude-code-20250219":                     true,
 	"computer-use-2025-01-24":                  true,
 	"computer-use-2025-11-24":                  true,
