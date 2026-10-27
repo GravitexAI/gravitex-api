@@ -865,6 +865,43 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	return setupContextForSelectedChannel(c, channel, modelName)
 }
 
+// backfillAutoGroupForSelectedChannel records the effective auto group for
+// channels that reached the request without going through the auto-group
+// iteration: asset-reference pins, origin-task pins, admin token channel
+// suffixes and locked/affinity retry channels. On those paths auto_group was
+// never set, so the task group label and the group ratio stayed on the
+// token's literal group ("auto") even though another resource group's
+// channel served the request. The resolved group is the first of the user's
+// auto groups (same order the regular auto iteration uses) that the channel
+// is tagged with, so labels and ratios match the channel actually in use.
+// The regular auto path sets auto_group before reaching here and is never
+// overwritten.
+func backfillAutoGroupForSelectedChannel(c *gin.Context, channel *model.Channel) {
+	if channel == nil {
+		return
+	}
+	if common.GetContextKeyString(c, constant.ContextKeyUsingGroup) != "auto" {
+		return
+	}
+	if _, exists := common.GetContextKey(c, constant.ContextKeyAutoGroup); exists {
+		return
+	}
+	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+	if userGroup == "" {
+		return
+	}
+	channelGroups := channel.GetGroups()
+	if len(channelGroups) == 0 {
+		return
+	}
+	for _, group := range service.GetRequestAutoGroups(c, userGroup) {
+		if common.StringsContains(channelGroups, group) {
+			common.SetContextKey(c, constant.ContextKeyAutoGroup, group)
+			return
+		}
+	}
+}
+
 func setupContextForSelectedChannel(c *gin.Context, channel *model.Channel, modelName string) *types.NewAPIError {
 	c.Set("original_model", modelName) // for retry
 	expectedPlugin := c.GetString("expected_task_plugin_key")
@@ -914,6 +951,7 @@ func setupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	if channel.Type == constant.ChannelTypeTaskPlugin {
 		c.Set("task_plugin_key", channel.GetSetting().TaskPluginKey)
 	}
+	backfillAutoGroupForSelectedChannel(c, channel)
 	logTaskPluginChannelDecision(c, channel, modelName, "channel_selected", "")
 	paramOverride := channel.GetParamOverride()
 	headerOverride := channel.GetHeaderOverride()

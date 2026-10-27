@@ -482,7 +482,7 @@ func TestApplyChannelPinLocksOnlySameChannelRetry(t *testing.T) {
 	require.Nil(t, applyOriginTaskIntent(c, map[string]any{"originTaskIds": []any{"task-lock-mode"}}, jsplugin.Meta{Key: "origin-plugin"}))
 
 	info := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
-	require.Nil(t, relay.ApplyChannelPin(c, info))
+	require.Nil(t, relay.ApplyOriginTaskAffinity(c, info))
 	locked, ok := info.LockedChannel.(*model.Channel)
 	require.True(t, ok)
 	assert.Equal(t, channel.Id, locked.Id)
@@ -495,6 +495,6 @@ func TestApplyChannelPinLocksOnlySameChannelRetry(t *testing.T) {
 		RetryMode: dto.PinRetrySingleAttempt,
 	})
 	tokenInfo := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
-	require.Nil(t, relay.ApplyChannelPin(tokenOnly, tokenInfo))
+	require.Nil(t, relay.ApplyOriginTaskAffinity(tokenOnly, tokenInfo))
 	assert.Nil(t, tokenInfo.LockedChannel)
 }

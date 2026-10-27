@@ -13,6 +13,8 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -301,4 +303,94 @@ func TestDistributeVideoRemixStillEnforcesTokenModelLimit(t *testing.T) {
 	router.ServeHTTP(recorder, request)
 
 	require.Equal(t, http.StatusForbidden, recorder.Code)
+}
+
+func configureSelectedChannelAutoGroupTest(t *testing.T) {
+	t.Helper()
+	originalAutoGroups := setting.AutoGroups2JsonString()
+	originalUsableGroups := setting.UserUsableGroups2JSONString()
+	originalRatios := ratio_setting.GroupRatio2JSONString()
+	require.NoError(t, setting.UpdateAutoGroupsByJsonString(`["vip","Seedance_1","Seedance"]`))
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP","Seedance_1":"Seedance 1","Seedance":"Seedance"}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1,"Seedance_1":1.05,"Seedance":1.05}`))
+	t.Cleanup(func() {
+		require.NoError(t, setting.UpdateAutoGroupsByJsonString(originalAutoGroups))
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalUsableGroups))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
+	})
+}
+
+func TestSetupContextForSelectedChannelBackfillsAutoGroupForPinnedChannel(t *testing.T) {
+	configureSelectedChannelAutoGroupTest(t)
+
+	// Reproduces the production incident: an asset-referencing video submit is
+	// pinned to a channel of the "Seedance" group while the token group is
+	// "auto", so the recorded group must resolve to "Seedance" instead of
+	// staying on the literal "auto".
+	ctx := newTokenAutoGroupsContext()
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "auto")
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+
+	channel := &model.Channel{Id: 458, Name: "seedance-channel", Group: "Seedance", Key: "sk-test"}
+	require.Nil(t, setupContextForSelectedChannel(ctx, channel, "seedance-2-5"))
+
+	value, ok := common.GetContextKey(ctx, constant.ContextKeyAutoGroup)
+	require.True(t, ok)
+	assert.Equal(t, "Seedance", value)
+	assert.Equal(t, 458, ctx.GetInt("channel_id"))
+}
+
+func TestBackfillAutoGroupForSelectedChannelFollowsAutoGroupOrder(t *testing.T) {
+	configureSelectedChannelAutoGroupTest(t)
+
+	ctx := newTokenAutoGroupsContext()
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", nil)
+	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "auto")
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+
+	// A multi-group channel resolves to the first of the user's auto groups
+	// it is tagged with, matching the order the regular auto iteration uses.
+	channel := &model.Channel{Id: 539, Group: "default,Seedance_1", Key: "sk-test"}
+	backfillAutoGroupForSelectedChannel(ctx, channel)
+
+	value, ok := common.GetContextKey(ctx, constant.ContextKeyAutoGroup)
+	require.True(t, ok)
+	assert.Equal(t, "Seedance_1", value)
+}
+
+func TestBackfillAutoGroupForSelectedChannelKeepsExistingResolution(t *testing.T) {
+	configureSelectedChannelAutoGroupTest(t)
+
+	ctx := newTokenAutoGroupsContext()
+	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "auto")
+	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
+	common.SetContextKey(ctx, constant.ContextKeyAutoGroup, "Seedance_1")
+
+	backfillAutoGroupForSelectedChannel(ctx, &model.Channel{Id: 458, Group: "Seedance", Key: "sk-test"})
+
+	value, ok := common.GetContextKey(ctx, constant.ContextKeyAutoGroup)
+	require.True(t, ok)
+	assert.Equal(t, "Seedance_1", value)
+}
+
+func TestBackfillAutoGroupForSelectedChannelSkipsNonAutoAndUnrelatedChannels(t *testing.T) {
+	configureSelectedChannelAutoGroupTest(t)
+
+	// Non-auto token groups keep their explicit group.
+	nonAuto := newTokenAutoGroupsContext()
+	common.SetContextKey(nonAuto, constant.ContextKeyUsingGroup, "Seedance")
+	common.SetContextKey(nonAuto, constant.ContextKeyUserGroup, "default")
+	backfillAutoGroupForSelectedChannel(nonAuto, &model.Channel{Id: 458, Group: "Seedance", Key: "sk-test"})
+	_, ok := common.GetContextKey(nonAuto, constant.ContextKeyAutoGroup)
+	assert.False(t, ok)
+
+	// A channel tagged with none of the user's auto groups leaves the
+	// recorded group unchanged.
+	unrelated := newTokenAutoGroupsContext()
+	common.SetContextKey(unrelated, constant.ContextKeyUsingGroup, "auto")
+	common.SetContextKey(unrelated, constant.ContextKeyUserGroup, "default")
+	backfillAutoGroupForSelectedChannel(unrelated, &model.Channel{Id: 100, Group: "Kling", Key: "sk-test"})
+	_, ok = common.GetContextKey(unrelated, constant.ContextKeyAutoGroup)
+	assert.False(t, ok)
 }
