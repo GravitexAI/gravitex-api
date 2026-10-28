@@ -24,7 +24,7 @@ spec:
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: DoNotSchedule
+          whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
               app: api-gateway
@@ -194,7 +194,7 @@ spec:
     kind: Deployment
     name: api-gateway
   minReplicas: 10
-  maxReplicas: 14
+  maxReplicas: 20
   metrics:
     - type: Resource
       resource:
