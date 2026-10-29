@@ -160,6 +160,9 @@ type RelayInfo struct {
 	// It is shaped as {"usage": {...}} or {"usageMetadata": {...}} and is only
 	// attached to log.other when the corresponding option is enabled.
 	UpstreamResponses map[string]any
+	// ClaudeRefusalAudit is per-attempt response evidence used only for logging.
+	// Keep it separate so subsequent usage snapshots cannot overwrite it.
+	ClaudeRefusalAudit map[string]any
 	// RawUpstreamUsage preserves the exact usage JSON bytes returned by the
 	// upstream image endpoint for the explicitly audited Seedream models.
 	RawUpstreamUsage []byte
@@ -218,6 +221,7 @@ type RelayInfo struct {
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
+	info.ClaudeRefusalAudit = nil
 	info.FinalRequestRelayFormat = ""
 	info.RequestConversionChain = nil
 	info.InitRequestConversionChain()

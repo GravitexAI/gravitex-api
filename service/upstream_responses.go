@@ -25,13 +25,23 @@ func isLogUsageConversionEnabled() bool {
 }
 
 func appendUpstreamResponses(other map[string]interface{}, relayInfo *relaycommon.RelayInfo) {
-	if other == nil || relayInfo == nil || (!isLogUpstreamResponsesEnabled() && !ShouldPersistSeedreamImageUsage(relayInfo) && !hasUpstreamGeminiRefusalAudit(relayInfo)) {
+	logEnabled := isLogUpstreamResponsesEnabled()
+	if other == nil || relayInfo == nil || (!logEnabled && !ShouldPersistSeedreamImageUsage(relayInfo) && !hasUpstreamGeminiRefusalAudit(relayInfo)) {
 		return
 	}
-	if len(relayInfo.UpstreamResponses) == 0 && len(relayInfo.RawUpstreamUsage) == 0 {
+	if len(relayInfo.UpstreamResponses) == 0 && len(relayInfo.RawUpstreamUsage) == 0 && len(relayInfo.ClaudeRefusalAudit) == 0 {
 		return
 	}
 	upstreamResponses := relayInfo.UpstreamResponses
+	if logEnabled && len(relayInfo.ClaudeRefusalAudit) > 0 {
+		upstreamResponses = make(map[string]any, len(relayInfo.UpstreamResponses)+len(relayInfo.ClaudeRefusalAudit))
+		for key, value := range relayInfo.UpstreamResponses {
+			upstreamResponses[key] = value
+		}
+		for key, value := range relayInfo.ClaudeRefusalAudit {
+			upstreamResponses[key] = value
+		}
+	}
 	if ShouldPersistSeedreamImageUsage(relayInfo) && len(relayInfo.RawUpstreamUsage) > 0 {
 		if upstreamResponses == nil {
 			upstreamResponses = make(map[string]any)

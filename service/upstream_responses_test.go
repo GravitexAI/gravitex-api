@@ -9,8 +9,47 @@ import (
 	"github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAppendUpstreamResponsesClaudeRefusalAudit(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(map[bool]string{true: "enabled", false: "disabled"}[enabled], func(t *testing.T) {
+			common.OptionMapRWMutex.Lock()
+			previousOptions := common.OptionMap
+			common.OptionMap = map[string]string{logUpstreamResponsesEnabledOption: map[bool]string{true: "true", false: "false"}[enabled]}
+			common.OptionMapRWMutex.Unlock()
+			t.Cleanup(func() {
+				common.OptionMapRWMutex.Lock()
+				common.OptionMap = previousOptions
+				common.OptionMapRWMutex.Unlock()
+			})
+			info := &relaycommon.RelayInfo{
+				ClaudeRefusalAudit: map[string]any{
+					"stop_reason":  "refusal",
+					"stop_details": json.RawMessage(`{"type":"refusal","category":null,"explanation":null,"extra":9007199254740993}`),
+				},
+			}
+			info.SetUpstreamResponsesField("usage", map[string]int{"input_tokens": 70, "output_tokens": 0})
+			other := map[string]interface{}{}
+			appendUpstreamResponses(other, info)
+			if !enabled {
+				assert.NotContains(t, other, "upstream_responses")
+				return
+			}
+			encoded, err := common.Marshal(other)
+			require.NoError(t, err)
+			assert.JSONEq(t, `{"upstream_responses":{"usage":{"input_tokens":70,"output_tokens":0},"stop_reason":"refusal","stop_details":{"type":"refusal","category":null,"explanation":null,"extra":9007199254740993}}}`, string(encoded))
+			assert.Contains(t, string(encoded), `9007199254740993`, "unknown fields must retain their numeric precision")
+			assert.NotContains(t, info.UpstreamResponses, "stop_reason", "log merge must not alter the usage snapshot")
+			assert.NotContains(t, info.UpstreamResponses, "stop_details")
+			var decoded map[string]any
+			require.NoError(t, common.Unmarshal(encoded, &decoded))
+			assert.Contains(t, decoded, "upstream_responses")
+		})
+	}
+}
 
 func TestAppendUsageConversion(t *testing.T) {
 	common.OptionMapRWMutex.Lock()

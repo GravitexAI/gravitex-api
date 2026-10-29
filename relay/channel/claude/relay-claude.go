@@ -91,6 +91,26 @@ func maybeMarkClaudeRefusal(c *gin.Context, stopReason string) {
 	}
 }
 
+// recordClaudeRefusal preserves upstream refusal details for logs without
+// changing response DTOs, emitted content, or the usage used for billing.
+func recordClaudeRefusal(info *relaycommon.RelayInfo, data string) {
+	if info == nil {
+		return
+	}
+	response := gjson.Parse(data)
+	refusal := response
+	if refusal.Get("stop_reason").String() != "refusal" {
+		refusal = response.Get("delta")
+		if refusal.Get("stop_reason").String() != "refusal" {
+			return
+		}
+	}
+	info.ClaudeRefusalAudit = map[string]any{"stop_reason": "refusal"}
+	if details := refusal.Get("stop_details"); details.Exists() {
+		info.ClaudeRefusalAudit["stop_details"] = json.RawMessage(details.Raw)
+	}
+}
+
 func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRequest) (*dto.ClaudeRequest, error) {
 	claudeTools := make([]any, 0, len(textRequest.Tools))
 
@@ -1372,6 +1392,7 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	if claudeResponse.Delta != nil && claudeResponse.Delta.StopReason != nil {
 		maybeMarkClaudeRefusal(c, *claudeResponse.Delta.StopReason)
 	}
+	recordClaudeRefusal(info, data)
 	// 与非流式 HandleClaudeResponseData 对齐:把 server_tool_use.web_search_requests 写入
 	// ctx,供 PostTextConsumeQuota 计算 Claude 内置工具调用 surcharge。流式下 server_tool_use
 	// 可能挂在 message_start.message.usage 或 message_delta.usage,两种事件都需要捕获。
@@ -1504,6 +1525,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		return types.WithClaudeError(*claudeError, http.StatusInternalServerError)
 	}
 	maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
+	recordClaudeRefusal(info, string(data))
 	if claudeInfo.Usage == nil {
 		claudeInfo.Usage = &dto.Usage{}
 	}

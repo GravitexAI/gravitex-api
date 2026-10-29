@@ -23,6 +23,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestClaudeRefusalAuditDoesNotChangeQuota(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatClaude,
+		OriginModelName: "claude-opus-5-5",
+		StartTime:       time.Now(),
+		PriceData: hosttypes.PriceData{
+			ModelRatio:      2,
+			CompletionRatio: 5,
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	usage := &dto.Usage{PromptTokens: 70, TotalTokens: 70, UsageSemantic: "anthropic"}
+	before := calculateTextQuotaSummary(ctx, info, usage)
+	info.ClaudeRefusalAudit = map[string]any{"stop_reason": "refusal", "stop_details": map[string]any{"category": "cyber"}}
+	after := calculateTextQuotaSummary(ctx, info, usage)
+	assert.Equal(t, before, after)
+	assert.Equal(t, 140, after.Quota, "this change must not waive refusal charges")
+}
+
 func TestCalculateTextQuotaSummaryBillsVideoInputAlongsideImageOutput(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
