@@ -19,6 +19,7 @@ var apiOnlyDomainsDefault = []string{
 	"api.gravitex.ai",
 	"api.tennda.ai",
 	"cnapi.gravitex.ai",
+	"api.mrpoola.asia",
 }
 
 var apiOnlyAllowedPrefixes = []string{
