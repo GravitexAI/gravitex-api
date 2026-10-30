@@ -975,7 +975,7 @@ export const getLogsColumns = ({
         const showIp =
           (record.type === 2 ||
             record.type === 5 ||
-            (isAdminUser && record.type === 1)) &&
+            (isAdminUser && (record.type === 1 || record.type === 3))) &&
           text;
         return showIp ? (
           <Tooltip content={text}>
