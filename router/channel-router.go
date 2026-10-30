@@ -20,13 +20,14 @@ func registerChannelRoutes(apiRouter *gin.RouterGroup) {
 	channelRoute := apiRouter.Group("/channel")
 	channelRoute.Use(middleware.AdminAuth())
 
-	channelRoute.POST("/:id/key",
-		middleware.RootAuth(),
-		middleware.CriticalRateLimit(),
-		middleware.DisableCache(),
-		middleware.SecureVerificationRequired(),
-		controller.GetChannelKey,
-	)
+	// Disabled: plaintext channel key retrieval is not needed in production.
+	// channelRoute.POST("/:id/key",
+	// 	middleware.RootAuth(),
+	// 	middleware.CriticalRateLimit(),
+	// 	middleware.DisableCache(),
+	// 	middleware.SecureVerificationRequired(),
+	// 	controller.GetChannelKey,
+	// )
 
 	for _, route := range channelPermissionRoutes {
 		channelRoute.Handle(route.method, route.path,
