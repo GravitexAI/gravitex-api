@@ -41,12 +41,6 @@ func GeminiGenerateContentRequestToOpenAIChat(geminiRequest *dto.GeminiChatReque
 			}
 		}
 	}
-	if baseSourceModel != "" && geminiRequest.GenerationConfig.ThinkingConfig != nil {
-		_, err = reasoning.ValidateGeminiThinkingConfig(baseSourceModel, geminiRequest.GenerationConfig.ThinkingConfig)
-		if err != nil {
-			return nil, reasoning.AsClientError(err)
-		}
-	}
 	reasoningIntent = reasoning.ResolveGeminiDefault(baseSourceModel, reasoningIntent)
 	effectiveEffort := reasoning.EffectiveEffort(reasoningIntent)
 	if err := reasoning.ApplyToOpenAIChat(openaiRequest, reasoningIntent); err != nil {

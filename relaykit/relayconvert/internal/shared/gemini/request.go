@@ -101,10 +101,9 @@ func ApplyThinkingConfig(geminiRequest *dto.GeminiChatRequest, info convmeta.Met
 	if preserveSuffix {
 		suffix = reasoning.Intent{}
 	}
-	native, err := reasoning.FromGemini(geminiRequest)
-	if err != nil {
-		return err
-	}
+	// An invalid or conflicting user thinking config is passed through
+	// as-is; the upstream provider decides what is supported.
+	native, _ := reasoning.FromGemini(geminiRequest)
 	source = reasoning.ResolveGeminiEnabledDefault(baseModel, source, geminiRequest.GenerationConfig.MaxOutputTokens)
 	if native.HasStrength() && source.HasStrength() {
 		equivalent, compareErr := reasoning.EquivalentGeminiStrength(baseModel, native, source)
@@ -150,12 +149,12 @@ func ApplyThinkingConfig(geminiRequest *dto.GeminiChatRequest, info convmeta.Met
 		if explicit.IncludeThoughts != nil {
 			geminiRequest.GenerationConfig.ThinkingConfig.IncludeThoughts = explicit.IncludeThoughts
 		}
-		effort, err := reasoning.ValidateGeminiThinkingConfig(baseModel, geminiRequest.GenerationConfig.ThinkingConfig)
-		if err != nil {
-			return err
-		}
-		if info != nil && effort != "" {
-			info.SetReasoningEffort(string(effort))
+		// Best-effort effort metadata only: the user's thinking config is
+		// forwarded unchanged and the upstream provider decides support.
+		if info != nil {
+			if effort := reasoning.EffectiveEffort(native); effort != "" {
+				info.SetReasoningEffort(string(effort))
+			}
 		}
 		return nil
 	}

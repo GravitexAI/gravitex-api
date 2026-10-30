@@ -179,51 +179,6 @@ func geminiDefaultEffort(model string) Effort {
 	}
 }
 
-func ValidateGeminiThinkingConfig(model string, config *dto.GeminiThinkingConfig) (Effort, error) {
-	if config == nil {
-		return "", nil
-	}
-	intent, err := FromGemini(&dto.GeminiChatRequest{GenerationConfig: dto.GeminiChatGenerationConfig{ThinkingConfig: config}})
-	if err != nil {
-		return "", err
-	}
-	capabilities := geminiCapabilitiesFor(model)
-	if capabilities.kind == geminiThinkingNotConfigurable {
-		if !intent.HasStrength() && capabilities.supportsIncludeThoughts {
-			return EffortHigh, nil
-		}
-		return "", fmt.Errorf("model %q does not support configurable thinking", model)
-	}
-	if capabilities.kind == geminiThinkingUnknown {
-		return EffectiveEffort(intent), nil
-	}
-	if capabilities.kind == geminiThinkingBudget {
-		if config.ThinkingLevel != "" {
-			return "", fmt.Errorf("Gemini 2.5 model %q requires thinkingBudget, not thinkingLevel", model)
-		}
-		if config.ThinkingBudget != nil {
-			if err := validateGeminiBudget(model, *config.ThinkingBudget, capabilities); err != nil {
-				return "", err
-			}
-		}
-		return EffectiveEffort(intent), nil
-	}
-	if config.ThinkingBudget != nil {
-		return "", fmt.Errorf("Gemini 3 model %q requires thinkingLevel, not thinkingBudget", model)
-	}
-	if config.ThinkingLevel != "" {
-		level, err := geminiLevelForEffort(model, intent.Effort)
-		if err != nil {
-			return "", err
-		}
-		if level != config.ThinkingLevel {
-			return "", fmt.Errorf("thinkingLevel %q is not supported by model %q", config.ThinkingLevel, model)
-		}
-		return Effort(level), nil
-	}
-	return "", nil
-}
-
 // ResolveGeminiDefault materializes documented family defaults when a
 // conversion targets another protocol. Dynamic 2.5 defaults retain their -1
 // budget in the in-process pivot; Flash-Lite's default is explicitly off.
