@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -165,6 +167,11 @@ func FetchCustomOAuthDiscovery(c *gin.Context) {
 		common.ApiErrorMsg(c, "Discovery URL 无效，仅支持 http/https")
 		return
 	}
+	// SSRF 防护：按 FetchSetting 校验目标地址，禁止内网/私有 IP（重定向同样拦截）
+	if err := service.ValidateSSRFProtectedFetchURL(targetURL); err != nil {
+		common.ApiErrorMsg(c, "Discovery URL 无效: "+err.Error())
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
 	defer cancel()
@@ -176,7 +183,19 @@ func FetchCustomOAuthDiscovery(c *gin.Context) {
 	}
 	httpReq.Header.Set("Accept", "application/json")
 
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{
+		Timeout: 20 * time.Second,
+		// 重定向目标同样要走 SSRF 校验，防止公网 URL 302 跳内网
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if err := service.ValidateSSRFProtectedFetchURL(req.URL.String()); err != nil {
+				return fmt.Errorf("redirect to %s blocked: %v", req.URL.String(), err)
+			}
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			return nil
+		},
+	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		common.ApiErrorMsg(c, "获取 Discovery 配置失败: "+err.Error())
