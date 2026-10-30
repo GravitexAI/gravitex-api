@@ -169,6 +169,13 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error)
 		db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
 			PrepareStmt: mysqlPrepareStmt,
 		})
+		// ADB（AnalyticDB for MySQL）：MySQL 协议兼容但定位 OLAP，作为独立日志库时
+		// 有专属行为（应用侧雪花 id、批量写入缓冲、跳过 AutoMigrate），单独标记类型；
+		// 查询侧其余分支按 MySQL 语义处理
+		if isLog && strings.Contains(dsn, ".ads.aliyuncs.com") {
+			common.SysLog("using Aliyun AnalyticDB(ADB) as log database (MySQL protocol)")
+			return db, common.DatabaseTypeADB, err
+		}
 		return db, common.DatabaseTypeMySQL, err
 	}
 	// Use SQLite
@@ -247,13 +254,13 @@ func InitLogDB() (err error) {
 		sqlDB.SetMaxOpenConns(common.GetEnvOrDefault("SQL_MAX_OPEN_CONNS", 1000))
 		sqlDB.SetConnMaxLifetime(time.Second * time.Duration(common.GetEnvOrDefault("SQL_MAX_LIFETIME", 60)))
 
-		// ClickHouse/ByteHouse 不适合单条 INSERT，所有节点都启用内存缓冲批量写入
-		if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		// ClickHouse/ByteHouse 与 ADB 均为 OLAP，不适合单条 INSERT，所有节点都启用内存缓冲批量写入
+		if common.UsingLogDatabase(common.DatabaseTypeClickHouse) || common.UsingLogDatabase(common.DatabaseTypeADB) {
 			GlobalLogBuffer = NewLogBuffer(
 				common.GetEnvOrDefault("LOG_BUFFER_MAX_SIZE", 5000),
 				time.Duration(common.GetEnvOrDefault("LOG_BUFFER_INTERVAL_SEC", 5))*time.Second,
 			)
-			common.SysLog("ClickHouse LogBuffer initialized")
+			common.SysLog("LogBuffer initialized for OLAP log database (ClickHouse/ADB)")
 		}
 
 		if !common.IsMasterNode {
@@ -416,6 +423,12 @@ func migrateLOGDB() error {
 		// 生产用 ByteHouse(CnchMergeTree)：手动建表（见 docs/bytehouse_logs.sql），跳过 AutoMigrate。
 		// 原生 ClickHouse 用户可改调 migrateClickHouseLogDB（main 引入的 MergeTree+TTL 流程）。
 		common.SysLog("ClickHouse/ByteHouse log DB: skip AutoMigrate, use manual DDL (see docs/bytehouse_logs.sql)")
+		return nil
+	}
+	if common.UsingLogDatabase(common.DatabaseTypeADB) {
+		// ADB 的 DDL 与 GORM AutoMigrate 兼容性有限，logs 表由人工建表
+		// （含主键与 DISTRIBUTED BY HASH 分布键），启动时跳过迁移
+		common.SysLog("ADB log DB: skip AutoMigrate, use manual DDL")
 		return nil
 	}
 	if err := LOG_DB.AutoMigrate(&Log{}); err != nil {

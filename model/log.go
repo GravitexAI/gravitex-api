@@ -152,10 +152,14 @@ func CreateLog(log *Log) error {
 	}
 	common.SysLog(fmt.Sprintf("[LogInsert] requestId=%s type=%s userId=%d channel=%d model=%s token=%s group=%s quota=%d content=%s",
 		log.RequestId, typeName, log.UserId, log.ChannelId, log.ModelName, log.TokenName, log.Group, log.Quota, log.Content))
-	// ClickHouse/ByteHouse：进缓冲区批量写入，不做单条 INSERT。
-	// id 由 ByteHouse 列 DEFAULT generateSnowflakeID() 服务端生成（雪花时间有序），
+	// ClickHouse/ByteHouse/ADB：进缓冲区批量写入，不做单条 INSERT。
+	// ClickHouse/ByteHouse：id 由 ByteHouse 列 DEFAULT generateSnowflakeID() 服务端生成（雪花时间有序），
 	// 写入时在 LogBuffer.Flush 里 Omit("id") 忽略该列，保证 DEFAULT 生效。
-	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) && GlobalLogBuffer != nil {
+	// ADB：无服务端默认值也无自增列，id 由应用侧雪花生成（generateLogID），写入时带上该列。
+	if common.UsingLogDatabase(common.DatabaseTypeADB) {
+		log.Id = int(generateLogID())
+	}
+	if (common.UsingLogDatabase(common.DatabaseTypeClickHouse) || common.UsingLogDatabase(common.DatabaseTypeADB)) && GlobalLogBuffer != nil {
 		GlobalLogBuffer.Add(log)
 		return nil
 	}

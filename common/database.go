@@ -7,6 +7,9 @@ const (
 	DatabaseTypeSQLite     DatabaseType = "sqlite"
 	DatabaseTypePostgreSQL DatabaseType = "postgres"
 	DatabaseTypeClickHouse DatabaseType = "clickhouse"
+	// DatabaseTypeADB 阿里云 AnalyticDB for MySQL：MySQL 协议兼容的 OLAP 日志库，
+	// 查询走 MySQL 语义，但写入需要应用侧雪花 id + 批量缓冲，DDL 由人工维护
+	DatabaseTypeADB DatabaseType = "adb"
 )
 
 var mainDatabaseType = DatabaseTypeSQLite

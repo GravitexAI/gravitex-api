@@ -79,9 +79,14 @@ func (lb *LogBuffer) Flush() {
 	lb.buffer = make([]*Log, 0, lb.maxSize)
 	lb.mu.Unlock()
 
-	// Omit("id")：忽略 id 列，让 ByteHouse 列 DEFAULT generateSnowflakeID() 服务端生成雪花 ID。
+	// ClickHouse/ByteHouse：Omit("id")，让 ByteHouse 列 DEFAULT generateSnowflakeID() 服务端生成雪花 ID。
 	// 若显式带上 id（即便为 0），ClickHouse 会用该值而不触发 DEFAULT。
-	if err := LOG_DB.Omit("id").CreateInBatches(batch, len(batch)).Error; err != nil {
+	// ADB：id 已在 CreateLog 里应用侧生成，必须随行写入，不能 Omit。
+	stmt := LOG_DB
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		stmt = stmt.Omit("id")
+	}
+	if err := stmt.CreateInBatches(batch, len(batch)).Error; err != nil {
 		common.SysError(fmt.Sprintf("[LogBuffer] batch insert failed: %v, %d logs in this batch", err, len(batch)))
 		// 计费数据兜底：写入失败时落本地文件，避免彻底丢失（可后续人工补写）
 		dumpFailedLogs(batch)
