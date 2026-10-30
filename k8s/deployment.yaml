@@ -19,6 +19,9 @@ spec:
       labels:
         app: api-gateway
     spec:
+      imagePullSecrets:
+      - name: regcred
+
       topologySpreadConstraints:
       - maxSkew: 1
         topologyKey: kubernetes.io/hostname
@@ -48,7 +51,7 @@ spec:
           sysctl -w net.ipv4.tcp_keepalive_probes=3
       containers:
       - name: api-gateway
-        image: gravitex-ap-southeast-1.cr.bytepluses.com/gravitex/api-gateway:1.0.107
+        image: gravitex-acr-registry-vpc.ap-southeast-1.cr.aliyuncs.com/gravitex/api-gateway:1.0.107
         ports:
         - containerPort: 3000
         env:
@@ -120,3 +123,42 @@ spec:
     port: 3000
     targetPort: 3000
   type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-gateway-hpa
+  namespace: prod
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api-gateway
+  minReplicas: 5
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
