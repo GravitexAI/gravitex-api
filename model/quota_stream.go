@@ -2,10 +2,12 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -31,6 +33,20 @@ const (
 	quotaDataBucketLocalRetryInterval = 200 * time.Millisecond
 	quotaDataBucketMaxRepairRounds    = 20
 )
+
+const (
+	// 源消费日志经 LogBuffer 批量异步落库（默认 5s 定时 flush），消费端的等待窗口
+	// 必须覆盖该延迟，否则事件只能靠 reclaimer 反复捞回重试才能应用成功。
+	quotaSourceLogReadyRetryTimes    = 10
+	quotaSourceLogReadyRetryInterval = time.Second
+)
+
+// errQuotaSourceLogNotVisible 表示源消费日志尚未落库（仍在批量写入延迟内），
+// 属于可自愈的临时状态，不是真正的应用失败。
+var errQuotaSourceLogNotVisible = errors.New("quota source log not visible yet")
+
+// quotaSourceNotVisibleLogAt 对"源日志未落库"的提醒做每分钟一次的限流，避免逐事件刷屏。
+var quotaSourceNotVisibleLogAt atomic.Int64
 
 const (
 	quotaDataLuaStateDone            = "DONE"
@@ -216,7 +232,7 @@ func processQuotaStreamMessage(ctx context.Context, consumerName string, message
 
 	done, err := common.RDB.Exists(ctx, doneKey).Result()
 	if err == nil && done > 0 {
-		common.SysLog(fmt.Sprintf("[QuotaStream][Consumer] duplicate ack consumer=%s messageId=%s eventId=%s logId=%d", consumerName, message.ID, event.EventID, event.LogID))
+		// 已处理过的事件（重复投递是 reclaimer 场景下的常态），静默 ack。
 		ackQuotaStreamMessage(ctx, consumerName, message.ID)
 		return
 	}
@@ -235,7 +251,7 @@ func processQuotaStreamMessage(ctx context.Context, consumerName string, message
 		}
 		switch beginState {
 		case quotaDataLuaStateDone:
-			common.SysLog(fmt.Sprintf("[QuotaStream][Consumer] duplicate ack consumer=%s messageId=%s eventId=%s logId=%d", consumerName, message.ID, event.EventID, event.LogID))
+			// 已处理过的事件，静默 ack。
 			ackQuotaStreamMessage(ctx, consumerName, message.ID)
 			return
 		case quotaDataLuaStateAcquiredBucket:
@@ -245,8 +261,7 @@ func processQuotaStreamMessage(ctx context.Context, consumerName string, message
 				time.Sleep(quotaDataBucketLocalRetryInterval)
 				continue
 			}
-			common.SysLog(fmt.Sprintf("[QuotaStream][Consumer] leave pending after local retry consumer=%s messageId=%s eventId=%s logId=%d state=%s",
-				consumerName, message.ID, event.EventID, event.LogID, beginState))
+			// 桶被其他消费者持有属正常争抢，留待 reclaimer 稍后重试即可。
 			return
 		default:
 			common.SysError(fmt.Sprintf("[QuotaStream][Consumer] unexpected begin state consumer=%s messageId=%s eventId=%s logId=%d state=%s",
@@ -258,6 +273,16 @@ func processQuotaStreamMessage(ctx context.Context, consumerName string, message
 APPLY:
 	if err := applyQuotaStreamEvent(ctx, consumerName, event); err != nil {
 		quotaDataAbortEventProcessing(ctx, consumerName, event)
+		if errors.Is(err, errQuotaSourceLogNotVisible) {
+			// 源日志还在批量写入延迟内：事件留在 PEL 由 reclaimer 稍后重试即可自愈，
+			// 逐事件打 ERROR 只会刷屏，限流为每分钟一条提醒。
+			now := time.Now().Unix()
+			last := quotaSourceNotVisibleLogAt.Load()
+			if now-last >= 60 && quotaSourceNotVisibleLogAt.CompareAndSwap(last, now) {
+				common.SysLog(fmt.Sprintf("[QuotaStream][Consumer] source log not visible yet, waiting for reclaimer retry: %v", err))
+			}
+			return
+		}
 		common.SysError(fmt.Sprintf("[QuotaStream][Consumer] apply failed consumer=%s messageId=%s eventId=%s logId=%d err=%v", consumerName, message.ID, event.EventID, event.LogID, err))
 		return
 	}
@@ -272,8 +297,7 @@ APPLY:
 		return
 	}
 
-	common.SysLog(fmt.Sprintf("[QuotaStream][Consumer] apply ok consumer=%s messageId=%s eventId=%s logId=%d userId=%d model=%s quota=%d bucket=%d",
-		consumerName, message.ID, event.EventID, event.LogID, event.UserID, event.ModelName, event.Quota, event.BucketTS))
+	// 成功路径不打逐事件日志（生产量=请求数，会刷屏）；异常路径在上方各自留痕。
 	ackQuotaStreamMessage(ctx, consumerName, message.ID)
 }
 
@@ -317,26 +341,22 @@ func waitQuotaSourceLogReadyWithRetry(event quotaStreamEvent) error {
 	}
 
 	var lastErr error
-	for attempt := 1; attempt <= quotaDataBucketLocalRetryTimes; attempt++ {
+	for attempt := 1; attempt <= quotaSourceLogReadyRetryTimes; attempt++ {
 		ready, err := hasQuotaSourceLog(event)
 		if err != nil {
 			lastErr = err
 		} else if ready {
-			if attempt > 1 {
-				common.SysLog(fmt.Sprintf("[QuotaStream][Consumer] source log became visible after retry eventId=%s requestId=%s userId=%d model=%s bucket=%d attempt=%d",
-					event.EventID, event.RequestID, event.UserID, event.ModelName, event.BucketTS, attempt))
-			}
 			return nil
 		} else {
-			lastErr = fmt.Errorf("source log not visible yet requestId=%s userId=%d model=%s bucket=%d source=%s",
-				event.RequestID, event.UserID, event.ModelName, event.BucketTS, event.EventSource)
+			lastErr = fmt.Errorf("%w requestId=%s userId=%d model=%s bucket=%d source=%s",
+				errQuotaSourceLogNotVisible, event.RequestID, event.UserID, event.ModelName, event.BucketTS, event.EventSource)
 		}
 
-		if attempt < quotaDataBucketLocalRetryTimes {
-			time.Sleep(quotaDataBucketLocalRetryInterval)
+		if attempt < quotaSourceLogReadyRetryTimes {
+			time.Sleep(quotaSourceLogReadyRetryInterval)
 		}
 	}
-	return fmt.Errorf("%w after %d local retries", lastErr, quotaDataBucketLocalRetryTimes)
+	return fmt.Errorf("%w after %d attempts", lastErr, quotaSourceLogReadyRetryTimes)
 }
 
 func hasQuotaSourceLog(event quotaStreamEvent) (bool, error) {
