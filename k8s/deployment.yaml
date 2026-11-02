@@ -117,7 +117,7 @@ metadata:
   annotations:
     service.beta.kubernetes.io/alibaba-cloud-loadbalancer-address-type: "internet"
     service.beta.kubernetes.io/alibaba-cloud-loadbalancer-name: "api-gateway-clb"
-    service.beta.kubernetes.io/alibaba-cloud-loadbalancer-persistence-timeout: "900"
+    service.beta.kubernetes.io/alibaba-cloud-loadbalancer-persistence-timeout: "0"
     service.beta.kubernetes.io/alibaba-cloud-loadbalancer-scheduler: "wrr"
 spec:
   type: LoadBalancer
