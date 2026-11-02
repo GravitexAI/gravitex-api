@@ -116,11 +116,12 @@ metadata:
   namespace: prod
   annotations:
     service.beta.kubernetes.io/alibaba-cloud-loadbalancer-address-type: "internet"
-    service.beta.kubernetes.io/alibaba-cloud-loadbalancer-name: "api-gateway-nlb"
-    service.beta.kubernetes.io/alibaba-cloud-loadbalancer-zone-maps: >-
-      ap-southeast-1d:vsw-t4nrkzfdro9itgg27zu7k,ap-southeast-1c:vsw-t4n58utzrbxu5f6feg2an,ap-southeast-1b:vsw-t4n5jsk5bp0e4kzlz73sg[cite: 3]
+    service.beta.kubernetes.io/alibaba-cloud-loadbalancer-name: "api-gateway-clb"
+    service.beta.kubernetes.io/alibaba-cloud-loadbalancer-persistence-timeout: "900"
+    service.beta.kubernetes.io/alibaba-cloud-loadbalancer-scheduler: "wrr"
 spec:
   type: LoadBalancer
+  externalTrafficPolicy: Local
   selector:
     app: api-gateway
   ports:
