@@ -361,10 +361,9 @@ func SetApiRouter(router *gin.Engine) {
 		dataRoute.GET("/flow", middleware.AdminAuth(), controller.GetAllFlowQuotaDates)
 		dataRoute.GET("/flow/self", middleware.UserAuth(), controller.GetUserFlowQuotaDates)
 
-		logRoute.Use(middleware.CORS(), middleware.CriticalRateLimit())
-		{
-			logRoute.GET("/token", middleware.TokenAuthReadOnly(), controller.GetLogByKey)
-		}
+		// /api/log/token（GetLogByKey，按 API key 查日志）已下线：
+		// 日志库 ADB 无 token_id 二级索引，该接口每次触发 1.3 亿行全表扫描，
+		// 且本项目所有前端均未使用，仅外部工具拿 sk- key 轮询。
 		groupRoute := apiRouter.Group("/group")
 		groupRoute.Use(middleware.AdminAuth())
 		{
