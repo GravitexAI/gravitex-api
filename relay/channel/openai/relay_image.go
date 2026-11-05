@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -49,6 +50,18 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	captureRawImageUsage(info, responseBody)
+	// SVG output also reports the authoring model's tokens in svg_usage; they are
+	// billed on top of usage at that model's rates. total_tokens beyond input +
+	// output means reasoning was reported separately, so it is billed as output.
+	if svgUsage := gjson.GetBytes(responseBody, "svg_usage"); svgUsage.IsObject() {
+		inputTokens := min(max(svgUsage.Get("input_tokens").Int(), 0), math.MaxInt32)
+		outputTokens := min(max(svgUsage.Get("output_tokens").Int(), svgUsage.Get("total_tokens").Int()-inputTokens, 0), math.MaxInt32)
+		c.Set(service.SvgAuthoringUsageContextKey, service.SvgAuthoringUsage{
+			Model:        svgUsage.Get("model").String(),
+			InputTokens:  int(inputTokens),
+			OutputTokens: int(outputTokens),
+		})
+	}
 	applyImageResponseMetadata(responseBody, &usageResp.Usage)
 	normalizeOpenAIUsage(&usageResp.Usage)
 	if service.ValidUsage(&usageResp.Usage) {

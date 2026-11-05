@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -1386,6 +1387,67 @@ func TestUnbilledRequestContent(t *testing.T) {
 			require.NotNil(t, tt)
 			got := unbilledRequestContent(tt.relayInfo)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// GPT Image SVG responses carry svg_usage for the authoring model; those tokens
+// must be billed at the authoring model's own ratios on top of the image usage,
+// in both the ratio and the per-call price paths.
+func TestCalculateTextQuotaSummaryBillsSvgAuthoringUsage(t *testing.T) {
+	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	previousCompletionRatios := ratio_setting.CompletionRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"svg-author-test":1}`))
+	require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(`{"svg-author-test":4}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
+		require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(previousCompletionRatios))
+	})
+	usage := &dto.Usage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30}
+
+	tests := []struct {
+		name         string
+		authorModel  string
+		usePrice     bool
+		wantQuota    int
+		wantSvgQuota int
+		wantUnpriced string
+	}{
+		// image: (10 + 20×6) × 2 × 1.5 = 390; svg: (100 + 50×4) × 1 × 1.5 = 450
+		{name: "ratio billing adds svg authoring tokens", authorModel: "svg-author-test", wantQuota: 840, wantSvgQuota: 450},
+		// image: 0.04 × QuotaPerUnit × 1.5 = 30000
+		{name: "per-call price adds svg authoring tokens", authorModel: "svg-author-test", usePrice: true, wantQuota: 30450, wantSvgQuota: 450},
+		{name: "unpriced authoring model is left unbilled", authorModel: "svg-author-unknown", wantQuota: 390, wantUnpriced: "svg-author-unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Set(SvgAuthoringUsageContextKey, SvgAuthoringUsage{Model: tt.authorModel, InputTokens: 100, OutputTokens: 50})
+			info := &relaycommon.RelayInfo{
+				OriginModelName: "gpt-image-2.6-flare",
+				StartTime:       time.Now(),
+				PriceData: hosttypes.PriceData{
+					ModelRatio:      2,
+					CompletionRatio: 6,
+					UsePrice:        tt.usePrice,
+					ModelPrice:      0.04,
+					GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1.5},
+				},
+			}
+
+			summary := calculateTextQuotaSummary(ctx, info, usage)
+
+			assert.Equal(t, tt.wantQuota, summary.Quota)
+			assert.Equal(t, tt.wantUnpriced, summary.SvgAuthoringUnpriced)
+			if tt.wantSvgQuota == 0 {
+				assert.Nil(t, summary.SvgAuthoring)
+				return
+			}
+			require.NotNil(t, summary.SvgAuthoring)
+			assert.Equal(t, tt.wantSvgQuota, summary.SvgAuthoring.Quota)
+			assert.Equal(t, 300, summary.SvgAuthoring.QuotaBeforeGroup)
+			assert.Equal(t, 1.5, summary.SvgAuthoring.GroupRatio)
+			assert.Equal(t, 4.0, summary.SvgAuthoring.CompletionRatio)
 		})
 	}
 }

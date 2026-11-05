@@ -212,7 +212,7 @@ func formImageValues(formData url.Values) []string {
 var imageEditParsedFormFields = map[string]bool{
 	"model": true, "prompt": true, "n": true, "size": true, "quality": true,
 	"stream": true, "image": true, "input_fidelity": true, "watermark": true,
-	"response_format": true, "complexity": true,
+	"response_format": true,
 }
 
 // formExtraValues 收集表单里网关没有显式解析的字段。OpenAI SDK 走 multipart 时会把嵌套
@@ -356,9 +356,6 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 					return nil, fmt.Errorf("n must be an integer between 1 and %d", dto.MaxImageN)
 				}
 				imageRequest.N = common.GetPointer(uint(n))
-			}
-			if values, exists := formData["complexity"]; exists && len(values) > 0 {
-				imageRequest.Complexity = common.GetPointer(values[0])
 			}
 			imageRequest.Quality = formData.Get("quality")
 			imageRequest.Size = formData.Get("size")

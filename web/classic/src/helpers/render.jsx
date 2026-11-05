@@ -1687,6 +1687,7 @@ export function renderModelPrice(opts) {
     audio_input_price: audioInputPrice = 0,
     image_generation_call: imageGenerationCall = false,
     image_generation_call_price: imageGenerationCallPrice = 0,
+    svg_usage: svgUsage = null,
     displayMode = 'price',
   } = opts;
   const { ratio: effectiveGroupRatio, label: ratioLabel } = getEffectiveRatio(
@@ -1697,6 +1698,31 @@ export function renderModelPrice(opts) {
   const completionRatio = _completionRatio ?? 0;
 
   const { symbol, rate } = getCurrencyConfig();
+
+  // GPT Image SVG 输出：编写模型的 token 按它自己的倍率另计，已计入扣费总额
+  const svgModel = svgUsage?.model ?? '';
+  const svgInputTokens = svgUsage?.input_tokens ?? 0;
+  const svgOutputTokens = svgUsage?.output_tokens ?? 0;
+  const svgInputPrice = (svgUsage?.model_ratio ?? 0) * 2.0;
+  const svgOutputPrice = svgInputPrice * (svgUsage?.completion_ratio || 1);
+  const svgAmount =
+      ((svgInputTokens / 1000000) * svgInputPrice +
+          (svgOutputTokens / 1000000) * svgOutputPrice) *
+      groupRatio;
+  const hasSvgUsage = svgAmount > 0;
+  const svgAmountLine = hasSvgUsage
+      ? buildBillingText(
+          'SVG编写({{model}})：输入 {{input}} tokens + 输出 {{output}} tokens，{{ratioType}} {{ratio}} = {{amount}}',
+          {
+            model: svgModel,
+            input: svgInputTokens,
+            output: svgOutputTokens,
+            ratioType: ratioLabel,
+            ratio: groupRatio,
+            amount: renderDisplayAmountFromUsd(svgAmount),
+          },
+      )
+      : null;
 
   if (!shouldUseRatioBillingProcess(modelPrice)) {
     if (modelPrice !== -1) {
@@ -1718,6 +1744,12 @@ export function renderModelPrice(opts) {
               total: formatBillingDisplayPrice(modelPrice * groupRatio, rate),
             },
         ),
+        svgAmountLine,
+        hasSvgUsage
+            ? buildBillingText('合计：{{total}}', {
+              total: renderDisplayAmountFromUsd(modelPrice * groupRatio + svgAmount),
+            })
+            : null,
       ]);
     }
 
@@ -1740,7 +1772,8 @@ export function renderModelPrice(opts) {
         (completionTokens / 1000000) * completionRatioPrice * groupRatio +
         (webSearchCallCount / 1000) * webSearchPrice * groupRatio +
         (fileSearchCallCount / 1000) * fileSearchPrice * groupRatio +
-        imageGenerationCallPrice * groupRatio;
+        imageGenerationCallPrice * groupRatio +
+        svgAmount;
 
     let inputDesc = '';
     if (image && imageOutputTokens > 0) {
@@ -1838,6 +1871,21 @@ export function renderModelPrice(opts) {
               },
           )
           : '',
+      hasSvgUsage
+          ? buildBillingText(
+              ' + SVG编写({{model}}) 输入 {{input}} tokens / 1M tokens * {{symbol}}{{inputPrice}} + 输出 {{output}} tokens / 1M tokens * {{symbol}}{{outputPrice}} * {{ratioType}} {{ratio}}',
+              {
+                model: svgModel,
+                input: svgInputTokens,
+                output: svgOutputTokens,
+                symbol,
+                inputPrice: formatBillingDisplayPrice(svgInputPrice, rate),
+                outputPrice: formatBillingDisplayPrice(svgOutputPrice, rate),
+                ratioType: ratioLabel,
+                ratio: groupRatio,
+              },
+          )
+          : '',
     ].join('');
 
     const billingLines = [
@@ -1901,6 +1949,17 @@ export function renderModelPrice(opts) {
             rate,
           })
           : null,
+      hasSvgUsage
+          ? buildBillingText(
+              'SVG编写价格({{model}})：输入 {{symbol}}{{inputPrice}}，输出 {{symbol}}{{outputPrice}} / 1M tokens',
+              {
+                model: svgModel,
+                symbol,
+                inputPrice: formatBillingDisplayPrice(svgInputPrice, rate),
+                outputPrice: formatBillingDisplayPrice(svgOutputPrice, rate),
+              },
+          )
+          : null,
       buildBillingText(
           '{{inputDesc}} + {{outputDesc}}{{extraServices}} = {{symbol}}{{total}}',
           {
@@ -1919,6 +1978,24 @@ export function renderModelPrice(opts) {
   if (modelPrice !== -1) {
     const displayPrice = (modelPrice * rate).toFixed(6);
     const displayTotal = (modelPrice * groupRatio * rate).toFixed(6);
+    if (hasSvgUsage) {
+      return renderBillingArticle([
+        i18next.t(
+            '按次：{{symbol}}{{price}} * {{ratioType}}：{{ratio}} = {{symbol}}{{total}}',
+            {
+              symbol: symbol,
+              price: displayPrice,
+              ratio: groupRatio,
+              total: displayTotal,
+              ratioType: ratioLabel,
+            },
+        ),
+        svgAmountLine,
+        buildBillingText('合计：{{total}}', {
+          total: renderDisplayAmountFromUsd(modelPrice * groupRatio + svgAmount),
+        }),
+      ]);
+    }
     return i18next.t(
         '按次：{{symbol}}{{price}} * {{ratioType}}：{{ratio}} = {{symbol}}{{total}}',
         {
@@ -1980,7 +2057,8 @@ export function renderModelPrice(opts) {
       completionAmount +
       webSearchAmount +
       fileSearchAmount +
-      imageGenerationAmount;
+      imageGenerationAmount +
+      svgAmount;
 
   return renderBillingArticle([
     [
@@ -2109,6 +2187,7 @@ export function renderModelPrice(opts) {
             },
         )
         : null,
+    svgAmountLine,
     buildBillingText('合计：{{total}}', {
       total: renderDisplayAmountFromUsd(totalAmount),
     }),

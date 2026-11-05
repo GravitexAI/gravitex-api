@@ -18,11 +18,30 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 )
+
+// SvgAuthoringUsageContextKey holds the svg_usage block of a GPT Image SVG
+// response: tokens spent by the model that wrote the SVG, separate from the
+// image rendering usage and billed at that model's own rates.
+const SvgAuthoringUsageContextKey = "svg_authoring_usage"
+
+type SvgAuthoringUsage struct {
+	Model           string  `json:"model"`
+	InputTokens     int     `json:"input_tokens"`
+	OutputTokens    int     `json:"output_tokens"`
+	ModelRatio      float64 `json:"model_ratio,omitempty"`
+	CompletionRatio float64 `json:"completion_ratio,omitempty"`
+	GroupRatio      float64 `json:"group_ratio,omitempty"`
+	// QuotaBeforeGroup excludes the group ratio, matching how log viewers apply
+	// the group ratio once over the whole formula; Quota is what was charged.
+	QuotaBeforeGroup int `json:"quota_before_group,omitempty"`
+	Quota            int `json:"quota,omitempty"`
+}
 
 // ToolSurchargeItem is one billable tool-call line for consume logs.
 type ToolSurchargeItem struct {
@@ -86,6 +105,10 @@ type textQuotaSummary struct {
 	EffectiveImageOutputRatio float64
 	ToolSurchargeItems        []ToolSurchargeItem
 	ToolCallSurchargeQuota    decimal.Decimal
+	// SvgAuthoring is set when svg_usage was billed; SvgAuthoringUnpriced names
+	// an authoring model that had no ratio configured and was left unbilled.
+	SvgAuthoring         *SvgAuthoringUsage
+	SvgAuthoringUnpriced string
 }
 
 // hasBillableUsage reports whether this request should incur any charge.
@@ -206,6 +229,35 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 	}
 
 	return surcharge
+}
+
+// calculateSvgAuthoringQuota bills the svg_usage tokens at the authoring
+// model's own ModelRatio/CompletionRatio and the request's group ratio. An
+// authoring model without a configured ratio cannot be priced, so it is
+// recorded for the admin log and left unbilled rather than guessed.
+func calculateSvgAuthoringQuota(ctx *gin.Context, summary *textQuotaSummary) decimal.Decimal {
+	value, exists := ctx.Get(SvgAuthoringUsageContextKey)
+	usage, ok := value.(SvgAuthoringUsage)
+	if !exists || !ok || usage.InputTokens+usage.OutputTokens <= 0 {
+		return decimal.Zero
+	}
+	modelRatio, priced, _ := ratio_setting.GetModelRatio(usage.Model)
+	if usage.Model == "" || !priced {
+		summary.SvgAuthoringUnpriced = usage.Model
+		logger.LogError(ctx, fmt.Sprintf("svg authoring model %q has no model ratio configured, svg_usage left unbilled", usage.Model))
+		return decimal.Zero
+	}
+	usage.ModelRatio = modelRatio
+	usage.CompletionRatio = ratio_setting.GetCompletionRatio(usage.Model)
+	usage.GroupRatio = summary.GroupRatio
+	quotaBeforeGroup := decimal.NewFromInt(int64(usage.InputTokens)).
+		Add(decimal.NewFromInt(int64(usage.OutputTokens)).Mul(decimal.NewFromFloat(usage.CompletionRatio))).
+		Mul(decimal.NewFromFloat(modelRatio))
+	quota := quotaBeforeGroup.Mul(decimal.NewFromFloat(summary.GroupRatio))
+	usage.QuotaBeforeGroup = common.QuotaFromDecimal(quotaBeforeGroup)
+	usage.Quota = common.QuotaFromDecimal(quota)
+	summary.SvgAuthoring = &usage
+	return quota
 }
 
 // noteQuotaClamp records the first quota saturation event onto relayInfo so it
@@ -359,7 +411,8 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 
 	ratio := dModelRatio.Mul(dGroupRatio)
-	summary.ToolCallSurchargeQuota = calculateTextToolCallSurcharge(ctx, relayInfo, &summary)
+	summary.ToolCallSurchargeQuota = calculateTextToolCallSurcharge(ctx, relayInfo, &summary).
+		Add(calculateSvgAuthoringQuota(ctx, &summary))
 
 	var audioInputQuota decimal.Decimal
 	if !relayInfo.PriceData.UsePrice {
@@ -657,6 +710,12 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other.SetPublic("input_image_price", inputTextPriceUSD*summary.ImageRatio)
 	}
 	appendToolSurchargeLogInfo(other, summary.ToolSurchargeItems)
+	if summary.SvgAuthoring != nil {
+		other.SetPublic("svg_usage", summary.SvgAuthoring)
+	}
+	if summary.SvgAuthoringUnpriced != "" {
+		other.SetAdmin("svg_usage_unpriced_model", summary.SvgAuthoringUnpriced)
+	}
 	if summary.AudioInputPrice > 0 && summary.AudioTokens > 0 {
 		other.SetPublic("audio_input_seperate_price", true)
 		other.SetPublic("audio_input_token_count", summary.AudioTokens)
