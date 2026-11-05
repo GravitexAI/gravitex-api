@@ -7,10 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -568,6 +571,11 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		// gpt-image 系列：在 multipart 转换路径里，prompt/size/quality/n/input_fidelity 必须
 		// 在这里手动写入，否则 Azure /v1/images/edits 会报 "Missing required parameter: 'prompt'"。
 		// 下面 multipart 输入分支的 skipFields 也依赖这里已经写过这些字段（避免重复写）。
+		if request.Complexity != nil {
+			if err := writer.WriteField("complexity", *request.Complexity); err != nil {
+				return nil, err
+			}
+		}
 		if request.Prompt != "" {
 			writer.WriteField("prompt", request.Prompt)
 		}
@@ -600,6 +608,37 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 				(request.Extra != nil && (request.Extra["image"] != nil || request.Extra["images"] != nil)))
 
 		if hasImageInDTO {
+			for _, field := range []struct {
+				name  string
+				value *int
+			}{{"frame_count", request.FrameCount}, {"frame_duration_ms", request.FrameDurationMs}} {
+				if field.value != nil {
+					if err := writer.WriteField(field.name, strconv.Itoa(*field.value)); err != nil {
+						return nil, err
+					}
+				}
+			}
+			if len(request.SVG) > 0 {
+				if err := writer.WriteField("svg", string(request.SVG)); err != nil {
+					return nil, err
+				}
+			}
+			if len(request.Markup) > 0 && string(request.Markup) != "null" {
+				data, err := readImageMarkup(c.Request.Context(), request.Markup)
+				if err != nil {
+					return nil, err
+				}
+				h := make(textproto.MIMEHeader)
+				h.Set("Content-Disposition", `form-data; name="markup"; filename="markup.png"`)
+				h.Set("Content-Type", "image/png")
+				part, err := writer.CreatePart(h)
+				if err != nil {
+					return nil, err
+				}
+				if _, err := part.Write(data); err != nil {
+					return nil, err
+				}
+			}
 			// JSON 请求的其余生图参数同样要写进表单：原生 multipart 请求靠下面的
 			// mf.Value 循环整体转发，JSON 请求没有这一步，不显式写就会被静默丢掉
 			// （background=transparent、output_format=jpeg 都属于这种情况）。
@@ -635,7 +674,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 			// 渠道专有参数（seed、sequential_image_generation 等）一并透传，
 			// 是否合法交给上游判断，不在网关这层做白名单。
 			for key, value := range request.Extra {
-				if key == "image" || key == "images" || key == "mask" {
+				if key == "image" || key == "images" || key == "mask" || key == "markup" || key == "complexity" {
 					continue
 				}
 				writer.WriteField(key, strings.Trim(string(value), `"`))
@@ -755,11 +794,46 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 				mf = c.Request.MultipartForm
 			}
 
+			if mf != nil {
+				if len(mf.Value["markup"]) > 0 {
+					return nil, invalidImageMarkup("markup must be a file part")
+				}
+				if files := mf.File["markup"]; len(files) > 0 {
+					if len(files) != 1 {
+						return nil, invalidImageMarkup("markup must contain exactly one file")
+					}
+					file, err := files[0].Open()
+					if err != nil {
+						return nil, invalidImageMarkup("failed to open markup file")
+					}
+					data, readErr := io.ReadAll(io.LimitReader(file, maxImageSize+1))
+					closeErr := file.Close()
+					if readErr != nil {
+						return nil, invalidImageMarkup("failed to read markup file")
+					}
+					if closeErr != nil {
+						return nil, closeErr
+					}
+					if err := validateImageMarkup(data); err != nil {
+						return nil, err
+					}
+					h := make(textproto.MIMEHeader)
+					h.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{"name": "markup", "filename": files[0].Filename}))
+					h.Set("Content-Type", files[0].Header.Get("Content-Type"))
+					part, err := writer.CreatePart(h)
+					if err != nil {
+						return nil, err
+					}
+					if _, err := part.Write(data); err != nil {
+						return nil, err
+					}
+				}
+			}
 			// 写入非文件字段（跳过已手动写入的字段）
 			if mf != nil {
 				skipFields := map[string]bool{
 					"model": true, "prompt": true, "size": true,
-					"quality": true, "n": true, "input_fidelity": true,
+					"quality": true, "n": true, "input_fidelity": true, "complexity": true,
 				}
 				for key, values := range mf.Value {
 					if skipFields[key] {
@@ -779,12 +853,32 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 				if imageFiles, exists = mf.File["image"]; !exists || len(imageFiles) == 0 {
 					if imageFiles, exists = mf.File["image[]"]; !exists || len(imageFiles) == 0 {
 						foundArrayImages := false
+						var indexedFields []string
 						for fieldName, files := range mf.File {
 							if strings.HasPrefix(fieldName, "image[") && len(files) > 0 {
-								foundArrayImages = true
-								imageFiles = append(imageFiles, files...)
+								indexedFields = append(indexedFields, fieldName)
 							}
 						}
+						// Numeric indices determine the first image for mask/markup.
+						// Retain legacy non-numeric field names after indexed images.
+						sort.Slice(indexedFields, func(i, j int) bool {
+							left, leftErr := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(indexedFields[i], "image["), "]"))
+							right, rightErr := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(indexedFields[j], "image["), "]"))
+							leftValid := leftErr == nil && left >= 0 && strings.HasSuffix(indexedFields[i], "]")
+							rightValid := rightErr == nil && right >= 0 && strings.HasSuffix(indexedFields[j], "]")
+							if leftValid != rightValid {
+								return leftValid
+							}
+							if leftValid && left != right {
+								return left < right
+							}
+							return indexedFields[i] < indexedFields[j]
+						})
+						for _, fieldName := range indexedFields {
+							foundArrayImages = true
+							imageFiles = append(imageFiles, mf.File[fieldName]...)
+						}
+
 						if !foundArrayImages && len(imageFiles) == 0 {
 							return nil, errors.New("image is required")
 						}
@@ -860,7 +954,9 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 			}(),
 			lo.FromPtr(request.InputFidelity), writer.FormDataContentType(), requestBody.Len()))
 
-		writer.Close()
+		if err := writer.Close(); err != nil {
+			return nil, err
+		}
 		c.Request.Header.Set("Content-Type", writer.FormDataContentType())
 		return &requestBody, nil
 

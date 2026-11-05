@@ -15,6 +15,11 @@ import (
 const MaxImageN = 128
 
 type ImageRequest struct {
+	Complexity        *string         `json:"complexity,omitempty"`
+	FrameCount        *int            `json:"frame_count,omitempty"`
+	FrameDurationMs   *int            `json:"frame_duration_ms,omitempty"`
+	SVG               json.RawMessage `json:"svg,omitempty"`
+	Markup            json.RawMessage `json:"markup,omitempty"`
 	Model             string          `json:"model"`
 	Prompt            string          `json:"prompt" binding:"required"`
 	N                 *uint           `json:"n,omitempty"`
