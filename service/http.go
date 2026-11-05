@@ -23,22 +23,31 @@ func CloseResponseBodyGracefully(httpResponse *http.Response) {
 	}
 }
 
+// upstreamHeaderAllowlist lists the only upstream response headers forwarded to
+// clients. Most channels are third-party relays that attach their own branding,
+// rate-limit and tracing headers, so everything else is dropped to avoid
+// leaking supplier identity to customers.
+var upstreamHeaderAllowlist = map[string]struct{}{
+	"Content-Type": {},
+	// Codex clients rely on these SSE headers.
+	"X-Reasoning-Included": {},
+	"X-Codex-Turn-State":   {},
+}
+
 // ShouldCopyUpstreamHeader checks whether a given upstream response header
-// should be copied to the client response. It returns false for Content-Length
-// (managed separately) and X-Api-Request-Id (to preserve the local instance
-// ID). When the upstream header is X-Api-Request-Id, the value is captured
-// into the Gin context for later logging.
+// should be copied to the client response. Only headers in
+// upstreamHeaderAllowlist are copied. When the upstream header is
+// X-Api-Request-Id, the value is captured into the Gin context for later
+// logging.
 func ShouldCopyUpstreamHeader(c *gin.Context, k string, v []string) bool {
-	if strings.EqualFold(k, "Content-Length") {
-		return false
-	}
 	if strings.EqualFold(k, common.RequestIdKey) {
 		if c != nil && len(v) > 0 {
 			c.Set(common.UpstreamRequestIdKey, v[0])
 		}
 		return false
 	}
-	return true
+	_, ok := upstreamHeaderAllowlist[http.CanonicalHeaderKey(k)]
+	return ok
 }
 
 func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
