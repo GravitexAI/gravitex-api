@@ -182,9 +182,9 @@ func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testi
 	require.Equal(t, []any{"computer-use-2025-01-24"}, values)
 }
 
-// 当 context-management-2025-06-27 这个 beta 被白名单剔除时，body 顶级字段
-// context_management 也必须一并清理，否则 Bedrock 返回 400 "Extra inputs are
-// not permitted"（真实客户案例）。
+// 当最终保留的 beta 集合里没有 context-management-2025-06-27 时（客户端声明了
+// context_management 顶级字段但没带对应 beta flag），body 顶级字段也必须一并清理，
+// 否则 Bedrock 返回 400 "Extra inputs are not permitted"（真实客户案例）。
 func TestDoAwsClientRequest_StripsContextManagementWhenBetaDropped(t *testing.T) {
 	t.Parallel()
 
@@ -198,8 +198,8 @@ func TestDoAwsClientRequest_StripsContextManagementWhenBetaDropped(t *testing.T)
 		IsStream:                  false,
 		UseRuntimeHeadersOverride: true,
 		RuntimeHeadersOverride: map[string]any{
-			// context-management 不在 Bedrock InvokeModel 白名单，filter 会丢掉它
-			"anthropic-beta": "context-management-2025-06-27,effort-2025-11-24",
+			// 客户端没声明 context-management beta，但 body 里带了 context_management
+			"anthropic-beta": "effort-2025-11-24",
 		},
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ApiKey:            "access-key|secret-key|us-east-1",
@@ -224,7 +224,7 @@ func TestDoAwsClientRequest_StripsContextManagementWhenBetaDropped(t *testing.T)
 	var payload map[string]any
 	require.NoError(t, common.Unmarshal(awsReq.Body, &payload))
 
-	// context-management beta 被剔除 → 对应 body 字段必须清理掉
+	// 保留的 beta 集合里没有 context-management → 对应 body 字段必须清理掉
 	_, ctxMgmtExists := payload["context_management"]
 	require.False(t, ctxMgmtExists, "context_management body field must be stripped when its beta is dropped")
 

@@ -53,7 +53,9 @@ func ResolveBetaTarget(channelType int, override string) FilterTarget {
 }
 
 // Bedrock InvokeModel / InvokeModelWithResponseStream 支持的 beta flag 白名单。
-// 数据源：AWS 官方文档 + LiteLLM bedrock mapping。
+// 数据源：AWS 官方文档 + LiteLLM bedrock mapping。context-management-2025-06-27
+// 依据 Anthropic 官方 context-editing 文档 supportedPlatforms（Amazon Bedrock
+// (InvokeModel): beta）补入，对齐官方口径。
 var bedrockInvokeBetaWhitelist = map[string]bool{
 	"computer-use-2025-01-24":                true,
 	"computer-use-2025-11-24":                true,
@@ -61,6 +63,7 @@ var bedrockInvokeBetaWhitelist = map[string]bool{
 	"output-128k-2025-02-19":                 true,
 	"dev-full-thinking-2025-05-14":           true,
 	"context-1m-2025-08-07":                  true,
+	"context-management-2025-06-27":          true,
 	"effort-2025-11-24":                      true,
 	"tool-search-tool-2025-10-19":            true,
 	"tool-examples-2025-10-29":               true,
@@ -71,7 +74,6 @@ var bedrockInvokeBetaWhitelist = map[string]bool{
 // Bedrock Converse 在 InvokeModel 白名单基础上额外支持的 flag。
 var bedrockConverseBetaExtra = map[string]bool{
 	"interleaved-thinking-2025-05-14": true,
-	"context-management-2025-06-27":   true,
 	"structured-outputs-2025-11-13":   true,
 }
 
@@ -263,8 +265,8 @@ func KeptBetaSet(keptBetas []string) map[string]bool {
 }
 
 // StripContextManagementForDroppedBetas 清理 context_management 顶级字段：该字段依赖
-// context-management-2025-06-27 beta（仅 Bedrock Converse / Vertex 支持）。beta 被过滤
-// 目标剔除后仍把字段发上去，Bedrock/Vertex 会返回 "Extra inputs are not permitted"。
+// context-management-2025-06-27 beta。当最终保留的 flag 集合里没有它时（客户端未声明、
+// 或被过滤目标剔除），仍把字段发上去，上游会返回 "Extra inputs are not permitted"。
 func StripContextManagementForDroppedBetas(raw json.RawMessage, kept map[string]bool) json.RawMessage {
 	if len(raw) == 0 || kept["context-management-2025-06-27"] {
 		return raw
