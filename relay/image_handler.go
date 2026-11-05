@@ -59,7 +59,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 				requestBytes = mergedBytes
 			}
 		}
-		logger.LogInfo(c, fmt.Sprintf("image user request params: %s", common.TruncateJsonValues(string(requestBytes))))
+		logger.LogDebug(c, fmt.Sprintf("image user request params: %s", common.TruncateJsonValues(string(requestBytes))))
 	}
 
 	request, err := common.DeepCopy(imageReq)
@@ -121,7 +121,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		if request.N != nil {
 			n = *request.N
 		}
-		logger.LogInfo(c, fmt.Sprintf("gpt-image edits user request: model=%s, prompt=%q, size=%s, quality=%s, n=%d, input_fidelity=%q, image_count=%d, image_preview=%s",
+		logger.LogDebug(c, fmt.Sprintf("gpt-image edits user request: model=%s, prompt=%q, size=%s, quality=%s, n=%d, input_fidelity=%q, image_count=%d, image_preview=%s",
 			request.Model, request.Prompt, request.Size, request.Quality, n, lo.FromPtr(request.InputFidelity), imageCount, imageSummary))
 	} else if strings.HasPrefix(request.Model, "gpt-image") && info.RelayMode == relayconstant.RelayModeImagesGenerations {
 		n := uint(1)
