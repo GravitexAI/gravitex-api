@@ -304,3 +304,28 @@ func TestInitChannelMetaResetsPerAttemptStreamStateAndPreservesRequestState(t *t
 func ptr[T any](value T) *T {
 	return &value
 }
+
+// 上游实际服务档位的提取位置：Chat Completions（含流式 chunk）与 Responses 非流式在顶层，
+// Responses 流式事件在 response.service_tier；无档位的 chunk 不能清空已记录的档位。
+func TestCaptureUpstreamServiceTier(t *testing.T) {
+	tests := []struct {
+		name   string
+		chunks []string
+		want   string
+	}{
+		{name: "chat completion top level", chunks: []string{`{"id":"chatcmpl-1","service_tier":"ultrafast"}`}, want: "ultrafast"},
+		{name: "responses stream event", chunks: []string{`{"type":"response.completed","response":{"id":"resp_1","service_tier":"priority"}}`}, want: "priority"},
+		{name: "later chunk without tier keeps earlier value", chunks: []string{`{"service_tier":"ultrafast"}`, `{"choices":[]}`}, want: "ultrafast"},
+		{name: "final event overrides initial tier", chunks: []string{`{"type":"response.created","response":{"service_tier":"auto"}}`, `{"type":"response.completed","response":{"service_tier":"default"}}`}, want: "default"},
+		{name: "null tier ignored", chunks: []string{`{"service_tier":null}`}, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := &RelayInfo{}
+			for _, chunk := range tt.chunks {
+				info.CaptureUpstreamServiceTier([]byte(chunk))
+			}
+			assert.Equal(t, tt.want, info.UpstreamServiceTier)
+		})
+	}
+}

@@ -1176,3 +1176,34 @@ func TestBuildTieredTokenParamsClaudeSemanticIgnoresOpenAIDetails(t *testing.T) 
 	assert.Equal(t, 500.0, params.CC)
 	assert.Equal(t, 0.0, params.CC1h)
 }
+
+// 上游回传的 service_tier 决定加收倍率：fast/priority ×2、ultrafast ×6，其余档位按原价。
+func TestTryTieredSettle_AppliesUpstreamServiceTierRatio(t *testing.T) {
+	// flatExpr: 1000*2 + 500*10 = 7000 → 7000/1e6*500000 = 3500（分组倍率 0.5 → 1750）
+	tests := []struct {
+		name          string
+		upstreamTier  string
+		wantAfterGrp  int
+		wantBeforeGrp float64
+	}{
+		{name: "no tier", upstreamTier: "", wantAfterGrp: 1750, wantBeforeGrp: 3500},
+		{name: "default", upstreamTier: "default", wantAfterGrp: 1750, wantBeforeGrp: 3500},
+		{name: "flex keeps base price", upstreamTier: "flex", wantAfterGrp: 1750, wantBeforeGrp: 3500},
+		{name: "priority", upstreamTier: "priority", wantAfterGrp: 3500, wantBeforeGrp: 7000},
+		{name: "fast", upstreamTier: "fast", wantAfterGrp: 3500, wantBeforeGrp: 7000},
+		{name: "ultrafast", upstreamTier: "ultrafast", wantAfterGrp: 10500, wantBeforeGrp: 21000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := makeRelayInfo(flatExpr, 0.5, 1000, 500)
+			info.UpstreamServiceTier = tt.upstreamTier
+
+			ok, quota, result := TryTieredSettle(info, billingexpr.TokenParams{P: 1000, C: 500})
+			require.True(t, ok)
+			require.NotNil(t, result)
+			assert.Equal(t, tt.wantAfterGrp, quota)
+			assert.Equal(t, tt.wantAfterGrp, result.ActualQuotaAfterGroup)
+			assert.InDelta(t, tt.wantBeforeGrp, result.ActualQuotaBeforeGroup, 1e-9)
+		})
+	}
+}

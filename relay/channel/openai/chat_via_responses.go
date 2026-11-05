@@ -40,6 +40,7 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if oaiError := responsesResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	info.CaptureUpstreamServiceTier(body)
 	if responsesResp.Usage != nil && service.ValidUsage(responsesResp.Usage) {
 		info.SetUpstreamResponsesField("usage", responsesResp.Usage)
 	}
@@ -117,6 +118,7 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 		switch streamResp.Type {
 		case "response.completed", "response.done", "response.incomplete":
 			finalResponse = streamResp.Response
+			info.CaptureUpstreamServiceTier(common.StringToByteSlice(data))
 			if streamResp.Type == "response.incomplete" {
 				if finalResponse == nil {
 					finalResponse = &dto.OpenAIResponsesResponse{}
@@ -292,6 +294,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			logger.LogError(c, "failed to unmarshal responses stream event: "+err.Error())
 			sr.Error(err)
 			return
+		}
+		if streamResp.Response != nil {
+			info.CaptureUpstreamServiceTier(common.StringToByteSlice(data))
 		}
 		if streamResp.Response != nil && streamResp.Response.Usage != nil && service.ValidUsage(streamResp.Response.Usage) {
 			info.SetUpstreamResponsesField("usage", streamResp.Response.Usage)

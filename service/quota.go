@@ -449,6 +449,11 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 
 	quota, clamp := calculateAudioQuota(quotaInfo)
 	noteQuotaClamp(relayInfo, clamp)
+	// 上游按 fast / ultrafast 等档位处理时按档位倍率加收；表达式计费已在 TryTieredSettle 中处理
+	if ratio := ServiceTierRatio(relayInfo); ratio != 1 && !tieredOk {
+		quota, clamp = common.QuotaFromFloatChecked(float64(quota) * ratio)
+		noteQuotaClamp(relayInfo, clamp)
+	}
 	if tieredOk {
 		quota = tieredQuota
 	}

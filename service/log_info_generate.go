@@ -126,6 +126,13 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	if relayInfo.ReasoningEffort != "" {
 		other.SetPublic("reasoning_effort", relayInfo.ReasoningEffort)
 	}
+	// 上游实际处理的服务档位及加收倍率，供日志展示与账单导出「服务档位」「档位倍率」列使用
+	if relayInfo.UpstreamServiceTier != "" {
+		other.SetPublic("service_tier", relayInfo.UpstreamServiceTier)
+		if ratio := ServiceTierRatio(relayInfo); ratio != 1 {
+			other.SetPublic("service_tier_ratio", ratio)
+		}
+	}
 	if relayInfo.IsModelMapped {
 		other.SetPublic("is_model_mapped", true)
 		other.SetPublic("upstream_model_name", relayInfo.UpstreamModelName)

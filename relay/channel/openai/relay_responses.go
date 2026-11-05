@@ -39,6 +39,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	info.UpstreamResponseId = responsesResponse.ID
+	info.CaptureUpstreamServiceTier(responseBody)
 
 	// 写入新的 response body（Meta 的整数值浮点时间戳先归一化为整数再透传）
 	responseBody = normalizeResponsesTimestamps(responseBody)
@@ -139,6 +140,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		case "response.completed", "response.done":
 			if streamResponse.Response != nil {
 				info.UpstreamResponseId = streamResponse.Response.ID
+				info.CaptureUpstreamServiceTier(common.StringToByteSlice(data))
 				if streamResponse.Response.Usage != nil {
 					if streamResponse.Response.Usage.InputTokens != 0 {
 						usage.PromptTokens = streamResponse.Response.Usage.InputTokens

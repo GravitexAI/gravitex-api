@@ -524,6 +524,10 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
+	// 上游按 fast / ultrafast 等档位处理时，倍率计费路径通过 OtherRatios 加收；表达式计费在 TryTieredSettle 中处理
+	if ratio := ServiceTierRatio(relayInfo); ratio != 1 {
+		relayInfo.PriceData.AddOtherRatio("service_tier", ratio)
+	}
 	summary := calculateTextQuotaSummary(ctx, relayInfo, billingUsage)
 
 	var tieredResult *billingexpr.TieredResult

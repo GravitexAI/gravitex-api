@@ -135,6 +135,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		}
 		if len(data) > 0 {
 			captureOpenAIStreamUsage(info, data)
+			info.CaptureUpstreamServiceTier(common.StringToByteSlice(data))
 			// 对音频模型，保存倒数第二个stream data
 			if isAudioModel && lastStreamData != "" {
 				secondLastStreamData = lastStreamData
@@ -276,6 +277,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	info.UpstreamResponseId = simpleResponse.Id
+	info.CaptureUpstreamServiceTier(responseBody)
 	if service.ValidUsage(&simpleResponse.Usage) {
 		info.SetUpstreamResponsesField("usage", simpleResponse.Usage)
 	}

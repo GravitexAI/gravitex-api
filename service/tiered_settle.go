@@ -5,6 +5,7 @@ import (
 
 	"net/http"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -242,6 +243,16 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 			quota = snap.EstimatedQuotaAfterGroup
 		}
 		return true, quota, nil
+	}
+
+	// 上游按 fast / ultrafast 等档位处理时，表达式结果按档位倍率加收
+	if ratio := ServiceTierRatio(relayInfo); ratio != 1 {
+		tr.ActualQuotaBeforeGroup *= ratio
+		afterGroup, clamp := common.QuotaRoundChecked(tr.ActualQuotaBeforeGroup * snap.GroupRatio)
+		tr.ActualQuotaAfterGroup = afterGroup
+		if tr.Clamp == nil {
+			tr.Clamp = clamp
+		}
 	}
 
 	// Surface any single-request saturation from settlement onto RelayInfo so the

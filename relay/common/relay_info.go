@@ -156,6 +156,9 @@ type RelayInfo struct {
 	RequestId string
 	// UpstreamResponseId 上游返回的响应 ID（如 chatcmpl-xxx, msg_xxx, gemini responseId）
 	UpstreamResponseId string
+	// UpstreamServiceTier 上游响应中回传的实际服务档位（如 default / priority / ultrafast），
+	// 结算时按它查 service.ServiceTierRatio 加收档位倍率。
+	UpstreamServiceTier string
 	// UpstreamResponses stores the raw upstream usage object for log persistence.
 	// It is shaped as {"usage": {...}} or {"usageMetadata": {...}} and is only
 	// attached to log.other when the corresponding option is enabled.
@@ -222,6 +225,7 @@ type RelayInfo struct {
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	info.ClaudeRefusalAudit = nil
+	info.UpstreamServiceTier = ""
 	info.FinalRequestRelayFormat = ""
 	info.RequestConversionChain = nil
 	info.InitRequestConversionChain()
@@ -940,6 +944,23 @@ func (info *RelayInfo) SetUpstreamResponsesField(field string, payload any) {
 
 	info.UpstreamResponses = map[string]any{
 		field: decoded,
+	}
+}
+
+// CaptureUpstreamServiceTier 从上游响应 JSON 中提取实际服务档位。
+// Chat Completions（含流式 chunk）放在顶层 service_tier，
+// Responses API 非流式在顶层、流式事件在 response.service_tier。
+// 只记录非空字符串，后到的值覆盖先到的值（流式以最终事件为准）。
+func (info *RelayInfo) CaptureUpstreamServiceTier(data []byte) {
+	if info == nil || len(data) == 0 {
+		return
+	}
+	values := gjson.GetManyBytes(data, "service_tier", "response.service_tier")
+	for _, value := range values {
+		if value.Type == gjson.String && strings.TrimSpace(value.String()) != "" {
+			info.UpstreamServiceTier = strings.TrimSpace(value.String())
+			return
+		}
 	}
 }
 
