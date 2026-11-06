@@ -284,7 +284,16 @@ func (cache *proxyHTTPClientCache) reset() map[string]*http.Client {
 	return oldClients
 }
 
-func configureProxyTransport(transport *http.Transport, proxyURL *url.URL) error {
+// NewSupplierGuardedDialer 返回带供应商拨号防护的 Dialer：在 TCP 连接建立前检查实际连接的 IP。
+func NewSupplierGuardedDialer() *net.Dialer {
+	return &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+		Control:   common.SupplierDialControl,
+	}
+}
+
+func configureProxyTransport(transport *http.Transport, proxyURL *url.URL, supplierDialGuard bool) error {
 	switch proxyURL.Scheme {
 	case "http", "https":
 		transport.Proxy = http.ProxyURL(proxyURL)
@@ -294,6 +303,10 @@ func configureProxyTransport(transport *http.Transport, proxyURL *url.URL) error
 		forwardDialer := &net.Dialer{
 			Timeout:   30 * time.Second,
 			KeepAlive: 30 * time.Second,
+		}
+		if supplierDialGuard {
+			// SOCKS 代理由 forwardDialer 拨号，检查的是代理地址
+			forwardDialer = NewSupplierGuardedDialer()
 		}
 		dialer, err := proxy.FromURL(proxyURL, forwardDialer)
 		if err != nil {
@@ -310,18 +323,22 @@ func configureProxyTransport(transport *http.Transport, proxyURL *url.URL) error
 	}
 }
 
-func newTransportFactory(proxyURL *url.URL, tlsConfig *tls.Config) (func() *http.Transport, error) {
+func newTransportFactory(proxyURL *url.URL, tlsConfig *tls.Config, supplierDialGuard bool) (func() *http.Transport, error) {
 	// Validate proxy configuration once before creating shard transports.
 	if proxyURL != nil {
 		probe := newRelayHTTPTransport()
-		if err := configureProxyTransport(probe, proxyURL); err != nil {
+		if err := configureProxyTransport(probe, proxyURL, supplierDialGuard); err != nil {
 			return nil, err
 		}
 	}
 	return func() *http.Transport {
 		transport := newRelayHTTPTransport()
+		if supplierDialGuard {
+			// 直连与 HTTP(S) 代理均经 DialContext 拨号；SOCKS 代理在 configureProxyTransport 中覆盖
+			transport.DialContext = NewSupplierGuardedDialer().DialContext
+		}
 		if proxyURL != nil {
-			_ = configureProxyTransport(transport, proxyURL)
+			_ = configureProxyTransport(transport, proxyURL, supplierDialGuard)
 		} else {
 			transport.Proxy = http.ProxyFromEnvironment
 		}
@@ -333,7 +350,7 @@ func newTransportFactory(proxyURL *url.URL, tlsConfig *tls.Config) (func() *http
 }
 
 func newHTTPClientFromPolicy(policy HTTPTransportPolicy, proxyURL *url.URL, tlsConfig *tls.Config) (*http.Client, error) {
-	factory, err := newTransportFactory(proxyURL, tlsConfig)
+	factory, err := newTransportFactory(proxyURL, tlsConfig, policy.SupplierDialGuard)
 	if err != nil {
 		return nil, err
 	}
@@ -362,6 +379,9 @@ func newDirectHTTPClient(policy HTTPTransportPolicy, tlsConfig *tls.Config) *htt
 	if err != nil {
 		// Direct clients cannot fail proxy configuration.
 		transport := newRelayHTTPTransport()
+		if policy.SupplierDialGuard {
+			transport.DialContext = NewSupplierGuardedDialer().DialContext
+		}
 		applyHTTPTransportPolicy(transport, policy)
 		return newRelayHTTPClient(transport)
 	}
@@ -386,8 +406,12 @@ func GetHttpClientWithProxy(rawProxyURL string) (*http.Client, error) {
 // GetHttpClientWithProxySettings returns a cached HTTP client for the proxy URL and
 // channel transport settings. Default auto + 1 shard shares the same client pool as
 // GetHttpClientWithProxy / GetHttpClient for the empty-proxy case.
+//
+// rawProxyURL 可带供应商拨号防护标记（common.WithSupplierDialGuard，见 model.Channel.GetDialProxy），
+// 此时返回独立缓存、拨号阶段拒绝内网地址的客户端。
 func GetHttpClientWithProxySettings(rawProxyURL string, settings dto.ChannelSettings) (*http.Client, error) {
 	policy := NormalizeHTTPTransportPolicy(settings)
+	rawProxyURL, policy.SupplierDialGuard = common.SplitSupplierDialGuard(rawProxyURL)
 	trimmedProxyURL := strings.TrimSpace(rawProxyURL)
 
 	if trimmedProxyURL == "" {
@@ -460,6 +484,15 @@ func ResetProxyClientCache() {
 	}
 	defaultClient.CloseIdleConnections()
 	proxyClients.store(clientCacheKey("", defaultHTTPTransportPolicy()), defaultClient)
+}
+
+// GetChannelAuxHttpClient 用于原本不区分渠道、直接使用 fallback 客户端的渠道辅助请求（上传/轮询等）：
+// dialProxy 带供应商拨号防护标记时改用受保护客户端（同时使用渠道代理），否则原样返回 fallback，官方渠道行为不变。
+func GetChannelAuxHttpClient(dialProxy string, fallback *http.Client) (*http.Client, error) {
+	if _, guarded := common.SplitSupplierDialGuard(dialProxy); guarded {
+		return GetHttpClientWithProxy(dialProxy)
+	}
+	return fallback, nil
 }
 
 // NewProxyHttpClient is kept for compatibility.

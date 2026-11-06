@@ -57,6 +57,8 @@ func UploadByImageURL(imageURL, token string) (*string, error) {
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
+	// 内部调用签名：Java /resource/oss 要求登录或有效签名
+	SignInternalRequest(req, jsonData)
 
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -113,7 +115,8 @@ func IsAssetOSSStagingEnabled() bool {
 //   - "Image"         -> /resource/oss/uploadByImageUrl
 //   - "Video"/"Audio" -> /resource/oss/uploadByVideoUrl
 //
-// Both endpoints are @SaIgnore on the Java side — no auth header required.
+// Requests are signed via SignInternalRequest (X-Gx-Timestamp / X-Gx-Signature);
+// the Java side requires login or a valid signature on /resource/oss.
 // ext is the file extension hint (without dot); empty falls back to a
 // type-appropriate default. Fails fast after assetOSSUploadTimeout (30 s).
 func UploadAssetURLToOSS(rawURL, assetType, ext string) (ossURL string, err error) {
@@ -153,6 +156,8 @@ func UploadAssetURLToOSS(rawURL, assetType, ext string) (ossURL string, err erro
 		return "", fmt.Errorf("build OSS request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// 内部调用签名：Java /resource/oss 要求登录或有效签名
+	SignInternalRequest(req, jsonData)
 
 	client := &http.Client{Timeout: assetOSSUploadTimeout}
 	resp, err := client.Do(req)

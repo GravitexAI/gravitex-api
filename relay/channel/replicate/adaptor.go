@@ -478,7 +478,12 @@ func uploadFileFromForm(c *gin.Context, info *relaycommon.RelayInfo, fieldCandid
 	req.Header.Set("Content-Type", formContentType)
 	req.Header.Set("Authorization", "Bearer "+info.ApiKey)
 
-	resp, err := service.GetHttpClient().Do(req)
+	// 供应商渠道改用拨号防护客户端，官方渠道行为不变
+	client, err := service.GetChannelAuxHttpClient(info.ChannelSetting.Proxy, service.GetHttpClient())
+	if err != nil {
+		return "", fmt.Errorf("replicate adaptor: new http client failed: %w", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("replicate adaptor: upload image failed: %w", err)
 	}

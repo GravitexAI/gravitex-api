@@ -91,7 +91,15 @@ func RelayVoices(c *gin.Context) {
 	}
 	req.URL.RawQuery = query.Encode()
 
-	client := service.GetHttpClient()
+	// 供应商渠道改用拨号防护客户端，官方渠道行为不变
+	client, err := service.GetChannelAuxHttpClient(channel.GetDialProxy(), service.GetHttpClient())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{
+			"message": err.Error(),
+			"type":    "api_error",
+		}})
+		return
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{
@@ -129,8 +137,7 @@ func buildVoicesUpstreamRequest(channel *model.Channel) (string, http.Header, er
 			base = ""
 		}
 		upstreamURL := vertex.BuildAPIBaseURL(base, "v1beta1", credentials.ProjectID, "global") + "/voices"
-		setting := channel.GetSetting()
-		accessToken, err := voicesAccessToken(channel, credentials, setting.Proxy)
+		accessToken, err := voicesAccessToken(channel, credentials, channel.GetDialProxy())
 		if err != nil {
 			return "", nil, fmt.Errorf("acquire vertex access token failed: %w", err)
 		}

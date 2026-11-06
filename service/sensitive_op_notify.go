@@ -114,6 +114,8 @@ func postEnterpriseAlert(userId int, tokenId int, operation string, scene string
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// 内部回调签名，Java 侧据此校验调用方为 Go 网关
+	SignInternalRequest(req, jsonData)
 
 	client := &http.Client{Timeout: sensitiveOpNotifyTimeout}
 	resp, err := client.Do(req)

@@ -59,6 +59,8 @@ func SendQuotaWarningNotifyToAPIEnd(userID int, notifyType string, remainingQuot
 		return fmt.Errorf("create quota warning notify request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// 内部回调签名，Java 侧据此校验调用方为 Go 网关
+	SignInternalRequest(req, jsonData)
 	client := GetHttpClient()
 	if client.Timeout == 0 {
 		client = &http.Client{Timeout: 30 * time.Second}

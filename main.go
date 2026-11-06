@@ -199,6 +199,19 @@ func main() {
 
 	// Initialize HTTP server
 	server := gin.New()
+	// 只信任 TRUSTED_PROXIES 里的代理（如 ALB/节点网段）追加的 X-Forwarded-For，防止客户端伪造 IP
+	// 绕过令牌 IP 白名单和登录限流；未配置时保持 gin 默认行为（信任所有来源），不影响现有环境
+	if raw := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")); raw != "" {
+		trustedProxies, _, err := common.ResolveTrustedProxies(raw)
+		if err == nil {
+			err = common.ConfigureTrustedProxies(server, trustedProxies)
+		}
+		if err != nil {
+			common.SysError("configure trusted proxies failed, keep default: " + err.Error())
+		} else {
+			common.SysLog(fmt.Sprintf("trusted proxies configured: %v", trustedProxies))
+		}
+	}
 	server.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
 		common.SysLog(fmt.Sprintf("panic detected: %v", err))
 		c.JSON(http.StatusInternalServerError, gin.H{

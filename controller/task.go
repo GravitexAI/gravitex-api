@@ -194,12 +194,15 @@ func initTaskArtifactAdaptor(task *model.Task) (relaychannel.TaskAdaptor, error)
 	if baseURL == "" {
 		baseURL = constant.GetChannelBaseURL(channelModel.Type)
 	}
+	channelSetting := channelModel.GetSetting()
+	// 供应商渠道带拨号防护标记，拒绝连接内网地址（仅运行期，不落库）
+	channelSetting.Proxy = channelModel.GetDialProxy()
 	adaptor.Init(&relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelType:    channelModel.Type,
 			ChannelBaseUrl: baseURL,
 			ApiKey:         pluginKey,
-			ChannelSetting: channelModel.GetSetting(),
+			ChannelSetting: channelSetting,
 		},
 	})
 	return adaptor, nil

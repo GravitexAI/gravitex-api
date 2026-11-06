@@ -112,6 +112,8 @@ func UploadBase64ToOSS(ctx context.Context, dataURI string, fileName string, ext
 		return "", fmt.Errorf("create OSS upload request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// 内部调用签名：Java /resource/oss 要求登录或有效签名
+	SignInternalRequest(req, body)
 
 	resp, err := ossHTTPClient.Do(req)
 	if err != nil {

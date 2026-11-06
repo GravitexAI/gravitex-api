@@ -260,7 +260,8 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 
 	client := service.GetSSRFProtectedHTTPClient()
 	if proxy != "" {
-		client, err = service.GetHttpClientWithProxy(proxy)
+		// 供应商渠道走代理时同样需要拨号防护（直连分支已是 SSRF 防护客户端）
+		client, err = service.GetHttpClientWithProxy(channel.GetDialProxy())
 		if err != nil {
 			return &taskMediaProxyError{
 				status: http.StatusInternalServerError, code: "artifact_internal_error",

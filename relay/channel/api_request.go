@@ -457,7 +457,7 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		targetHeader.Set(key, value)
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
-	targetConn, _, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
+	targetConn, _, err := WebsocketDialerForChannel(info).Dial(fullRequestURL, targetHeader)
 	if err != nil {
 		return nil, fmt.Errorf("dial failed to %s: %w", common.SanitizeURLForLog(fullRequestURL), err)
 	}
@@ -465,6 +465,20 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	//all, err := io.ReadAll(requestBody)
 	//err = service.WssString(c, targetConn, string(all))
 	return targetConn, nil
+}
+
+// WebsocketDialerForChannel 返回上游 WebSocket 拨号器：供应商渠道使用拨号阶段拒绝内网地址的拨号器，
+// 其余渠道沿用 websocket.DefaultDialer（行为不变）。
+func WebsocketDialerForChannel(info *common.RelayInfo) *websocket.Dialer {
+	if info == nil || info.ChannelMeta == nil {
+		return websocket.DefaultDialer
+	}
+	if _, guarded := common2.SplitSupplierDialGuard(info.ChannelSetting.Proxy); !guarded {
+		return websocket.DefaultDialer
+	}
+	dialer := *websocket.DefaultDialer
+	dialer.NetDialContext = service.NewSupplierGuardedDialer().DialContext
+	return &dialer
 }
 
 func startPingKeepAlive(c *gin.Context, pingInterval time.Duration) (context.CancelFunc, <-chan struct{}) {

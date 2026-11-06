@@ -389,7 +389,7 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 	if adaptor == nil {
 		return errors.New("adaptor not found")
 	}
-	proxy := ch.GetSetting().Proxy
+	proxy := ch.GetDialProxy()
 	resp, err := adaptor.FetchTask(*ch.BaseURL, ch.Key, map[string]any{
 		"ids": taskIds,
 	}, proxy)
@@ -563,6 +563,10 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 		ChannelType:    pollingChannelType,
 		ChannelBaseUrl: cacheGetChannel.GetBaseURL(),
 	}
+	// 仅供应商渠道携带拨号代理键，轮询辅助请求据此启用拨号防护（运行期，不落库）；官方渠道行为不变
+	if cacheGetChannel.GetOtherSettings().IsSupplierChannel() {
+		info.ChannelSetting.Proxy = cacheGetChannel.GetDialProxy()
+	}
 	info.ApiKey = cacheGetChannel.Key
 	adaptor.Init(info)
 	disablePollingSleep := cacheGetChannel.GetOtherSettings().DisableTaskPollingSleep
@@ -595,7 +599,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	if ch.GetBaseURL() != "" {
 		baseURL = ch.GetBaseURL()
 	}
-	proxy := ch.GetSetting().Proxy
+	proxy := ch.GetDialProxy()
 
 	task := taskM[taskId]
 	if task == nil {

@@ -204,7 +204,11 @@ func updateTask(info *relaycommon.RelayInfo, taskID string) (*AliResponse, error
 
 	req.Header.Set("Authorization", "Bearer "+info.ApiKey)
 
-	client := &http.Client{}
+	// 供应商渠道改用拨号防护客户端，官方渠道行为不变
+	client, err := service.GetChannelAuxHttpClient(info.ChannelSetting.Proxy, &http.Client{})
+	if err != nil {
+		return &aliResponse, err, nil
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		common.SysLog("updateTask client.Do err: " + err.Error())

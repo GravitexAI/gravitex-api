@@ -15,6 +15,9 @@ import (
 type HTTPTransportPolicy struct {
 	Protocol string // dto.HTTPProtocolAuto or dto.HTTPProtocolHTTP1
 	Shards   int    // 1..dto.MaxHTTP2ConnectionShards
+	// SupplierDialGuard 为 true 时拨号阶段拒绝内网/保留地址（仅供应商渠道），
+	// 与普通客户端使用不同缓存键与独立连接池，避免复用官方渠道的内网连接。
+	SupplierDialGuard bool
 }
 
 var httpTransportPolicyWarnings sync.Map
@@ -83,6 +86,9 @@ func warnHTTPTransportPolicyOnce(field, value string) {
 }
 
 func (p HTTPTransportPolicy) cacheKeyPart() string {
+	if p.SupplierDialGuard {
+		return fmt.Sprintf("%s|%d|supplier-guard", p.Protocol, p.Shards)
+	}
 	return fmt.Sprintf("%s|%d", p.Protocol, p.Shards)
 }
 

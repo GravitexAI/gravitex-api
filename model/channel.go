@@ -1274,6 +1274,17 @@ func (channel *Channel) SetSetting(setting dto.ChannelSettings) {
 	channel.Setting = common.GetPointer[string](string(settingBytes))
 }
 
+// GetDialProxy 返回用于选择出站 HTTP 客户端的代理键：供应商渠道会带上拨号防护标记，
+// 使 service.GetHttpClientWithProxy* 返回拨号阶段拒绝内网地址的客户端。
+// 返回值仅用于选择客户端，不能写回渠道设置。
+func (channel *Channel) GetDialProxy() string {
+	proxy := channel.GetSetting().Proxy
+	if channel.GetOtherSettings().IsSupplierChannel() {
+		return common.WithSupplierDialGuard(proxy)
+	}
+	return proxy
+}
+
 func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 	setting := dto.ChannelOtherSettings{}
 	if channel.OtherSettings != "" {

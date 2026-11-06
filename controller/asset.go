@@ -119,7 +119,8 @@ func getAssetChannelBaseURL(ch *model.Channel) string {
 }
 
 func assetHTTPClient(ch *model.Channel) (*http.Client, error) {
-	proxy := ch.GetSetting().Proxy
+	// 供应商渠道带拨号防护标记，拒绝连接内网地址
+	proxy := ch.GetDialProxy()
 	return service.GetHttpClientWithProxy(proxy)
 }
 

@@ -62,6 +62,10 @@ func updateVideoTaskAll(ctx context.Context, platform constant.TaskPlatform, cha
 		ApiVersion:           cacheGetChannel.Other,
 		ChannelOtherSettings: cacheGetChannel.GetOtherSettings(),
 	}
+	// 仅供应商渠道携带拨号代理键，轮询辅助请求据此启用拨号防护（运行期，不落库）；官方渠道行为不变
+	if info.ChannelOtherSettings.IsSupplierChannel() {
+		info.ChannelSetting.Proxy = cacheGetChannel.GetDialProxy()
+	}
 	info.ApiKey = cacheGetChannel.Key
 	adaptor.Init(info)
 	for _, taskId := range taskIds {
@@ -77,7 +81,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	if channel.GetBaseURL() != "" {
 		baseURL = channel.GetBaseURL()
 	}
-	proxy := channel.GetSetting().Proxy
+	proxy := channel.GetDialProxy()
 
 	task := taskM[taskId]
 	if task == nil {

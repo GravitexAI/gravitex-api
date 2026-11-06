@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/url"
@@ -111,6 +112,17 @@ type ChannelOtherSettings struct {
 
 	AdvancedCustom *AdvancedCustomConfig `json:"advanced_custom,omitempty"`
 	MockAI         *MockAIConfig         `json:"mock_ai,omitempty"`
+
+	// OwnerUserId 由 Java ChannelLiteServiceImpl（OWNER_KEY = "ownerUserId"）在供应商创建渠道时写入，
+	// 存在即表示供应商渠道。Java 写入的是字符串形式的雪花 ID，用 RawMessage 原样保留，
+	// 兼容字符串/数字两种形态，避免类型不符导致整段 settings 解析失败被清空。
+	OwnerUserId json.RawMessage `json:"ownerUserId,omitempty"`
+}
+
+// IsSupplierChannel 判断是否为供应商渠道（settings 中带非空 ownerUserId）。
+func (s ChannelOtherSettings) IsSupplierChannel() bool {
+	owner := strings.TrimSpace(string(s.OwnerUserId))
+	return owner != "" && owner != "null" && owner != `""`
 }
 
 func (s ChannelOtherSettings) ValidateModelCostDiscount() error {

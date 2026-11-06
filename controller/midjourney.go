@@ -119,7 +119,14 @@ func runMidjourneyTaskUpdateOnce(ctx context.Context, report func(processed, tot
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("mj-api-secret", midjourneyChannel.Key)
-		resp, err := service.GetHttpClient().Do(req)
+		// 供应商渠道改用拨号防护客户端，官方渠道行为不变
+		client, err := service.GetChannelAuxHttpClient(midjourneyChannel.GetDialProxy(), service.GetHttpClient())
+		if err != nil {
+			cancel()
+			logger.LogError(ctx, fmt.Sprintf("Get Task http client error: %v", err))
+			continue
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			logger.LogError(ctx, fmt.Sprintf("Get Task Do req error: %v", err))
 			cancel()
