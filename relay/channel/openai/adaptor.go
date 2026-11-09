@@ -410,8 +410,12 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			request.Temperature = nil
 		}
 
-		// gpt-5 及之后世代适配 归零不再支持的参数
-		if isGPT5OrNewerModel {
+		// gpt-5 及之后世代适配 归零不再支持的参数；
+		// GPT-5.6+ 在 reasoning_effort=none 时官方支持采样参数，此时保留（不支持 none 的模型除外）
+		samplingAllowed := relaycommon.IsGPT56PlusModel(info.UpstreamModelName) &&
+			strings.EqualFold(strings.TrimSpace(request.ReasoningEffort), "none") &&
+			!relaycommon.GPTModelRejectsNoneEffort(info.UpstreamModelName)
+		if isGPT5OrNewerModel && !samplingAllowed {
 			request.Temperature = nil
 			request.TopP = nil
 			request.LogProbs = nil
@@ -464,6 +468,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 			info.UpstreamModelName = baseModel
 			request.Model = baseModel
 		}
+		// Chat 端点保持 max -> xhigh：Azure Chat 最高只到 xhigh，直接透传 max 会 400
 		if canonicalEffort := kitreasoning.OpenAIEffort(kitreasoning.EffectiveEffort(currentIntent)); canonicalEffort != "" {
 			request.ReasoningEffort = string(canonicalEffort)
 			info.SetReasoningEffort(string(canonicalEffort))
@@ -1148,7 +1153,12 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 			info.UpstreamModelName = originModel
 		}
 	}
-	if canonicalEffort := kitreasoning.OpenAIEffort(kitreasoning.EffectiveEffort(currentIntent)); canonicalEffort != "" {
+	// GPT-5.6+ 的 Responses 端点原生支持 max，保留；更早的模型仍映射为 xhigh
+	canonicalEffort := kitreasoning.EffectiveEffort(currentIntent)
+	if canonicalEffort != kitreasoning.EffortMax || !relaycommon.IsGPT56PlusModel(request.Model) {
+		canonicalEffort = kitreasoning.OpenAIEffort(canonicalEffort)
+	}
+	if canonicalEffort != "" {
 		if request.Reasoning == nil {
 			request.Reasoning = &dto.Reasoning{}
 		}

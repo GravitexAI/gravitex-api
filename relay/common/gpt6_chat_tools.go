@@ -8,25 +8,74 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-var gpt6ChatFunctionToolModels = map[string]struct{}{
-	"gpt-6-sol":  {},
-	"gpt-6-luna": {},
+// gptChatToolRule describes how a GPT model family handles function tools on
+// Chat Completions. Families that keep tools only accept them with
+// reasoning_effort "none"; families that drop tools reject them with any effort.
+// rejectsNoneEffort marks models without a "none" effort level.
+type gptChatToolRule struct {
+	modelPrefix       string
+	dropTools         bool
+	rejectsNoneEffort bool
 }
 
-// SanitizeGPT6ChatToolReasoningEffort applies the GPT-6 Chat Completions
-// compatibility rule. GPT-6 Astra and GPT-6.1 Sol reject "none" as an effort
-// and reject function tools with any supported effort, so Chat Completions
-// requests for those models must omit function tools. Sol and Luna accept an
-// explicit "none" to disable reasoning while preserving function tools.
+// gptChatToolRules is matched in order, so specific models must precede their
+// family prefix. A prefix matches the exact name or the name followed by "-"
+// (e.g. dated Azure names like gpt-5.6-sol-2026-07-09).
+var gptChatToolRules = []gptChatToolRule{
+	{modelPrefix: "gpt-6-astra", dropTools: true, rejectsNoneEffort: true},
+	{modelPrefix: "gpt-6.1-sol", dropTools: true, rejectsNoneEffort: true},
+	{modelPrefix: "gpt-6.1", dropTools: true},
+	{modelPrefix: "gpt-6-sol"},
+	{modelPrefix: "gpt-6-luna"},
+	{modelPrefix: "gpt-5.6"},
+}
+
+// matchGPTChatToolRule returns the rule of a GPT-5.6+ model, or nil for any
+// other model.
+func matchGPTChatToolRule(model string) *gptChatToolRule {
+	model = strings.TrimSpace(model)
+	for i := range gptChatToolRules {
+		prefix := gptChatToolRules[i].modelPrefix
+		if model == prefix || strings.HasPrefix(model, prefix+"-") {
+			return &gptChatToolRules[i]
+		}
+	}
+	return nil
+}
+
+// IsGPT56PlusModel reports whether the model belongs to the GPT-5.6+ families
+// listed in gptChatToolRules.
+func IsGPT56PlusModel(model string) bool {
+	return matchGPTChatToolRule(model) != nil
+}
+
+// GPTModelRejectsNoneEffort reports whether the model rejects reasoning effort
+// "none" (GPT-6 Astra, GPT-6.1 Sol).
+func GPTModelRejectsNoneEffort(model string) bool {
+	rule := matchGPTChatToolRule(model)
+	return rule != nil && rule.rejectsNoneEffort
+}
+
+// SanitizeGPT6ChatToolReasoningEffort applies the GPT-5.6 / GPT-6 Chat
+// Completions compatibility rule. GPT-6 Astra and all GPT-6.1 models reject
+// function tools on Chat Completions, so those tools are removed; Astra and
+// GPT-6.1 Sol additionally reject "none" as an effort, so it is lowered to
+// "low", their lightest level, while GPT-6.1 Terra accepts "none". GPT-5.6, GPT-6 Sol and GPT-6 Luna accept function tools only with
+// reasoning_effort "none", so the effort is forced to "none" to keep the tools.
 func SanitizeGPT6ChatToolReasoningEffort(data []byte, info *RelayInfo) ([]byte, bool, error) {
 	if info == nil || info.RelayMode != relayconstant.RelayModeChatCompletions {
 		return data, false, nil
 	}
 
-	model := strings.TrimSpace(gjson.GetBytes(data, "model").String())
-	effort := strings.TrimSpace(gjson.GetBytes(data, "reasoning_effort").String())
-	if model == "gpt-6-astra" || model == "gpt-6.1-sol" {
-		if !hasOpenAIFunctionTool(data) && !strings.EqualFold(effort, "none") {
+	rule := matchGPTChatToolRule(gjson.GetBytes(data, "model").String())
+	if rule == nil {
+		return data, false, nil
+	}
+
+	effortIsNone := strings.EqualFold(strings.TrimSpace(gjson.GetBytes(data, "reasoning_effort").String()), "none")
+	if rule.dropTools {
+		lowerNone := rule.rejectsNoneEffort && effortIsNone
+		if !hasOpenAIFunctionTool(data) && !lowerNone {
 			return data, false, nil
 		}
 
@@ -38,8 +87,8 @@ func SanitizeGPT6ChatToolReasoningEffort(data []byte, info *RelayInfo) ([]byte, 
 				return nil, false, err
 			}
 		}
-		if strings.EqualFold(effort, "none") {
-			result, err = sjson.DeleteBytes(result, "reasoning_effort")
+		if lowerNone {
+			result, err = sjson.SetBytes(result, "reasoning_effort", "low")
 			if err != nil {
 				return nil, false, err
 			}
@@ -48,10 +97,7 @@ func SanitizeGPT6ChatToolReasoningEffort(data []byte, info *RelayInfo) ([]byte, 
 		return result, true, nil
 	}
 
-	if _, matched := gpt6ChatFunctionToolModels[model]; !matched {
-		return data, false, nil
-	}
-	if strings.EqualFold(effort, "none") || !hasOpenAIFunctionTool(data) {
+	if effortIsNone || !hasOpenAIFunctionTool(data) {
 		return data, false, nil
 	}
 

@@ -285,6 +285,19 @@ type ToolCallRequest struct {
 	Custom   json.RawMessage `json:"custom,omitempty"`
 }
 
+// MarshalJSON omits the function object for non-function tools such as custom
+// tools; the value-typed field would otherwise always emit "function":{"name":""}.
+func (t ToolCallRequest) MarshalJSON() ([]byte, error) {
+	type toolAlias ToolCallRequest
+	if t.Type == "function" || t.Function.Name != "" {
+		return kitutil.Marshal(toolAlias(t))
+	}
+	return kitutil.Marshal(struct {
+		toolAlias
+		Function *FunctionRequest `json:"function,omitempty"`
+	}{toolAlias: toolAlias(t)})
+}
+
 type FunctionRequest struct {
 	Description string `json:"description,omitempty"`
 	Name        string `json:"name"`
@@ -297,7 +310,8 @@ type StreamOptions struct {
 	IncludeUsage bool `json:"include_usage,omitempty"`
 	// IncludeObfuscation is only for /v1/responses stream payload.
 	// This field is filtered by default and can be enabled via channel setting allow_include_obfuscation.
-	IncludeObfuscation bool `json:"include_obfuscation,omitempty"`
+	// Pointer so an explicit false (the only non-default value) survives re-serialization.
+	IncludeObfuscation *bool `json:"include_obfuscation,omitempty"`
 }
 
 func (r *GeneralOpenAIRequest) GetMaxTokens() uint {
@@ -339,6 +353,9 @@ type Message struct {
 	ToolCalls        json.RawMessage `json:"tool_calls,omitempty"`
 	ToolCallId       string          `json:"tool_call_id,omitempty"`
 	Annotations      json.RawMessage `json:"annotations,omitempty"`
+	// Refusal / Audio 是官方 assistant 历史消息字段，原样透传
+	Refusal json.RawMessage `json:"refusal,omitempty"`
+	Audio   json.RawMessage `json:"audio,omitempty"`
 	// CacheControl 是网关扩展字段，允许 OpenAI 客户端在单条 message 上显式启用
 	// Anthropic prompt caching。转换为 Claude 协议时会附加到该 message 的
 	// 最后一个 content block 上。Anthropic 原生协议本身就有 cache_control。
