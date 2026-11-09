@@ -554,20 +554,18 @@ func getModelFromRequest(c *gin.Context) (*ModelRequest, error) {
 		}
 	}
 	if strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json") {
-		modelRequest, err := getModelFromJSONBody(c)
-		if err != nil {
-			return nil, errors.New(i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
-		}
-		return modelRequest, nil
+		// Callers add the "Invalid request" prefix; wrapping here doubled it.
+		return getModelFromJSONBody(c)
 	}
 
 	var modelRequest ModelRequest
-	err := common.UnmarshalBodyReusable(c, &modelRequest)
-	if err != nil {
-		return nil, errors.New(i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
+	if err := common.UnmarshalBodyReusable(c, &modelRequest); err != nil {
+		return nil, err
 	}
 	return &modelRequest, nil
 }
+
+var errInvalidJSONRequestBody = errors.New("invalid JSON request body")
 
 func getModelFromJSONBody(c *gin.Context) (*ModelRequest, error) {
 	storage, err := common.GetBodyStorage(c)
@@ -579,7 +577,7 @@ func getModelFromJSONBody(c *gin.Context) (*ModelRequest, error) {
 		return nil, err
 	}
 	if !gjson.ValidBytes(requestBody) {
-		return nil, errors.New("invalid JSON request body")
+		return nil, errInvalidJSONRequestBody
 	}
 	if countTopLevelJSONKey(requestBody, "model") > 1 {
 		return nil, errors.New("model must be provided once")

@@ -325,6 +325,11 @@ func PinTaskPluginEndpoint() gin.HandlerFunc {
 
 		modelRequest, err := getModelFromRequest(c)
 		if err != nil {
+			// Malformed JSON is not a task protocol problem; let the endpoint report it.
+			if errors.Is(err, errInvalidJSONRequestBody) {
+				c.Next()
+				return
+			}
 			if _, _, protocolPath := pluginruntime.LookupHostProtocolOperation(c.Request.Method, c.Request.URL.Path); protocolPath {
 				abortWithOpenAiMessage(c, http.StatusBadRequest, "Invalid task protocol request")
 				return

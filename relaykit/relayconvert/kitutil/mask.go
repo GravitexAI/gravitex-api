@@ -10,6 +10,16 @@ var (
 	maskURLPattern    = regexp.MustCompile(`(http|https)://[^\s/$.?#].[^\s]*`)
 	maskDomainPattern = regexp.MustCompile(`\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b`)
 	maskIPPattern     = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+	// maskPlainDomainTLDs lists the generic TLDs that mark a bare dotted token
+	// as a domain; two-letter country-code TLDs are recognized by length. Any
+	// other dotted token, such as a parameter path like reasoning.effort, stays
+	// readable.
+	maskPlainDomainTLDs = map[string]struct{}{
+		"com": {}, "net": {}, "org": {}, "edu": {}, "gov": {}, "mil": {}, "int": {},
+		"info": {}, "biz": {}, "xyz": {}, "top": {}, "dev": {}, "app": {}, "cloud": {},
+		"tech": {}, "site": {}, "online": {}, "pro": {}, "vip": {}, "club": {}, "link": {},
+		"live": {}, "work": {}, "space": {}, "run": {}, "services": {}, "icu": {},
+	}
 	// maskApiKeyPattern matches patterns like 'api_key:xxx' or "api_key:xxx" to mask the API key value
 	maskApiKeyPattern = regexp.MustCompile(`(['"]?)api_key:([^\s'"]+)(['"]?)`)
 )
@@ -121,6 +131,10 @@ func MaskSensitiveInfo(str string) string {
 
 	// Mask domain names without protocol (like openai.com, www.openai.com)
 	str = maskDomainPattern.ReplaceAllStringFunc(str, func(domain string) string {
+		tld := strings.ToLower(domain[strings.LastIndex(domain, ".")+1:])
+		if _, known := maskPlainDomainTLDs[tld]; !known && len(tld) != 2 {
+			return domain
+		}
 		return maskHostForPlainDomain(domain)
 	})
 

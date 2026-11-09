@@ -1698,3 +1698,29 @@ func insertTaskPluginRouteTask(t *testing.T, task *model.Task) {
 	t.Helper()
 	require.NoError(t, model.DB.Create(task).Error)
 }
+
+func TestPinTaskPluginEndpointLetsMalformedJSONReachEndpoint(t *testing.T) {
+	const key = "endpoint-malformed-json-test"
+	_, err := jsplugin.DefaultRegistry.Register(taskProtocolPluginSource(
+		key,
+		"1.0.0",
+		`["claimed-model"]`,
+		"/v1/responses",
+		`throw new Error("model is required");`,
+	), jsplugin.Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+
+	router := gin.New()
+	router.POST("/v1/responses", PinTaskPluginEndpoint(), func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	assert.Equal(t, http.StatusNoContent, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), "Invalid task protocol request")
+}
