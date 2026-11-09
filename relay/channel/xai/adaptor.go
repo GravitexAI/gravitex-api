@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -16,6 +18,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 
 	"github.com/QuantumNous/new-api/relay/constant"
 
@@ -114,19 +117,133 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 			body[k] = v
 		}
 	}
+	// deferred 模式上游只回 request_id，要靠 GET /v1/images/{request_id} 轮询取图，
+	// 网关没有这个轮询接口，放行会让用户被扣费却拿不到图，直接拒绝。
+	if bytes.Equal(bytes.TrimSpace(body["deferred"]), []byte("true")) {
+		return nil, types.NewErrorWithStatusCode(
+			errors.New("deferred image generation is not supported, please remove the deferred parameter"),
+			types.ErrorCodeInvalidRequest,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+	// OpenAI SDK 只会传 size，xAI 用 aspect_ratio 控制画幅；客户端没显式传 aspect_ratio 时按 size 换算。
+	if _, exists := body["aspect_ratio"]; !exists {
+		if ratio := xaiAspectRatioFromSize(request.Size); ratio != "" {
+			encoded, err := common.Marshal(ratio)
+			if err != nil {
+				return nil, err
+			}
+			body["aspect_ratio"] = encoded
+		}
+	}
 	// OpenAI 专有、xAI 未定义的字段去掉，避免老客户端（如固定带 size 的 SDK）被上游拒绝。
 	for _, k := range xaiImageUnsupportedFields {
 		delete(body, k)
 	}
 
+	// xAI 的参考图只认引用对象（{"url": ...} 或 {"file_id": ...}），且只收 JSON 请求体。
+	// OpenAI 习惯的字符串 / 字符串数组转成 {"url": ...}；对象原样保留，
+	// 其余取值也原样转发，合法性交给上游判断。
+	_, usedImages := body["images"]
+	var refs []json.RawMessage
+	for _, raw := range []json.RawMessage{body["image"], body["images"]} {
+		items := []json.RawMessage{raw}
+		if common.GetJsonType(raw) == "array" {
+			if err := common.Unmarshal(raw, &items); err != nil {
+				return nil, err
+			}
+		}
+		for _, item := range items {
+			switch common.GetJsonType(item) {
+			case "unknown", "null":
+				continue
+			case "string":
+				var url string
+				if err := common.Unmarshal(item, &url); err != nil {
+					return nil, err
+				}
+				if strings.TrimSpace(url) == "" {
+					continue
+				}
+				if item, err = common.Marshal(map[string]string{"url": url}); err != nil {
+					return nil, err
+				}
+			}
+			refs = append(refs, item)
+		}
+	}
+	// OpenAI SDK 的 images.edit() 以 multipart 上传图片文件，xAI 不支持表单，
+	// 这里把上传的文件转成 data URI，按提交顺序追加到参考图里。
+	if c != nil && info.RelayMode == constant.RelayModeImagesEdits {
+		dataURIs, err := channel.ImageDataURIsFromForm(c)
+		if err != nil {
+			return nil, err
+		}
+		for _, dataURI := range dataURIs {
+			ref, err := common.Marshal(map[string]string{"url": dataURI})
+			if err != nil {
+				return nil, err
+			}
+			refs = append(refs, ref)
+		}
+	}
+	delete(body, "image")
+	delete(body, "images")
+	// 单图用 image，多图用 images（两者互斥）；客户端本来就传 images 时保持 images。
+	if len(refs) == 1 && !usedImages {
+		body["image"] = refs[0]
+	} else if len(refs) > 0 {
+		encoded, err := common.Marshal(refs)
+		if err != nil {
+			return nil, err
+		}
+		body["images"] = encoded
+	}
+
 	// xAI 图生图只走 /v1/images/edits；generations 请求带了参考图时改发 edits，
 	// 否则上游会忽略参考图、按纯文生图出图。
-	_, hasImage := body["image"]
-	_, hasImages := body["images"]
-	if info.RelayMode == constant.RelayModeImagesGenerations && (hasImage || hasImages) {
+	if info.RelayMode == constant.RelayModeImagesGenerations && len(refs) > 0 {
 		info.RequestURLPath = strings.Replace(info.RequestURLPath, "/images/generations", "/images/edits", 1)
 	}
 	return body, nil
+}
+
+// xaiAspectRatios 是 xAI 图像接口支持的固定画幅（auto 单独处理）。
+var xaiAspectRatios = []struct {
+	name  string
+	value float64
+}{
+	{"1:1", 1}, {"3:4", 3.0 / 4}, {"4:3", 4.0 / 3}, {"9:16", 9.0 / 16}, {"16:9", 16.0 / 9},
+	{"2:3", 2.0 / 3}, {"3:2", 3.0 / 2}, {"9:19.5", 9 / 19.5}, {"19.5:9", 19.5 / 9},
+	{"9:20", 9.0 / 20}, {"20:9", 20.0 / 9}, {"1:2", 1.0 / 2}, {"2:1", 2}, {"21:9", 21.0 / 9}, {"5:2", 5.0 / 2},
+}
+
+// xaiAspectRatioFromSize 把 OpenAI 的 size（如 1536x1024、auto）换算成 xAI 的 aspect_ratio：
+// 取宽高比最接近的支持画幅；size 为空或无法解析时返回空串，不设置 aspect_ratio。
+func xaiAspectRatioFromSize(size string) string {
+	size = strings.ToLower(strings.TrimSpace(size))
+	if size == "auto" {
+		return "auto"
+	}
+	widthStr, heightStr, ok := strings.Cut(size, "x")
+	if !ok {
+		return ""
+	}
+	width, errW := strconv.ParseFloat(strings.TrimSpace(widthStr), 64)
+	height, errH := strconv.ParseFloat(strings.TrimSpace(heightStr), 64)
+	if errW != nil || errH != nil || width <= 0 || height <= 0 || math.IsInf(width, 0) || math.IsInf(height, 0) {
+		return ""
+	}
+	// 按对数距离比较，横竖画幅的偏差同等对待。
+	target := math.Log(width / height)
+	best, bestDiff := "", math.Inf(1)
+	for _, ratio := range xaiAspectRatios {
+		if diff := math.Abs(math.Log(ratio.value) - target); diff < bestDiff {
+			best, bestDiff = ratio.name, diff
+		}
+	}
+	return best
 }
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
@@ -138,6 +255,11 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
+	// 非透传时图像请求体总是转换后的 JSON；客户端用 multipart 调 edits 时，不能把表单的 Content-Type 带给上游。
+	passThrough := model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled
+	if !passThrough && (info.RelayMode == constant.RelayModeImagesGenerations || info.RelayMode == constant.RelayModeImagesEdits) {
+		req.Set("Content-Type", "application/json")
+	}
 	req.Set("Authorization", "Bearer "+info.ApiKey)
 	return nil
 }
