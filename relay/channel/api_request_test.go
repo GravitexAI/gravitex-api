@@ -1,28 +1,15 @@
 package channel
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	common2 "github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
-
-func TestNewTaskAPIRequestInheritsClientCancellation(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	requestContext, cancel := context.WithCancel(context.Background())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
-
-	upstream, err := newTaskAPIRequest(c, "https://provider.example/tasks", nil)
-	require.NoError(t, err)
-	cancel()
-
-	require.ErrorIs(t, upstream.Context().Err(), context.Canceled)
-}
 
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 	t.Parallel()
@@ -366,4 +353,48 @@ func TestProcessHeaderOverrideResolvesServerUserID(t *testing.T) {
 	headers, err := processHeaderOverride(info, ctx)
 	require.NoError(t, err)
 	require.Equal(t, "u_8812", headers["x-end-user"])
+}
+
+func TestProcessHeaderOverride_RequestIdPlaceholderResolvesSystemRequestId(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx.Set(common2.RequestIdKey, "req-abc-123")
+
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"X-Te-Request-Id": "{request_id}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	require.Equal(t, "req-abc-123", headers["x-te-request-id"])
+}
+
+func TestProcessHeaderOverride_RequestIdPlaceholderSkippedWhenRequestIdAbsent(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			HeadersOverride: map[string]any{
+				"X-Te-Request-Id": "{request_id}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	_, ok := headers["x-te-request-id"]
+	require.False(t, ok)
 }

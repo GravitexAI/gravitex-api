@@ -2694,6 +2694,9 @@ const EditChannelModal = (props) => {
                             <div>
                               {t('渠道密钥')}: {'{api_key}'}
                             </div>
+                            <div>
+                              {t('系统请求 ID')}: {'{request_id}'}
+                            </div>
                           </div>
                         </div>
                       </div>

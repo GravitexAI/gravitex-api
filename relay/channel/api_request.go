@@ -228,6 +228,16 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 		}
 		template = strings.ReplaceAll(template, "{user_id}", fmt.Sprintf("u_%d", userID))
 	}
+	if strings.Contains(template, "{request_id}") {
+		if c == nil {
+			return "", false, fmt.Errorf("missing request context for request_id placeholder")
+		}
+		requestId := c.GetString(common2.RequestIdKey)
+		if requestId == "" {
+			return "", false, nil
+		}
+		template = strings.ReplaceAll(template, "{request_id}", requestId)
+	}
 	if strings.TrimSpace(template) == "" {
 		return "", false, nil
 	}
@@ -241,6 +251,9 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 //   - {client_header:<name>|<default>}: same as above, falling back to <default>
 //     when the incoming request does not carry <name> (or it is blank)
 //   - {user_id}: resolved from the authenticated internal user ID as u_<id>
+//   - {request_id}: resolved to the gateway-generated system request ID
+//     (X-Api-Request-Id), for supplier reconciliation headers such as
+//     TokenEasy's x-te-request-id
 //
 // Header passthrough rules (keys only; values are ignored):
 //   - "*": passthrough all incoming headers by name (excluding unsafe headers)
