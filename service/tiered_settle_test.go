@@ -1207,3 +1207,33 @@ func TestTryTieredSettle_AppliesUpstreamServiceTierRatio(t *testing.T) {
 		})
 	}
 }
+
+// Claude 缓存写入总量含 5m+1h：上游未拆分或拆分不全时，剩余部分按 5m 写入价（cc）计费，不能漏收。
+func TestBuildTieredTokenParamsClaudeCacheCreationRemainder(t *testing.T) {
+	tests := []struct {
+		name     string
+		total    int
+		split5m  int
+		split1h  int
+		wantCC   float64
+		wantCC1h float64
+	}{
+		{name: "full split", total: 3000, split5m: 1000, split1h: 2000, wantCC: 1000, wantCC1h: 2000},
+		{name: "no split uses total", total: 3000, wantCC: 3000, wantCC1h: 0},
+		{name: "only 1h split", total: 3000, split1h: 2000, wantCC: 1000, wantCC1h: 2000},
+		{name: "partial split remainder", total: 3500, split5m: 1000, split1h: 2000, wantCC: 1500, wantCC1h: 2000},
+		{name: "split without total", total: 0, split5m: 1000, split1h: 2000, wantCC: 1000, wantCC1h: 2000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			usage := &dto.Usage{PromptTokens: 100, UsageSemantic: "anthropic"}
+			usage.PromptTokensDetails.CachedCreationTokens = tt.total
+			usage.ClaudeCacheCreation5mTokens = tt.split5m
+			usage.ClaudeCacheCreation1hTokens = tt.split1h
+
+			params := BuildTieredTokenParams(usage, true, billingexpr.UsedVars(`tier("base", p * 1 + cc * 1.25 + cc1h * 2)`))
+			assert.Equal(t, tt.wantCC, params.CC)
+			assert.Equal(t, tt.wantCC1h, params.CC1h)
+		})
+	}
+}

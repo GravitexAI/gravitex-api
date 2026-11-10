@@ -527,6 +527,24 @@ export const useLogsData = () => {
             }),
           });
         }
+        // 上游按 fast / ultrafast / flex 等档位处理时，实际扣费 = 计费过程金额 × 档位倍率
+        if (other?.service_tier) {
+          const serviceTierRatio = Number(other?.service_tier_ratio);
+          const hasTierRatio =
+            Number.isFinite(serviceTierRatio) && serviceTierRatio !== 1;
+          expandDataLocal.push({
+            key: t('服务档位'),
+            value: hasTierRatio
+              ? t(
+                  '{{tier}}（档位倍率 {{ratio}}x，实际扣费 = 计费过程金额 × {{ratio}}）',
+                  {
+                    tier: other.service_tier,
+                    ratio: serviceTierRatio,
+                  },
+                )
+              : other.service_tier,
+          });
+        }
       }
       if (logs[i].type === 6) {
         if (other?.task_id) {

@@ -1276,6 +1276,26 @@ function getTimeRuleSegments(requestRules) {
   return segments;
 }
 
+/**
+ * 解析 other.service_tier / service_tier_ratio（上游实际服务档位加收倍率），
+ * 生成详情列展示片段；未加收（无倍率或倍率为 1）时不显示。
+ */
+function getServiceTierSegments(serviceTier, serviceTierRatio) {
+  const ratio = Number(serviceTierRatio);
+  if (!Number.isFinite(ratio) || ratio <= 0 || ratio === 1) {
+    return [];
+  }
+  return [
+    {
+      tone: 'primary',
+      text: i18next.t('档位倍率 {{tier}} {{ratio}}x', {
+        tier: serviceTier || '',
+        ratio,
+      }),
+    },
+  ];
+}
+
 function formatRatioValue(value, digits = 6) {
   const num = Number(value);
   if (!Number.isFinite(num)) {
@@ -1330,6 +1350,8 @@ function renderPriceSimpleCore({
                                  groupRatio,
                                  user_group_ratio,
                                  request_rules: requestRules,
+                                 service_tier: serviceTier,
+                                 service_tier_ratio: serviceTierRatio,
                                  cacheTokens = 0,
                                  cacheRatio = 1.0,
                                  cacheCreationTokens = 0,
@@ -1370,6 +1392,7 @@ function renderPriceSimpleCore({
         text: getGroupRatioText(groupRatio, user_group_ratio),
       },
       ...getTimeRuleSegments(requestRules),
+      ...getServiceTierSegments(serviceTier, serviceTierRatio),
     ];
 
     if (modelPrice !== -1) {
@@ -2463,6 +2486,8 @@ export function renderTieredModelPriceSimple(opts) {
     group_ratio: groupRatio,
     user_group_ratio,
     request_rules: requestRules,
+    service_tier: serviceTier,
+    service_tier_ratio: serviceTierRatio,
     cache_tokens: cacheTokens = 0,
     cache_creation_tokens_5m: cacheCreationTokens5m = 0,
     cache_creation_tokens_1h: cacheCreationTokens1h = 0,
@@ -2487,6 +2512,7 @@ export function renderTieredModelPriceSimple(opts) {
         text: getGroupRatioText(groupRatio, user_group_ratio),
       },
       ...getTimeRuleSegments(requestRules),
+      ...getServiceTierSegments(serviceTier, serviceTierRatio),
     ];
 
     if (!tier) {
@@ -2538,6 +2564,8 @@ export function renderModelPriceSimple(opts) {
     image = false,
     image_ratio: imageRatio = 1.0,
     is_system_prompt_overwritten: isSystemPromptOverride = false,
+    service_tier,
+    service_tier_ratio,
     provider = 'openai',
     displayMode = 'price',
     outputMode = 'text',
@@ -2547,6 +2575,8 @@ export function renderModelPriceSimple(opts) {
     modelPrice,
     groupRatio,
     user_group_ratio,
+    service_tier,
+    service_tier_ratio,
     cacheTokens,
     cacheRatio,
     cacheCreationTokens,

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"math"
 	"strings"
 
 	"net/http"
@@ -75,8 +76,10 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	cc1h := float64(0)
 
 	if usage.UsageSemantic == "anthropic" {
+		// cache_creation_input_tokens 是 5m+1h 总量；上游未拆分或拆分不全时，
+		// 剩余部分并入 cc 按 5m 写入价计费，与倍率计费路径的 remaining 口径一致。
 		cc1h = float64(usage.ClaudeCacheCreation1hTokens)
-		cc5m = float64(usage.ClaudeCacheCreation5mTokens)
+		cc5m = math.Max(float64(usage.ClaudeCacheCreation5mTokens), cc5m-cc1h)
 	}
 
 	// OpenAI 12h 缓存写入（cache_write_tokens_details.ttl_12h_tokens）按 30m
