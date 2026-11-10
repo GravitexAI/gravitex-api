@@ -37,6 +37,7 @@ const RatioSetting = () => {
     ModelRatio: '',
     CacheRatio: '',
     CreateCacheRatio: '',
+    CreateCache1hRatio: '',
     CompletionRatio: '',
     GroupRatio: '',
     GroupGroupRatio: '',

@@ -590,6 +590,8 @@ type ClaudeUsage struct {
 	// OutputTokensDetails 携带上游对 output_tokens 的拆分，其中 thinking_tokens 用于
 	// 映射到 OpenAI 协议的 completion_tokens_details.reasoning_tokens。
 	OutputTokensDetails *ClaudeOutputTokensDetails `json:"output_tokens_details,omitempty"`
+	// Speed 上游实际使用的推理速度模式（standard / fast），fast 按快速模式倍率计费。
+	Speed string `json:"speed,omitempty"`
 	// BillingUsage 只在进程内传递上游原始用量给计费链路，绝不下发给客户端。
 	BillingUsage *BillingUsage `json:"-"`
 }

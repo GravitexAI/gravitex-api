@@ -29,6 +29,7 @@ var completionRatioMetaOptionKeys = []string{
 	"CompletionRatio",
 	"CacheRatio",
 	"CreateCacheRatio",
+	"CreateCache1hRatio",
 	"ImageRatio",
 	"AudioRatio",
 	"AudioCompletionRatio",
@@ -310,6 +311,11 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "CreateCache1hRatio":
+		if err = ratio_setting.ValidateCreateCache1hRatio(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
 	case "ModelRequestRateLimitGroup":
 		err = setting.CheckModelRequestRateLimitGroup(option.Value.(string))
 		if err != nil {
@@ -366,6 +372,11 @@ func UpdateOption(c *gin.Context) {
 				common.ApiErrorMsg(c, fmt.Sprintf("模型 %s 的计费表达式无效: %v", modelName, err))
 				return
 			}
+		}
+	case "billing_setting.service_tier_ratio":
+		if err = billing_setting.ValidateServiceTierRatio(option.Value.(string)); err != nil {
+			common.ApiErrorMsg(c, err.Error())
+			return
 		}
 	case "console_setting.api_info":
 		err = console_setting.ValidateConsoleSettings(option.Value.(string), "ApiInfo")

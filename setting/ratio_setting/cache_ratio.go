@@ -1,6 +1,10 @@
 package ratio_setting
 
 import (
+	"fmt"
+	"math"
+
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/types"
 )
 
@@ -163,6 +167,9 @@ var defaultCreateCacheRatio = map[string]float64{
 var cacheRatioMap = types.NewRWMap[string, float64]()
 var createCacheRatioMap = types.NewRWMap[string, float64]()
 
+// createCache1hRatioMap 1h 缓存创建倍率（相对输入价），未配置的模型按 5m 缓存创建倍率的固定比例推算
+var createCache1hRatioMap = types.NewRWMap[string, float64]()
+
 // GetCacheRatioMap returns a copy of the cache ratio map
 func GetCacheRatioMap() map[string]float64 {
 	return cacheRatioMap.ReadAll()
@@ -176,6 +183,11 @@ func CacheRatio2JSONString() string {
 // CreateCacheRatio2JSONString converts the create cache ratio map to a JSON string
 func CreateCacheRatio2JSONString() string {
 	return createCacheRatioMap.MarshalJSONString()
+}
+
+// CreateCache1hRatio2JSONString converts the 1h create cache ratio map to a JSON string
+func CreateCache1hRatio2JSONString() string {
+	return createCache1hRatioMap.MarshalJSONString()
 }
 
 // UpdateCacheRatioByJSONString updates the cache ratio map from a JSON string
@@ -197,6 +209,33 @@ func GetCacheRatio(name string) (float64, bool) {
 	return ratio, true
 }
 
+// UpdateCreateCache1hRatioByJSONString updates the 1h create cache ratio map from a JSON string
+func UpdateCreateCache1hRatioByJSONString(jsonStr string) error {
+	return types.LoadFromJsonStringWithCallback(createCache1hRatioMap, jsonStr, InvalidateExposedDataCache)
+}
+
+// MaxCreateCache1hRatio 1h 缓存创建倍率上限，防止误配出异常扣费
+const MaxCreateCache1hRatio = 100
+
+// ValidateCreateCache1hRatio 校验 1h 缓存创建倍率配置：倍率必须是 (0, MaxCreateCache1hRatio] 内的有限数
+func ValidateCreateCache1hRatio(jsonStr string) error {
+	ratios := make(map[string]float64)
+	if err := common.UnmarshalJsonStr(jsonStr, &ratios); err != nil {
+		return fmt.Errorf("1h 缓存创建倍率必须是 {模型名: 倍率} 的 JSON 对象: %w", err)
+	}
+	for model, ratio := range ratios {
+		if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio <= 0 || ratio > MaxCreateCache1hRatio {
+			return fmt.Errorf("模型 %s 的 1h 缓存创建倍率 %v 无效，必须大于 0 且不超过 %d", model, ratio, MaxCreateCache1hRatio)
+		}
+	}
+	return nil
+}
+
+// GetCreateCache1hRatio 返回模型配置的 1h 缓存创建倍率，未配置时返回 false 由调用方按 5m 倍率推算
+func GetCreateCache1hRatio(name string) (float64, bool) {
+	return createCache1hRatioMap.Get(name)
+}
+
 func GetCreateCacheRatio(name string) (float64, bool) {
 	ratio, ok := createCacheRatioMap.Get(name)
 	if !ok {
@@ -211,4 +250,8 @@ func GetCacheRatioCopy() map[string]float64 {
 
 func GetCreateCacheRatioCopy() map[string]float64 {
 	return createCacheRatioMap.ReadAll()
+}
+
+func GetCreateCache1hRatioCopy() map[string]float64 {
+	return createCache1hRatioMap.ReadAll()
 }

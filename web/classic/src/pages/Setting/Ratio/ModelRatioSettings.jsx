@@ -46,6 +46,7 @@ export default function ModelRatioSettings(props) {
     ModelRatio: '',
     CacheRatio: '',
     CreateCacheRatio: '',
+    CreateCache1hRatio: '',
     CompletionRatio: '',
     ImageRatio: '',
     AudioRatio: '',
@@ -57,6 +58,7 @@ export default function ModelRatioSettings(props) {
     VideoModelPricePerSecond: '',
     'billing_setting.billing_mode': '',
     'billing_setting.billing_expr': '',
+    'billing_setting.service_tier_ratio': '',
     ExposeRatioEnabled: false,
   });
   const refForm = useRef();
@@ -216,9 +218,7 @@ export default function ModelRatioSettings(props) {
           <Col xs={24} sm={16}>
             <Form.TextArea
               label={t('缓存创建倍率')}
-              extraText={t(
-                '默认为 5m 缓存创建倍率；1h 缓存创建倍率按固定乘法自动计算（当前为 1.6x）',
-              )}
+              extraText={t('5m 缓存创建倍率；1h 缓存创建倍率见下方单独配置')}
               placeholder={t('为一个 JSON 文本，键为模型名称，值为倍率')}
               field={'CreateCacheRatio'}
               autosize={{ minRows: 6, maxRows: 12 }}
@@ -232,6 +232,32 @@ export default function ModelRatioSettings(props) {
               ]}
               onChange={(value) =>
                 setInputs({ ...inputs, CreateCacheRatio: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('1h 缓存创建倍率')}
+              extraText={t(
+                '与缓存创建倍率一样相对输入价格，仅 Claude 1h 缓存写入（cache_control ttl=1h）使用；未配置的模型按 5m 缓存创建倍率 × 1.6 计算（官方 1h 写入 2x / 5m 写入 1.25x）。倍率需大于 0 且不超过 100',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，键为模型名称，值为倍率，例如：{"claude-opus-5-5": 2}',
+              )}
+              field={'CreateCache1hRatio'}
+              autosize={{ minRows: 6, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, CreateCache1hRatio: value })
               }
             />
           </Col>
@@ -508,6 +534,35 @@ export default function ModelRatioSettings(props) {
               ]}
               onChange={(value) =>
                 setInputs({ ...inputs, 'billing_setting.billing_expr': value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('服务档位倍率')}
+              extraText={t(
+                '按上游实际处理档位加收的倍率（OpenAI 响应 service_tier / Claude usage.speed），键为完整模型名称，值为 {档位: 倍率}，仅需配置与默认值不同的模型。未配置的模型或漏配的档位使用内置默认值：priority 2、fast 2、ultrafast 6、flex 0.5，其余档位按原价。倍率需大于 0 且不超过 100',
+              )}
+              placeholder={t(
+                '为一个 JSON 文本，例如：{"gpt-5.5": {"priority": 2.5, "fast": 2.5}}',
+              )}
+              field={'billing_setting.service_tier_ratio'}
+              autosize={{ minRows: 4, maxRows: 12 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: '不是合法的 JSON 字符串',
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({
+                  ...inputs,
+                  'billing_setting.service_tier_ratio': value,
+                })
               }
             />
           </Col>

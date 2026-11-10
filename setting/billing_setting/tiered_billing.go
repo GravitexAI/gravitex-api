@@ -23,15 +23,31 @@ const (
 )
 
 // BillingSetting is managed by config.GlobalConfig.Register.
-// DB keys: billing_setting.billing_mode, billing_setting.billing_expr
+// DB keys: billing_setting.billing_mode, billing_setting.billing_expr, billing_setting.service_tier_ratio
 type BillingSetting struct {
 	BillingMode map[string]string `json:"billing_mode"`
 	BillingExpr map[string]string `json:"billing_expr"`
+	// ServiceTierRatio 按模型覆盖上游实际服务档位的加收倍率：完整模型名 -> 档位 -> 倍率。
+	// 档位取自 OpenAI 响应的 service_tier 或 Claude 的 usage.speed；
+	// 模型未配置或未配置该档位时使用代码内置的 defaultServiceTierRatios。
+	ServiceTierRatio map[string]map[string]float64 `json:"service_tier_ratio"`
 }
 
+// defaultServiceTierRatios 官方档位相对标准价的默认倍率，未在表中的档位（default / auto / scale 等）按原价。
+var defaultServiceTierRatios = map[string]float64{
+	"priority":  2,   // OpenAI Priority（2026-07-30 起改名 Fast），GPT-5.6 及更早响应回传 priority
+	"fast":      2,   // OpenAI fast / Claude 快速模式（usage.speed=fast，Opus 5.5 / 5 / 4.8 官方均为 2 倍）
+	"ultrafast": 6,   // OpenAI ultrafast
+	"flex":      0.5, // OpenAI Flex 半价档
+}
+
+// MaxServiceTierRatio 单个档位倍率上限，防止误配出异常扣费。
+const MaxServiceTierRatio = 100
+
 var billingSetting = BillingSetting{
-	BillingMode: make(map[string]string),
-	BillingExpr: make(map[string]string),
+	BillingMode:      make(map[string]string),
+	BillingExpr:      make(map[string]string),
+	ServiceTierRatio: make(map[string]map[string]float64),
 }
 
 func init() {
@@ -52,6 +68,33 @@ func GetBillingMode(model string) string {
 func GetBillingExpr(model string) (string, bool) {
 	expr, ok := billingSetting.BillingExpr[model]
 	return expr, ok
+}
+
+// GetServiceTierRatio 返回模型在指定上游档位下的加收倍率：先查模型配置，再查内置默认值，都没有返回 1。
+func GetServiceTierRatio(model string, tier string) float64 {
+	if ratio, ok := billingSetting.ServiceTierRatio[model][tier]; ok {
+		return ratio
+	}
+	if ratio, ok := defaultServiceTierRatios[tier]; ok {
+		return ratio
+	}
+	return 1
+}
+
+// ValidateServiceTierRatio 校验 service_tier_ratio 配置：倍率必须是 (0, MaxServiceTierRatio] 内的有限数。
+func ValidateServiceTierRatio(jsonStr string) error {
+	tierRatios := make(map[string]map[string]float64)
+	if err := common.UnmarshalJsonStr(jsonStr, &tierRatios); err != nil {
+		return fmt.Errorf("服务档位倍率必须是 {模型名: {档位: 倍率}} 的 JSON 对象: %w", err)
+	}
+	for model, ratios := range tierRatios {
+		for tier, ratio := range ratios {
+			if math.IsNaN(ratio) || math.IsInf(ratio, 0) || ratio <= 0 || ratio > MaxServiceTierRatio {
+				return fmt.Errorf("模型 %s 档位 %s 的倍率 %v 无效，必须大于 0 且不超过 %d", model, tier, ratio, MaxServiceTierRatio)
+			}
+		}
+	}
+	return nil
 }
 
 func GetBillingModeCopy() map[string]string {

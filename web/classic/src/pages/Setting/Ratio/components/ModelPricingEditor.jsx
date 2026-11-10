@@ -1192,6 +1192,46 @@ export default function ModelPricingEditor({
                             : ''
                         }
                       />
+                      <PriceInput
+                        label={t('1h 缓存创建价格')}
+                        value={selectedModel.createCache1hPrice}
+                        placeholder={t('输入 $/1M tokens')}
+                        onChange={(value) =>
+                          handleNumericFieldChange('createCache1hPrice', value)
+                        }
+                        headerAction={
+                          <Switch
+                            size='small'
+                            checked={isOptionalFieldEnabled(
+                              selectedModel,
+                              'createCache1hPrice',
+                            )}
+                            onChange={(checked) =>
+                              handleOptionalFieldToggle(
+                                'createCache1hPrice',
+                                checked,
+                              )
+                            }
+                          />
+                        }
+                        hidden={
+                          !isOptionalFieldEnabled(
+                            selectedModel,
+                            'createCache1hPrice',
+                          )
+                        }
+                        disabled={!hasValue(selectedModel.inputPrice)}
+                        extraText={
+                          !isOptionalFieldEnabled(
+                            selectedModel,
+                            'createCache1hPrice',
+                          )
+                            ? t(
+                                '当前未启用，Claude 1h 缓存写入按缓存创建价格 × 1.6 计费。',
+                              )
+                            : t('仅 Claude 1h 缓存写入（ttl=1h）使用')
+                        }
+                      />
                     </Card>
 
                     <Card

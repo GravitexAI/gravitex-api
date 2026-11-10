@@ -1177,7 +1177,7 @@ func TestBuildTieredTokenParamsClaudeSemanticIgnoresOpenAIDetails(t *testing.T) 
 	assert.Equal(t, 0.0, params.CC1h)
 }
 
-// 上游回传的 service_tier 决定加收倍率：fast/priority ×2、ultrafast ×6，其余档位按原价。
+// 上游回传的 service_tier 按默认档位倍率计费：fast/priority ×2、ultrafast ×6、flex ×0.5，其余档位按原价。
 func TestTryTieredSettle_AppliesUpstreamServiceTierRatio(t *testing.T) {
 	// flatExpr: 1000*2 + 500*10 = 7000 → 7000/1e6*500000 = 3500（分组倍率 0.5 → 1750）
 	tests := []struct {
@@ -1188,7 +1188,7 @@ func TestTryTieredSettle_AppliesUpstreamServiceTierRatio(t *testing.T) {
 	}{
 		{name: "no tier", upstreamTier: "", wantAfterGrp: 1750, wantBeforeGrp: 3500},
 		{name: "default", upstreamTier: "default", wantAfterGrp: 1750, wantBeforeGrp: 3500},
-		{name: "flex keeps base price", upstreamTier: "flex", wantAfterGrp: 1750, wantBeforeGrp: 3500},
+		{name: "flex half price", upstreamTier: "flex", wantAfterGrp: 875, wantBeforeGrp: 1750},
 		{name: "priority", upstreamTier: "priority", wantAfterGrp: 3500, wantBeforeGrp: 7000},
 		{name: "fast", upstreamTier: "fast", wantAfterGrp: 3500, wantBeforeGrp: 7000},
 		{name: "ultrafast", upstreamTier: "ultrafast", wantAfterGrp: 10500, wantBeforeGrp: 21000},

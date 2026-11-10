@@ -38,6 +38,7 @@ const EMPTY_MODEL = {
   completionRatioLocked: false,
   cachePrice: '',
   createCachePrice: '',
+  createCache1hPrice: '',
   imagePrice: '',
   imageCompletionPrice: '',
   audioInputPrice: '',
@@ -55,6 +56,7 @@ const EMPTY_MODEL = {
     completionRatio: '',
     cacheRatio: '',
     createCacheRatio: '',
+    createCache1hRatio: '',
     imageRatio: '',
     imageCompletionRatio: '',
     audioRatio: '',
@@ -313,6 +315,9 @@ const buildModelState = (name, sourceMaps) => {
   );
   const cacheRatio = toNumericString(sourceMaps.CacheRatio[name]);
   const createCacheRatio = toNumericString(sourceMaps.CreateCacheRatio[name]);
+  const createCache1hRatio = toNumericString(
+    sourceMaps.CreateCache1hRatio[name],
+  );
   const imageRatio = toNumericString(sourceMaps.ImageRatio[name]);
   const imageCompletionRatio = toNumericString(
     sourceMaps.ImageCompletionRatio[name],
@@ -394,6 +399,10 @@ const buildModelState = (name, sourceMaps) => {
       inputPriceNumber !== null && hasValue(createCacheRatio)
         ? formatNumber(inputPriceNumber * Number(createCacheRatio))
         : '',
+    createCache1hPrice:
+      inputPriceNumber !== null && hasValue(createCache1hRatio)
+        ? formatNumber(inputPriceNumber * Number(createCache1hRatio))
+        : '',
     imagePrice:
       inputPriceNumber !== null && hasValue(imageRatio)
         ? formatNumber(inputPriceNumber * Number(imageRatio))
@@ -416,6 +425,7 @@ const buildModelState = (name, sourceMaps) => {
       completionRatio,
       cacheRatio,
       createCacheRatio,
+      createCache1hRatio,
       imageRatio,
       imageCompletionRatio,
       audioRatio,
@@ -430,6 +440,7 @@ const buildModelState = (name, sourceMaps) => {
         completionRatio,
         cacheRatio,
         createCacheRatio,
+        createCache1hRatio,
         imageRatio,
         imageCompletionRatio,
         audioRatio,
@@ -468,6 +479,7 @@ export const getModelWarnings = (model, t) => {
     model.completionPrice,
     model.cachePrice,
     model.createCachePrice,
+    model.createCache1hPrice,
     model.imagePrice,
     model.imageCompletionPrice,
     model.audioInputPrice,
@@ -488,6 +500,7 @@ export const getModelWarnings = (model, t) => {
       model.rawRatios.completionRatio,
       model.rawRatios.cacheRatio,
       model.rawRatios.createCacheRatio,
+      model.rawRatios.createCache1hRatio,
       model.rawRatios.imageRatio,
       model.rawRatios.imageCompletionRatio,
       model.rawRatios.audioRatio,
@@ -564,6 +577,7 @@ export const buildSummaryText = (model, t) => {
       model.completionPrice,
       model.cachePrice,
       model.createCachePrice,
+      model.createCache1hPrice,
       model.imagePrice,
       model.audioInputPrice,
       model.audioOutputPrice,
@@ -582,6 +596,7 @@ export const buildOptionalFieldToggles = (model) => ({
     model.completionRatioLocked || hasValue(model.completionPrice),
   cachePrice: hasValue(model.cachePrice),
   createCachePrice: hasValue(model.createCachePrice),
+  createCache1hPrice: hasValue(model.createCache1hPrice),
   imagePrice: hasValue(model.imagePrice),
   imageCompletionPrice: hasValue(model.imageCompletionPrice),
   audioInputPrice: hasValue(model.audioInputPrice),
@@ -597,6 +612,7 @@ const serializeModel = (model, t) => {
     CompletionRatio: null,
     CacheRatio: null,
     CreateCacheRatio: null,
+    CreateCache1hRatio: null,
     ImageRatio: null,
     ImageCompletionRatio: null,
     AudioRatio: null,
@@ -646,6 +662,7 @@ const serializeModel = (model, t) => {
   const completionPrice = toNumberOrNull(model.completionPrice);
   const cachePrice = toNumberOrNull(model.cachePrice);
   const createCachePrice = toNumberOrNull(model.createCachePrice);
+  const createCache1hPrice = toNumberOrNull(model.createCache1hPrice);
   const imagePrice = toNumberOrNull(model.imagePrice);
   const imageCompletionPrice = toNumberOrNull(model.imageCompletionPrice);
   const audioInputPrice = toNumberOrNull(model.audioInputPrice);
@@ -657,6 +674,7 @@ const serializeModel = (model, t) => {
     completionPrice,
     cachePrice,
     createCachePrice,
+    createCache1hPrice,
     imagePrice,
     imageCompletionPrice,
     audioInputPrice,
@@ -691,6 +709,11 @@ const serializeModel = (model, t) => {
     if (hasValue(model.rawRatios.createCacheRatio)) {
       result.CreateCacheRatio = toNormalizedNumber(
         model.rawRatios.createCacheRatio,
+      );
+    }
+    if (hasValue(model.rawRatios.createCache1hRatio)) {
+      result.CreateCache1hRatio = toNormalizedNumber(
+        model.rawRatios.createCache1hRatio,
       );
     }
     if (hasValue(model.rawRatios.imageRatio)) {
@@ -746,6 +769,15 @@ const serializeModel = (model, t) => {
   } else if (hasValue(model.rawRatios.createCacheRatio)) {
     result.CreateCacheRatio = toNormalizedNumber(
       model.rawRatios.createCacheRatio,
+    );
+  }
+  if (createCache1hPrice !== null) {
+    result.CreateCache1hRatio = toNormalizedNumber(
+      createCache1hPrice / inputPrice,
+    );
+  } else if (hasValue(model.rawRatios.createCache1hRatio)) {
+    result.CreateCache1hRatio = toNormalizedNumber(
+      model.rawRatios.createCache1hRatio,
     );
   }
   if (imagePrice !== null) {
@@ -907,6 +939,13 @@ export const buildPreviewRows = (model, t) => {
           : t('空'),
       },
       {
+        key: 'CreateCache1hRatio',
+        label: 'CreateCache1hRatio',
+        value: hasValue(model.rawRatios.createCache1hRatio)
+          ? model.rawRatios.createCache1hRatio
+          : t('空'),
+      },
+      {
         key: 'ImageRatio',
         label: 'ImageRatio',
         value: hasValue(model.rawRatios.imageRatio)
@@ -941,6 +980,7 @@ export const buildPreviewRows = (model, t) => {
   const completionPrice = toNumberOrNull(model.completionPrice);
   const cachePrice = toNumberOrNull(model.cachePrice);
   const createCachePrice = toNumberOrNull(model.createCachePrice);
+  const createCache1hPrice = toNumberOrNull(model.createCache1hPrice);
   const imagePrice = toNumberOrNull(model.imagePrice);
   const audioInputPrice = toNumberOrNull(model.audioInputPrice);
   const audioOutputPrice = toNumberOrNull(model.audioOutputPrice);
@@ -973,6 +1013,14 @@ export const buildPreviewRows = (model, t) => {
       value:
         createCachePrice !== null
           ? formatNumber(createCachePrice / inputPrice)
+          : t('空'),
+    },
+    {
+      key: 'CreateCache1hRatio',
+      label: 'CreateCache1hRatio',
+      value:
+        createCache1hPrice !== null
+          ? formatNumber(createCache1hPrice / inputPrice)
           : t('空'),
     },
     {
@@ -1045,6 +1093,7 @@ export function useModelPricingEditorState({
       CompletionRatioMeta: parseOptionJSON(options.CompletionRatioMeta),
       CacheRatio: parseOptionJSON(options.CacheRatio),
       CreateCacheRatio: parseOptionJSON(options.CreateCacheRatio),
+      CreateCache1hRatio: parseOptionJSON(options.CreateCache1hRatio),
       ImageRatio: parseOptionJSON(options.ImageRatio),
       ImageCompletionRatio: parseOptionJSON(options.ImageCompletionRatio),
       AudioRatio: parseOptionJSON(options.AudioRatio),
@@ -1075,6 +1124,7 @@ export function useModelPricingEditorState({
       ...Object.keys(sourceMaps.CompletionRatioMeta),
       ...Object.keys(sourceMaps.CacheRatio),
       ...Object.keys(sourceMaps.CreateCacheRatio),
+      ...Object.keys(sourceMaps.CreateCache1hRatio),
       ...Object.keys(sourceMaps.ImageRatio),
       ...Object.keys(sourceMaps.ImageCompletionRatio),
       ...Object.keys(sourceMaps.AudioRatio),
@@ -1266,6 +1316,13 @@ export function useModelPricingEditorState({
         hasValue(model.rawRatios.createCacheRatio)
           ? formatNumber(baseNumber * Number(model.rawRatios.createCacheRatio))
           : model.createCachePrice,
+      createCache1hPrice:
+        !hasValue(model.createCache1hPrice) &&
+        hasValue(model.rawRatios.createCache1hRatio)
+          ? formatNumber(
+              baseNumber * Number(model.rawRatios.createCache1hRatio),
+            )
+          : model.createCache1hPrice,
       imagePrice:
         !hasValue(model.imagePrice) && hasValue(model.rawRatios.imageRatio)
           ? formatNumber(baseNumber * Number(model.rawRatios.imageRatio))
@@ -1430,6 +1487,7 @@ export function useModelPricingEditorState({
           completionPrice: selectedModel.completionPrice,
           cachePrice: selectedModel.cachePrice,
           createCachePrice: selectedModel.createCachePrice,
+          createCache1hPrice: selectedModel.createCache1hPrice,
           imagePrice: selectedModel.imagePrice,
           imageCompletionPrice: selectedModel.imageCompletionPrice,
           audioInputPrice: selectedModel.audioInputPrice,
@@ -1470,6 +1528,7 @@ export function useModelPricingEditorState({
             : Boolean(sourceToggles.completionPrice),
           cachePrice: Boolean(sourceToggles.cachePrice),
           createCachePrice: Boolean(sourceToggles.createCachePrice),
+          createCache1hPrice: Boolean(sourceToggles.createCache1hPrice),
           imagePrice: Boolean(sourceToggles.imagePrice),
           audioInputPrice: Boolean(sourceToggles.audioInputPrice),
           audioOutputPrice:
@@ -1505,6 +1564,7 @@ export function useModelPricingEditorState({
       CompletionRatio: seedDict('CompletionRatio'),
       CacheRatio: seedDict('CacheRatio'),
       CreateCacheRatio: seedDict('CreateCacheRatio'),
+      CreateCache1hRatio: seedDict('CreateCache1hRatio'),
       ImageRatio: seedDict('ImageRatio'),
       ImageCompletionRatio: seedDict('ImageCompletionRatio'),
       AudioRatio: seedDict('AudioRatio'),

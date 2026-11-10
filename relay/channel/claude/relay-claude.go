@@ -111,6 +111,15 @@ func recordClaudeRefusal(info *relaycommon.RelayInfo, data string) {
 	}
 }
 
+// captureClaudeFastSpeed 上游 usage.speed 回报 fast 时记为 fast 档位，
+// 由 service.ServiceTierRatio 按快速模式倍率加收；standard 或缺失不改动。
+func captureClaudeFastSpeed(info *relaycommon.RelayInfo, usage *dto.ClaudeUsage) {
+	if info == nil || usage == nil || usage.Speed != "fast" {
+		return
+	}
+	info.UpstreamServiceTier = "fast"
+}
+
 func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRequest) (*dto.ClaudeRequest, error) {
 	claudeTools := make([]any, 0, len(textRequest.Tools))
 
@@ -1255,6 +1264,7 @@ func FormatClaudeResponseInfo(info *relaycommon.RelayInfo, claudeResponse *dto.C
 		// message_start, 获取usage
 		if claudeResponse.Message != nil && claudeResponse.Message.Usage != nil {
 			info.SetUpstreamResponsesField("usage", claudeResponse.Message.Usage)
+			captureClaudeFastSpeed(info, claudeResponse.Message.Usage)
 			claudeInfo.Usage.PromptTokens = claudeResponse.Message.Usage.InputTokens
 			claudeInfo.Usage.UsageSemantic = "anthropic"
 			claudeInfo.Usage.PromptTokensDetails.CachedTokens = claudeResponse.Message.Usage.CacheReadInputTokens
@@ -1277,6 +1287,7 @@ func FormatClaudeResponseInfo(info *relaycommon.RelayInfo, claudeResponse *dto.C
 		// 最终的usage获取
 		if claudeResponse.Usage != nil {
 			info.SetUpstreamResponsesField("usage", claudeResponse.Usage)
+			captureClaudeFastSpeed(info, claudeResponse.Usage)
 			claudeInfo.Usage.UsageSemantic = "anthropic"
 			if claudeResponse.Usage.InputTokens > 0 {
 				// 不叠加，只取最新的
@@ -1531,6 +1542,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	}
 	if claudeResponse.Usage != nil {
 		info.SetUpstreamResponsesField("usage", claudeResponse.Usage)
+		captureClaudeFastSpeed(info, claudeResponse.Usage)
 		claudeInfo.Usage.PromptTokens = claudeResponse.Usage.InputTokens
 		claudeInfo.Usage.CompletionTokens = claudeResponse.Usage.OutputTokens
 		claudeInfo.Usage.CompletionTokenDetails.ReasoningTokens = claudeResponse.Usage.GetThinkingTokens()
