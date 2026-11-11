@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { API, showError, showSuccess } from '../../helpers';
 import { ITEMS_PER_PAGE } from '../../constants';
@@ -165,89 +165,117 @@ export const useModelsData = () => {
     await loadModels(page, pageSize);
   };
 
-  // Sync upstream models/vendors for missing models only
-  const syncUpstream = async (opts = {}) => {
-    const locale = opts?.locale;
-    setSyncing(true);
-    try {
-      const body = {};
-      if (locale) body.locale = locale;
-      const res = await API.post('/api/models/sync_upstream', body);
-      const { success, message, data } = res.data || {};
-      if (success) {
-        const createdModels = data?.created_models || 0;
-        const createdVendors = data?.created_vendors || 0;
-        const skipped = (data?.skipped_models || []).length || 0;
-        showSuccess(
-          t(
-            `已同步：新增 ${createdModels} 模型，新增 ${createdVendors} 供应商，跳过 ${skipped} 项`,
-          ),
-        );
-        await loadVendors();
-        await refresh();
-      } else {
-        showError(message || t('同步失败'));
-      }
-    } catch (e) {
-      showError(t('同步失败'));
-    }
-    setSyncing(false);
-  };
+  // 官方新同步接口：先预览拿到 source_version 与每个模型的 record_version，再提交勾选项
+  const lastSyncPreviewRef = useRef(null);
 
   // Preview upstream differences
   const previewUpstreamDiff = async (opts = {}) => {
     const locale = opts?.locale;
+    const empty = { sourceVersion: '', creates: [], conflicts: [] };
     setPreviewing(true);
     try {
       const url = `/api/models/sync_upstream/preview${locale ? `?locale=${locale}` : ''}`;
       const res = await API.get(url);
       const { success, message, data } = res.data || {};
-      if (success) {
-        return data || { missing: [], conflicts: [] };
+      if (!success) {
+        showError(message || t('预览失败'));
+        return empty;
       }
-      showError(message || t('预览失败'));
-      return { missing: [], conflicts: [] };
+      const candidates = data?.candidates || [];
+      const preview = {
+        sourceVersion: data?.source?.version || '',
+        // 站点渠道在用但缺少元数据的模型：直接新建
+        creates: candidates.filter(
+          (c) => c.kind === 'create' && c.scope === 'site',
+        ),
+        // 已有元数据且与上游不同：交给冲突弹窗逐字段选择是否覆盖
+        conflicts: candidates.filter(
+          (c) => c.kind === 'update' && (c.fields || []).length > 0,
+        ),
+      };
+      lastSyncPreviewRef.current = { ...preview, locale };
+      return preview;
     } catch (e) {
       showError(t('预览失败'));
-      return { missing: [], conflicts: [] };
+      return empty;
     } finally {
       setPreviewing(false);
     }
   };
+
+  // 提交同步：缺失模型全部新建 + 冲突弹窗里勾选的覆盖字段
+  const applyMetadataSync = async ({ locale, overwrite = [] }) => {
+    let preview = lastSyncPreviewRef.current;
+    if (!preview || preview.locale !== locale) {
+      preview = await previewUpstreamDiff({ locale });
+    }
+    if (!preview.sourceVersion) return false;
+    const conflictByName = Object.fromEntries(
+      preview.conflicts.map((c) => [c.model_name, c]),
+    );
+    const selections = [
+      ...preview.creates.map((c) => ({
+        model_name: c.model_name,
+        record_version: c.record_version,
+        create: true,
+        fields: [],
+      })),
+      ...overwrite
+        .filter((o) => conflictByName[o.model_name] && o.fields?.length)
+        .map((o) => ({
+          model_name: o.model_name,
+          record_version: conflictByName[o.model_name].record_version,
+          create: false,
+          fields: o.fields,
+        })),
+    ];
+    if (selections.length === 0) {
+      showSuccess(t('已是最新，无需同步'));
+      return true;
+    }
+    setSyncing(true);
+    try {
+      const body = { source_version: preview.sourceVersion, selections };
+      if (locale) body.locale = locale;
+      const res = await API.post('/api/models/sync_upstream', body);
+      const { success, message, data } = res.data || {};
+      if (success) {
+        const createdModels = (data?.created_models || []).length;
+        const updatedModels = (data?.updated_models || []).length;
+        const createdVendors = (data?.created_vendors || []).length;
+        showSuccess(
+          t(
+            `完成：新增 ${createdModels} 模型，更新 ${updatedModels} 模型，新增 ${createdVendors} 供应商`,
+          ),
+        );
+        lastSyncPreviewRef.current = null;
+        await loadVendors();
+        await refresh();
+        return true;
+      }
+      // 409：上游或本地在预览后发生变化，需要重新预览
+      showError(message || t('同步失败'));
+      lastSyncPreviewRef.current = null;
+      return false;
+    } catch (e) {
+      showError(e?.response?.data?.message || t('同步失败'));
+      lastSyncPreviewRef.current = null;
+      return false;
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // Sync upstream models/vendors for missing models only
+  const syncUpstream = async (opts = {}) =>
+    applyMetadataSync({ locale: opts?.locale });
 
   // Apply selected overwrite
   const applyUpstreamOverwrite = async (payloadOrArray = []) => {
     const isArray = Array.isArray(payloadOrArray);
     const overwrite = isArray ? payloadOrArray : payloadOrArray.overwrite || [];
     const locale = isArray ? undefined : payloadOrArray.locale;
-    setSyncing(true);
-    try {
-      const body = { overwrite };
-      if (locale) body.locale = locale;
-      const res = await API.post('/api/models/sync_upstream', body);
-      const { success, message, data } = res.data || {};
-      if (success) {
-        const createdModels = data?.created_models || 0;
-        const updatedModels = data?.updated_models || 0;
-        const createdVendors = data?.created_vendors || 0;
-        const skipped = (data?.skipped_models || []).length || 0;
-        showSuccess(
-          t(
-            `完成：新增 ${createdModels} 模型，更新 ${updatedModels} 模型，新增 ${createdVendors} 供应商，跳过 ${skipped} 项`,
-          ),
-        );
-        await loadVendors();
-        await refresh();
-        return true;
-      }
-      showError(message || t('同步失败'));
-      return false;
-    } catch (e) {
-      showError(t('同步失败'));
-      return false;
-    } finally {
-      setSyncing(false);
-    }
+    return applyMetadataSync({ locale, overwrite });
   };
 
   // Search models with keyword and vendor

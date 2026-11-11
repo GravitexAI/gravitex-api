@@ -40,6 +40,7 @@ const FIELD_LABELS = {
   icon: '图标',
   tags: '标签',
   vendor: '供应商',
+  endpoints: '端点',
   name_rule: '命名规则',
   status: '状态',
 };

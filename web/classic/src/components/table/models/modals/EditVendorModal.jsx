@@ -37,7 +37,6 @@ const EditVendorModal = ({ visible, handleClose, refresh, editingVendor }) => {
     name: '',
     description: '',
     icon: '',
-    status: true,
   });
 
   const handleCancel = () => {
@@ -53,8 +52,6 @@ const EditVendorModal = ({ visible, handleClose, refresh, editingVendor }) => {
       const res = await API.get(`/api/vendors/${editingVendor.id}`);
       const { success, message, data } = res.data;
       if (success) {
-        // 将数字状态转为布尔值
-        data.status = data.status === 1;
         if (formApiRef.current) {
           formApiRef.current.setValues({ ...getInitValues(), ...data });
         }
@@ -82,11 +79,9 @@ const EditVendorModal = ({ visible, handleClose, refresh, editingVendor }) => {
   const submit = async (values) => {
     setLoading(true);
     try {
-      // 转换 status 为数字
-      const submitData = {
-        ...values,
-        status: values.status ? 1 : 0,
-      };
+      // 供应商状态由后端维护（固定启用），表单不再提交
+      const submitData = { ...values };
+      delete submitData.status;
 
       if (isEdit) {
         submitData.id = editingVendor.id;
@@ -173,9 +168,6 @@ const EditVendorModal = ({ visible, handleClose, refresh, editingVendor }) => {
               }
               showClear
             />
-          </Col>
-          <Col span={24}>
-            <Form.Switch field='status' label={t('状态')} initValue={true} />
           </Col>
         </Row>
       </Form>

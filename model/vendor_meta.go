@@ -33,8 +33,7 @@ func (v *Vendor) Insert() error {
 			return err
 		}
 		now := common.GetTimestamp()
-		// alpha：classic 前端创建时可指定状态，沿用客户端传入的 status
-		v.CreatedTime, v.UpdatedTime = now, now
+		v.CreatedTime, v.UpdatedTime, v.Status = now, now, 1
 		return tx.Create(v).Error
 	})
 	if err == nil {
@@ -67,9 +66,8 @@ func (v *Vendor) Update() error {
 		if err := validateVendorMetadata(tx, v); err != nil {
 			return err
 		}
-		// alpha：classic 前端厂商编辑带状态开关，status 随编辑一起更新
-		v.CreatedTime, v.UpdatedTime = saved.CreatedTime, common.GetTimestamp()
-		return tx.Model(&Vendor{}).Where("id = ?", v.Id).Updates(map[string]any{"name": v.Name, "description": v.Description, "icon": v.Icon, "status": v.Status, "updated_time": v.UpdatedTime}).Error
+		v.CreatedTime, v.Status, v.UpdatedTime = saved.CreatedTime, saved.Status, common.GetTimestamp()
+		return tx.Model(&Vendor{}).Where("id = ?", v.Id).Updates(map[string]any{"name": v.Name, "description": v.Description, "icon": v.Icon, "updated_time": v.UpdatedTime}).Error
 	})
 	if err == nil {
 		v.Version = VendorRecordVersion(v)
