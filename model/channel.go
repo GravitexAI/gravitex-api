@@ -1221,6 +1221,9 @@ func (channel *Channel) ValidateSettings() error {
 			return err
 		}
 	}
+	if err := channelOtherSettings.ValidateToolLossPolicy(); err != nil {
+		return err
+	}
 	if err := channelOtherSettings.ValidateModelCostDiscount(); err != nil {
 		return err
 	}

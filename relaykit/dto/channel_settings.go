@@ -148,6 +148,20 @@ func (s *ChannelOtherSettings) IsOpenRouterEnterprise() bool {
 	return *s.OpenRouterEnterprise
 }
 
+// ValidateToolLossPolicy validates the channel-level request-phase tool-loss
+// policy. Empty keeps the default allow policy.
+func (s *ChannelOtherSettings) ValidateToolLossPolicy() error {
+	if s == nil {
+		return nil
+	}
+	switch strings.TrimSpace(s.ToolLossPolicy) {
+	case "", string(types.ConversionLossPolicyAllow), string(types.ConversionLossPolicySafe), string(types.ConversionLossPolicyStrict):
+		return nil
+	default:
+		return fmt.Errorf("invalid tool_loss_policy: %s", s.ToolLossPolicy)
+	}
+}
+
 func (s ChannelOtherSettings) HasByteplusAssetConfig() bool {
 	return s.ByteplusAssetAK != "" && s.ByteplusAssetSK != ""
 }

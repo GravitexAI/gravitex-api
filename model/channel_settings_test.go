@@ -66,6 +66,39 @@ func TestChannelValidateSettingsRejectsOutOfRangeCostDiscount(t *testing.T) {
 	assert.Contains(t, err.Error(), "cost_discount")
 }
 
+// ValidateSettings 必须接通 ChannelOtherSettings.ValidateToolLossPolicy，
+// 该校验曾在 main-alpha 合并中丢失，导致非法 tool_loss_policy 静默入库。
+func TestChannelValidateSettingsRejectsInvalidToolLossPolicy(t *testing.T) {
+	tests := []struct {
+		name          string
+		toolLossPolicy string
+		wantErr        string
+	}{
+		{name: "empty keeps default allow policy", toolLossPolicy: ""},
+		{name: "allow is valid", toolLossPolicy: "allow"},
+		{name: "safe is valid", toolLossPolicy: "safe"},
+		{name: "strict is valid", toolLossPolicy: "strict"},
+		{name: "unknown policy rejected", toolLossPolicy: "drop", wantErr: "tool_loss_policy"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			channel := &Channel{}
+			channel.SetOtherSettings(dto.ChannelOtherSettings{
+				ToolLossPolicy: tt.toolLossPolicy,
+			})
+
+			err := channel.ValidateSettings()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
 func TestAdvancedCustomChannelRequiresModelListRouteOnlyWhenUpdateChecksEnabled(t *testing.T) {
 	inferenceRoute := dto.AdvancedCustomRoute{
 		IncomingPath: "/v1/chat/completions",
