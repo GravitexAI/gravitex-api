@@ -22,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 )
@@ -240,8 +241,11 @@ func ListModels(c *gin.Context, modelType int) {
 	}
 	models := service.GetGroupsEnabledModels(ownerGroups)
 	for _, modelName := range models {
-		if modelLimitEnable && !tokenModelLimit[modelName] && !service.IsModelAllowedByToken(c, modelName) {
-			continue
+		if modelLimitEnable {
+			matchingName := ratio_setting.RoutingMatchModelName(modelName)
+			if !tokenModelLimit[modelName] && !tokenModelLimit[matchingName] && !service.IsModelAllowedByToken(c, modelName) {
+				continue
+			}
 		}
 		if !acceptUnsetRatioModel && !helper.HasModelBillingConfig(modelName) {
 			continue

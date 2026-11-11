@@ -3,6 +3,7 @@ package reasoning
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -122,4 +123,60 @@ func TestIntentStateRoundTrip(t *testing.T) {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+func TestOpenAIPivotRetainsExactStrengthAndBudget(t *testing.T) {
+	budget, include := 16384, false
+	// alpha 约定：OpenAI 线上没有 max，max 投影为 xhigh；pivot 仍保留原始强度与预算
+	for _, tc := range []struct {
+		effort Effort
+		wire   string
+	}{
+		{effort: EffortMax, wire: "xhigh"},
+		{effort: EffortXHigh, wire: "xhigh"},
+	} {
+		t.Run(string(tc.effort), func(t *testing.T) {
+			intent := Intent{Mode: ModeEnabled, Effort: tc.effort, BudgetTokens: &budget, IncludeThoughts: &include}
+			chat := &dto.GeneralOpenAIRequest{}
+			require.NoError(t, ApplyToOpenAIChat(chat, intent))
+			assert.Equal(t, tc.wire, chat.ReasoningEffort)
+			restored, err := FromOpenAIChat(chat)
+			require.NoError(t, err)
+			assert.Equal(t, tc.effort, restored.Effort)
+			require.NotNil(t, restored.BudgetTokens)
+			assert.Equal(t, budget, *restored.BudgetTokens)
+			require.NotNil(t, restored.IncludeThoughts)
+			assert.False(t, *restored.IncludeThoughts)
+
+			responses := &dto.OpenAIResponsesRequest{}
+			require.NoError(t, ApplyToOpenAIResponses(responses, restored))
+			require.NotNil(t, responses.Reasoning)
+			assert.Equal(t, tc.wire, responses.Reasoning.Effort)
+			restored, err = FromOpenAIResponses(responses)
+			require.NoError(t, err)
+			assert.Equal(t, tc.effort, restored.Effort)
+			require.NotNil(t, restored.BudgetTokens)
+			assert.Equal(t, budget, *restored.BudgetTokens)
+			require.NotNil(t, restored.IncludeThoughts)
+			assert.False(t, *restored.IncludeThoughts)
+		})
+	}
+}
+
+// alpha 约定：max 在 OpenAI 线上投影为 xhigh，因此客户端看到的 xhigh 与 pivot 中的 max 等价，不算冲突
+func TestOpenAIPivotTreatsProjectedXHighAsMax(t *testing.T) {
+	intent := Intent{Mode: ModeEnabled, Effort: EffortMax}
+	chat := &dto.GeneralOpenAIRequest{}
+	require.NoError(t, ApplyToOpenAIChat(chat, intent))
+	assert.Equal(t, "xhigh", chat.ReasoningEffort)
+	restored, err := FromOpenAIChat(chat)
+	require.NoError(t, err)
+	assert.Equal(t, EffortMax, restored.Effort)
+
+	responses := &dto.OpenAIResponsesRequest{}
+	require.NoError(t, ApplyToOpenAIResponses(responses, intent))
+	assert.Equal(t, "xhigh", responses.Reasoning.Effort)
+	restored, err = FromOpenAIResponses(responses)
+	require.NoError(t, err)
+	assert.Equal(t, EffortMax, restored.Effort)
 }

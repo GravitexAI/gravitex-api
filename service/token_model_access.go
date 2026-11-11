@@ -19,7 +19,9 @@ func IsTokenModelAccessLimited(c *gin.Context) bool {
 func IsModelAllowedByToken(c *gin.Context, modelName string) bool {
 	matchName := ratio_setting.FormatMatchingModelName(modelName)
 	if value, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit); ok {
-		if limits, ok := value.(map[string]bool); ok && limits[matchName] {
+		// 与官方 tokenModelLimitAllows 口径一致：原名、归一名、去掉 @ 修饰符后的路由名任一命中即放行
+		if limits, ok := value.(map[string]bool); ok &&
+			(limits[modelName] || limits[matchName] || limits[ratio_setting.RoutingMatchModelName(modelName)]) {
 			return true
 		}
 	}

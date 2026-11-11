@@ -21,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -836,6 +837,19 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	}
 
 	return &modelRequest, shouldSelectChannel, nil
+}
+
+// tokenModelLimitAllows reports whether a token model-limit map authorizes
+// model. Exact name, wildcard-normalized name, and routing-normalized name
+// (modifiers and legacy aliases stripped) are all accepted.
+func tokenModelLimitAllows(limit map[string]bool, model string) bool {
+	if limit[model] {
+		return true
+	}
+	if formatted := ratio_setting.FormatMatchingModelName(model); limit[formatted] {
+		return true
+	}
+	return limit[ratio_setting.RoutingMatchModelName(model)]
 }
 
 // 修复 #4834: GET /v1/video/generations/:task_id && /v1/video/:task_id 此前不解析 model，

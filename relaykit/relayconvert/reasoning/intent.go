@@ -439,6 +439,7 @@ func ApplyToOpenAIResponses(req *dto.OpenAIResponsesRequest, intent Intent) erro
 // OpenAIEffort maps the canonical cross-provider vocabulary to the public
 // OpenAI reasoning_effort vocabulary. Claude/OpenRouter "max" has no direct
 // OpenAI equivalent and is represented by xhigh at that wire boundary.
+// alpha 保留：官方 #2 去掉了该映射，但 Azure Chat 最高只到 xhigh，透传 max 会 400。
 func OpenAIEffort(effort Effort) Effort {
 	if effort == EffortMax {
 		return EffortXHigh
