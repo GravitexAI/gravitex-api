@@ -52,7 +52,7 @@ func executeTaskSubmission(c *gin.Context, info *relaycommon.RelayInfo) (*taskSu
 	if err := task.Insert(); err != nil {
 		return nil, service.TaskErrorWrapperLocal(err, "task_insert_failed", http.StatusInternalServerError)
 	}
-	if err := service.SettleBilling(c, info, result.Quota); err != nil {
+	if err := service.SettleBillingWithFunding(c, info, result.Quota); err != nil {
 		return nil, service.TaskErrorWrapperLocal(err, "task_billing_settlement_failed", http.StatusInternalServerError)
 	}
 	service.LogTaskConsumption(c, info)

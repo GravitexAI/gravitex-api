@@ -169,7 +169,7 @@ func runLyriaAsyncWorker(c *gin.Context, info *relaycommon.RelayInfo, taskID str
 		}
 		recordVertexLyriaSubmitFailure(c, info, reason, result.UpstreamStatusCode)
 	} else if info.Billing != nil {
-		if err := service.SettleBilling(c, info, result.Quota); err != nil {
+		if err := service.SettleBillingWithFunding(c, info, result.Quota); err != nil {
 			common.SysError(fmt.Sprintf("lyria async task %s settle failed: %v", taskID, err))
 		}
 		if result.InitialTaskInfo != nil {

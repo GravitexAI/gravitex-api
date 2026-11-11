@@ -56,6 +56,17 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 // SettleBilling 执行计费结算。如果 RelayInfo 上有 BillingSession 则通过 session 结算，
 // 否则回退到旧的 PostConsumeQuota 路径（兼容按次计费等场景）。
 func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int) error {
+	return settleBilling(ctx, relayInfo, actualQuota, true)
+}
+
+// SettleBillingWithFunding 用于没有在 handler 中调用 model.ConsumeUserQuotaSettle 的路径
+// （realtime、任务、Lyria 异步、插件协议兼容）：由 BillingSession 按「实际 - 预扣」调整
+// 钱包/订阅，与官方结算语义一致。否则预扣与实际的差额不会退补到用户余额。
+func SettleBillingWithFunding(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int) error {
+	return settleBilling(ctx, relayInfo, actualQuota, false)
+}
+
+func settleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int, skipFunding bool) error {
 	if relayInfo.Billing != nil {
 		preConsumed := relayInfo.Billing.GetPreConsumedQuota()
 		delta := actualQuota - preConsumed
@@ -79,7 +90,7 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 		}
 
 		// skipFunding=true：用户额度已在 compatible_handler 中通过 model.ConsumeUserQuotaSettle 一次更新
-		if err := relayInfo.Billing.Settle(actualQuota, true); err != nil {
+		if err := relayInfo.Billing.Settle(actualQuota, skipFunding); err != nil {
 			return err
 		}
 

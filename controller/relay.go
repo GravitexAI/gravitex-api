@@ -777,7 +777,7 @@ func RelayTask(c *gin.Context) {
 			// handlers; the async poller will no longer see this completed row.
 			relayInfo.Billing = nil
 		case !isPerSecondOrTokenRatio:
-			if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
+			if settleErr := service.SettleBillingWithFunding(c, relayInfo, result.Quota); settleErr != nil {
 				common.SysError("settle task billing error: " + settleErr.Error())
 			}
 			if result.InitialTaskInfo != nil {
