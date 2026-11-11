@@ -71,6 +71,7 @@ import {
 } from '@/lib/admin-permissions'
 import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { formatQuota, parseQuotaFromDollars } from '@/lib/format'
+import { accountPasswordSchema } from '@/lib/password-policy'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -136,11 +137,13 @@ export function UsersMutateDrawer({
   useEffect(() => {
     if (open && isUpdate && currentRow) {
       // For update, fetch fresh data
-      getUser(currentRow.id).then((result) => {
-        if (result.success && result.data) {
-          form.reset(transformUserToFormDefaults(result.data))
-        }
-      })
+      getUser(currentRow.id)
+        .then((result) => {
+          if (result.success && result.data) {
+            form.reset(transformUserToFormDefaults(result.data))
+          }
+        })
+        .catch(() => undefined)
     } else if (open && !isUpdate) {
       // For create, reset to defaults
       form.reset(USER_FORM_DEFAULT_VALUES)
@@ -157,12 +160,11 @@ export function UsersMutateDrawer({
   const targetIsAdmin = (selectedRole ?? currentRow?.role ?? 0) >= ROLE.ADMIN
 
   const onSubmit = async (data: UserFormValues) => {
-    if (!isUpdate) {
-      const passwordLength = data.password?.length || 0
-      if (passwordLength < 8 || passwordLength > 20) {
+    if (!isUpdate || data.password) {
+      if (!accountPasswordSchema.safeParse(data.password ?? '').success) {
         form.setError('password', {
           type: 'manual',
-          message: t('Password must be between 8 and 20 characters'),
+          message: t('Password must contain between 8 and 128 characters.'),
         })
         return
       }
@@ -196,7 +198,7 @@ export function UsersMutateDrawer({
               : t(ERROR_MESSAGES.CREATE_FAILED))
         )
       }
-    } catch (_error) {
+    } catch {
       toast.error(t(ERROR_MESSAGES.UNEXPECTED))
     } finally {
       setIsSubmitting(false)
@@ -339,7 +341,7 @@ export function UsersMutateDrawer({
                           placeholder={
                             isUpdate
                               ? t('Leave empty to keep unchanged')
-                              : t('Enter password (8-20 characters)')
+                              : t('Enter password (8–128 characters)')
                           }
                         />
                       </FormControl>
@@ -361,12 +363,10 @@ export function UsersMutateDrawer({
                       <FormItem>
                         <FormLabel>{t('Group')}</FormLabel>
                         <Select
-                          items={[
-                            ...groups.map((group) => ({
-                              value: group,
-                              label: group,
-                            })),
-                          ]}
+                          items={groups.map((group) => ({
+                            value: group,
+                            label: group,
+                          }))}
                           onValueChange={field.onChange}
                           value={field.value}
                         >
@@ -648,7 +648,7 @@ export function UsersMutateDrawer({
                   </h3>
                   <p className='text-muted-foreground text-xs'>
                     {t(
-                      'Third-party account bindings (read-only, managed by user in profile settings)'
+                      'Third-party account bindings (read-only, managed by user in Security & Access)'
                     )}
                   </p>
 

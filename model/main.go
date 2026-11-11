@@ -140,10 +140,10 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error)
 		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
 			// Use PostgreSQL
 			common.SysLog("using PostgreSQL as database")
-			db, err := gorm.Open(postgres.New(postgres.Config{
+			db, err := gorm.Open(postgresMigrationDialector{postgres.Dialector{Config: &postgres.Config{
 				DSN:                  dsn,
 				PreferSimpleProtocol: true, // disables implicit prepared statement usage
-			}), &gorm.Config{
+			}}}, &gorm.Config{
 				PrepareStmt: true,
 			})
 			return db, common.DatabaseTypePostgreSQL, err
@@ -166,7 +166,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, common.DatabaseType, error)
 		// MySQL: disable PrepareStmt by default to avoid exceeding max_prepared_stmt_count
 		// under high concurrency (MaxOpenConns × unique_queries > 16382)
 		mysqlPrepareStmt := common.GetEnvOrDefaultBool("MYSQL_PREPARE_STMT", false)
-		db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
+		db, err := gorm.Open(mysqlMigrationDialector{mysql.Dialector{Config: &mysql.Config{DSN: dsn}}}, &gorm.Config{
 			PrepareStmt: mysqlPrepareStmt,
 		})
 		// ADB（AnalyticDB for MySQL）：MySQL 协议兼容但定位 OLAP，作为独立日志库时
