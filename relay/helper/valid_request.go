@@ -127,7 +127,8 @@ const maxTokensLimit = math.MaxInt32 / 2
 // MaxTokensLimit is the shared upper bound for user-supplied output token limits.
 const MaxTokensLimit = maxTokensLimit
 
-func exceedsMaxTokensLimit(values ...*uint) bool {
+// ExceedsMaxTokensLimit checks token limits before they reach billing arithmetic.
+func ExceedsMaxTokensLimit(values ...*uint) bool {
 	for _, v := range values {
 		if lo.FromPtrOr(v, uint(0)) > maxTokensLimit {
 			return true
@@ -148,7 +149,7 @@ func GetAndValidateResponsesRequest(c *gin.Context) (*dto.OpenAIResponsesRequest
 	if request.Input == nil {
 		return nil, errors.New("input is required")
 	}
-	if exceedsMaxTokensLimit(request.MaxOutputTokens) {
+	if ExceedsMaxTokensLimit(request.MaxOutputTokens) {
 		return nil, errors.New("max_output_tokens is invalid")
 	}
 	return request, nil
@@ -444,7 +445,7 @@ func GetAndValidateClaudeRequest(c *gin.Context) (textRequest *dto.ClaudeRequest
 	if strings.TrimSpace(textRequest.Model) == "" {
 		return nil, errors.New("field model is required")
 	}
-	if exceedsMaxTokensLimit(textRequest.MaxTokens, textRequest.MaxTokensToSample) {
+	if ExceedsMaxTokensLimit(textRequest.MaxTokens, textRequest.MaxTokensToSample) {
 		return nil, errors.New("max_tokens is invalid")
 	}
 
@@ -469,8 +470,11 @@ func GetAndValidateTextRequest(c *gin.Context, relayMode int) (*dto.GeneralOpenA
 		textRequest.Model = c.Param("model")
 	}
 
-	if exceedsMaxTokensLimit(textRequest.MaxTokens, textRequest.MaxCompletionTokens) {
+	if ExceedsMaxTokensLimit(textRequest.MaxTokens, textRequest.MaxCompletionTokens) {
 		return nil, errors.New("max_tokens is invalid")
+	}
+	if ExceedsMaxTokensLimit(textRequest.MinTokens) {
+		return nil, errors.New("min_tokens is invalid")
 	}
 	if strings.TrimSpace(textRequest.Model) == "" {
 		return nil, errors.New("model is required")
@@ -567,7 +571,7 @@ func GetAndValidateGeminiRequest(c *gin.Context) (*dto.GeminiChatRequest, error)
 	if len(request.Contents) == 0 && len(request.Requests) == 0 {
 		return nil, errors.New("contents is required")
 	}
-	if exceedsMaxTokensLimit(request.GenerationConfig.MaxOutputTokens) {
+	if ExceedsMaxTokensLimit(request.GenerationConfig.MaxOutputTokens) {
 		return nil, errors.New("maxOutputTokens is invalid")
 	}
 

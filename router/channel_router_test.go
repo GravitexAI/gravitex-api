@@ -1,7 +1,10 @@
 package router
 
 import (
+	"github.com/gin-contrib/sessions"
+	"github.com/gin-contrib/sessions/cookie"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
@@ -12,7 +15,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestChannelStatusRoutesUseOperatePermission(t *testing.T) {
+func TestChannelDefaultBaseURLsRequireReadPermission(t *testing.T) {
+	assertChannelRoutePermission(t, http.MethodGet, "/default_base_urls", authz.ChannelRead, controller.GetChannelDefaultBaseURLs)
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	// alpha 鉴权链路（classic cookie 会话）依赖 session 中间件，与生产 main.go 保持一致
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("router-test-secret"))))
+	registerChannelRoutes(engine.Group("/api"))
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/channel/default_base_urls", nil))
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+}
+
+func TestChannelStatusRoutesUseExpectedPermissions(t *testing.T) {
+	assertChannelRoutePermission(t, http.MethodGet, "/:id/vllm/status", authz.ChannelRead, controller.GetVLLMChannelStatus)
+	assertChannelRoutePermission(t, http.MethodGet, "/:id/sglang/status", authz.ChannelRead, controller.GetSGLangChannelStatus)
 	assertChannelRoutePermission(t, http.MethodPost, "/:id/status", authz.ChannelOperate, controller.UpdateChannelStatus)
 	assertChannelRoutePermission(t, http.MethodPost, "/status/batch", authz.ChannelOperate, controller.BatchUpdateChannelStatus)
 	assertChannelRoutePermission(t, http.MethodPut, "/", authz.ChannelWrite, controller.UpdateChannel)

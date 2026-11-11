@@ -20,6 +20,8 @@ import (
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -41,25 +43,16 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	info.UpstreamResponseId = responsesResponse.ID
 	info.CaptureUpstreamServiceTier(responseBody)
 
-	// 写入新的 response body（Meta 的整数值浮点时间戳先归一化为整数再透传）
+	// 写入新的 response body（SGLang 时间戳修正 + Meta 的整数值浮点时间戳归一化为整数再透传）
+	responseBody = rewriteSGLangResponsesCreatedAt(info, responseBody, "created_at", responsesResponse.CreatedAt)
 	responseBody = normalizeResponsesTimestamps(responseBody)
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	// compute usage
 	usage := dto.Usage{}
 	if responsesResponse.Usage != nil {
-		usage.PromptTokens = responsesResponse.Usage.InputTokens
-		usage.CompletionTokens = responsesResponse.Usage.OutputTokens
-		usage.TotalTokens = responsesResponse.Usage.TotalTokens
-		if responsesResponse.Usage.InputTokensDetails != nil {
-			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
-			usage.PromptTokensDetails.CacheWriteTokens = responsesResponse.Usage.InputTokensDetails.CacheWriteTokens
-			usage.PromptTokensDetails.CacheWriteTokensDetails = responsesResponse.Usage.InputTokensDetails.CacheWriteTokensDetails
-			usage.PromptTokensDetails.TextTokens = responsesResponse.Usage.InputTokensDetails.TextTokens
-			usage.PromptTokensDetails.AudioTokens = responsesResponse.Usage.InputTokensDetails.AudioTokens
-			usage.PromptTokensDetails.ImageTokens = responsesResponse.Usage.InputTokensDetails.ImageTokens
-		}
-		usage.CompletionTokenDetails = responsesResponse.Usage.CompletionTokenDetails
+		// 官方 ApplyResponsesUsage：完整复制输入明细（含 12h 缓存写入、视频、缓存图片拆分）
+		service.ApplyResponsesUsage(&usage, responsesResponse.Usage)
 		if service.ValidUsage(&usage) {
 			info.SetUpstreamResponsesField("usage", responsesResponse.Usage)
 		}
@@ -135,6 +128,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			pendingEvents = nil
 			flushed = true
 		}
+		if streamResponse.Response != nil {
+			data = string(rewriteSGLangResponsesCreatedAt(info, []byte(data), "response.created_at", streamResponse.Response.CreatedAt))
+		}
 		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {
 		case "response.completed", "response.done":
@@ -142,24 +138,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				info.UpstreamResponseId = streamResponse.Response.ID
 				info.CaptureUpstreamServiceTier(common.StringToByteSlice(data))
 				if streamResponse.Response.Usage != nil {
-					if streamResponse.Response.Usage.InputTokens != 0 {
-						usage.PromptTokens = streamResponse.Response.Usage.InputTokens
-					}
-					if streamResponse.Response.Usage.OutputTokens != 0 {
-						usage.CompletionTokens = streamResponse.Response.Usage.OutputTokens
-					}
-					if streamResponse.Response.Usage.TotalTokens != 0 {
-						usage.TotalTokens = streamResponse.Response.Usage.TotalTokens
-					}
-					if streamResponse.Response.Usage.InputTokensDetails != nil {
-						usage.PromptTokensDetails.CachedTokens = streamResponse.Response.Usage.InputTokensDetails.CachedTokens
-						usage.PromptTokensDetails.CacheWriteTokens = streamResponse.Response.Usage.InputTokensDetails.CacheWriteTokens
-						usage.PromptTokensDetails.CacheWriteTokensDetails = streamResponse.Response.Usage.InputTokensDetails.CacheWriteTokensDetails
-						usage.PromptTokensDetails.TextTokens = streamResponse.Response.Usage.InputTokensDetails.TextTokens
-						usage.PromptTokensDetails.AudioTokens = streamResponse.Response.Usage.InputTokensDetails.AudioTokens
-						usage.PromptTokensDetails.ImageTokens = streamResponse.Response.Usage.InputTokensDetails.ImageTokens
-					}
-					usage.CompletionTokenDetails = streamResponse.Response.Usage.CompletionTokenDetails
+					// 官方 ApplyResponsesUsage：只合并非零值，完整复制输入明细
+					service.ApplyResponsesUsage(usage, streamResponse.Response.Usage)
 					if service.ValidUsage(usage) {
 						info.SetUpstreamResponsesField("usage", streamResponse.Response.Usage)
 					}
@@ -322,4 +302,18 @@ func normalizeTimestampBytes(raw []byte) ([]byte, bool) {
 		return nil, false
 	}
 	return []byte(strconv.FormatInt(int64(f), 10)), true
+}
+
+func rewriteSGLangResponsesCreatedAt(info *relaycommon.RelayInfo, payload []byte, path string, createdAt dto.IntValue) []byte {
+	if info.GetChannelType() != constant.ChannelTypeSGLang {
+		return payload
+	}
+	if !gjson.GetBytes(payload, path).Exists() {
+		return payload
+	}
+	patched, err := sjson.SetBytes(payload, path, int(createdAt))
+	if err != nil {
+		return payload
+	}
+	return patched
 }

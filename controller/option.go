@@ -389,6 +389,25 @@ func UpdateOption(c *gin.Context) {
 			common.ApiErrorMsg(c, err.Error())
 			return
 		}
+	case billing_setting.PluginBillingExprOption:
+		var expressions map[string]string
+		if err = common.UnmarshalJsonStr(option.Value.(string), &expressions); err != nil || expressions == nil {
+			common.ApiErrorMsg(c, "plugin billing expressions must be a JSON object")
+			return
+		}
+		for key, expression := range expressions {
+			plugin, name, valid := billing_setting.SplitPluginBillingExprKey(key)
+			if !valid {
+				common.ApiErrorMsg(c, "invalid plugin billing expression key: "+key)
+				return
+			}
+			if err = model.ValidateModelPricing(name, model.PricingValues{
+				billing_setting.PluginBillingExprOption: map[string]any{plugin: expression},
+			}); err != nil {
+				common.ApiErrorMsg(c, err.Error())
+				return
+			}
+		}
 	case "console_setting.api_info":
 		err = console_setting.ValidateConsoleSettings(option.Value.(string), "ApiInfo")
 		if err != nil {

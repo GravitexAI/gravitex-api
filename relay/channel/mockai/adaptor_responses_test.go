@@ -39,11 +39,9 @@ func assertResponsesUsage(t *testing.T, usage *dto.Usage) {
 	assert.Equal(t, 140, usage.PromptTokens)
 	assert.Equal(t, 40, usage.PromptTokensDetails.CachedTokens)
 	assert.Equal(t, 25, usage.CompletionTokens)
-	// 真实 OaiResponses*Handler 只从 completion_tokens_details 读 reasoning，而官方
-	// /v1/responses 下发的是 output_tokens_details，所以真实上游流过它同样得到 0。
-	// Mock 按设计 §5.4 与「逐字节同构」下发官方字段，这里如实锁住该既存行为；
-	// output_tokens_details.reasoning_tokens == 5 由 TestResponsesNonStreamBody 在字节层锁住。
-	assert.Equal(t, 0, usage.CompletionTokenDetails.ReasoningTokens)
+	// 合并官方 ApplyResponsesUsage 后，/v1/responses 的 output_tokens_details.reasoning_tokens
+	// 会正确映射到 CompletionTokenDetails（此前 alpha 只读 completion_tokens_details，记为 0）
+	assert.Equal(t, 5, usage.CompletionTokenDetails.ReasoningTokens)
 	assert.Equal(t, 165, usage.TotalTokens)
 }
 

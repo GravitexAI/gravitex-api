@@ -277,6 +277,74 @@ func TestConvertRequestClaudeAdaptiveThinkingPreservesEffort(t *testing.T) {
 	}
 }
 
+func TestGeminiThinkingLevelCaseInsensitiveAcrossPaths(t *testing.T) {
+	newRequest := func(level string) *dto.GeminiChatRequest {
+		return &dto.GeminiChatRequest{
+			Contents: []dto.GeminiChatContent{{Role: "user", Parts: []dto.GeminiPart{{Text: "hello"}}}},
+			GenerationConfig: dto.GeminiChatGenerationConfig{
+				ThinkingConfig: &dto.GeminiThinkingConfig{ThinkingLevel: level},
+			},
+		}
+	}
+
+	t.Run("native passthrough records canonical effort without rewriting wire value", func(t *testing.T) {
+		info := &convmeta.Values{OriginModelName: "gemini-3.7-flash", UpstreamModelName: "gemini-3.7-flash"}
+		req := newRequest(" MEDIUM ")
+		require.NoError(t, ApplyGeminiThinkingConfigChecked(req, info))
+		assert.Equal(t, "medium", info.GetReasoningEffort())
+		assert.Equal(t, " MEDIUM ", req.GenerationConfig.ThinkingConfig.ThinkingLevel)
+	})
+
+	t.Run("native passthrough keeps unknown level as sent", func(t *testing.T) {
+		info := &convmeta.Values{OriginModelName: "gemini-3.7-flash", UpstreamModelName: "gemini-3.7-flash"}
+		req := newRequest("ULTRA")
+		require.NoError(t, ApplyGeminiThinkingConfigChecked(req, info))
+		assert.Equal(t, "ULTRA", info.GetReasoningEffort())
+	})
+
+	t.Run("suffix state canonicalizes uppercase level against normalized effort", func(t *testing.T) {
+		info := &convmeta.Values{
+			OriginModelName:     "gemini-3.7-flash-thinking-medium",
+			UpstreamModelName:   "gemini-3.7-flash",
+			ChannelMetaAttached: true,
+			ReasoningConversion: &dto.ReasoningConversionState{Mode: "enabled", Effort: "medium"},
+		}
+		req := newRequest("MEDIUM")
+		require.NoError(t, ApplyGeminiThinkingConfigChecked(req, info))
+		assert.Equal(t, "medium", info.GetReasoningEffort())
+		// alpha（32b66ce98）：用户原生 thinking 配置原样透传，不改写大小写（Gemini 自身大小写不敏感）
+		assert.Equal(t, "MEDIUM", req.GenerationConfig.ThinkingConfig.ThinkingLevel)
+	})
+
+	t.Run("gemini to openai conversion accepts uppercase level", func(t *testing.T) {
+		info := &convmeta.Values{
+			OriginModelName:   "gemini-3.7-flash",
+			UpstreamModelName: "gemini-3.7-flash",
+			ConversionChain:   []types.RelayFormat{types.RelayFormatGemini},
+		}
+		result, err := ConvertRequest(nil, info, types.RelayFormatOpenAI, newRequest("MEDIUM"))
+		require.NoError(t, err)
+		openaiReq, ok := result.Value.(*dto.GeneralOpenAIRequest)
+		require.True(t, ok)
+		assert.Equal(t, "medium", openaiReq.ReasoningEffort)
+		assert.Equal(t, "medium", info.GetReasoningEffort())
+	})
+
+	// alpha（32b66ce98）：不对用户的 Gemini thinking 配置做模型能力校验/调整，原样换算为 OpenAI effort
+	t.Run("gemini to openai conversion keeps unsupported level as sent", func(t *testing.T) {
+		info := &convmeta.Values{
+			OriginModelName:   "gemini-3-pro-preview",
+			UpstreamModelName: "gemini-3-pro-preview",
+			ConversionChain:   []types.RelayFormat{types.RelayFormatGemini},
+		}
+		result, err := ConvertRequest(nil, info, types.RelayFormatOpenAI, newRequest("MINIMAL"))
+		require.NoError(t, err)
+		openaiReq, ok := result.Value.(*dto.GeneralOpenAIRequest)
+		require.True(t, ok)
+		assert.Equal(t, "minimal", openaiReq.ReasoningEffort)
+	})
+}
+
 func TestConvertRequestViaExecutesExplicitPath(t *testing.T) {
 	info := &convmeta.Values{
 		ConversionChain: []types.RelayFormat{types.RelayFormatOpenAI},

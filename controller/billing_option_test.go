@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,10 +13,8 @@ import (
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/gin-gonic/gin"
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 func TestUpdateOptionRejectsInvalidTaskBillingExpressions(t *testing.T) {
@@ -132,13 +132,15 @@ func setupBillingAliasOptionDB(t *testing.T) {
 }
 
 func TestUpdateOptionAliasBillingExprUsesPluginSchema(t *testing.T) {
+	// 原依赖官方 model_management_test 的 modelManagementDB（该测试文件随模型管理接口未采用而删除），改用本文件的内存库
 	setupBillingAliasOptionDB(t)
 	const pluginKey = "billing-alias-probe"
 	source := `
 export const meta = {
   apiVersion: 1, key: "billing-alias-probe", name: "Billing Alias Probe", version: "1.0.0", author: {name: "Test"},
   models: ["declared-model"], fetchMode: "per_task",
-  usageSchema: {seconds: {type: "number", unit: "second"}}
+  usageSchema: {seconds: {type: "number", unit: "second"}, image_count: {type: "number", unit: "count"}},
+  usageProfiles: [{models: ["declared-model"], schema: {seconds: {type: "number", unit: "second"}}}]
 };
 export function buildSubmitRequest() { return {}; }
 export function parseSubmitResponse() { return {}; }
@@ -191,10 +193,14 @@ export function parseTaskResult() { return {}; }
 	assert.Equal(t, http.StatusOK, accepted.Code)
 	assert.Contains(t, accepted.Body.String(), `"success":true`)
 
-	rejectedKey := putExpr("alias-model", `u("clips")`)
+	rejectedKey := putExpr("alias-model", `u("image_count")`)
 	assert.Equal(t, http.StatusOK, rejectedKey.Code)
 	assert.Contains(t, rejectedKey.Body.String(), `"success":false`)
-	assert.Contains(t, rejectedKey.Body.String(), `usage key \"clips\" is not declared`)
+	assert.Contains(t, rejectedKey.Body.String(), `usage key \"image_count\" is not declared`)
+
+	rejectedDeclared := putExpr("declared-model", `u("image_count")`)
+	assert.Contains(t, rejectedDeclared.Body.String(), `"success":false`)
+	assert.Contains(t, rejectedDeclared.Body.String(), `usage key \"image_count\" is not declared`)
 
 	unresolvable := putExpr("unknown-alias-model", `u("seconds")`)
 	assert.Equal(t, http.StatusOK, unresolvable.Code)

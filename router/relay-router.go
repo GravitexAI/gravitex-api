@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -148,6 +149,11 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router.Use(middleware.RouteTag("relay"))
 	relayV1Router.Use(middleware.SystemPerformanceCheck())
 	relayV1Router.Use(middleware.TokenAuth())
+	{
+		// Responses WebSocket route. Channel selection happens after the first
+		// response.create event; each event runs the ordinary request limiter.
+		relayV1Router.GET("/responses", controller.ResponsesWebSocket)
+	}
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
 	{
 		// WebSocket 路由（统一到 Relay）
@@ -290,6 +296,13 @@ func SetRelayRouter(router *gin.Engine) {
 	// preview 面的叫法。两种写法都接受，上游用哪个由渠道 adaptor 按自己后端的方言决定。
 	for _, prefix := range []string{"/v1beta", "/v1beta1"} {
 		relayGeminiRouter := router.Group(prefix)
+		// 官方 #89：:countTokens 未实现，在鉴权与选渠道前按未注册路由返回，避免被当作 generateContent 转发
+		relayGeminiRouter.Use(func(c *gin.Context) {
+			if strings.HasSuffix(c.Request.URL.Path, ":countTokens") {
+				controller.RelayNotFound(c)
+				c.Abort()
+			}
+		})
 		relayGeminiRouter.Use(middleware.RouteTag("relay"))
 		relayGeminiRouter.Use(middleware.SystemPerformanceCheck())
 		relayGeminiRouter.Use(middleware.TokenAuth())

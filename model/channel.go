@@ -62,6 +62,8 @@ type Channel struct {
 	Keys []string `json:"-" gorm:"-"`
 }
 
+const ChannelStatusReasonAllKeysDisabled = "All keys are disabled"
+
 type ChannelInfo struct {
 	IsMultiKey             bool                  `json:"is_multi_key"`                        // 是否多Key模式
 	MultiKeySize           int                   `json:"multi_key_size"`                      // 多Key模式下的Key数量
@@ -824,7 +826,7 @@ func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason
 		if !hasEnabledMultiKey(keys, channel.ChannelInfo.MultiKeyStatusList) {
 			channel.Status = common.ChannelStatusAutoDisabled
 			info := channel.GetOtherInfo()
-			info["status_reason"] = "All keys are disabled"
+			info["status_reason"] = ChannelStatusReasonAllKeysDisabled
 			info["status_time"] = common.GetTimestamp()
 			channel.SetOtherInfo(info)
 		} else if status == common.ChannelStatusEnabled {
@@ -866,7 +868,12 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 	}
 
 	shouldUpdateAbilities := false
-	if channel.Status == status {
+	// 官方：多 key 渠道因所有 key 不可用被自动禁用后，管理员手动禁用需覆盖该原因（即使状态值相同），
+	// 避免后续被当作 key 耗尽自动恢复
+	overridesKeyExhaustion := channel.ChannelInfo.IsMultiKey && usingKey == "" &&
+		status == common.ChannelStatusManuallyDisabled && reason != ChannelStatusReasonAllKeysDisabled &&
+		channel.GetOtherInfo()["status_reason"] == ChannelStatusReasonAllKeysDisabled
+	if channel.Status == status && !overridesKeyExhaustion {
 		return false
 	}
 
@@ -922,6 +929,18 @@ func EnableChannelByTag(tag string) error {
 }
 
 func DisableChannelByTag(tag string) error {
+	// 官方：按标签禁用时，先把因 key 耗尽而自动禁用的多 key 渠道改为手动禁用，取消自动恢复
+	var exhausted []Channel
+	if err := DB.Where("tag = ? and status != ?", tag, common.ChannelStatusDeleted).Find(&exhausted).Error; err != nil {
+		return err
+	}
+	for _, channel := range exhausted {
+		if channel.ChannelInfo.IsMultiKey && channel.GetOtherInfo()["status_reason"] == ChannelStatusReasonAllKeysDisabled {
+			if !UpdateChannelStatus(channel.Id, "", common.ChannelStatusManuallyDisabled, "manual tag operation") {
+				return fmt.Errorf("failed to disable channel #%d by tag", channel.Id)
+			}
+		}
+	}
 	return updateChannelStatusByTag(tag, common.ChannelStatusManuallyDisabled, false)
 }
 
@@ -1227,7 +1246,10 @@ func (channel *Channel) ValidateSettings() error {
 	if err := channelOtherSettings.ValidateModelCostDiscount(); err != nil {
 		return err
 	}
-	if channel.Type == constant.ChannelTypeAdvancedCustom {
+	if preset := common.GetAdvancedCustomPreset(channel.Type); preset != nil {
+		channelOtherSettings.AdvancedCustom = preset
+	}
+	if constant.IsAdvancedCustomChannel(channel.Type) {
 		if channelOtherSettings.AdvancedCustom == nil {
 			return fmt.Errorf("advanced_custom is required")
 		}
@@ -1247,7 +1269,7 @@ func (channel *Channel) ValidateSettings() error {
 			return err
 		}
 	}
-	if channel.Type == constant.ChannelTypeAdvancedCustom && channelOtherSettings.UpstreamModelUpdateCheckEnabled {
+	if constant.IsAdvancedCustomChannel(channel.Type) && channelOtherSettings.UpstreamModelUpdateCheckEnabled {
 		if _, ok := channelOtherSettings.AdvancedCustom.ModelListRoute(); !ok {
 			return fmt.Errorf("advanced custom channels require a %s route when upstream model update checks are enabled", dto.AdvancedCustomModelListPath)
 		}
@@ -1297,6 +1319,9 @@ func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 			channel.OtherSettings = "{}" // 清空设置以避免后续错误
 			_ = channel.Save()           // 保存修改
 		}
+	}
+	if preset := common.GetAdvancedCustomPreset(channel.Type); preset != nil {
+		setting.AdvancedCustom = preset
 	}
 	return setting
 }

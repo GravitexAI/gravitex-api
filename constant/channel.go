@@ -67,7 +67,10 @@ const (
 	ChannelTypeNewAPI     = 64
 	ChannelTypeTaskPlugin = 65
 	ChannelTypeMockAI     = 66
-	ChannelTypeDummy      // this one is only for count, do not add any channel after this
+	// 67 预留给 Gemini Enterprise 渠道；官方 VLLM=62 / SGLang=63 与 alpha 撞号，顺延到 68 / 69（2026-11-11 用户拍板）
+	ChannelTypeVLLM   = 68
+	ChannelTypeSGLang = 69
+	ChannelTypeDummy  // this one is only for count, do not add any channel after this
 
 )
 
@@ -146,6 +149,9 @@ var ChannelBaseURLs = []string{
 	"",                                          //64 New API
 	"",                                          //65 Task Plugin
 	"",                                          //66 Mock AI
+	"",                                          //67 预留 Gemini Enterprise
+	"",                                          //68 vLLM
+	"",                                          //69 SGLang
 }
 
 var ChannelTypeNames = map[int]string{
@@ -211,6 +217,8 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeSub2API:         "Sub2API",
 	ChannelTypeNewAPI:          "New API",
 	ChannelTypeMockAI:          "Mock AI",
+	ChannelTypeVLLM:            "vLLM",
+	ChannelTypeSGLang:          "SGLang",
 }
 
 func GetChannelTypeName(channelType int) string {
@@ -242,4 +250,14 @@ var ChannelSpecialBases = map[string]ChannelSpecialBase{
 		ClaudeBaseURL: "https://ark.cn-beijing.volces.com/api/coding",
 		OpenAIBaseURL: "https://ark.cn-beijing.volces.com/api/coding/v3",
 	},
+}
+
+// IsAdvancedCustomChannel includes named channels backed by route presets.
+func IsAdvancedCustomChannel(channelType int) bool {
+	switch channelType {
+	case ChannelTypeAdvancedCustom, ChannelTypeVLLM, ChannelTypeSGLang:
+		return true
+	default:
+		return false
+	}
 }

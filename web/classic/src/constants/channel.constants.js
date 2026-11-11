@@ -229,6 +229,17 @@ export const CHANNEL_OPTIONS = [
     color: 'orange',
     label: 'Mock AI',
   },
+  // 67 预留 Gemini Enterprise；官方 vLLM/SGLang 顺延到 68/69，须与 constant/channel.go 一致
+  {
+    value: 68,
+    color: 'blue',
+    label: 'vLLM',
+  },
+  {
+    value: 69,
+    color: 'cyan',
+    label: 'SGLang',
+  },
 ];
 
 // 不再允许新建的渠道类型：仍保留在 CHANNEL_OPTIONS 里，让存量渠道的表格标签、

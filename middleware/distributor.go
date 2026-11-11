@@ -174,6 +174,12 @@ func selectReplacementChannelAffinityKey(channel *model.Channel, excludedHash st
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
+		policy := service.RequestPolicy(c)
+		defer func() {
+			if c.Writer.Status() >= 400 {
+				service.RecordRequestPolicyTermination(c, types.NewErrorWithStatusCode(errors.New("request rejected"), types.ErrorCodeInvalidRequest, c.Writer.Status(), types.ErrOptionWithSkipRetry()))
+			}
+		}()
 		constraints := service.GetChannelConstraints(c)
 		// Native asset routing still supplies the legacy context key. Bridge it
 		// into the same pin used by plugin routing and retry selection.
@@ -368,6 +374,10 @@ func Distribute() func(c *gin.Context) {
 						service.ClearChannelAffinityHit(c)
 						c.Set(channelAffinityBindingContextKey, service.ChannelAffinityBinding{})
 					}
+					if !affinityUsable && policy.SessionMode == "strict" {
+						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, "strict_session_binding_unavailable")
+						return
+					}
 				}
 
 				if channel == nil {
@@ -464,16 +474,25 @@ func shouldRecordChannelAffinity(c *gin.Context) bool {
 }
 
 // noAvailableChannelMessage explains a 503 for a task-plugin-claimed model.
-// A model claimed by a plugin is served only by that plugin's channels, so the
-// generic "no channel" text hides the real cause: the claiming plugin has no
-// enabled channel, and the operator must disable or override that plugin for
-// any other plugin or channel to take the model. Non-plugin requests keep the
-// generic message.
+// The response tells the caller the model is plugin-claimed without naming the
+// plugin; the candidate plugin keys go to the server log under the request id.
 func noAvailableChannelMessage(c *gin.Context, group, modelName string) string {
 	value, exists := c.Get(jsplugin.ContextKeyPinnedPlugin)
 	pinned, ok := value.(jsplugin.PinnedPlugin)
 	if exists && ok && pinned.Plugin != nil {
-		return i18n.T(c, i18n.MsgDistributorNoAvailableChannelTaskPlugin, map[string]any{"Group": group, "Model": modelName, "Plugin": pinned.Plugin.Meta.Key})
+		keys := []string{pinned.Plugin.Meta.Key}
+		if value, exists := c.Get(jsplugin.ContextKeyPinnedEndpoint); exists {
+			if endpoint, ok := value.(jsplugin.PinnedEndpoint); ok && len(endpoint.Candidates) > 0 {
+				keys = nil
+				for _, candidate := range endpoint.Candidates {
+					if candidate.Plugin != nil {
+						keys = append(keys, candidate.Plugin.Meta.Key)
+					}
+				}
+			}
+		}
+		logger.LogWarn(c, "task_plugin subsystem=distribution event=no_available_channel group=%q model=%q plugins=%q reason=no_eligible_channel", group, modelName, strings.Join(keys, ","))
+		return i18n.T(c, i18n.MsgDistributorNoAvailableChannelTaskPlugin, map[string]any{"Group": group, "Model": modelName})
 	}
 	return i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": group, "Model": modelName})
 }

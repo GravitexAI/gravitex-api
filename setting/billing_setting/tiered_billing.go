@@ -5,6 +5,7 @@ import (
 	"maps"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -17,15 +18,17 @@ import (
 )
 
 const (
-	BillingModeRatio      = "ratio"
-	BillingModeTieredExpr = "tiered_expr"
-	BillingModeField      = "billing_mode"
-	BillingExprField      = "billing_expr"
-	maxTaskExprSmokeTests = 64
+	BillingModeRatio        = "ratio"
+	BillingModeTieredExpr   = "tiered_expr"
+	BillingModeField        = "billing_mode"
+	BillingExprField        = "billing_expr"
+	PluginBillingExprOption = "billing_setting.plugin_billing_expr"
+	maxTaskExprSmokeTests   = 64
 )
 
 // BillingSetting is managed by config.GlobalConfig.Register.
-// DB keys: billing_setting.billing_mode, billing_setting.billing_expr, billing_setting.service_tier_ratio
+// DB keys: billing_setting.billing_mode, billing_setting.billing_expr,
+// billing_setting.service_tier_ratio, billing_setting.plugin_billing_expr
 type BillingSetting struct {
 	BillingMode map[string]string `json:"billing_mode"`
 	BillingExpr map[string]string `json:"billing_expr"`
@@ -33,6 +36,7 @@ type BillingSetting struct {
 	// 档位取自 OpenAI 响应的 service_tier 或 Claude 的 usage.speed；
 	// 模型未配置或未配置该档位时使用代码内置的 defaultServiceTierRatios。
 	ServiceTierRatio map[string]map[string]float64 `json:"service_tier_ratio"`
+	PluginBillingExpr map[string]string `json:"plugin_billing_expr"`
 }
 
 // defaultServiceTierRatios 官方档位相对标准价的默认倍率，未在表中的档位（default / auto / scale 等）按原价。
@@ -50,6 +54,7 @@ var billingSetting = BillingSetting{
 	BillingMode:      make(map[string]string),
 	BillingExpr:      make(map[string]string),
 	ServiceTierRatio: make(map[string]map[string]float64),
+	PluginBillingExpr: make(map[string]string),
 }
 
 func init() {
@@ -119,6 +124,67 @@ func ValidateServiceTierRatio(jsonStr string) error {
 func GetBuiltinBillingExpr(model string) (string, bool) {
 	expression, ok := builtinBillingExpr[model]
 	return expression, ok
+}
+
+func PluginBillingExprKey(pluginKey, model string) string {
+	return pluginKey + "::" + model
+}
+
+func SplitPluginBillingExprKey(key string) (plugin, model string, ok bool) {
+	plugin, model, ok = strings.Cut(key, "::")
+	if !ok || !jsplugin.ValidPluginKey(plugin) || strings.TrimSpace(model) == "" {
+		return "", "", false
+	}
+	return plugin, model, true
+}
+
+func GetPluginBillingExprCopy() map[string]string {
+	return maps.Clone(billingSetting.PluginBillingExpr)
+}
+
+func GetPluginBillingExpr(pluginKey, model string) (string, bool) {
+	expression, ok := billingSetting.PluginBillingExpr[PluginBillingExprKey(pluginKey, model)]
+	return expression, ok
+}
+
+// ResolveTaskBillingExpr selects the executing plugin's override before the
+// model expression, retaining the model alias fallback and explicit modes.
+func ResolveTaskBillingExpr(pluginKey, model, mappedModel string) (string, bool) {
+	if pluginKey != "" {
+		if expr, ok := GetPluginBillingExpr(pluginKey, model); ok {
+			return expr, true
+		}
+		if mappedModel != "" && mappedModel != model {
+			if expr, ok := GetPluginBillingExpr(pluginKey, mappedModel); ok {
+				return expr, true
+			}
+		}
+	}
+	if GetBillingMode(model) == BillingModeTieredExpr {
+		return GetBillingExpr(model)
+	}
+	if mappedModel != "" && mappedModel != model && GetBillingMode(mappedModel) == BillingModeTieredExpr {
+		expression, ok := GetBillingExpr(mappedModel)
+		return expression, ok && strings.TrimSpace(expression) != ""
+	}
+	return "", false
+}
+
+// TaskExprCompatible checks the schema contract even for usage references in
+// branches that the current request would not evaluate.
+func TaskExprCompatible(expression string, schema map[string]jsplugin.UsageFieldSchema) bool {
+	if strings.TrimSpace(expression) == "" {
+		return false
+	}
+	if _, err := billingexpr.CompileFromCache(expression); err != nil {
+		return false
+	}
+	for key := range billingexpr.UsedUsageKeys(expression) {
+		if _, exists := schema[key]; !exists {
+			return false
+		}
+	}
+	return !billingexpr.UsesFixedPricing(expression)
 }
 
 func GetBuiltinBillingExprCopy() map[string]string {

@@ -218,17 +218,7 @@ func usageFromResponsesUsage(src *dto.Usage, createBillingSnapshot bool) *dto.Us
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
 	if src.InputTokensDetails != nil {
-		usage.PromptTokensDetails.VideoTokens = src.InputTokensDetails.VideoTokens
-		if src.InputTokensDetails.CachedTokensDetails != nil {
-			details := *src.InputTokensDetails.CachedTokensDetails
-			usage.PromptTokensDetails.CachedTokensDetails = &details
-		}
-		usage.PromptTokensDetails.CachedTokens = src.InputTokensDetails.CachedTokens
-		usage.PromptTokensDetails.CachedCreationTokens = src.InputTokensDetails.CachedCreationTokens
-		usage.PromptTokensDetails.CacheWriteTokens = src.InputTokensDetails.CacheWriteTokens
-		usage.PromptTokensDetails.TextTokens = src.InputTokensDetails.TextTokens
-		usage.PromptTokensDetails.ImageTokens = src.InputTokensDetails.ImageTokens
-		usage.PromptTokensDetails.AudioTokens = src.InputTokensDetails.AudioTokens
+		usage.PromptTokensDetails = src.InputTokensDetails.Clone()
 	}
 	if src.CompletionTokenDetails.ReasoningTokens != 0 ||
 		src.CompletionTokenDetails.TextTokens != 0 ||

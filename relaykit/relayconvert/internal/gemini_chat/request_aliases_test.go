@@ -11,7 +11,7 @@ import (
 func TestSnakeCaseRequestKeepsToolsDuringOpenAIConversion(t *testing.T) {
 	var req dto.GeminiChatRequest
 	require.NoError(t, kitutil.Unmarshal([]byte(`{"contents":[{"role":"user","parts":[{"text":"lookup"}]}],"generation_config":{"max_output_tokens":100,"temperature":0},"system_instruction":{"parts":[{"text":"system"}]},"tools":[{"function_declarations":[{"name":"lookup","parameters":{"type":"object","properties":{"file_uri":{"type":"string"}}}}]}]}`), &req))
-	got, err := GeminiGenerateContentRequestToOpenAIChat(&req, nil)
+	got, err := GeminiGenerateContentRequestToOpenAIChat(t.Context(), &req, nil)
 	require.NoError(t, err)
 	require.Len(t, got.Tools, 1)
 	assert.Equal(t, "lookup", got.Tools[0].Function.Name)
