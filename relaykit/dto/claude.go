@@ -234,11 +234,11 @@ type ClaudeRequest struct {
 	TopK              *int            `json:"top_k,omitempty"`
 	Stream            *bool           `json:"stream,omitempty"`
 	Tools             any             `json:"tools,omitempty"`
+	Safeguards        json.RawMessage `json:"safeguards,omitempty"`
 	ContextManagement json.RawMessage `json:"context_management,omitempty"`
 	OutputConfig      json.RawMessage `json:"output_config,omitempty"`
 	OutputFormat      json.RawMessage `json:"output_format,omitempty"`
 	Container         json.RawMessage `json:"container,omitempty"`
-	Safeguards        json.RawMessage `json:"safeguards,omitempty"`
 	ToolChoice        any             `json:"tool_choice,omitempty"`
 	Thinking          *Thinking       `json:"thinking,omitempty"`
 	// Reasoning is a non-standard OpenRouter-style field ({enabled,effort,max_tokens})
@@ -394,18 +394,6 @@ func (c *ClaudeRequest) SetModelName(modelName string) {
 	if modelName != "" {
 		c.Model = modelName
 	}
-}
-
-func (c *ClaudeRequest) SearchToolNameByToolCallId(toolCallId string) string {
-	for _, message := range c.Messages {
-		content, _ := message.ParseContent()
-		for _, mediaMessage := range content {
-			if mediaMessage.Id == toolCallId {
-				return mediaMessage.Name
-			}
-		}
-	}
-	return ""
 }
 
 // AddTool 添加工具到请求中

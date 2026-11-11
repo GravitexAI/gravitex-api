@@ -20,6 +20,7 @@ func TestHostProtocolRegistryDrivesProtocolRoutesOnce(t *testing.T) {
 		"GET /v1/videos/:task_id",
 		"GET /v1/videos/:task_id/content",
 		"HEAD /v1/videos/:task_id/content",
+		// alpha：/v1/images/* 不由插件协议路由注册，统一走 relay-router 的 ImageHelper
 	}
 	actual := make([]string, 0, len(engine.Routes()))
 	for _, route := range engine.Routes() {

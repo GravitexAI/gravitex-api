@@ -549,6 +549,9 @@ func taskBillingOther(task *model.Task) taskBillingOtherMap {
 			if len(snap.UsageFacts) > 0 {
 				other["usage_facts"] = snap.UsageFacts
 			}
+			setTaskImageCount(other, snap.UsageFacts["image_count"])
+		} else if priceData := taskBillingContextPriceData(bc); priceData != nil {
+			setTaskImageCount(other, priceData.OtherRatios()["image_count"])
 		}
 	}
 	props := task.Properties
@@ -1044,4 +1047,14 @@ func EvaluateTaskCompletionUsage(snap *billingexpr.BillingSnapshot, facts map[st
 		err = fmt.Errorf("task completion expression produced an invalid cost")
 	}
 	return result, usage, err
+}
+
+// setTaskImageCount 把图片任务的计费张数写到 other.image_count（与 HTTP 图片中转同一字段），
+// 值为宿主校验过的张数（不超过 MaxImageN），不是额度（官方 #141，适配 alpha 的 map 日志格式）
+func setTaskImageCount(other map[string]interface{}, value any) {
+	count, ok := value.(float64)
+	if !ok || count < 0 || count > float64(relaydto.MaxImageN) {
+		return
+	}
+	other["image_count"] = common.QuotaRound(count)
 }

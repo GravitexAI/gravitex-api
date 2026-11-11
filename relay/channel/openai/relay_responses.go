@@ -43,6 +43,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	info.UpstreamResponseId = responsesResponse.ID
 	info.CaptureUpstreamServiceTier(responseBody)
 
+	info.ObserveResponseModel(responsesResponse.Model)
 	// 写入新的 response body（SGLang 时间戳修正 + Meta 的整数值浮点时间戳归一化为整数再透传）
 	responseBody = rewriteSGLangResponsesCreatedAt(info, responseBody, "created_at", responsesResponse.CreatedAt)
 	responseBody = normalizeResponsesTimestamps(responseBody)
@@ -132,9 +133,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			data = string(rewriteSGLangResponsesCreatedAt(info, []byte(data), "response.created_at", streamResponse.Response.CreatedAt))
 		}
 		sendResponsesStreamData(c, streamResponse, data)
+		// 官方：按事件记录流的协议结果（完成/失败/截断），用于渠道健康统计
+		service.ObserveResponsesOutcome(info, &streamResponse)
 		switch streamResponse.Type {
 		case "response.completed", "response.done":
 			if streamResponse.Response != nil {
+				info.ObserveResponseModel(streamResponse.Response.Model)
 				info.UpstreamResponseId = streamResponse.Response.ID
 				info.CaptureUpstreamServiceTier(common.StringToByteSlice(data))
 				if streamResponse.Response.Usage != nil {
@@ -189,6 +193,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	})
 
+	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)
+	info.StreamStatus.RequireTerminal()
 	if !flushed && c.Request.Context().Err() == nil {
 		if upstreamFailure == nil {
 			upstreamFailure = fmt.Errorf("upstream stream ended without any output, received %d events", len(pendingEvents))

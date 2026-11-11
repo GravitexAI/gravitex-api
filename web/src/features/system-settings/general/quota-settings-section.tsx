@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import i18next from 'i18next'
 import type { ChangeEvent } from 'react'
 import type { Resolver } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -34,7 +35,6 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
 import { formatQuota } from '@/lib/format'
 
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
@@ -53,45 +53,27 @@ import { useUpdateOption } from '../hooks/use-update-option'
 
 const quotaSchema = z.object({
   QuotaForNewUser: z.coerce.number().min(0),
-  PreConsumedQuota: z.coerce.number().min(0),
   QuotaForInviter: z.coerce.number().min(0),
   QuotaForInvitee: z.coerce.number().min(0),
   TopUpLink: z.string(),
-  general_setting: z.object({
-    docs_link: z.string(),
-  }),
   quota_setting: z.object({
     enable_free_model_pre_consume: z.boolean(),
-    minimum_remaining_quota: z.coerce.number().int().min(0),
-    model_quota_reserve: z.string().refine(isValidModelQuotaReserve, {
-      message: 'Model quota reserve rules must be a JSON object with non-negative integer values.',
-    }),
+    trust_quota_usd: z.preprocess(
+      (value) => (value === '' ? undefined : value),
+      z.coerce
+        .number({ error: () => i18next.t('Please enter a valid number') })
+        .min(0, {
+          error: () => i18next.t('Must be greater than or equal to 0'),
+        })
+    ),
+    pre_consume_multiplier: z.coerce
+      .number({ error: () => i18next.t('Please enter a valid number') })
+      .positive({ error: () => i18next.t('Must be greater than 0') }),
   }),
 })
 
 type QuotaFormValues = z.infer<typeof quotaSchema>
 type QuotaInputValue = number | ''
-
-function isValidModelQuotaReserve(value: string): boolean {
-  if (!value.trim()) return true
-  try {
-    const parsed: unknown = JSON.parse(value)
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      return false
-    }
-    return Object.entries(parsed as Record<string, unknown>).every(
-      ([pattern, quota]) =>
-        pattern.length > 0 &&
-        (!pattern.includes('*') || pattern.endsWith('*')) &&
-        typeof quota === 'number' &&
-        Number.isInteger(quota) &&
-        Number.isFinite(quota) &&
-        quota >= 0
-    )
-  } catch {
-    return false
-  }
-}
 
 function formatQuotaInputValue(value: QuotaInputValue): string {
   return formatQuota(value === '' ? 0 : value)
@@ -186,22 +168,56 @@ export function QuotaSettingsSection({
 
             <FormField
               control={form.control}
-              name='PreConsumedQuota'
+              name='quota_setting.trust_quota_usd'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Pre-Consumed Quota')}</FormLabel>
+                  <FormLabel>
+                    {t('Wallet pre-consume bypass threshold (USD)')}
+                  </FormLabel>
                   <FormControl>
                     <Input
                       type='number'
+                      min={0}
+                      step='any'
                       value={field.value ?? ''}
-                      onChange={handleNumberChange(field.onChange)}
+                      onChange={field.onChange}
                       name={field.name}
                       onBlur={field.onBlur}
                       ref={field.ref}
                     />
                   </FormControl>
                   <FormDescription>
-                    {t('Quota consumed before charging users')}
+                    {t(
+                      'Skip pre-consumption when the wallet balance and limited API key balance both exceed this amount. Set to 0 to always pre-consume. Subscriptions and asynchronous tasks always reserve quota.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='quota_setting.pre_consume_multiplier'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Input pre-consume multiplier')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      step='any'
+                      value={field.value ?? ''}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      ref={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Reserve the estimated input cost multiplied by this value, without estimating output tokens. Defaults to 1; positive decimals such as 0.5 and 1.5 are supported. Final charges use actual usage. Per-request and task prices are unaffected.'
+                    )}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -291,59 +307,6 @@ export function QuotaSettingsSection({
 
             <FormField
               control={form.control}
-              name='quota_setting.minimum_remaining_quota'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Minimum Remaining Quota')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      type='number'
-                      min={0}
-                      step={1}
-                      value={field.value ?? ''}
-                      onChange={handleNumberChange(field.onChange)}
-                      name={field.name}
-                      onBlur={field.onBlur}
-                      ref={field.ref}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t('Quota that must remain after a model request is pre-consumed')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <SettingsFormGridItem span='full'>
-              <FormField
-                control={form.control}
-                name='quota_setting.model_quota_reserve'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Model Quota Reserve Rules')}</FormLabel>
-                    <FormControl>
-                      <Textarea
-                        className='min-h-28 font-mono text-sm'
-                        placeholder={t(
-                          'Example: {"seedance*": 10000, "seedance-2-0": 20000}'
-                        )}
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'Use JSON with exact model names or trailing * prefixes. Exact matches take priority.'
-                      )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </SettingsFormGridItem>
-
-            <FormField
-              control={form.control}
               name='TopUpLink'
               render={({ field }) => (
                 <FormItem>
@@ -356,26 +319,6 @@ export function QuotaSettingsSection({
                   </FormControl>
                   <FormDescription>
                     {t('External link for users to purchase quota')}
-                  </FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name='general_setting.docs_link'
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{t('Documentation Link')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      placeholder={t('https://docs.example.com')}
-                      {...field}
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t('Link to your documentation site')}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

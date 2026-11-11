@@ -403,10 +403,9 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, service.TaskErrorWrapper(err, "do_request_failed", http.StatusInternalServerError)
 	}
 	nativeVertexInteractionResponse := isNativeInteractionTaskRequest(info, modelName)
-	responseSucceeded := resp != nil && resp.StatusCode == http.StatusOK
-	if nativeVertexInteractionResponse && resp != nil {
-		responseSucceeded = resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices
-	}
+	// 官方 #155：任意 2xx 都是提交成功（任务接口常返回 201 Created / 202 Accepted），
+	// 否则会误判失败、退款并换渠道重复提交
+	responseSucceeded := resp != nil && resp.StatusCode/100 == 2
 	if resp != nil && !responseSucceeded {
 		responseBody, _ := io.ReadAll(resp.Body)
 		taskErr := service.TaskErrorWrapper(fmt.Errorf("%s", string(responseBody)), "fail_to_fetch_task", resp.StatusCode)
@@ -932,7 +931,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		taskResp = service.TaskErrorWrapper(err, "get_task_failed", http.StatusInternalServerError)
 		return
 	}
-	if !exist {
+	if !exist || !originTask.ResultRetrievable() {
 		taskResp = service.TaskErrorWrapperLocal(errors.New("task_not_exist"), "task_not_exist", http.StatusBadRequest)
 		return
 	}

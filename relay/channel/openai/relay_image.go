@@ -127,13 +127,14 @@ func openaiImageDataHasField(item gjson.Result, field string) bool {
 }
 
 // normalizeOpenAIUsage maps the OpenAI Images usage shape (input_tokens /
-// output_tokens / input_tokens_details) onto the canonical prompt/completion
-// fields. It is used only on the OpenAI image relay paths (generations/edits,
-// streaming and non-streaming): the image API never returns prompt_tokens /
-// completion_tokens, so the overwrite (=) semantics here are equivalent to the
-// previous additive (+=) behavior while avoiding any future double-counting if
-// both field sets are ever populated. Do not reuse this on chat/embedding paths
-// without revisiting the overwrite semantics.
+// output_tokens / input_tokens_details / output_tokens_details) onto the
+// canonical prompt/completion fields. It is used only on the OpenAI image
+// relay paths (generations/edits, streaming and non-streaming): the image
+// API never returns prompt_tokens / completion_tokens, so the overwrite (=)
+// semantics here are equivalent to the previous additive (+=) behavior while
+// avoiding any future double-counting if both field sets are ever populated.
+// Do not reuse this on chat/embedding paths without revisiting the overwrite
+// semantics.
 func normalizeOpenAIUsage(usage *dto.Usage) {
 	if usage == nil {
 		return
@@ -147,10 +148,13 @@ func normalizeOpenAIUsage(usage *dto.Usage) {
 	if usage.InputTokensDetails != nil {
 		usage.PromptTokensDetails = usage.InputTokensDetails.Clone()
 	}
-	// 图片接口（generations/edits）的 output_tokens 都是图片输出，
-	// 写入 CompletionTokenDetails.ImageTokens 让 text_quota.go 按 ImageCompletionRatio
-	// 拆分计费，并在 logs.other 里回写 image_output_tokens / output_image_price 等字段。
-	if usage.OutputTokens > 0 && usage.CompletionTokenDetails.ImageTokens == 0 {
+	// 官方 #114：上游给出 output_tokens_details 时按其文本/图片拆分计费
+	if usage.OutputTokensDetails != nil {
+		usage.CompletionTokenDetails = *usage.OutputTokensDetails
+	}
+	// alpha 兜底：未给出拆分时图片接口的 output_tokens 都是图片输出，写入 ImageTokens
+	// 让 text_quota.go 按 ImageCompletionRatio 拆分计费，并回写 image_output_tokens 等日志字段
+	if usage.OutputTokens > 0 && usage.CompletionTokenDetails.ImageTokens == 0 && usage.CompletionTokenDetails.TextTokens == 0 {
 		usage.CompletionTokenDetails.ImageTokens = usage.OutputTokens
 	}
 	if usage.TotalTokens == 0 {

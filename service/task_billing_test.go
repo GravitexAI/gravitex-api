@@ -810,6 +810,9 @@ func TestLogTaskConsumptionWithoutSnapshotKeepsRatioMode(t *testing.T) {
 	assert.Contains(t, log.Content, "size: 2.00")
 }
 
+// Task logs distinguish jobs the client polls from requests whose HTTP call
+// returned the deliverable itself, and flag results the gateway did not keep.
+
 func TestTaskBillingOtherSeparatesPluginAndRootDiagnostics(t *testing.T) {
 	task := makeTask(1, 1, 100, 0, BillingSourceWallet, 0)
 	task.TaskID = "task_public"
