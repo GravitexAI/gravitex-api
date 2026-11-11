@@ -22,8 +22,9 @@ const (
 
 var legacyTaskActionAliases = map[string]string{"generate": TaskActionImageToVideo, "textGenerate": TaskActionTextToVideo, "firstTailGenerate": TaskActionFirstTailToVideo, "referenceGenerate": TaskActionReferenceToVideo, "remixGenerate": TaskActionRemix}
 var TaskPluginEnabled = true
-var TaskPluginOverrideEnabled = true
 
+// NormalizeTaskAction maps persisted legacy action names to the canonical task
+// action vocabulary. Unknown platform-specific actions pass through unchanged.
 func NormalizeTaskAction(action string) string {
 	if v, ok := legacyTaskActionAliases[action]; ok {
 		return v

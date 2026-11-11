@@ -30,7 +30,6 @@ export type ModelPricingSnapshotInput = {
   imageRatio: string
   audioRatio: string
   audioCompletionRatio: string
-  videoRatio: string
   billingMode: string
   billingExpr: string
 }
@@ -45,7 +44,6 @@ export type ModelPricingSnapshot = {
   imageRatio?: string
   audioRatio?: string
   audioCompletionRatio?: string
-  videoRatio?: string
   billingMode?: string
   billingExpr?: string
   requestRuleExpr?: string
@@ -121,19 +119,7 @@ export const getPriceSummary = (
   const inputPrice = ratioToPrice(row.ratio)
   if (!inputPrice) return t('Unset price')
 
-  const extraCount = [
-    row.completionRatio,
-    row.cacheRatio,
-    row.createCacheRatio,
-    row.imageRatio,
-    row.audioRatio,
-    row.audioCompletionRatio,
-    row.videoRatio,
-  ].filter(hasPricingValue).length
-
-  return extraCount > 0
-    ? `${t('Input')} $${inputPrice} · ${extraCount} ${t('extras')}`
-    : `${t('Input')} $${inputPrice}`
+  return `${t('Input')} $${inputPrice}`
 }
 
 export const getPriceDetail = (
@@ -159,8 +145,6 @@ export const getPriceDetail = (
       `${t('Cache')} $${ratioToPrice(row.cacheRatio, inputPrice)}`,
     row.createCacheRatio &&
       `${t('Cache write')} $${ratioToPrice(row.createCacheRatio, inputPrice)}`,
-    row.videoRatio &&
-      `${t('Video input')} $${ratioToPrice(row.videoRatio, inputPrice)}`,
   ]
     .filter(Boolean)
     .slice(0, 2)
@@ -177,7 +161,6 @@ export const buildModelSnapshots = ({
   imageRatio,
   audioRatio,
   audioCompletionRatio,
-  videoRatio,
   billingMode,
   billingExpr,
 }: ModelPricingSnapshotInput): ModelPricingSnapshot[] => {
@@ -213,10 +196,6 @@ export const buildModelSnapshots = ({
     audioCompletionRatio,
     { fallback: {}, context: 'audio completion ratios' }
   )
-  const videoMap = safeJsonParse<Record<string, number>>(videoRatio, {
-    fallback: {},
-    context: 'video ratios',
-  })
   const billingModeMap = safeJsonParse<Record<string, string>>(billingMode, {
     fallback: {},
     context: 'billing mode',
@@ -235,12 +214,11 @@ export const buildModelSnapshots = ({
     ...Object.keys(imageMap),
     ...Object.keys(audioMap),
     ...Object.keys(audioCompletionMap),
-    ...Object.keys(videoMap),
     ...Object.keys(billingModeMap),
     ...Object.keys(billingExprMap),
   ])
 
-  return Array.from(modelNames).map((name) => {
+  return [...modelNames].map((name) => {
     const price = priceMap[name]?.toString() || ''
     const ratio = ratioMap[name]?.toString() || ''
     const cache = cacheMap[name]?.toString() || ''
@@ -249,7 +227,6 @@ export const buildModelSnapshots = ({
     const image = imageMap[name]?.toString() || ''
     const audio = audioMap[name]?.toString() || ''
     const audioCompletion = audioCompletionMap[name]?.toString() || ''
-    const video = videoMap[name]?.toString() || ''
 
     const modeForModel = billingModeMap[name]
     if (modeForModel === 'tiered_expr') {
@@ -269,7 +246,6 @@ export const buildModelSnapshots = ({
         imageRatio: image,
         audioRatio: audio,
         audioCompletionRatio: audioCompletion,
-        videoRatio: video,
         hasConflict: false,
       }
     }
@@ -284,7 +260,6 @@ export const buildModelSnapshots = ({
       imageRatio: image,
       audioRatio: audio,
       audioCompletionRatio: audioCompletion,
-      videoRatio: video,
       billingMode: price !== '' ? 'per-request' : 'per-token',
       hasConflict:
         price !== '' &&
@@ -294,8 +269,7 @@ export const buildModelSnapshots = ({
           createCache !== '' ||
           image !== '' ||
           audio !== '' ||
-          audioCompletion !== '' ||
-          video !== ''),
+          audioCompletion !== ''),
     }
   })
 }
@@ -311,7 +285,6 @@ export const getSnapshotSignature = (snapshot?: ModelPricingSnapshot) => {
     imageRatio: snapshot.imageRatio || '',
     audioRatio: snapshot.audioRatio || '',
     audioCompletionRatio: snapshot.audioCompletionRatio || '',
-    videoRatio: snapshot.videoRatio || '',
     billingMode: snapshot.billingMode || 'per-token',
     billingExpr: snapshot.billingExpr || '',
     requestRuleExpr: snapshot.requestRuleExpr || '',
