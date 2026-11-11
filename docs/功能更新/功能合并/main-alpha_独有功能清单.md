@@ -838,7 +838,7 @@ routes/console/topup.tsx
 |---|---|---|
 | 请求追踪响应头 `X-Api-Request-Id` | `middleware/request-id.go` | |
 | readiness / liveness probe initial delay 增大 | k8s 部署配置 | |
-| 429 限流不触发重试 | `controller/relay.go:721`(直接返回不重试)、`controller/task_video.go:133`(轮询遇 429 跳过本轮,下轮再试) | 避免无 backoff 反复打上游。commit `1a1a786d7`。与 [7.11.12](#71112--settingoperation_settingstatus_code_rangesgo--main-alpha-删掉了官方的-504524-硬编码不重试) 的 504/524 相邻但独立,官方改重试判定易带回 429 重试 |
+| ~~429 限流不触发重试~~（2026-11-11 用户决定任务提交 429 改为换渠道重试，对齐官方） | `controller/task_video.go`(轮询遇 429 跳过本轮,下轮再试，仍保留) | 原 commit `1a1a786d7`。与 [7.11.12](#71112--settingoperation_settingstatus_code_rangesgo--main-alpha-删掉了官方的-504524-硬编码不重试) 的 504/524 相邻但独立,官方改重试判定易带回 429 重试 |
 | 模型不存在/无渠道返回 404 而非 503 | `middleware/distributor.go:146/150`(`ErrorCodeModelNotFound` + `StatusNotFound`) | 官方默认 503。commit `5247ec9da` |
 | Vertex AI token 换取重试 | `relay/channel/vertex/service_account.go:126/178`(sleep 2s 重试循环) | 解决代理偶发超时导致的 401/500。commit `d61319f34` |
 | 管理员充值/扣减/覆盖三类审计文案 | `controller/user.go` `TopUp` + 充值/扣减/覆盖三类审计 | commit `ca9a36639`/`1a6f7e6ab` |
