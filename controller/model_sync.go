@@ -447,5 +447,6 @@ func SyncUpstreamModels(c *gin.Context) {
 		c.JSON(status, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	recordManageAudit(c, "model.metadata.sync", map[string]any{"created_models": result.CreatedModels, "updated_models": result.UpdatedModels, "created_vendors": result.CreatedVendors})
 	common.ApiSuccess(c, result)
 }
