@@ -21,6 +21,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
+	"github.com/tidwall/sjson"
 )
 
 func truncateImageLogBody(body []byte) string {
@@ -41,6 +42,8 @@ func truncateImageLogBody(body []byte) string {
 
 func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
+	info.BillingImageCount = nil
+	info.ImageRequestCount = 0
 
 	imageReq, ok := info.Request.(*dto.ImageRequest)
 	if !ok {
@@ -77,6 +80,11 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
+	imageCount, err := request.ImageCount(info.ChannelType == constant.ChannelTypeAli)
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	promptExtend := request.BillingParameters != nil && request.BillingParameters.PromptExtend != nil && *request.BillingParameters.PromptExtend
 
 	// gpt-image 系列：当 /v1/images/generations 请求包含 image 字段时，自动升级为 edits 模式
 	if info.RelayMode == relayconstant.RelayModeImagesGenerations && strings.HasPrefix(request.Model, "gpt-image") {
@@ -133,6 +141,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	}
 
 	var requestBody io.Reader
+	var jsonData []byte
 
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)
@@ -143,7 +152,14 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		if bodyBytes, err := storage.Bytes(); err == nil {
 			logger.LogDebug(c, "image upstream request body(size=%d): %s", len(bodyBytes), truncateImageLogBody(bodyBytes))
 		}
-		requestBody = common.NewReplayableBodyReader(storage)
+		if strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
+			requestBody = common.NewReplayableBodyReader(storage)
+		} else {
+			jsonData, err = storage.Bytes()
+			if err != nil {
+				return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
+		}
 	} else {
 		convertedRequest, err := adaptor.ConvertImageRequest(c, info, *request)
 		if err != nil {
@@ -158,7 +174,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			logger.LogDebug(c, "image upstream request body(size=%d): %s", len(bodyBytes), truncateImageLogBody(bodyBytes))
 			requestBody = convertedRequest.(io.Reader)
 		default:
-			jsonData, err := common.Marshal(convertedRequest)
+			jsonData, err = common.Marshal(convertedRequest)
 			if err != nil {
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
@@ -170,16 +186,47 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 					return newAPIErrorFromParamOverride(err)
 				}
 			}
-			// JSON 形式的上游请求在应用参数覆盖后记录，确保日志反映最终发送结果。
-			logger.LogDebug(c, "image upstream request body(size=%d): %s", len(jsonData), truncateImageLogBody(jsonData))
-			body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+
+		}
+	}
+	if jsonData != nil {
+		// This is a different trust boundary from ingress: channel overrides
+		// and pass-through bodies can change the quantity actually submitted.
+		var outbound struct {
+			N          *uint                       `json:"n"`
+			Parameters *dto.ImageBillingParameters `json:"parameters"`
+		}
+		if err := common.Unmarshal(jsonData, &outbound); err != nil {
+			return types.NewErrorWithStatusCode(fmt.Errorf("invalid image billing parameters: %w", err), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		quantityRequest := dto.ImageRequest{N: outbound.N, BillingParameters: outbound.Parameters}
+		if quantityRequest.N == nil {
+			quantityRequest.N = common.GetPointer(uint(imageCount))
+		}
+		imageCount, err = quantityRequest.ImageCount(info.ChannelType == constant.ChannelTypeAli)
+		if err != nil {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		promptExtend = outbound.Parameters != nil && outbound.Parameters.PromptExtend != nil && *outbound.Parameters.PromptExtend
+		if info.ChannelType == constant.ChannelTypeAli {
+			// Always send the same explicit quantity that is reserved, including
+			// when an empty parameters object accompanies a top-level n.
+			jsonData, err = sjson.SetBytes(jsonData, "parameters.n", imageCount)
 			if err != nil {
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
-			defer closer.Close()
-			jsonData = nil
-			requestBody = body
 		}
+		// JSON 形式的上游请求在应用参数覆盖后记录，确保日志反映最终发送结果（截断 base64）。
+		logger.LogDebug(c, "image upstream request body(size=%d): %s", len(jsonData), truncateImageLogBody(jsonData))
+		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		defer closer.Close()
+		requestBody = body
+	}
+	if billingErr := service.PrepareImageBillingForRequest(c, info, imageCount, promptExtend); billingErr != nil {
+		return billingErr
 	}
 
 	statusCodeMappingStr := c.GetString("status_code_mapping")
@@ -234,16 +281,14 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		imageN = *request.N
 	}
 
-	// n is handled via OtherRatio so it is applied exactly once in quota
-	// calculation (both price-based and ratio-based paths).
-	// Adaptors may have already set a more accurate count from the
-	// upstream response; only set the default when they haven't.
-	// 保留 main-alpha 的 ImagePerImagePricing 判断（按张计费已含实际张数与输入成本），
-	// 同时用官方新的 HasOtherRatio 访问器（otherRatios 已私有化）。
-	if info.PriceData.UsePrice && info.PriceData.ImagePerImagePricing == nil {
-		if !info.PriceData.HasOtherRatio("n") {
-			info.PriceData.AddOtherRatio("n", float64(imageN))
-		}
+	// n 通过 OtherRatio 只参与一次计费。官方 PrepareImageBillingForRequest 已按请求张数预扣并写入 n，
+	// 适配器可在响应后用 UpdateImageCount 改成实际张数；这里补 alpha 规则：
+	// - 按张计费（Seedream 逐张分档）：ModelPrice 已是实际总价，n 复位为 1，避免张数重复计算
+	// - 上游 usage 返回 generated_images 时按实际生成张数结算（例如请求 n=4 实际只出 1 张）
+	if info.PriceData.ImagePerImagePricing != nil {
+		info.PriceData.AddOtherRatio("n", 1)
+	} else if u, ok := usage.(*dto.Usage); ok && u != nil && u.GeneratedImages > 0 {
+		info.UpdateImageCount(int64(u.GeneratedImages))
 	}
 
 	if usage.(*dto.Usage).TotalTokens == 0 {

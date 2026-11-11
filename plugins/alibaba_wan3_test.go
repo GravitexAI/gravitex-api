@@ -98,13 +98,12 @@ func TestAlibabaWan3(t *testing.T) {
 		parameters := roundTrip(t, value)["body"].(map[string]any)["parameters"].(map[string]any)
 		assert.Equal(t, "720P", parameters["resolution"])
 		assert.NotContains(t, parameters, "size")
-		// alpha：按像素尺寸映射分辨率并带出对应画幅比例（1280*720 → 16:9），不使用官方的 adaptive
 		assert.Equal(t, "16:9", parameters["ratio"])
 
 		_, callErr = plugin.Engine.Call(t.Context(), "buildSubmitRequest", submitCtx("wan3.0-video", "wan3.0-video", map[string]any{"model": "wan3.0-video", "prompt": "a cat", "size": "1000*1000"}))
 		require.ErrorContains(t, callErr, "invalid size")
 		_, callErr = plugin.Engine.Call(t.Context(), "buildSubmitRequest", submitCtx("wan3.0-video", "wan3.0-video", map[string]any{"model": "wan3.0-video", "prompt": "a cat", "duration": 31}))
-		require.ErrorContains(t, callErr, "requires 2-30 seconds")
+		require.ErrorContains(t, callErr, "between 2 and 30")
 	})
 
 	t.Run("image-only input stays rejected for t2v models and accepted for wan3.0", func(t *testing.T) {

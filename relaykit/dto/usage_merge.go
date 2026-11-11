@@ -295,8 +295,23 @@ func mergeInputTokenDetails(current *InputTokenDetails, incoming InputTokenDetai
 		current.VideoTokens = incoming.VideoTokens
 	}
 	if incoming.CachedTokensDetails != nil {
-		details := *incoming.CachedTokensDetails
-		current.CachedTokensDetails = &details
+		// Unlike legacy scalar counters, these optional fields explicitly report
+		// zero. Merge only present modalities and detach the resulting snapshot.
+		merged := current.Clone()
+		if merged.CachedTokensDetails == nil {
+			merged.CachedTokensDetails = &CachedTokenDetails{}
+		}
+		details := incoming.Clone().CachedTokensDetails
+		if details.TextTokens != nil {
+			merged.CachedTokensDetails.TextTokens = details.TextTokens
+		}
+		if details.ImageTokens != nil {
+			merged.CachedTokensDetails.ImageTokens = details.ImageTokens
+		}
+		if details.AudioTokens != nil {
+			merged.CachedTokensDetails.AudioTokens = details.AudioTokens
+		}
+		current.CachedTokensDetails = merged.CachedTokensDetails
 	}
 	if incoming.CachedTokens > 0 {
 		current.CachedTokens = incoming.CachedTokens

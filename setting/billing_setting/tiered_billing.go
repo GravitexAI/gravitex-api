@@ -186,6 +186,9 @@ func smokeTestExpr(exprStr string) error {
 		{P: 1000, C: 1000, Len: 1000},
 		{P: 100000, C: 100000, Len: 100000},
 		{P: 1000000, C: 1000000, Len: 1000000},
+		{P: 300, C: 100, Len: 1000, CR: 100, Img: 400, ImgCR: 200},
+		{P: 800, C: 50, Len: 1000, AI: 200, AO: 50},
+		{Len: math.MaxInt32, ImgCR: math.MaxInt32},
 	}
 
 	for _, v := range vectors {
@@ -208,6 +211,9 @@ func smokeTestExpr(exprStr string) error {
 func SmokeTestTaskExpr(exprStr string, schema map[string]jsplugin.UsageFieldSchema) error {
 	if _, err := billingexpr.CompileFromCache(exprStr); err != nil {
 		return err
+	}
+	if billingexpr.UsesFixedPricing(exprStr) {
+		return fmt.Errorf("fixed pricing is not supported for task usage expressions")
 	}
 	for key := range billingexpr.UsedUsageKeys(exprStr) {
 		if _, declared := schema[key]; !declared {

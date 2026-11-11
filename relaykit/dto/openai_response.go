@@ -284,12 +284,6 @@ type OpenAIVideoResponse struct {
 	Purpose   string `json:"purpose" example:"fine-tune"`
 }
 
-type CachedTokensDetails struct {
-	TextTokens  int `json:"text_tokens"`
-	AudioTokens int `json:"audio_tokens"`
-	ImageTokens int `json:"image_tokens"`
-}
-
 // CacheWriteTokensDetails is OpenAI's TTL breakdown of cache_write_tokens
 // (gpt-5.6+). ttl_30m_tokens and ttl_12h_tokens never overlap and always sum
 // to cache_write_tokens. The 12h tier exists since 2026-10-20 (Responses API
@@ -300,15 +294,15 @@ type CacheWriteTokensDetails struct {
 }
 
 type InputTokenDetails struct {
-	CachedTokens         int `json:"cached_tokens"`
-	CachedCreationTokens int `json:"cached_creation_tokens,omitempty"`
+	CachedTokens         int                 `json:"cached_tokens"`
+	CachedTokensDetails  *CachedTokenDetails `json:"cached_tokens_details,omitempty"`
+	CachedCreationTokens int                 `json:"cached_creation_tokens,omitempty"`
 	// CacheWriteTokens is OpenAI's native cache-write count, reported as
 	// prompt_tokens_details.cache_write_tokens (Chat Completions) or
 	// input_tokens_details.cache_write_tokens (Responses). It is billed at the
 	// cache-creation price. (gpt-5.6+)
 	CacheWriteTokens        int                      `json:"cache_write_tokens,omitempty"`
 	CacheWriteTokensDetails *CacheWriteTokensDetails `json:"cache_write_tokens_details,omitempty"`
-	CachedTokensDetails     *CachedTokensDetails     `json:"cached_tokens_details,omitempty"`
 	TextTokens              int                      `json:"text_tokens"`
 	AudioTokens             int                      `json:"audio_tokens"`
 	ImageTokens             int                      `json:"image_tokens"`
@@ -321,6 +315,62 @@ type InputTokenDetails struct {
 	CachedAudioTokens int `json:"cached_audio_tokens,omitempty"`
 	CachedImageTokens int `json:"cached_image_tokens,omitempty"`
 	CachedVideoTokens int `json:"cached_video_tokens,omitempty"`
+}
+
+// CachedTokenDetails describes subsets of cached_tokens. Pointers distinguish
+// an unreported modality from an explicitly reported zero.
+type CachedTokenDetails struct {
+	TextTokens  *int `json:"text_tokens,omitempty"`
+	ImageTokens *int `json:"image_tokens,omitempty"`
+	AudioTokens *int `json:"audio_tokens,omitempty"`
+}
+
+// Accumulate 把另一份缓存明细累加进来：realtime 按 response.done 粒度下发 usage，
+// 需要跨轮汇总才能正确拆分文本/音频缓存（alpha realtime 计费使用）。
+func (d *CachedTokenDetails) Accumulate(other *CachedTokenDetails) {
+	if d == nil || other == nil {
+		return
+	}
+	d.TextTokens = addOptionalTokens(d.TextTokens, other.TextTokens)
+	d.ImageTokens = addOptionalTokens(d.ImageTokens, other.ImageTokens)
+	d.AudioTokens = addOptionalTokens(d.AudioTokens, other.AudioTokens)
+}
+
+func addOptionalTokens(current, incoming *int) *int {
+	if incoming == nil {
+		return current
+	}
+	sum := *incoming
+	if current != nil {
+		sum += *current
+	}
+	return &sum
+}
+
+func (d *CachedTokenDetails) HasTokens() bool {
+	return d != nil && (d.TextTokens != nil && *d.TextTokens != 0 ||
+		d.ImageTokens != nil && *d.ImageTokens != 0 || d.AudioTokens != nil && *d.AudioTokens != 0)
+}
+
+// Clone preserves presence information without sharing mutable usage fields.
+func (d InputTokenDetails) Clone() InputTokenDetails {
+	if d.CachedTokensDetails != nil {
+		cached := *d.CachedTokensDetails
+		if cached.TextTokens != nil {
+			value := *cached.TextTokens
+			cached.TextTokens = &value
+		}
+		if cached.ImageTokens != nil {
+			value := *cached.ImageTokens
+			cached.ImageTokens = &value
+		}
+		if cached.AudioTokens != nil {
+			value := *cached.AudioTokens
+			cached.AudioTokens = &value
+		}
+		d.CachedTokensDetails = &cached
+	}
+	return d
 }
 
 // CacheCreationTokensTotal returns the cache-write token count regardless of

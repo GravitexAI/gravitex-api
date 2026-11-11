@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -359,6 +360,9 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 			}
 			imageRequest.Quality = formData.Get("quality")
 			imageRequest.Size = formData.Get("size")
+			if parameters := formData.Get("parameters"); parameters != "" {
+				imageRequest.Extra = map[string]json.RawMessage{"parameters": json.RawMessage(parameters)}
+			}
 			if streamValue := strings.TrimSpace(formData.Get("stream")); streamValue != "" {
 				stream, err := strconv.ParseBool(streamValue)
 				if err != nil {
@@ -398,7 +402,6 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 		}
 
 		if imageRequest.Model == "" {
-			//imageRequest.Model = "dall-e-3"
 			return nil, errors.New("model is required")
 		}
 
@@ -410,9 +413,22 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 
 		// size / quality / response_format / n 等参数不再补默认值也不再改写：
 		// 网关补的默认值会覆盖上游自己的默认（例如 OpenAI 的 size=auto、quality=auto），
-		// 用户没传的字段就该让上游按自己的规则决定。
+		// 用户没传的字段就该让上游按自己的规则决定。张数上限校验在 ImageHelper 预扣前统一执行。
 	}
 
+	// Provider parameters can override the top-level count. Validate before
+	// pricing so malformed multipliers return a client error, not a pricing
+	// failure after reservation has started.
+	if raw, exists := imageRequest.Extra["parameters"]; exists {
+		parameters := &dto.ImageBillingParameters{}
+		if err := common.Unmarshal(raw, parameters); err != nil {
+			return nil, fmt.Errorf("invalid image parameters: %w", err)
+		}
+		imageRequest.BillingParameters = parameters
+	}
+	if _, err := imageRequest.ImageCount(common.GetContextKeyInt(c, constant.ContextKeyChannelType) == constant.ChannelTypeAli); err != nil {
+		return nil, err
+	}
 	return imageRequest, nil
 }
 

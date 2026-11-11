@@ -135,10 +135,9 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						usage.OutputTokenDetails.TextTokens += realtimeUsage.OutputTokenDetails.TextTokens
 						if d := realtimeUsage.InputTokenDetails.CachedTokensDetails; d != nil {
 							if usage.InputTokenDetails.CachedTokensDetails == nil {
-								usage.InputTokenDetails.CachedTokensDetails = &dto.CachedTokensDetails{}
+								usage.InputTokenDetails.CachedTokensDetails = &dto.CachedTokenDetails{}
 							}
-							usage.InputTokenDetails.CachedTokensDetails.TextTokens += d.TextTokens
-							usage.InputTokenDetails.CachedTokensDetails.AudioTokens += d.AudioTokens
+							usage.InputTokenDetails.CachedTokensDetails.Accumulate(d)
 						}
 						err := preConsumeUsage(c, info, usage, sumUsage)
 						if err != nil {
@@ -248,10 +247,9 @@ func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.R
 	// 累积 CachedTokensDetails（上游按 response.done 粒度下发，需跨轮汇总才能正确拆分文本/音频缓存）
 	if d := usage.InputTokenDetails.CachedTokensDetails; d != nil {
 		if totalUsage.InputTokenDetails.CachedTokensDetails == nil {
-			totalUsage.InputTokenDetails.CachedTokensDetails = &dto.CachedTokensDetails{}
+			totalUsage.InputTokenDetails.CachedTokensDetails = &dto.CachedTokenDetails{}
 		}
-		totalUsage.InputTokenDetails.CachedTokensDetails.TextTokens += d.TextTokens
-		totalUsage.InputTokenDetails.CachedTokensDetails.AudioTokens += d.AudioTokens
+		totalUsage.InputTokenDetails.CachedTokensDetails.Accumulate(d)
 	}
 	// clear usage
 	err := service.PreWssConsumeQuota(ctx, info, usage)

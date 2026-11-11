@@ -744,7 +744,14 @@ func (t *Task) ToOpenAIVideo() *dto.OpenAIVideo {
 	openAIVideo.Model = t.Properties.OriginModelName
 	openAIVideo.SetProgressStr(t.Progress)
 	openAIVideo.CreatedAt = t.CreatedAt
-	openAIVideo.CompletedAt = t.UpdatedAt
+	// 仅成功的任务给出 completed_at，优先用完成时间（官方口径）；metadata.url 为 alpha 海螺等视频取链功能
+	if t.Status == TaskStatusSuccess {
+		if t.FinishTime != 0 {
+			openAIVideo.CompletedAt = t.FinishTime
+		} else {
+			openAIVideo.CompletedAt = t.UpdatedAt
+		}
+	}
 	openAIVideo.SetMetadata("url", t.GetResultURL())
 	return openAIVideo
 }

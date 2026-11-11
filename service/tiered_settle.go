@@ -95,13 +95,48 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	}
 
 	img := float64(usage.PromptTokensDetails.ImageTokens)
+	imgCR := float64(0)
+	if usedVars["img_cr"] && !isClaudeUsageSemantic {
+		details := usage.PromptTokensDetails.CachedTokensDetails
+		if details != nil && details.ImageTokens != nil {
+			cachedImage := *details.ImageTokens
+			cached := usage.PromptTokensDetails.CachedTokens
+			image := usage.PromptTokensDetails.ImageTokens
+			valid := cachedImage >= 0 && cached >= cachedImage && image >= cachedImage &&
+				cached <= usage.PromptTokens && image <= usage.PromptTokens-(cached-cachedImage)
+			if valid {
+				remaining := cached - cachedImage
+				for _, count := range []*int{details.TextTokens, details.AudioTokens} {
+					if count == nil {
+						continue
+					}
+					if *count < 0 || *count > remaining {
+						valid = false
+						break
+					}
+					remaining -= *count
+				}
+			}
+			if valid {
+				imgCR = float64(cachedImage)
+				cr -= imgCR
+				img -= imgCR
+			} else {
+				common.SysError("invalid image cache token breakdown; using aggregate cache billing")
+			}
+		}
+	}
 	ai := float64(usage.PromptTokensDetails.AudioTokens)
 	if !isClaudeUsageSemantic {
 		// 非 Claude 语义下 prompt_tokens 含缓存，模态拆分与缓存拆分切的是同一批
 		// token。只有未命中缓存的部分才按模态单价计价，否则重叠部分会先被扣减
 		// 两次、再按缓存价和模态价各计费一次。
 		fresh := resolveFreshModalityTokens(usage.PromptTokensDetails, usage.PromptTokens)
-		img = float64(fresh.Image)
+		// 官方已按 cached_tokens_details 拆出缓存图片（img_cr）时 img 已是未命中部分，
+		// 不能再用 alpha 推算值覆盖，否则缓存图片 token 会按图片价与缓存图片价各收一次
+		if imgCR == 0 {
+			img = float64(fresh.Image)
+		}
 		ai = float64(fresh.Audio)
 	}
 	imgO := float64(usage.CompletionTokenDetails.ImageTokens)
@@ -115,7 +150,13 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		inputLen = p + cr + cc5m + cc1h
 	}
 
-	if !isClaudeUsageSemantic {
+	if isClaudeUsageSemantic {
+		// Anthropic input excludes cache reads. When cr has no separate
+		// price, merge those tokens into the input category instead.
+		if !usedVars["cr"] {
+			p += cr
+		}
+	} else {
 		if usedVars["cr"] {
 			p -= cr
 		}
@@ -127,6 +168,9 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		}
 		if usedVars["img"] {
 			p -= img
+		}
+		if usedVars["img_cr"] {
+			p -= imgCR
 		}
 		if usedVars["ai"] {
 			p -= ai
@@ -149,16 +193,17 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	}
 
 	return billingexpr.TokenParams{
-		P:    p,
-		C:    c,
-		Len:  inputLen,
-		CR:   cr,
-		CC:   ccPriced,
-		CC1h: cc1h,
-		Img:  img,
-		ImgO: imgO,
-		AI:   ai,
-		AO:   ao,
+		P:     p,
+		C:     c,
+		Len:   inputLen,
+		CR:    cr,
+		CC:    ccPriced,
+		CC1h:  cc1h,
+		Img:   img,
+		ImgCR: imgCR,
+		ImgO:  imgO,
+		AI:    ai,
+		AO:    ao,
 	}
 }
 
@@ -238,6 +283,11 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 	if relayInfo.BillingRequestInput != nil {
 		requestInput = *relayInfo.BillingRequestInput
 	}
+	if relayInfo.BillingImageCount != nil {
+		requestInput.ImageCount = relayInfo.BillingImageCount
+	} else if snap.EstimatedImageCount != nil {
+		requestInput.ImageCount = snap.EstimatedImageCount
+	}
 
 	tr, err := billingexpr.ComputeTieredQuotaWithRequest(snap, params, requestInput)
 	if err != nil {
@@ -264,4 +314,14 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 	noteQuotaClamp(relayInfo, tr.Clamp)
 
 	return true, tr.ActualQuotaAfterGroup, &tr
+}
+
+// A failed evaluation retains the reservation and its estimated billing unit.
+// Successful evaluations always use the actual branch, including zero prices.
+func isFixedPriceSettlement(info *relaycommon.RelayInfo, result *billingexpr.TieredResult) bool {
+	if result != nil {
+		return result.BillingUnit == billingexpr.BillingUnitRequest
+	}
+	snap := info.TieredBillingSnapshot
+	return snap != nil && snap.BillingMode == "tiered_expr" && snap.EstimatedBillingUnit == billingexpr.BillingUnitRequest
 }

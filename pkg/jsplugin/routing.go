@@ -660,10 +660,14 @@ func intersectingReservedNamespace(routePath string) (string, bool) {
 
 func isAlibabaVideoCompatibilityRoute(routePath string) bool {
 	const submit = "/api/v1/services/aigc/video-generation/video-synthesis"
+	// 官方 #48 新增的图生视频提交端点，与 video-synthesis 同样只放行精确路径
+	const imageSubmit = "/api/v1/services/aigc/image2video/video-synthesis"
 	const query = "/api/v1/tasks/:task_id"
-	const prefixedSubmit = "/:prefix" + submit
-	const prefixedQuery = "/:prefix" + query
-	return routePath == submit || routePath == query || routePath == prefixedSubmit || routePath == prefixedQuery
+	switch routePath {
+	case submit, imageSubmit, query, "/:prefix" + submit, "/:prefix" + imageSubmit, "/:prefix" + query:
+		return true
+	}
+	return false
 }
 
 func routePatternIntersectsNamespace(routePath, namespace string) bool {

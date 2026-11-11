@@ -284,6 +284,9 @@ func migrateDB() error {
 	}
 	// 扩展 tasks.task_id 长度以支持 Veo/Vertex base64 operation name（>191）
 	migrateTaskIDColumnLength()
+	if err := migrateOptionPrimaryKey(DB); err != nil {
+		common.SysError("failed to migrate options primary key: " + err.Error())
+	}
 
 	err := DB.AutoMigrate(
 		&Channel{},
