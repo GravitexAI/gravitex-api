@@ -182,49 +182,146 @@ export async function deleteVendor(
 // Sync Operations
 // ============================================================================
 
-/**
- * Sync upstream models (missing only or with overwrite)
- */
-export async function syncUpstream(params?: {
-  locale?: SyncLocale
-  source?: SyncSource
-  overwrite?: SyncOverwritePayload[]
-}): Promise<SyncUpstreamResponse> {
-  const res = await api.post('/api/models/sync_upstream', params)
-  return res.data
-}
+// 后端已改用官方新同步接口：预览返回 source.version 与每个模型的 record_version，
+// 提交时需带 source_version + selections。这里把新接口适配成原有的
+// missing / conflicts / overwrite 形态，组件层无需改动。
+type MetadataSyncCandidate = {
+  model_name: string;
+  scope: "site" | "catalog";
+  kind: string;
+  record_version?: string;
+  fields?: Array<{ field: string; local?: unknown; upstream?: unknown }>;
+  upstream?: { vendor?: string };
+};
+
+type CachedSyncPreview = {
+  locale?: SyncLocale;
+  sourceVersion: string;
+  creates: MetadataSyncCandidate[];
+  conflicts: MetadataSyncCandidate[];
+};
+
+let lastSyncPreview: CachedSyncPreview | null = null;
 
 /**
  * Preview upstream diff
  */
 export async function previewUpstreamDiff(params?: {
-  locale?: SyncLocale
-  source?: SyncSource
+  locale?: SyncLocale;
+  source?: SyncSource;
 }): Promise<PreviewUpstreamDiffResponse> {
-  const searchParams = new URLSearchParams()
+  const searchParams = new URLSearchParams();
   if (params?.locale) {
-    searchParams.set('locale', params.locale)
+    searchParams.set("locale", params.locale);
   }
-  if (params?.source) {
-    searchParams.set('source', params.source)
-  }
-  const queryString = searchParams.toString()
+  const queryString = searchParams.toString();
   const url = queryString
     ? `/api/models/sync_upstream/preview?${queryString}`
-    : '/api/models/sync_upstream/preview'
-  const res = await api.get(url)
-  return res.data
+    : "/api/models/sync_upstream/preview";
+  const res = await api.get(url);
+  const body = res.data;
+  if (!body?.success) {
+    lastSyncPreview = null;
+    return { success: false, message: body?.message };
+  }
+  const candidates: MetadataSyncCandidate[] = body.data?.candidates || [];
+  // 站点渠道在用但缺少元数据的模型：直接新建；已有元数据且与上游不同：交给冲突弹窗
+  const creates = candidates.filter(
+    (c) => c.kind === "create" && c.scope === "site",
+  );
+  const conflicts = candidates.filter(
+    (c) => c.kind === "update" && (c.fields?.length || 0) > 0,
+  );
+  lastSyncPreview = {
+    locale: params?.locale,
+    sourceVersion: body.data?.source?.version || "",
+    creates,
+    conflicts,
+  };
+  return {
+    success: true,
+    data: {
+      missing: creates.map((c) => ({
+        model_name: c.model_name,
+        vendor: c.upstream?.vendor,
+      })),
+      conflicts: conflicts.map((c) => ({
+        model_name: c.model_name,
+        fields: c.fields || [],
+      })),
+    },
+  };
+}
+
+/**
+ * Sync upstream models (missing only or with overwrite)
+ */
+export async function syncUpstream(params?: {
+  locale?: SyncLocale;
+  source?: SyncSource;
+  overwrite?: SyncOverwritePayload[];
+}): Promise<SyncUpstreamResponse> {
+  if (!lastSyncPreview || lastSyncPreview.locale !== params?.locale) {
+    const preview = await previewUpstreamDiff(params);
+    if (!preview.success) return { success: false, message: preview.message };
+  }
+  const preview = lastSyncPreview as CachedSyncPreview;
+  const conflictByName = new Map(
+    preview.conflicts.map((c) => [c.model_name, c]),
+  );
+  const selections = [
+    ...preview.creates.map((c) => ({
+      model_name: c.model_name,
+      record_version: c.record_version,
+      create: true,
+      fields: [] as string[],
+    })),
+    ...(params?.overwrite || [])
+      .filter((o) => conflictByName.has(o.model_name) && o.fields.length > 0)
+      .map((o) => ({
+        model_name: o.model_name,
+        record_version: conflictByName.get(o.model_name)?.record_version,
+        create: false,
+        fields: o.fields,
+      })),
+  ];
+  if (selections.length === 0) {
+    return {
+      success: true,
+      data: { created_models: 0, updated_models: 0, created_vendors: 0 },
+    };
+  }
+  // 提交后无论成败都需重新预览（成功后数据已变；409 表示预览已过期）
+  lastSyncPreview = null;
+  const res = await api.post("/api/models/sync_upstream", {
+    locale: params?.locale,
+    source_version: preview.sourceVersion,
+    selections,
+  });
+  const body = res.data;
+  if (!body?.success) {
+    return { success: false, message: body?.message };
+  }
+  return {
+    success: true,
+    data: {
+      created_models: body.data?.created_models?.length || 0,
+      updated_models: body.data?.updated_models?.length || 0,
+      created_vendors: body.data?.created_vendors?.length || 0,
+      skipped_models: [],
+    },
+  };
 }
 
 /**
  * Apply upstream overwrite
  */
 export async function applyUpstreamOverwrite(params: {
-  overwrite: SyncOverwritePayload[]
-  locale?: SyncLocale
-  source?: SyncSource
+  overwrite: SyncOverwritePayload[];
+  locale?: SyncLocale;
+  source?: SyncSource;
 }): Promise<SyncUpstreamResponse> {
-  return syncUpstream(params)
+  return syncUpstream(params);
 }
 
 // ============================================================================
