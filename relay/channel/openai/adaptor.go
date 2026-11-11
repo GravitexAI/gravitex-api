@@ -387,38 +387,6 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		info.SetReasoningEffort(string(effectiveEffort))
 
 	}
-	isOModel := dto.IsOpenAIReasoningOModel(info.UpstreamModelName)
-	isGPT5OrNewerModel := dto.IsOpenAIGPT5OrNewerModel(info.UpstreamModelName)
-	if isOModel || isGPT5OrNewerModel {
-		if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
-			request.MaxCompletionTokens = request.MaxTokens
-			request.MaxTokens = nil
-		}
-
-		if isOModel {
-			request.Temperature = nil
-		}
-
-		// gpt-5 及之后世代适配 归零不再支持的参数；
-		// GPT-5.6+ 在 reasoning_effort=none 时官方支持采样参数，此时保留（不支持 none 的模型除外）
-		samplingAllowed := relaycommon.IsGPT56PlusModel(info.UpstreamModelName) &&
-			strings.EqualFold(strings.TrimSpace(request.ReasoningEffort), "none") &&
-			!relaycommon.GPTModelRejectsNoneEffort(info.UpstreamModelName)
-		if isGPT5OrNewerModel && !samplingAllowed {
-			request.Temperature = nil
-			request.TopP = nil
-			request.LogProbs = nil
-		}
-
-		// o系列模型developer适配（o1-mini除外）
-		if !strings.HasPrefix(info.UpstreamModelName, "o1-mini") && !strings.HasPrefix(info.UpstreamModelName, "o1-preview") {
-			//修改第一个Message的内容，将system改为developer
-			if len(request.Messages) > 0 && request.Messages[0].Role == "system" {
-				request.Messages[0].Role = "developer"
-			}
-		}
-	}
-
 	if info.ChannelType != constant.ChannelTypeOpenRouter {
 		effort, baseModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(info.UpstreamModelName)
 		if preserveSuffix {
@@ -464,6 +432,36 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		if info.ChannelType == constant.ChannelTypeOpenAI || info.ChannelType == constant.ChannelTypeAzure {
 			request.Reasoning = nil
 		}
+	}
+
+	// 参数契约按官方能力表处理（使用解析 @ 修饰符与后缀之后的最终 effort）
+	capabilities := dto.GetOpenAIChatCapabilities(info.UpstreamModelName, info.ReasoningEffort)
+	// alpha：GPT-5.6+ 家族在 reasoning_effort=none 时官方支持采样参数，予以保留（不支持 none 的模型除外）
+	if relaycommon.IsGPT56PlusModel(info.UpstreamModelName) &&
+		strings.EqualFold(strings.TrimSpace(info.ReasoningEffort), "none") &&
+		!relaycommon.GPTModelRejectsNoneEffort(info.UpstreamModelName) {
+		capabilities.SupportsTemperature = true
+		capabilities.SupportsTopP = true
+		capabilities.SupportsLogProbs = true
+	}
+	if capabilities.UseMaxCompletionTokens {
+		if lo.FromPtrOr(request.MaxCompletionTokens, uint(0)) == 0 && lo.FromPtrOr(request.MaxTokens, uint(0)) != 0 {
+			request.MaxCompletionTokens = request.MaxTokens
+			request.MaxTokens = nil
+		}
+	}
+	if !capabilities.SupportsTemperature {
+		request.Temperature = nil
+	}
+	if !capabilities.SupportsTopP {
+		request.TopP = nil
+	}
+	if !capabilities.SupportsLogProbs {
+		request.LogProbs = nil
+		request.TopLogProbs = nil
+	}
+	if capabilities.UseDeveloperRole && len(request.Messages) > 0 && request.Messages[0].Role == "system" {
+		request.Messages[0].Role = "developer"
 	}
 
 	return request, nil

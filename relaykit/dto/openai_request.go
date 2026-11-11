@@ -288,10 +288,12 @@ func GetOpenAIChatCapabilities(modelName, reasoningEffort string) OpenAIChatCapa
 		return capabilities
 	}
 
-	isGPT5Model := IsOpenAIGPT5Model(modelName)
-	if !isGPT5Model && !isOpenAIModelSnapshot(modelName, "gpt-6-astra") {
+	// alpha：按世代号判定，GPT-5 及之后的所有型号（含 gpt-6-sol、gpt-6.1-terra 等官方未列出的新型号）
+	// 都遵循新参数契约，避免新模型上线时漏处理导致上游 400
+	if !IsOpenAIGPT5OrNewerModel(modelName) {
 		return capabilities
 	}
+	isGPT5Model := IsOpenAIGPT5Model(modelName)
 	capabilities.UseMaxCompletionTokens = true
 	capabilities.UseDeveloperRole = true
 
@@ -337,11 +339,7 @@ func IsQwenThinkingBudgetModel(modelName string) bool {
 }
 
 func (r *GeneralOpenAIRequest) GetSystemRoleName() string {
-	if IsOpenAIReasoningOModel(r.Model) {
-		if !strings.HasPrefix(r.Model, "o1-mini") && !strings.HasPrefix(r.Model, "o1-preview") {
-			return "developer"
-		}
-	} else if IsOpenAIGPT5OrNewerModel(r.Model) {
+	if GetOpenAIChatCapabilities(r.Model, r.ReasoningEffort).UseDeveloperRole {
 		return "developer"
 	}
 	return "system"

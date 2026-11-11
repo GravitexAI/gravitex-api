@@ -283,3 +283,30 @@ func TestIsOpenAIGPT5OrNewerModel(t *testing.T) {
 		})
 	}
 }
+
+// alpha 在官方能力表上改为按世代号判定：官方未列出的 GPT-5+ 新型号同样遵循新参数契约
+func TestGetOpenAIChatCapabilitiesCoversNewerGenerations(t *testing.T) {
+	tests := []struct {
+		model         string
+		effort        string
+		wantContract  bool
+		wantSampling  bool
+		wantDeveloper bool
+	}{
+		{model: "gpt-6-sol", effort: "high", wantContract: true, wantSampling: false, wantDeveloper: true},
+		{model: "gpt-6.1-terra", effort: "", wantContract: true, wantSampling: false, wantDeveloper: true},
+		{model: "gpt-7", effort: "", wantContract: true, wantSampling: false, wantDeveloper: true},
+		{model: "gpt-5.4", effort: "none", wantContract: true, wantSampling: true, wantDeveloper: true},
+		{model: "gpt-5.4-pro", effort: "none", wantContract: true, wantSampling: false, wantDeveloper: true},
+		{model: "gpt-4.1", effort: "", wantContract: false, wantSampling: true, wantDeveloper: false},
+		{model: "o1-mini", effort: "", wantContract: true, wantSampling: false, wantDeveloper: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model+"/"+tt.effort, func(t *testing.T) {
+			got := GetOpenAIChatCapabilities(tt.model, tt.effort)
+			assert.Equal(t, tt.wantContract, got.UseMaxCompletionTokens)
+			assert.Equal(t, tt.wantSampling, got.SupportsTemperature)
+			assert.Equal(t, tt.wantDeveloper, got.UseDeveloperRole)
+		})
+	}
+}

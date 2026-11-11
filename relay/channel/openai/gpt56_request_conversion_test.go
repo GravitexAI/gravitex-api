@@ -84,7 +84,10 @@ func TestConvertOpenAIRequestSamplingParamsFollowNoneEffort(t *testing.T) {
 		{name: "dropped with reasoning enabled", model: "gpt-6-sol", effort: "high", keepSampling: false},
 		{name: "dropped without explicit effort", model: "gpt-6-luna", effort: "", keepSampling: false},
 		{name: "dropped for model rejecting none", model: "gpt-6-astra", effort: "none", keepSampling: false},
-		{name: "dropped for older gpt-5 models", model: "gpt-5.4", effort: "none", keepSampling: false},
+		// 官方能力表：gpt-5.1/5.2/5.4 标准型号关闭推理时支持采样参数，具名变体不继承
+		{name: "kept for gpt-5.4 when reasoning disabled", model: "gpt-5.4", effort: "none", keepSampling: true},
+		{name: "dropped for gpt-5.4 named variant", model: "gpt-5.4-pro", effort: "none", keepSampling: false},
+		{name: "dropped for gpt-5.4 with reasoning enabled", model: "gpt-5.4", effort: "high", keepSampling: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -92,10 +95,11 @@ func TestConvertOpenAIRequestSamplingParamsFollowNoneEffort(t *testing.T) {
 			if tt.effort != "" {
 				effort = `,"reasoning_effort":"` + tt.effort + `"`
 			}
-			data := convertChatForTest(t, `{"model":"`+tt.model+`","messages":[{"role":"user","content":"hi"}],"temperature":0.2,"top_p":0.5,"logprobs":true`+effort+`}`)
+			data := convertChatForTest(t, `{"model":"`+tt.model+`","messages":[{"role":"user","content":"hi"}],"temperature":0.2,"top_p":0.5,"logprobs":true,"top_logprobs":3`+effort+`}`)
 			assert.Equal(t, tt.keepSampling, gjson.GetBytes(data, "temperature").Exists())
 			assert.Equal(t, tt.keepSampling, gjson.GetBytes(data, "top_p").Exists())
 			assert.Equal(t, tt.keepSampling, gjson.GetBytes(data, "logprobs").Exists())
+			assert.Equal(t, tt.keepSampling, gjson.GetBytes(data, "top_logprobs").Exists())
 		})
 	}
 }
