@@ -110,6 +110,10 @@ type ChannelOtherSettings struct {
 	// otherwise calls return 404 NotFound.Id which pollutes logs and confuses users.
 	EnableModerationQuery bool `json:"enable_moderation_query,omitempty"`
 
+	// UpstreamRequestIdHeader 指定从上游响应的哪个 header 读取 logs.upstream_request_id，
+	// 用于和供应商逐条对账（如 TokenEasy 的 x-request-id）。空 = 沿用默认的 X-Api-Request-Id。
+	UpstreamRequestIdHeader string `json:"upstream_request_id_header,omitempty"`
+
 	AdvancedCustom *AdvancedCustomConfig `json:"advanced_custom,omitempty"`
 	MockAI         *MockAIConfig         `json:"mock_ai,omitempty"`
 

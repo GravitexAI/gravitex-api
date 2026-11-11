@@ -254,6 +254,7 @@ const EditChannelModal = (props) => {
     allow_speed: false,
     claude_beta_query: false,
     anthropic_beta_target: 'direct',
+    upstream_request_id_header: '',
     upstream_model_update_check_enabled: false,
     upstream_model_update_auto_sync_enabled: false,
     upstream_model_update_last_check_time: 0,
@@ -1047,6 +1048,8 @@ const EditChannelModal = (props) => {
           data.allow_speed = parsedSettings.allow_speed || false;
           data.claude_beta_query = parsedSettings.claude_beta_query || false;
           data.anthropic_beta_target = parsedSettings.anthropic_beta_target || '';
+          data.upstream_request_id_header =
+            parsedSettings.upstream_request_id_header || '';
           data.upstream_model_update_check_enabled =
             parsedSettings.upstream_model_update_check_enabled === true;
           data.upstream_model_update_auto_sync_enabled =
@@ -1087,6 +1090,7 @@ const EditChannelModal = (props) => {
           data.allow_speed = false;
           data.claude_beta_query = false;
           data.anthropic_beta_target = '';
+          data.upstream_request_id_header = '';
           data.upstream_model_update_check_enabled = false;
           data.upstream_model_update_auto_sync_enabled = false;
           data.upstream_model_update_last_check_time = 0;
@@ -1114,6 +1118,7 @@ const EditChannelModal = (props) => {
         data.allow_speed = false;
         data.claude_beta_query = false;
         data.anthropic_beta_target = '';
+        data.upstream_request_id_header = '';
         data.upstream_model_update_check_enabled = false;
         data.upstream_model_update_auto_sync_enabled = false;
         data.upstream_model_update_last_check_time = 0;
@@ -1193,6 +1198,8 @@ const EditChannelModal = (props) => {
         data.pass_through_body_enabled ||
         data.force_format ||
         data.claude_beta_query ||
+        (data.upstream_request_id_header &&
+          data.upstream_request_id_header.trim()) ||
         data.system_prompt_override;
       if (hasAdvancedValues) {
         setAdvancedSettingsOpen(true);
@@ -2049,6 +2056,18 @@ const EditChannelModal = (props) => {
       }
     }
 
+    // 对账用上游请求 ID 的响应头名；编辑时清空需显式发 null，后端合并语义下省略 key 不会删除旧值
+    const upstreamRequestIdHeader = String(
+      localInputs.upstream_request_id_header || '',
+    ).trim();
+    if (upstreamRequestIdHeader) {
+      settings.upstream_request_id_header = upstreamRequestIdHeader;
+    } else if (isEdit) {
+      settings.upstream_request_id_header = null;
+    } else {
+      delete settings.upstream_request_id_header;
+    }
+
     settings.upstream_model_update_check_enabled =
       localInputs.upstream_model_update_check_enabled === true;
     settings.upstream_model_update_auto_sync_enabled =
@@ -2105,6 +2124,7 @@ const EditChannelModal = (props) => {
     delete localInputs.allow_speed;
     delete localInputs.claude_beta_query;
     delete localInputs.anthropic_beta_target;
+    delete localInputs.upstream_request_id_header;
     delete localInputs.upstream_model_update_check_enabled;
     delete localInputs.upstream_model_update_auto_sync_enabled;
     delete localInputs.upstream_model_update_last_check_time;
@@ -2828,6 +2848,8 @@ const EditChannelModal = (props) => {
                   <Form.Switch field='pass_through_body_enabled' label={t('透传请求体')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('pass_through_body_enabled', value)} extraText={t('启用请求体透传功能')} />
 
                   <Form.Input field='proxy' label={t('代理地址')} placeholder={t('例如: socks5://user:pass@host:port')} onChange={(value) => handleChannelSettingsChange('proxy', value)} showClear extraText={t('用于配置网络代理，支持 socks5 协议')} />
+
+                  <Form.Input field='upstream_request_id_header' label={t('上游请求 ID 响应头')} placeholder={t('例如: x-request-id')} onChange={(value) => handleChannelOtherSettingsChange('upstream_request_id_header', value)} showClear extraText={t('从上游响应的该 header 读取上游请求 ID 记入日志，用于和供应商逐条对账；留空默认读取 X-Api-Request-Id')} />
 
                   <Form.TextArea field='system_prompt' label={t('系统提示词')} placeholder={t('输入系统提示词，用户的系统提示词将优先于此设置')} onChange={(value) => handleChannelSettingsChange('system_prompt', value)} autosize showClear extraText={t('用户优先：如果用户在请求中指定了系统提示词，将优先使用用户的设置')} />
                   <Form.Switch field='system_prompt_override' label={t('系统提示词拼接')} checkedText={t('开')} uncheckedText={t('关')} onChange={(value) => handleChannelSettingsChange('system_prompt_override', value)} extraText={t('如果用户请求中包含系统提示词，则使用此设置拼接到用户的系统提示词前面')} />

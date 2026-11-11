@@ -38,10 +38,11 @@ var upstreamHeaderAllowlist = map[string]struct{}{
 // should be copied to the client response. Only headers in
 // upstreamHeaderAllowlist are copied. When the upstream header is
 // X-Api-Request-Id, the value is captured into the Gin context for later
-// logging.
+// logging, unless the relay already captured one from the channel-configured
+// upstream request ID header.
 func ShouldCopyUpstreamHeader(c *gin.Context, k string, v []string) bool {
 	if strings.EqualFold(k, common.RequestIdKey) {
-		if c != nil && len(v) > 0 {
+		if c != nil && len(v) > 0 && c.GetString(common.UpstreamRequestIdKey) == "" {
 			c.Set(common.UpstreamRequestIdKey, v[0])
 		}
 		return false

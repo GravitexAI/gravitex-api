@@ -624,6 +624,8 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
+	// 每次尝试前清空，避免重试换渠道后日志沿用上一次尝试的上游 ID
+	c.Set(common2.UpstreamRequestIdKey, "")
 	resp, err := relayClient.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
@@ -651,7 +653,11 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		))
 	}
 
-	if upID := resp.Header.Get(common2.RequestIdKey); upID != "" {
+	upstreamRequestIdHeader := strings.TrimSpace(info.ChannelOtherSettings.UpstreamRequestIdHeader)
+	if upstreamRequestIdHeader == "" {
+		upstreamRequestIdHeader = common2.RequestIdKey
+	}
+	if upID := resp.Header.Get(upstreamRequestIdHeader); upID != "" {
 		c.Set(common2.UpstreamRequestIdKey, upID)
 	}
 

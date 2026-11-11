@@ -60,3 +60,12 @@ func TestShouldCopyUpstreamHeaderKeepsCodexHeaders(t *testing.T) {
 	assert.True(t, ShouldCopyUpstreamHeader(nil, "X-Reasoning-Included", []string{"true"}))
 	assert.False(t, ShouldCopyUpstreamHeader(nil, "X-Codex-Primary-Used-Percent", []string{"10"}))
 }
+
+func TestShouldCopyUpstreamHeaderKeepsChannelCapturedUpstreamRequestId(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set(common.UpstreamRequestIdKey, "te-id")
+
+	assert.False(t, ShouldCopyUpstreamHeader(c, common.RequestIdKey, []string{"newapi-id"}))
+	assert.Equal(t, "te-id", c.GetString(common.UpstreamRequestIdKey))
+}
