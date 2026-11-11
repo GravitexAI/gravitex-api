@@ -1037,6 +1037,10 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskEr
 	if taskErr == nil {
 		return false
 	}
+	// 官方：上游已受理任务（如流式提交中途出错）不能重试，否则会重复建任务、重复扣费
+	if taskErr.NoRetry {
+		return false
+	}
 	if c.GetBool(common.KeyLyriaRawMirror) {
 		return false
 	}
@@ -1049,11 +1053,12 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskEr
 	if _, ok := c.Get("specific_channel_id"); ok {
 		return false
 	}
-	if taskErr.StatusCode == http.StatusTooManyRequests {
-		// 429 不重试，直接返回给客户端，避免无 backoff 地反复请求上游
+	// 与官方一致：令牌/来源任务固定渠道且只允许单次尝试时不重试
+	if service.GetChannelConstraints(c).SuppressesRetry() {
 		return false
 	}
-	if taskErr.StatusCode == 307 {
+	// 与官方 decideTaskRetry 一致：429（渠道被限流）与 307 换渠道重试（2026-11-11 用户确认，取代 alpha 1a1a786d7 的 429 不重试）
+	if taskErr.StatusCode == http.StatusTooManyRequests || taskErr.StatusCode == 307 {
 		return true
 	}
 	if taskErr.StatusCode/100 == 5 {

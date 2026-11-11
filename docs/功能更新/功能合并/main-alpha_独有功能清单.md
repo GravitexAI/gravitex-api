@@ -1191,7 +1191,7 @@ middleware.RequestId()(c)   // ← main-alpha 独有，必须在 c.Request 初�
 - [ ] TokenHub deepseek-v4 走 `/v1/responses`（`relay/channel/tokenhub/adaptor.go` 的 `isDeepSeekV4ResponsesModel` 在）；Gemini imagine 图片端点（`setting/model_setting/gemini.go` 的 `SupportedImagineModels` + `relay-gemini.go` `CHZ-PATCH(gemini-imagine-images-generations)` 在）；Fable/Mythos 限制（`relay-claude.go` `IsFableModel`/`IsMythosModel`/`RequiresAdaptiveThinking` 在）
 - [ ] 余额预警子系统（第七点十）：`service/user_quota_warning_notify_api.go` 在,`service/quota.go` 里 `SendQuotaWarningNotifyToAPIEnd` **4 处**接入都在
 - [ ] `model/model_meta.go` 的 `ModelNickName` 字段在,且 `pricing.go` 的 Select 列含 `model_nick_name`
-- [ ] 429 不重试（`controller/relay.go` + `controller/task_video.go`）、无渠道返回 404（`middleware/distributor.go`）、Vertex token 重试（`relay/channel/vertex/service_account.go`）都在
+- [ ] 任务提交 429 换渠道重试（2026-11-11 起对齐官方，取代旧"429 不重试"）、`NoRetry` 已受理任务不重试；视频轮询 429 跳过本轮（`controller/task_video.go`）、无渠道返回 404（`middleware/distributor.go`）、Vertex token 重试（`relay/channel/vertex/service_account.go`）都在
 - [ ] Qwen 扩展参数(`search_options`/`thinking_budget`/`preserve_thinking`/`enable_code_interpreter`/`tool_stream`)在 —— ⚠️ 已随 dto 包搬迁到 **`relaykit/dto/openai_request.go:94-100`**,不在旧 `dto/openai_request.go`。commit `60cbe7917`
 - [ ] 全仓库无残留旧 DB API：`grep -rn "common.UsingSQLite\|common.UsingMySQL\|common.UsingPostgreSQL\|common.UsingClickHouse\|common.LogSqlType" --include="*.go" .` 应为空
 - [ ] 🔴 **拒绝 AuthVersion 机制（第 5.8 节）**：`grep -rn "AuthVersion\|IncrementUserAuthVersion\|getUserAuthVersionFloor\|ErrUserAuthCachePending" --include="*.go" model/` 应为空；`user_auth_cache.go`/`user_session.go` 不存在；`user_update_test.go`/`quota_reserve_test.go` 无 `AuthVersion:` 字段初始化。但 `UpdateWithTx` 的 Omit 仍含 access_token/aff_*（并发防覆盖）

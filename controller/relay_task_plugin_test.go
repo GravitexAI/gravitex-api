@@ -38,7 +38,7 @@ type taskSubmissionTestBilling struct {
 	refunds    int
 }
 
-func (b *taskSubmissionTestBilling) Settle(int) error {
+func (b *taskSubmissionTestBilling) Settle(int, bool) error {
 	*b.events = append(*b.events, "settle")
 	if b.onSettle != nil {
 		b.onSettle()
@@ -539,7 +539,7 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 
 func TestAcceptedSubmitStreamNeverRetries(t *testing.T) {
 	c := taskSubmissionTestContext()
-	assert.Equal(t, service.PolicyDecision{Action: "stop", Reason: "task_accepted", Source: "system"}, decideTaskRetry(c, &dto.TaskError{StatusCode: 502, LocalError: true, NoRetry: true}, 3))
+	assert.False(t, shouldRetryTaskRelay(c, 0, &dto.TaskError{StatusCode: 502, LocalError: true, NoRetry: true}, 3), "accepted task must not be resubmitted")
 }
 
 // Local task rejections carry a message but no cause; the response and the
@@ -556,7 +556,7 @@ func TestRespondTaskSubmissionErrorWithoutCause(t *testing.T) {
 	require.Len(t, events, 1)
 	assert.Equal(t, service.PolicyDecision{Action: "stop", Reason: "request_failed", Source: "system"}, events[0].Decision)
 	assert.Equal(t, http.StatusServiceUnavailable, events[0].Status)
-	assert.Equal(t, service.PolicyDecision{Action: "stop", Reason: "local_rejection", Source: "system"}, decideTaskRetry(c, &dto.TaskError{StatusCode: http.StatusForbidden, LocalError: true, Message: "billing"}, 2), "local errors stop once the status rules do not force a retry")
+	assert.False(t, shouldRetryTaskRelay(c, 0, &dto.TaskError{StatusCode: http.StatusForbidden, LocalError: true, Message: "billing"}, 2), "local errors stop once the status rules do not force a retry")
 }
 
 func TestExecuteTaskSubmissionRefundsWhenFinalReserveFails(t *testing.T) {

@@ -78,3 +78,12 @@ func TestShouldRetryTaskRelay_LyriaRawMirrorDoesNotRetryProviderResponse(t *test
 
 	require.False(t, shouldRetryTaskRelay(c, 60, taskErr, 3))
 }
+
+// 任务提交遇到 429（渠道被限流）换渠道重试，与官方 decideTaskRetry 一致
+func TestShouldRetryTaskRelay_RateLimitedRetriesOnAnotherChannel(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	taskErr := &dto.TaskError{StatusCode: http.StatusTooManyRequests}
+
+	require.True(t, shouldRetryTaskRelay(c, 60, taskErr, 3))
+	require.False(t, shouldRetryTaskRelay(c, 60, taskErr, 0), "no retry budget left")
+}
