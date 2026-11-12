@@ -82,14 +82,11 @@ type TokenCountMeta struct {
 }
 
 // ModelFallbackInfo captures an upstream model swap: what we actually sent
-// upstream vs the model the response reports. Priced is set at settlement
-// when the request was re-billed through the actual model's own price
-// configuration; false means the requested model's price was kept because
-// the actual model has no billing config (manual reconciliation needed).
+// upstream vs the model the response reports. It is only logged for
+// reconciliation; billing stays on the requested model's price.
 type ModelFallbackInfo struct {
 	SentModel   string
 	ActualModel string
-	Priced      bool
 }
 
 type RelayInfo struct {
@@ -185,7 +182,8 @@ type RelayInfo struct {
 	// ClaudeUsageIterations is the per-attempt usage receipt (usage.iterations)
 	// of an official Claude server-side fallback response; the last entry is the
 	// attempt that produced the final message (already billed via top-level
-	// usage), earlier entries are rejected attempts. Reset per channel attempt.
+	// usage), earlier entries are rejected attempts. Only marked on the admin
+	// log; rejected attempts are not billed on our side. Reset per channel attempt.
 	ClaudeUsageIterations []dto.ClaudeIterationUsage
 	// UpstreamResponses stores the raw upstream usage object for log persistence.
 	// It is shaped as {"usage": {...}} or {"usageMetadata": {...}} and is only
@@ -855,7 +853,8 @@ func (info *RelayInfo) GetUpstreamModelName() string {
 // Version-suffix aliases are NOT a fallback: OpenAI echoes requested models
 // as "gpt-4o" while serving e.g. "gpt-4o-2024-08-06", and retry attempts may
 // report either form for the same model. A response model is only treated as
-// a swap when it differs after stripping the -YYYY-MM-DD suffix from either
+// a swap when it differs after stripping the date suffix (-YYYY-MM-DD or
+// Anthropic's -YYYYMMDD, e.g. claude-sonnet-4-5-20250929) from either
 // side (exact match still wins first, so a deliberately versioned pricing
 // entry is never masked).
 func (info *RelayInfo) NoteUpstreamResponseModel(actual string) {
@@ -875,34 +874,23 @@ func (info *RelayInfo) NoteUpstreamResponseModel(actual string) {
 	info.UpstreamModelFallback = &ModelFallbackInfo{SentModel: sent, ActualModel: actual}
 }
 
-// trimModelVersionSuffix strips a trailing -YYYY-MM-DD date tag from a model
-// name. Only the date form is stripped: structured suffixes like
-// "-thinking-8192" or "-nothinking" are pricing-relevant and must survive.
+// trimModelVersionSuffix strips a trailing date tag from a model name, in
+// either the OpenAI form "-YYYY-MM-DD" or the Anthropic form "-YYYYMMDD".
+// Only date forms are stripped: structured suffixes like "-thinking-8192" or
+// "-nothinking" are pricing-relevant and must survive.
 func trimModelVersionSuffix(name string) string {
-	if len(name) < 11 {
-		return name
-	}
-	tail := name[len(name)-11:]
-	// tail must look like "-YYYY-MM-DD": separators fixed, digits ASCII,
-	// and a plausible calendar date (guard against structured suffixes that
-	// happen to be 10 digits).
-	if tail[0] != '-' {
-		return name
-	}
-	if tail[5] != '-' || tail[8] != '-' {
-		return name
-	}
-	for _, i := range []int{1, 2, 3, 4, 6, 7, 9, 10} {
-		if tail[i] < '0' || tail[i] > '9' {
-			return name
+	for _, layout := range []string{"-2006-01-02", "-20060102"} {
+		if len(name) <= len(layout) {
+			continue
+		}
+		tail := name[len(name)-len(layout):]
+		// time.Parse rejects non-digits and impossible months/days, so
+		// structured suffixes that merely look numeric are kept.
+		if _, err := time.Parse(layout, tail); err == nil {
+			return name[:len(name)-len(layout)]
 		}
 	}
-	month := int(tail[6]-'0')*10 + int(tail[7]-'0')
-	day := int(tail[9]-'0')*10 + int(tail[10]-'0')
-	if month < 1 || month > 12 || day < 1 || day > 31 {
-		return name
-	}
-	return name[:len(name)-11]
+	return name
 }
 
 func (info *RelayInfo) HasChannelMeta() bool { return info != nil && info.ChannelMeta != nil }

@@ -177,9 +177,6 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			info.PriceData = originPriceData
 			return types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithSkipRetry(), types.ErrOptionWithStatusCode(http.StatusBadRequest))
 		}
-		// 重定价须在 compact 模式自己的 ModelPriceHelper 重跑之后调用，
-		// 保证上游换模型时按实际响应模型的价格覆盖 compact 估算。
-		helper.ApplyUpstreamModelFallbackPricing(c, info)
 		service.PostTextConsumeQuota(c, info, usageDto, nil)
 
 		info.OriginModelName = originModelName
@@ -190,7 +187,6 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") {
 		service.PostAudioConsumeQuota(c, info, usageDto, "")
 	} else {
-		helper.ApplyUpstreamModelFallbackPricing(c, info)
 		service.PostTextConsumeQuota(c, info, usageDto, nil)
 	}
 	return nil

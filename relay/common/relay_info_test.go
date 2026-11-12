@@ -336,7 +336,6 @@ func TestNoteUpstreamResponseModelRecordsMismatch(t *testing.T) {
 	require.NotNil(t, info.UpstreamModelFallback)
 	assert.Equal(t, "model-sent", info.UpstreamModelFallback.SentModel)
 	assert.Equal(t, "model-actual", info.UpstreamModelFallback.ActualModel)
-	assert.False(t, info.UpstreamModelFallback.Priced)
 }
 
 func TestNoteUpstreamResponseModelSameModelIsNoop(t *testing.T) {
@@ -384,15 +383,12 @@ func TestNoteUpstreamResponseModelVersionSuffixIsNotFallback(t *testing.T) {
 		{"gpt-4o", "gpt-4o-2024-08-06"},
 		{"gpt-4o-2024-08-06", "gpt-4o"},
 		{"gpt-4o-2024-08-06", "gpt-4o-2024-11-20"},
-		{"claude-3-5-sonnet", "claude-3-5-sonnet-20241022"}, // 带/不带日期版本
-		{"claude-3-5-sonnet", "claude-3-5-sonnet-20241022"},
+		{"claude-sonnet-4-5", "claude-sonnet-4-5-20250929"}, // Anthropic 紧凑日期快照
+		{"claude-sonnet-4-5-20250929", "claude-sonnet-4-5"},
 	}
 	for _, tc := range cases {
 		info := &RelayInfo{ChannelMeta: &ChannelMeta{UpstreamModelName: tc.sent}}
 		info.NoteUpstreamResponseModel(tc.actual)
-		if tc.sent == "claude-3-5-sonnet" && tc.actual == "claude-3-5-sonnet-20241022" {
-			continue // Claude 的 YYYYMMDD 紧凑格式不带分隔符，视为独立模型名（保留匹配）
-		}
 		assert.Nil(t, info.UpstreamModelFallback, "date-suffixed echo of %s must not count as fallback", tc.actual)
 	}
 }
@@ -415,6 +411,8 @@ func TestNoteUpstreamResponseModelRealSwapDetected(t *testing.T) {
 func TestTrimModelVersionSuffix(t *testing.T) {
 	assert.Equal(t, "gpt-4o", trimModelVersionSuffix("gpt-4o-2024-08-06"))
 	assert.Equal(t, "gpt-4o", trimModelVersionSuffix("gpt-4o"))
+	assert.Equal(t, "claude-sonnet-4-5", trimModelVersionSuffix("claude-sonnet-4-5-20250929"))
+	assert.Equal(t, "m-20241399", trimModelVersionSuffix("m-20241399"))
 	// 结构化后缀不是日期，必须保留。
 	assert.Equal(t, "gemini-2.5-flash-thinking-8192", trimModelVersionSuffix("gemini-2.5-flash-thinking-8192"))
 	assert.Equal(t, "model-nothinking", trimModelVersionSuffix("model-nothinking"))

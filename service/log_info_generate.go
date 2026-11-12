@@ -58,30 +58,30 @@ func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, o
 		clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, relayInfo.UserId, relayInfo.GetBillingModelName()))
 }
 
-// attachUpstreamModelFallback records an upstream model swap (second-hand
-// relays serving a different model than requested) onto the consume log's
-// other.admin_info and emits a request-correlated warning. Priced=false means
-// the actual model has no billing config on our side, so the requested
-// model's price was kept and the difference needs manual reconciliation.
+// attachUpstreamModelFallback records upstream model swaps onto the consume
+// log's other.admin_info for reconciliation only; billing is not changed.
+// model_fallback is a response model that differs from the one we sent
+// (second-hand relays silently swapping models); claude_fallback_iterations
+// is the per-attempt usage of an official Claude server-side fallback, whose
+// rejected attempts are not billed on our side.
 // Called right before RecordConsumeLog on the text paths.
-func attachUpstreamModelFallback(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
-	if relayInfo == nil {
+func attachUpstreamModelFallback(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
+	if relayInfo == nil || other == nil {
 		return
 	}
-	fb := relayInfo.UpstreamModelFallback
-	if fb == nil {
-		return
-	}
-	if other != nil {
+	if fb := relayInfo.UpstreamModelFallback; fb != nil {
 		other.SetAdmin("model_fallback", map[string]any{
 			"requested_model": relayInfo.OriginModelName,
 			"sent_model":      fb.SentModel,
 			"actual_model":    fb.ActualModel,
-			"priced":          fb.Priced,
 		})
 	}
-	logger.LogWarn(ctx, fmt.Sprintf("upstream model fallback: requested=%s sent=%s actual=%s priced=%t user=%d channel=%d",
-		relayInfo.OriginModelName, fb.SentModel, fb.ActualModel, fb.Priced, relayInfo.UserId, relayInfo.GetChannelID()))
+	if len(relayInfo.ClaudeUsageIterations) >= 2 {
+		other.SetAdmin("claude_fallback_iterations", map[string]any{
+			"trigger_category": relayInfo.ClaudeFallbackTriggerCategory,
+			"iterations":       relayInfo.ClaudeUsageIterations,
+		})
+	}
 }
 
 func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other *model.LogOther) {

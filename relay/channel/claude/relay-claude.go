@@ -1577,7 +1577,7 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	recordClaudeRefusal(info, string(data))
 	info.NoteUpstreamResponseModel(claudeResponse.Model)
 	// 官方回退响应：content 里的 fallback 块携带拒绝类别（顶层 model 换模型
-	// 已在上面检测到，这里主要是补 trigger.category 供计费判断）。
+	// 已在上面检测到，这里主要是补 trigger.category 供日志标记）。
 	for i := range claudeResponse.Content {
 		noteClaudeFallbackContentBlock(info, &claudeResponse.Content[i])
 	}

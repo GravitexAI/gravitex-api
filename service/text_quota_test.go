@@ -1452,80 +1452,28 @@ func TestCalculateTextQuotaSummaryBillsSvgAuthoringUsage(t *testing.T) {
 	}
 }
 
-// Official Claude server-side fallback responses bill the rejected attempt at
-// its own model's rate on top of the final message; the settlement surcharge
-// must mirror the vendor's billability rules (billable categories, mid-stream
-// output, per-attempt ratios, unpriced fallbacks) without touching the base
-// usage math.
-func TestCalculateTextQuotaSummaryBillsClaudeFallbackIterations(t *testing.T) {
-	previousModelRatios := ratio_setting.ModelRatio2JSONString()
-	previousCompletionRatios := ratio_setting.CompletionRatio2JSONString()
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"fb-pricing-test":2,"fb-final-test":3}`))
-	require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(`{"fb-pricing-test":5,"fb-final-test":1}`))
-	t.Cleanup(func() {
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
-		require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(previousCompletionRatios))
-	})
+// Official Claude server-side fallback responses (usage.iterations) are only
+// marked on the admin log: the rejected attempt must not add any charge on
+// top of the final message's usage.
+func TestCalculateTextQuotaSummaryDoesNotBillClaudeFallbackIterations(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName:               "fb-final-test",
+		ClaudeFallbackTriggerCategory: "bio",
+		ClaudeUsageIterations: []dto.ClaudeIterationUsage{
+			{Type: "message", Model: "fb-rejected-test", InputTokens: 535, OutputTokens: 80},
+			{Type: "fallback_message", Model: "fb-final-test", InputTokens: 412, OutputTokens: 264},
+		},
+		StartTime: time.Now(),
+		PriceData: hosttypes.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
 	usage := &dto.Usage{PromptTokens: 412, CompletionTokens: 264, TotalTokens: 676}
 
-	tests := []struct {
-		name         string
-		category     string
-		iterations   []dto.ClaudeIterationUsage
-		wantQuota    int
-		wantAttempts int
-		wantUnpriced string
-	}{
-		// base: (412 + 264×1)×1 = 676; rejected bio hop: (535 + 0×5)×2 = 1070
-		{name: "bio pre-output refusal is billed", category: "bio", iterations: []dto.ClaudeIterationUsage{
-			{Type: "message", Model: "fb-pricing-test", InputTokens: 535},
-			{Type: "fallback_message", Model: "fb-final-test", InputTokens: 412, OutputTokens: 264},
-		}, wantQuota: 676 + 1070, wantAttempts: 1},
-		// cyber pre-output refusal is not billed by the vendor
-		{name: "cyber pre-output refusal is not billed", category: "cyber", iterations: []dto.ClaudeIterationUsage{
-			{Type: "message", Model: "fb-pricing-test", InputTokens: 535},
-			{Type: "fallback_message", Model: "fb-final-test", InputTokens: 412, OutputTokens: 264},
-		}, wantQuota: 676},
-		// mid-stream refusal already streamed output: billed regardless of category
-		{name: "mid-stream refusal is billed regardless of category", category: "cyber", iterations: []dto.ClaudeIterationUsage{
-			{Type: "message", Model: "fb-pricing-test", InputTokens: 535, OutputTokens: 80},
-			{Type: "fallback_message", Model: "fb-final-test", InputTokens: 412, OutputTokens: 264},
-		}, wantQuota: 676 + (535+80*5)*2, wantAttempts: 1},
-		// unpriced attempt model falls back to the billing model's ratio
-		{name: "unpriced attempt model falls back to billing model", category: "bio", iterations: []dto.ClaudeIterationUsage{
-			{Type: "message", Model: "fb-unknown-test", InputTokens: 535},
-			{Type: "fallback_message", Model: "fb-final-test", InputTokens: 412, OutputTokens: 264},
-		}, wantQuota: 676 + 535*3, wantAttempts: 1},
-		// a single iteration entry is the final attempt itself: no surcharge
-		{name: "single iteration is not a fallback", category: "bio", iterations: []dto.ClaudeIterationUsage{
-			{Type: "message", Model: "fb-final-test", InputTokens: 412, OutputTokens: 264},
-		}, wantQuota: 676},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-			info := &relaycommon.RelayInfo{
-				OriginModelName:               "fb-final-test",
-				ClaudeFallbackTriggerCategory: tt.category,
-				ClaudeUsageIterations:         tt.iterations,
-				StartTime:                     time.Now(),
-				PriceData: hosttypes.PriceData{
-					ModelRatio:      1,
-					CompletionRatio: 1,
-					GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
-				},
-			}
+	summary := calculateTextQuotaSummary(ctx, info, usage)
 
-			summary := calculateTextQuotaSummary(ctx, info, usage)
-
-			assert.Equal(t, tt.wantQuota, summary.Quota)
-			if tt.wantAttempts == 0 {
-				assert.Nil(t, summary.ClaudeFallbackIterations)
-				return
-			}
-			require.NotNil(t, summary.ClaudeFallbackIterations)
-			assert.Len(t, summary.ClaudeFallbackIterations.Attempts, tt.wantAttempts)
-			assert.Equal(t, tt.wantUnpriced, summary.ClaudeFallbackIterations.UnpricedModel)
-		})
-	}
+	assert.Equal(t, 676, summary.Quota)
 }
