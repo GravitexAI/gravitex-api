@@ -188,8 +188,8 @@ main-alpha 比官方早占用了 58/59/60 三个号，导致 `ChannelTypeAdvance
 
 ### 3.5 Claude 流式工具调用计费
 - **位置**：`relay/channel/claude/relay-claude.go HandleStreamResponseData` + `stream_server_tool_use_test.go`
-- **背景**：Claude 流式响应下 `server_tool_use.web_search_requests` 可能挂在 `message_start.message.usage` 或 `message_delta.usage`，两种事件都要捕获，写入 `c.Set("claude_web_search_requests", ...)`
-- **合并时注意**：这是 bingyu commit `14e1aa54` 的修复
+- **背景**：Claude 流式响应下 `server_tool_use.web_search_requests` 可能挂在 `message_start.message.usage` 或 `message_delta.usage`，两种事件都要捕获
+- **合并时注意**：这是 bingyu commit `14e1aa54` 的修复。2026-11 合并第 8 批起改用官方 `recordClaudeServerToolUse` 写入 `BuiltInTools["web_search"]`（不再用 `claude_web_search_requests` ctx key，避免与官方计数重复），`countClaudeStreamBillableTools` 中保留 message_start 的捕获
 
 ### 3.6 视频计费多节点 CAS 终态保护 + 计费锁自动释放（2026-08 补记）
 - **位置**：`controller/task_video.go`

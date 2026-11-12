@@ -27,7 +27,7 @@ func SetWebRouter(router *gin.Engine, assets ThemeAssets, pluginDispatcher gin.H
 	themeFS := common.NewThemeAwareFS(defaultFS, classicFS)
 
 	router.NoRoute(pluginDispatcher, middleware.RouteTag("web"),
-		gzip.Gzip(gzip.DefaultCompression), middleware.GlobalWebRateLimit(),
+		gzip.Gzip(gzip.DefaultCompression), middleware.GlobalWebRateLimit(themeFS),
 		middleware.Cache(), static.Serve("/", themeFS), func(c *gin.Context) {
 			c.Set(middleware.RouteTagKey, "web")
 			if strings.HasPrefix(c.Request.RequestURI, "/v1") || strings.HasPrefix(c.Request.RequestURI, "/api") || strings.HasPrefix(c.Request.RequestURI, "/assets") {

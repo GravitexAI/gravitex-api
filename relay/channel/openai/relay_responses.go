@@ -69,13 +69,11 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			info.CountBillableToolCall(dto.BuildInCallFunctionCall, output.Name)
 		}
 	}
+	info.ApplyVendorToolUsage(responseBody)
 
 	imageCounter := &relaycommon.ImageGenerationCallCounter{}
-	if !relaycommon.IsNonBillableResponsesStatus(responsesResponse.Status) {
-		for i := range responsesResponse.Output {
-			idx := i
-			imageCounter.Observe(&responsesResponse.Output[i], &idx)
-		}
+	for i := range responsesResponse.Output {
+		imageCounter.Observe(&responsesResponse.Output[i], &i)
 	}
 	imageCounter.Commit(info)
 
@@ -90,10 +88,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	defer service.CloseResponseBodyGracefully(resp)
 
-	var usage = &dto.Usage{}
-	var responseTextBuilder strings.Builder
-	imageCounter := &relaycommon.ImageGenerationCallCounter{}
-	imageCommitted := false
+	accumulator := service.NewResponsesUsageAccumulator(info)
 	// 在收到第一个实质内容事件前，先缓存开头事件、不写给客户端；
 	// 若此时上游失败/空流结束，客户端尚未收到任何数据，可安全走重试换渠道。
 	type pendingEvent struct {
@@ -133,64 +128,20 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			data = string(rewriteSGLangResponsesCreatedAt(info, []byte(data), "response.created_at", streamResponse.Response.CreatedAt))
 		}
 		sendResponsesStreamData(c, streamResponse, data)
-		// 官方：按事件记录流的协议结果（完成/失败/截断），用于渠道健康统计
-		service.ObserveResponsesOutcome(info, &streamResponse)
-		switch streamResponse.Type {
-		case "response.completed", "response.done":
-			if streamResponse.Response != nil {
-				info.ObserveResponseModel(streamResponse.Response.Model)
-				info.UpstreamResponseId = streamResponse.Response.ID
-				info.CaptureUpstreamServiceTier(common.StringToByteSlice(data))
-				if streamResponse.Response.Usage != nil {
-					// 官方 ApplyResponsesUsage：只合并非零值，完整复制输入明细
-					service.ApplyResponsesUsage(usage, streamResponse.Response.Usage)
-					if service.ValidUsage(usage) {
-						info.SetUpstreamResponsesField("usage", streamResponse.Response.Usage)
-					}
-				}
-				if !imageCommitted {
-					if relaycommon.IsNonBillableResponsesStatus(streamResponse.Response.Status) {
-						imageCounter.Reset()
-						imageCounter.Commit(info)
-						imageCommitted = true
-					} else {
-						for i := range streamResponse.Response.Output {
-							idx := i
-							imageCounter.Observe(&streamResponse.Response.Output[i], &idx)
-						}
-						imageCounter.Commit(info)
-						imageCommitted = true
-					}
-				}
-			} else if !imageCommitted {
-				imageCounter.Commit(info)
-				imageCommitted = true
-			}
-		case "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
-			if !imageCommitted {
-				imageCounter.Reset()
-				imageCounter.Commit(info)
-				imageCommitted = true
-			}
-		case "response.output_text.delta":
-			// 处理输出文本
-			responseTextBuilder.WriteString(streamResponse.Delta)
-		case dto.ResponsesOutputTypeItemDone:
-			if streamResponse.Item != nil {
-				switch streamResponse.Item.Type {
-				case dto.BuildInCallWebSearchCall:
-					info.CountBillableToolCall(dto.BuildInCallWebSearchCall, "")
-				case dto.BuildInCallFileSearchCall:
-					info.CountBillableToolCall(dto.BuildInCallFileSearchCall, "")
-				case dto.BuildInCallFunctionCall:
-					info.CountBillableToolCall(dto.BuildInCallFunctionCall, streamResponse.Item.Name)
-				case dto.ResponsesOutputTypeImageGenerationCall:
-					if !imageCommitted {
-						imageCounter.Observe(streamResponse.Item, streamResponse.OutputIndex)
-					}
+		// alpha：完成事件上记录上游响应 ID、服务等级与原始 usage（计费审计用）
+		if (streamResponse.Type == "response.completed" || streamResponse.Type == "response.done") && streamResponse.Response != nil {
+			info.UpstreamResponseId = streamResponse.Response.ID
+			info.CaptureUpstreamServiceTier(common.StringToByteSlice(data))
+			if streamResponse.Response.Usage != nil {
+				upstreamUsage := &dto.Usage{}
+				service.ApplyResponsesUsage(upstreamUsage, streamResponse.Response.Usage)
+				if service.ValidUsage(upstreamUsage) {
+					info.SetUpstreamResponsesField("usage", streamResponse.Response.Usage)
 				}
 			}
 		}
+		// 官方：用量、工具/图片计数、协议结果统一交给 accumulator
+		accumulator.Observe(&streamResponse, common.StringToByteSlice(data))
 	})
 
 	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)
@@ -203,23 +154,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, types.NewErrorWithStatusCode(upstreamFailure, types.ErrorCodeBadResponse, http.StatusBadGateway)
 	}
 
-	if usage.CompletionTokens == 0 {
-		// 计算输出文本的 token 数量
-		tempStr := responseTextBuilder.String()
-		if len(tempStr) > 0 {
-			// 非正常结束，使用输出文本的 token 数量
-			common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
-			completionTokens := service.CountTextToken(tempStr, info.UpstreamModelName)
-			usage.CompletionTokens = completionTokens
-		}
+	usage := accumulator.Finish()
+	if accumulator.EstimatedCompletion() {
+		// alpha：非正常结束、按输出文本估算 token 时在日志中标记
+		common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 	}
-
-	if usage.PromptTokens == 0 && usage.CompletionTokens != 0 {
-		usage.PromptTokens = info.GetEstimatePromptTokens()
-	}
-
-	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-
 	return usage, nil
 }
 

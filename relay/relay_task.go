@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/tokenkit"
 	"io"
 	"net/http"
 	"strconv"
@@ -567,7 +568,7 @@ func nativeInteractionsTieredPrice(c *gin.Context, info *relaycommon.RelayInfo, 
 	request := gjson.ParseBytes(raw)
 	promptTokens := 0
 	if constant.CountToken {
-		promptTokens = service.CountTextToken(nativeInteractionPromptText(request.Get("input")), modelName)
+		promptTokens = tokenkit.Count(modelName, nativeInteractionPromptText(request.Get("input")))
 	}
 	completionTokens := helper.DefaultTieredPreConsumeMaxTokens
 	if maxOutput := request.Get("max_output_tokens"); maxOutput.Exists() && maxOutput.Type == gjson.Number {
