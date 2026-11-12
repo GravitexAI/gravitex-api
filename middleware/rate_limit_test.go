@@ -111,8 +111,7 @@ func TestRedisEmailVerificationRateLimiterPreservesResponseAndTTL(t *testing.T) 
 	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(router, "/verify", remoteAddr).Code)
 	response := performRateLimitRequest(router, "/verify", remoteAddr)
 	assert.Equal(t, http.StatusTooManyRequests, response.Code)
-	// main-alpha 的限流提示文案是英文（项目约定：日志和错误内容统一用英文）
-	assert.JSONEq(t, `{"success":false,"message":"Too many requests, please wait 30 seconds before trying again"}`, response.Body.String())
+	assert.JSONEq(t, `{"success":false,"message":"Please wait 30 seconds before requesting another verification code.","message_key":"Please wait {{seconds}} seconds before requesting another verification code.","message_params":{"seconds":30}}`, response.Body.String())
 
 	key := redisIPRateLimitKey(EmailVerificationRateLimitMark, "192.0.2.30")
 	assert.True(t, redisServer.Exists(key))

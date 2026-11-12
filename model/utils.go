@@ -2,7 +2,6 @@ package model
 
 import (
 	"errors"
-	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -52,7 +51,7 @@ func addNewRecord(type_ int, id int, value int) {
 
 	sum := old + value
 	if (value > 0 && sum < old) || (value < 0 && sum > old) {
-		common.SysError(fmt.Sprintf("batch update overflow: type=%d id=%d old=%d value=%d", type_, id, old, value))
+		common.SysError(common.LogText("batch update overflow: type=%d id=%d old=%d value=%d", type_, id, old, value))
 		if value > 0 {
 			sum = math.MaxInt
 		} else {

@@ -223,7 +223,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 				service.TaskAdjustTokenQuota(ctx, task, -task.Quota)
 			}
 			logContent := fmt.Sprintf("Video async task failed %s, refund %s", task.TaskID, logger.LogQuota(task.Quota))
-			model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
+			model.RecordLog(task.UserId, model.LogTypeSystem, common.NewMessage(logContent))
 		}
 		// 记录失败日志
 		modelName := task.Properties.OriginModelName
@@ -582,7 +582,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 										model.RecordLogWithAdminInfo(task.UserId, model.LogTypeSystem, logContent,
 											map[string]interface{}{"quota_saturation": clamp.AuditMap()})
 									} else {
-										model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
+										model.RecordLog(task.UserId, model.LogTypeSystem, common.NewMessage(logContent))
 									}
 								}
 							} else if quotaDelta < 0 {
@@ -603,7 +603,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 										model.RecordLogWithAdminInfo(task.UserId, model.LogTypeSystem, logContent,
 											map[string]interface{}{"quota_saturation": clamp.AuditMap()})
 									} else {
-										model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
+										model.RecordLog(task.UserId, model.LogTypeSystem, common.NewMessage(logContent))
 									}
 								}
 							} else {
@@ -722,7 +722,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 			service.TaskAdjustTokenQuota(ctx, task, -quota)
 		}
 		logContent := fmt.Sprintf("Video async task failed %s, refund %s", task.TaskID, logger.LogQuota(quota))
-		model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
+		model.RecordLog(task.UserId, model.LogTypeSystem, common.NewMessage(logContent))
 	}
 
 	return nil
@@ -1430,9 +1430,8 @@ func handleVideoPerSecondBilling(ctx context.Context, task *model.Task) error {
 	// 最后兜底：按秒计费模型若仍为 0（历史数据或入库异常），按 4 秒计费，避免计费失败导致任务标 FAILURE
 	if requestedSeconds <= 0 {
 		logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] model=%s task=%s requested_seconds=0, fallback to 4s for billing", modelName, task.TaskID))
-		model.RecordLog(task.UserId, model.LogTypeSystem,
-			fmt.Sprintf("[VideoBilling] model=%s task=%s requested_seconds 解析失败，兜底按 4s 计费（properties=%d）",
-				modelName, task.TaskID, task.Properties.RequestedSeconds))
+		model.RecordLog(task.UserId, model.LogTypeSystem, common.NewMessage(fmt.Sprintf("[VideoBilling] model=%s task=%s requested_seconds 解析失败，兜底按 4s 计费（properties=%d）",
+			modelName, task.TaskID, task.Properties.RequestedSeconds)))
 		requestedSeconds = 4
 	}
 
@@ -1560,8 +1559,7 @@ func handleVideoPerSecondBilling(ctx context.Context, task *model.Task) error {
 	actualQuota, quotaClamp := common.QuotaFromFloatChecked(actualQuotaFloat)
 	if quotaClamp != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("[VideoBilling] quota saturation: task=%s %s", task.TaskID, quotaClamp.Error()))
-		model.RecordLog(task.UserId, model.LogTypeSystem,
-			fmt.Sprintf("[VideoBilling] task=%s quota saturation: %s", task.TaskID, quotaClamp.Error()))
+		model.RecordLog(task.UserId, model.LogTypeSystem, common.NewMessage(fmt.Sprintf("[VideoBilling] task=%s quota saturation: %s", task.TaskID, quotaClamp.Error())))
 	}
 
 	// 计费过程日志：公式与各因子，便于排查

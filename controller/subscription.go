@@ -370,8 +370,8 @@ func AdminBindSubscription(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if msg != "" {
-		common.ApiSuccess(c, gin.H{"message": msg})
+	if msg != nil {
+		common.ApiSuccess(c, gin.H{"message": msg.LogContentText()})
 		return
 	}
 	common.ApiSuccess(c, nil)
@@ -442,8 +442,8 @@ func AdminCreateUserSubscription(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if msg != "" {
-		common.ApiSuccess(c, gin.H{"message": msg})
+	if msg != nil {
+		common.ApiSuccess(c, gin.H{"message": msg.LogContentText()})
 		return
 	}
 	common.ApiSuccess(c, nil)
@@ -524,8 +524,8 @@ func AdminInvalidateUserSubscription(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if msg != "" {
-		common.ApiSuccess(c, gin.H{"message": msg})
+	if msg != nil {
+		common.ApiSuccess(c, gin.H{"message": msg.LogContentText()})
 		return
 	}
 	common.ApiSuccess(c, nil)
@@ -543,8 +543,8 @@ func AdminDeleteUserSubscription(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if msg != "" {
-		common.ApiSuccess(c, gin.H{"message": msg})
+	if msg != nil {
+		common.ApiSuccess(c, gin.H{"message": msg.LogContentText()})
 		return
 	}
 	common.ApiSuccess(c, nil)

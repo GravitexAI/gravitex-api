@@ -1,7 +1,6 @@
 package model
 
 import (
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -185,7 +184,7 @@ func loadPricingAdvancedCustomConfigs(enableAbilities []AbilityWithChannel) map[
 	for _, channelID := range channelIDs {
 		channel, err := CacheGetChannel(channelID)
 		if err != nil {
-			common.SysLog(fmt.Sprintf("load advanced custom channel settings error: channel_id=%d, error=%v", channelID, err))
+			common.SysLog(common.LogText("load advanced custom channel settings error: channel_id=%d, error=%v", channelID, err))
 			continue
 		}
 		if channel.Type != constant.ChannelTypeAdvancedCustom {
@@ -215,7 +214,7 @@ func loadPricingMockAIConfigs(enableAbilities []AbilityWithChannel) map[int]*dto
 		seen[ability.ChannelId] = struct{}{}
 		channel, err := CacheGetChannel(ability.ChannelId)
 		if err != nil {
-			common.SysLog(fmt.Sprintf("load mock ai channel settings error: channel_id=%d, error=%v", ability.ChannelId, err))
+			common.SysLog(common.LogText("load mock ai channel settings error: channel_id=%d, error=%v", ability.ChannelId, err))
 			continue
 		}
 		if channel.Type != constant.ChannelTypeMockAI {
@@ -242,7 +241,7 @@ func updatePricing() {
 	//modelRatios := common.GetModelRatios()
 	enableAbilities, err := GetAllEnableAbilityWithChannels()
 	if err != nil {
-		common.SysLog(fmt.Sprintf("GetAllEnableAbilityWithChannels error: %v", err))
+		common.SysLog(common.LogText("GetAllEnableAbilityWithChannels error: %v", err))
 		return
 	}
 	// 预加载模型元数据与供应商一次，避免循环查询

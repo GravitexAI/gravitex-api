@@ -38,7 +38,7 @@ type TwoFABackupCode struct {
 // GetTwoFAByUserId 根据用户ID获取2FA设置
 func GetTwoFAByUserId(userId int) (*TwoFA, error) {
 	if userId == 0 {
-		return nil, errors.New("用户ID不能为空")
+		return nil, errors.New("user ID is empty")
 	}
 
 	var twoFA TwoFA
@@ -88,7 +88,7 @@ func (t *TwoFA) Create() error {
 // Update 更新2FA设置
 func (t *TwoFA) Update() error {
 	if t.Id == 0 {
-		return errors.New("2FA记录ID不能为空")
+		return errors.New("2FA record ID is empty")
 	}
 	return DB.Save(t).Error
 }
@@ -121,7 +121,7 @@ func (t *TwoFA) ResetFailedAttempts() error {
 // IncrementFailedAttempts 增加失败尝试次数
 func (t *TwoFA) IncrementFailedAttempts() error {
 	if t.Id == 0 {
-		return errors.New("2FA记录ID不能为空")
+		return errors.New("2FA record ID is empty")
 	}
 
 	const maxUpdateRetries = 5
@@ -163,7 +163,7 @@ func (t *TwoFA) IncrementFailedAttempts() error {
 		return nil
 	}
 
-	return errors.New("更新2FA失败次数冲突，请重试")
+	return errors.New("conflicting updates to the 2FA failure count, please retry")
 }
 
 // IsLocked 检查账户是否被锁定
@@ -207,7 +207,7 @@ func CreateBackupCodes(userId int, codes []string) error {
 // ValidateBackupCode 验证并使用备用码
 func ValidateBackupCode(userId int, code string) (bool, error) {
 	if !common.ValidateBackupCode(code) {
-		return false, errors.New("验证码或备用码不正确")
+		return false, errors.New("the verification code or backup code is incorrect")
 	}
 
 	normalizedCode := common.NormalizeBackupCode(code)
@@ -271,7 +271,7 @@ func (t *TwoFA) Enable() error {
 func (t *TwoFA) ValidateTOTPAndUpdateUsage(code string) (bool, error) {
 	// 检查是否被锁定
 	if t.IsLocked() {
-		return false, fmt.Errorf("账户已被锁定，请在%v后重试", t.LockedUntil.Format("2006-01-02 15:04:05"))
+		return false, fmt.Errorf("the account is locked, retry after %v", t.LockedUntil.Format("2006-01-02 15:04:05"))
 	}
 
 	// 验证TOTP码
@@ -300,7 +300,7 @@ func (t *TwoFA) ValidateTOTPAndUpdateUsage(code string) (bool, error) {
 func (t *TwoFA) ValidateBackupCodeAndUpdateUsage(code string) (bool, error) {
 	// 检查是否被锁定
 	if t.IsLocked() {
-		return false, fmt.Errorf("账户已被锁定，请在%v后重试", t.LockedUntil.Format("2006-01-02 15:04:05"))
+		return false, fmt.Errorf("the account is locked, retry after %v", t.LockedUntil.Format("2006-01-02 15:04:05"))
 	}
 
 	// 验证备用码

@@ -46,12 +46,14 @@ func InitEnv() {
 		os.Exit(0)
 	}
 
+	DefaultLanguage = os.Getenv("DEFAULT_LANGUAGE")
+	SetLogLanguage(DefaultLanguage)
+
 	if os.Getenv("SESSION_SECRET") != "" {
 		ss := os.Getenv("SESSION_SECRET")
 		if ss == "random_string" {
-			log.Println("WARNING: SESSION_SECRET is set to the default value 'random_string', please change it to a random string.")
-			log.Println("警告：SESSION_SECRET被设置为默认值'random_string'，请修改为随机字符串。")
-			log.Fatal("Please set SESSION_SECRET to a random string.")
+			log.Println(LogText("WARNING: SESSION_SECRET is set to the default value 'random_string', please change it to a random string."))
+			log.Fatal(LogText("Please set SESSION_SECRET to a random string."))
 		} else {
 			SessionSecret = ss
 		}
