@@ -246,6 +246,7 @@ func TestDoAwsClientRequest_StripsContextManagementWhenBetaDropped(t *testing.T)
 	require.Equal(t, []any{"effort-2025-11-24"}, betaValues)
 }
 
+
 func TestNewAwsInvokeContextInheritsParent(t *testing.T) {
 	originalRelayTimeout := common.RelayTimeout
 	t.Cleanup(func() {

@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -57,6 +58,10 @@ func outputTokensForModel(usage *dto.Usage, modelName string) int {
 // include all sub-categories (cache, image, audio). Claude-format APIs
 // report them as text-only. This function normalizes to text-only when
 // sub-categories are separately priced.
+//
+// A long-lived cache write (Claude 1h, OpenAI 12h) without its own price
+// costs a fixed multiple of the short write price: it is billed in cc, or in
+// p when cc has no price either.
 func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVars map[string]bool) billingexpr.TokenParams {
 	return buildTieredTokenParams(usage, isClaudeUsageSemantic, usedVars, usage.CompletionTokens)
 }
@@ -69,11 +74,9 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	p := float64(usage.PromptTokens)
 	c := float64(completionTokens)
 	cr := float64(usage.PromptTokensDetails.CachedTokens)
-	// gpt-5.6+ 缓存写入 token 并入 cc（通用缓存创建变量），复用同一计价系数。
-	// 用 CacheCreationTokensTotal() 取 max(CachedCreationTokens, CacheWriteTokens)，
-	// 不能相加——上游两个字段都上报时相加会重复计费。
-	cc5m := float64(usage.PromptTokensDetails.CacheCreationTokensTotal())
+	cc := float64(usage.PromptTokensDetails.CacheCreationTokensTotal())
 	cc1h := float64(0)
+	cc12h := float64(0)
 
 	if usage.UsageSemantic == "anthropic" {
 		// Upstreams may report the cache-write total without a full 5m/1h
@@ -83,20 +86,8 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 			usage.ClaudeCacheCreation5mTokens,
 			usage.ClaudeCacheCreation1hTokens,
 		)
-		cc5m = float64(split5m)
+		cc = float64(split5m)
 		cc1h = float64(split1h)
-	}
-
-	// OpenAI 12h 缓存写入（cache_write_tokens_details.ttl_12h_tokens）按 30m
-	// 写入价的 2 倍计费：官方定价 12h 写入恒为 30m 写入的 2 倍（2.5x vs 1.25x
-	// input，短/长上下文两档都成立）。只加权计价变量 cc——下方 p 的扣减仍用
-	// 原始 token 数，虚拟权重不能再从新鲜输入 token 里扣一次。
-	ccPriced := cc5m
-	if usage.UsageSemantic != "anthropic" {
-		if d := usage.PromptTokensDetails.CacheWriteTokensDetails; d != nil &&
-			d.Ttl12hTokens > 0 && float64(d.Ttl12hTokens) <= cc5m {
-			ccPriced += float64(d.Ttl12hTokens)
-		}
 	}
 
 	img := float64(usage.PromptTokensDetails.ImageTokens)
@@ -152,21 +143,45 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	// Claude: input_tokens is text-only, so add cache read + cache creation.
 	inputLen := p
 	if isClaudeUsageSemantic {
-		inputLen = p + cr + cc5m + cc1h
+		inputLen = p + cr + cc + cc1h
 	}
 
 	if isClaudeUsageSemantic {
-		// Anthropic input excludes cache reads. When cr has no separate
-		// price, merge those tokens into the input category instead.
+		// Anthropic input excludes cache reads and writes. When they have no
+		// separate price, merge those tokens into the input category instead.
 		if !usedVars["cr"] {
 			p += cr
+		}
+		if !usedVars["cc1h"] {
+			cc += cc1h * hosttypes.ClaudeCacheCreation1hMultiplier
+			cc1h = 0
+		}
+		if !usedVars["cc"] {
+			p += cc
+			cc = 0
 		}
 	} else {
 		if usedVars["cr"] {
 			p -= cr
 		}
+		// prompt_tokens counts every cache write once. A 12h write without
+		// its own price joins cc at twice its count; ccTokens keeps the real
+		// count that cc takes out of p, and an unpriced cc leaves p the extra.
+		cc12h = float64(usage.PromptTokensDetails.CacheWrite12hTokens())
+		cc -= cc12h
+		ccTokens := cc
+		if usedVars["cc12h"] {
+			p -= cc12h
+		} else {
+			ccTokens += cc12h
+			cc += cc12h * hosttypes.OpenAICacheCreation12hMultiplier
+			cc12h = 0
+		}
 		if usedVars["cc"] {
-			p -= cc5m
+			p -= ccTokens
+		} else {
+			p += cc - ccTokens
+			cc = 0
 		}
 		if usedVars["cc1h"] {
 			p -= cc1h
@@ -202,8 +217,9 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 		C:     c,
 		Len:   inputLen,
 		CR:    cr,
-		CC:    ccPriced,
+		CC:    cc,
 		CC1h:  cc1h,
+		CC12h: cc12h,
 		Img:   img,
 		ImgCR: imgCR,
 		ImgO:  imgO,

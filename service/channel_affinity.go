@@ -25,14 +25,15 @@ import (
 )
 
 const (
-	ginKeyChannelAffinityCacheKey   = "channel_affinity_cache_key"
-	ginKeyChannelAffinityTTLSeconds = "channel_affinity_ttl_seconds"
-	ginKeyChannelAffinityMeta       = "channel_affinity_meta"
-	ginKeyChannelAffinityLogInfo    = "channel_affinity_log_info"
-	ginKeyChannelAffinitySkipRetry  = "channel_affinity_skip_retry_on_failure"
-	ginKeyChannelAffinityHitChannel = "channel_affinity_hit_channel_id"
-	ginKeyChannelAffinityHitBinding = "channel_affinity_hit_binding"
-	ginKeyChannelAffinityHit        = "channel_affinity_hit"
+	ginKeyChannelAffinityCacheKey    = "channel_affinity_cache_key"
+	ginKeyChannelAffinityTTLSeconds  = "channel_affinity_ttl_seconds"
+	ginKeyChannelAffinityMeta        = "channel_affinity_meta"
+	ginKeyChannelAffinityLogInfo     = "channel_affinity_log_info"
+	ginKeyChannelAffinitySkipRetry   = "channel_affinity_skip_retry_on_failure"
+	ginKeyChannelAffinityHitChannel  = "channel_affinity_hit_channel_id"
+	ginKeyChannelAffinityHitBinding  = "channel_affinity_hit_binding"
+	ginKeyChannelAffinityHit         = "channel_affinity_hit"
+	ginKeyChannelAffinityRetryOffset = "channel_affinity_retry_offset"
 
 	channelAffinityCacheNamespace           = "new-api:channel_affinity:v1"
 	channelAffinityUsageCacheStatsNamespace = "new-api:channel_affinity_usage_cache_stats:v1"
@@ -888,6 +889,8 @@ func MarkChannelAffinityUsed(c *gin.Context, selectedGroup string, channelID int
 		return
 	}
 	c.Set(ginKeyChannelAffinitySkipRetry, meta.SkipRetry)
+	// 官方 #347：亲和命中占用一次尝试，但不消耗普通优先级层
+	c.Set(ginKeyChannelAffinityRetryOffset, 1)
 	info := map[string]interface{}{
 		"reason":         meta.RuleName,
 		"rule_name":      meta.RuleName,

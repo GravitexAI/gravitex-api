@@ -214,7 +214,8 @@ func main() {
 			common.SysLog(fmt.Sprintf("trusted proxies configured: %v", trustedProxies))
 		}
 	}
-	server.Use(gin.CustomRecovery(func(c *gin.Context, err any) {
+	// 官方 #353：panic 日志写入当前日志文件（轮转后不丢）；返回体保留 alpha 文案
+	server.Use(gin.CustomRecoveryWithWriter(common.ErrorLogWriter, func(c *gin.Context, err any) {
 		common.SysLog(common.LogText("panic detected: %v", err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{

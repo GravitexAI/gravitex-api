@@ -33,6 +33,14 @@ type ImageBillingUsage struct {
 	OutputTiers           []ImageOutputTierUsage `json:"output_tiers,omitempty"`
 }
 
+// Long-lived cache writes cost a fixed multiple of the short write price.
+const (
+	// https://docs.claude.com/en/docs/build-with-claude/prompt-caching#1-hour-cache-duration
+	ClaudeCacheCreation1hMultiplier = 6 / 3.75
+	// https://developers.openai.com/api/docs/guides/prompt-caching
+	OpenAICacheCreation12hMultiplier = 2
+)
+
 type GroupRatioInfo struct {
 	GroupRatio        float64
 	GroupSpecialRatio float64
@@ -40,28 +48,29 @@ type GroupRatioInfo struct {
 }
 
 type PriceData struct {
-	FreeModel            bool
-	ModelPrice           float64
-	ModelRatio           float64
-	CompletionRatio      float64
-	ImageCompletionRatio float64
-	CacheRatio           float64
-	CacheCreationRatio   float64
-	CacheCreation5mRatio float64
-	CacheCreation1hRatio float64
-	ImageRatio           float64
-	AudioRatio           float64
-	AudioCompletionRatio float64
-	VideoRatio           float64
-	otherRatios          map[string]float64
-	UsePrice             bool
-	Quota                int // 按次计费的最终额度（MJ / Task）
-	QuotaToPreConsume    int // 按量计费的预消耗额度
-	GroupRatioInfo       GroupRatioInfo
-	PerImageUnitPrice    float64 // 按张计费单价 ($/image)，来自 ImageModelPricePerImage 配置
-	ImagePriceMultiplier float64 // 按张计费倍率（图片数量×尺寸×质量），来自 meta.ImagePriceRatio
-	ImagePerImagePricing *ImagePerImagePricing
-	ImageBillingUsage    *ImageBillingUsage
+	FreeModel             bool
+	ModelPrice            float64
+	ModelRatio            float64
+	CompletionRatio       float64
+	ImageCompletionRatio  float64
+	CacheRatio            float64
+	CacheCreationRatio    float64
+	CacheCreation5mRatio  float64
+	CacheCreation1hRatio  float64
+	CacheCreation12hRatio float64
+	ImageRatio            float64
+	AudioRatio            float64
+	AudioCompletionRatio  float64
+	VideoRatio            float64
+	otherRatios           map[string]float64
+	UsePrice              bool
+	Quota                 int // 按次计费的最终额度（MJ / Task）
+	QuotaToPreConsume     int // 按量计费的预消耗额度
+	GroupRatioInfo        GroupRatioInfo
+	PerImageUnitPrice     float64 // 按张计费单价 ($/image)，来自 ImageModelPricePerImage 配置
+	ImagePriceMultiplier  float64 // 按张计费倍率（图片数量×尺寸×质量），来自 meta.ImagePriceRatio
+	ImagePerImagePricing  *ImagePerImagePricing
+	ImageBillingUsage     *ImageBillingUsage
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {
@@ -149,5 +158,5 @@ func isValidOtherRatio(ratio float64) bool {
 }
 
 func (p *PriceData) ToSetting() string {
-	return fmt.Sprintf("ModelPrice: %f, ModelRatio: %f, CompletionRatio: %f, CacheRatio: %f, GroupRatio: %f, UsePrice: %t, CacheCreationRatio: %f, CacheCreation5mRatio: %f, CacheCreation1hRatio: %f, QuotaToPreConsume: %d, ImageRatio: %f, AudioRatio: %f, AudioCompletionRatio: %f, VideoRatio: %f", p.ModelPrice, p.ModelRatio, p.CompletionRatio, p.CacheRatio, p.GroupRatioInfo.GroupRatio, p.UsePrice, p.CacheCreationRatio, p.CacheCreation5mRatio, p.CacheCreation1hRatio, p.QuotaToPreConsume, p.ImageRatio, p.AudioRatio, p.AudioCompletionRatio, p.VideoRatio)
+	return fmt.Sprintf("ModelPrice: %f, ModelRatio: %f, CompletionRatio: %f, CacheRatio: %f, GroupRatio: %f, UsePrice: %t, CacheCreationRatio: %f, CacheCreation5mRatio: %f, CacheCreation1hRatio: %f, CacheCreation12hRatio: %f, QuotaToPreConsume: %d, ImageRatio: %f, AudioRatio: %f, AudioCompletionRatio: %f, VideoRatio: %f", p.ModelPrice, p.ModelRatio, p.CompletionRatio, p.CacheRatio, p.GroupRatioInfo.GroupRatio, p.UsePrice, p.CacheCreationRatio, p.CacheCreation5mRatio, p.CacheCreation1hRatio, p.CacheCreation12hRatio, p.QuotaToPreConsume, p.ImageRatio, p.AudioRatio, p.AudioCompletionRatio, p.VideoRatio)
 }

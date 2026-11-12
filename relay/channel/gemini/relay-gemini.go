@@ -475,20 +475,25 @@ func CovertOpenAI2Gemini(c *gin.Context, textRequest dto.GeneralOpenAIRequest, i
 				urlContext = true
 				continue
 			}
-			if tool.Function.Parameters != nil {
-
-				params, ok := tool.Function.Parameters.(map[string]interface{})
-				if ok {
-					if props, hasProps := params["properties"].(map[string]interface{}); hasProps {
-						if len(props) == 0 {
-							tool.Function.Parameters = nil
-						}
+			// 官方 #321 起 Parameters 是原始 JSON 字节；alpha 的 Gemini schema 清理基于 map，先解码再编码回去
+			var parsedParams any
+			if len(tool.Function.Parameters) > 0 {
+				_ = common.Unmarshal(tool.Function.Parameters, &parsedParams)
+			}
+			if params, ok := parsedParams.(map[string]interface{}); ok {
+				if props, hasProps := params["properties"].(map[string]interface{}); hasProps {
+					if len(props) == 0 {
+						parsedParams = nil
 					}
 				}
 			}
 			// Clean the parameters before appending
-			cleanedParams := cleanFunctionParameters(tool.Function.Parameters)
-			tool.Function.Parameters = cleanedParams
+			tool.Function.Parameters = nil
+			if cleanedParams := cleanFunctionParameters(parsedParams); cleanedParams != nil {
+				if encoded, err := common.Marshal(cleanedParams); err == nil {
+					tool.Function.Parameters = encoded
+				}
+			}
 			functions = append(functions, tool.Function)
 		}
 		geminiTools := geminiRequest.GetTools()

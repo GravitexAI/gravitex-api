@@ -34,3 +34,4 @@ func TestMaskSensitiveInfoMasksCredentialsAndIPv6(t *testing.T) {
 	assert.Equal(t, `Post "https://***.com/***/***?client_secret=***&grant_type=***": timeout`,
 		MaskSensitiveInfo(`Post "https://aip.baidubce.com/oauth/token?grant_type=client_credentials&client_secret=s": timeout`, "https://custom.example"))
 }
+

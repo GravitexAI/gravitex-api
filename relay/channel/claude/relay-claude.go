@@ -126,22 +126,13 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 	claudeTools := make([]any, 0, len(textRequest.Tools))
 
 	for _, tool := range textRequest.Tools {
-		if params, ok := tool.Function.Parameters.(map[string]any); ok {
+		// 官方 #321：参数 schema 以原始字节传递，保留客户端的属性顺序（上游按该顺序生成参数）
+		var params map[string]any
+		if err := common.Unmarshal(tool.Function.Parameters, &params); err == nil && params != nil {
 			claudeTool := dto.Tool{
 				Name:        tool.Function.Name,
 				Description: tool.Function.Description,
-			}
-			claudeTool.InputSchema = make(map[string]interface{})
-			if params["type"] != nil {
-				claudeTool.InputSchema["type"] = params["type"].(string)
-			}
-			claudeTool.InputSchema["properties"] = params["properties"]
-			claudeTool.InputSchema["required"] = params["required"]
-			for s, a := range params {
-				if s == "type" || s == "properties" || s == "required" {
-					continue
-				}
-				claudeTool.InputSchema[s] = a
+				InputSchema: tool.Function.Parameters,
 			}
 			claudeTools = append(claudeTools, &claudeTool)
 		}
@@ -219,7 +210,7 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 				claudeTools = append(claudeTools, &dto.Tool{
 					Name:        jsonSchemaToolName,
 					Description: desc,
-					InputSchema: schemaMap,
+					InputSchema: mustMarshalClaudeSchema(schemaMap),
 				})
 			}
 		}
@@ -1733,4 +1724,13 @@ func mapToolChoice(toolChoice any, parallelToolCalls *bool) *dto.ClaudeToolChoic
 	}
 
 	return claudeToolChoice
+}
+
+// mustMarshalClaudeSchema 把已解析的 schema 重新编码为 Claude tool 的 input_schema。
+func mustMarshalClaudeSchema(schema map[string]any) json.RawMessage {
+	data, err := common.Marshal(schema)
+	if err != nil {
+		return nil
+	}
+	return data
 }

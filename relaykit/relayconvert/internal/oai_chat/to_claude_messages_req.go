@@ -22,13 +22,14 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 	claudeTools := make([]any, 0, len(textRequest.Tools))
 
 	for _, tool := range textRequest.Tools {
-		if _, ok := tool.Function.Parameters.(map[string]any); !ok && tool.Type != "function" {
+		if kitutil.GetJsonType(tool.Function.Parameters) != "object" && tool.Type != "function" {
 			continue
 		}
+		inputSchema, _ := sharedclaude.FunctionParametersToInputSchema(tool.Function.Parameters)
 		claudeTools = append(claudeTools, &dto.Tool{
 			Name:        tool.Function.Name,
 			Description: tool.Function.Description,
-			InputSchema: sharedclaude.FunctionParametersToInputSchema(tool.Function.Parameters),
+			InputSchema: inputSchema,
 		})
 	}
 
@@ -112,18 +113,7 @@ func OpenAIChatRequestToClaudeMessages(c context.Context, info convmeta.Meta, te
 		}
 	}
 
-	if textRequest.Stop != nil {
-		switch stop := textRequest.Stop.(type) {
-		case string:
-			claudeRequest.StopSequences = []string{stop}
-		case []any:
-			stopSequences := make([]string, 0)
-			for _, item := range stop {
-				stopSequences = append(stopSequences, item.(string))
-			}
-			claudeRequest.StopSequences = stopSequences
-		}
-	}
+	claudeRequest.StopSequences = parseClaudeStopSequences(textRequest.Stop)
 
 	formatMessages := make([]dto.Message, 0)
 	// sourceIndexes[i] 为 formatMessages[i] 在客户端原始 messages 中的下标，
@@ -461,4 +451,23 @@ func toolResultPartType(part any) string {
 	}
 	partType, _ := partMap["type"].(string)
 	return partType
+}
+
+func parseClaudeStopSequences(stop any) []string {
+	switch stop := stop.(type) {
+	case string:
+		return []string{stop}
+	case []string:
+		return stop
+	case []any:
+		sequences := make([]string, 0, len(stop))
+		for _, item := range stop {
+			if sequence, ok := item.(string); ok {
+				sequences = append(sequences, sequence)
+			}
+		}
+		return sequences
+	default:
+		return nil
+	}
 }

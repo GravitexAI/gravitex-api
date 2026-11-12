@@ -197,3 +197,4 @@ func setupRelayRouterTestDB(t *testing.T) {
 		}
 	})
 }
+

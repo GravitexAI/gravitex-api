@@ -782,6 +782,17 @@ func redactVideoResponseBody(body []byte) []byte {
 			resp["video"] = truncateBase64(v)
 		}
 	}
+	if steps, ok := m["steps"].([]any); ok {
+		for _, step := range steps {
+			sm, _ := step.(map[string]any)
+			parts, _ := sm["content"].([]any)
+			for _, part := range parts {
+				if pm, ok := part.(map[string]any); ok && pm["type"] == "video" {
+					delete(pm, "data")
+				}
+			}
+		}
+	}
 	b, err := common.Marshal(m)
 	if err != nil {
 		return body

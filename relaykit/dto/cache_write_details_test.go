@@ -22,8 +22,8 @@ func TestUsageParsesCacheWriteTokensDetails(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ccUsage.PromptTokensDetails.CacheWriteTokensDetails)
 	assert.Equal(t, 30, ccUsage.PromptTokensDetails.CacheWriteTokens)
-	assert.Equal(t, 20, ccUsage.PromptTokensDetails.CacheWriteTokensDetails.Ttl30mTokens)
-	assert.Equal(t, 10, ccUsage.PromptTokensDetails.CacheWriteTokensDetails.Ttl12hTokens)
+	assert.Equal(t, 20, ccUsage.PromptTokensDetails.CacheWriteTokensDetails.TTL30mTokens)
+	assert.Equal(t, 10, ccUsage.PromptTokensDetails.CacheWriteTokensDetails.TTL12hTokens)
 	assert.Equal(t, 30, ccUsage.PromptTokensDetails.CacheCreationTokensTotal())
 
 	// Responses shape: input_tokens_details.cache_write_tokens_details
@@ -39,8 +39,8 @@ func TestUsageParsesCacheWriteTokensDetails(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, respUsage.InputTokensDetails)
 	require.NotNil(t, respUsage.InputTokensDetails.CacheWriteTokensDetails)
-	assert.Equal(t, 20, respUsage.InputTokensDetails.CacheWriteTokensDetails.Ttl30mTokens)
-	assert.Equal(t, 10, respUsage.InputTokensDetails.CacheWriteTokensDetails.Ttl12hTokens)
+	assert.Equal(t, 20, respUsage.InputTokensDetails.CacheWriteTokensDetails.TTL30mTokens)
+	assert.Equal(t, 10, respUsage.InputTokensDetails.CacheWriteTokensDetails.TTL12hTokens)
 }
 
 func TestUsageOmitsCacheWriteTokensDetailsWhenAbsent(t *testing.T) {
@@ -61,10 +61,10 @@ func TestUsageOmitsCacheWriteTokensDetailsWhenAbsent(t *testing.T) {
 func TestMergeInputTokenDetailsCarriesCacheWriteTokensDetails(t *testing.T) {
 	var current, incoming InputTokenDetails
 	incoming.CacheWriteTokens = 30
-	incoming.CacheWriteTokensDetails = &CacheWriteTokensDetails{Ttl30mTokens: 20, Ttl12hTokens: 10}
+	incoming.CacheWriteTokensDetails = &CacheWriteTokenDetails{TTL30mTokens: 20, TTL12hTokens: 10}
 
 	mergeInputTokenDetails(&current, incoming)
 	require.NotNil(t, current.CacheWriteTokensDetails)
-	assert.Equal(t, 20, current.CacheWriteTokensDetails.Ttl30mTokens)
-	assert.Equal(t, 10, current.CacheWriteTokensDetails.Ttl12hTokens)
+	assert.Equal(t, 20, current.CacheWriteTokensDetails.TTL30mTokens)
+	assert.Equal(t, 10, current.CacheWriteTokensDetails.TTL12hTokens)
 }
