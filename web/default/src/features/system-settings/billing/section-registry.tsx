@@ -74,6 +74,9 @@ const BILLING_SECTIONS = [
             minimum_remaining_quota:
               settings['quota_setting.minimum_remaining_quota'],
             model_quota_reserve: settings['quota_setting.model_quota_reserve'],
+            pre_consume_multiplier:
+              settings['quota_setting.pre_consume_multiplier'],
+            trust_quota_usd: settings['quota_setting.trust_quota_usd'],
           },
         }}
         complianceConfirmed={

@@ -66,6 +66,8 @@ const quotaSchema = z.object({
     enable_free_model_pre_consume: z.boolean(),
     minimum_remaining_quota: z.coerce.number().int().min(0),
     model_quota_reserve: z.string(),
+    pre_consume_multiplier: z.coerce.number().gt(0),
+    trust_quota_usd: z.coerce.number().min(0),
   }),
 })
 
@@ -371,7 +373,9 @@ export function QuotaSettingsSection({
                     />
                   </FormControl>
                   <FormDescription>
-                    {t('Quota consumed before charging users')}
+                    {t(
+                      'Only used to pre-consume per-volume video models; text requests use the pre-consume multiplier'
+                    )}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -427,6 +431,62 @@ export function QuotaSettingsSection({
                     {t('Quota given to invited users ({{formattedQuota}})', {
                       formattedQuota: formatQuotaInputValue(field.value),
                     })}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='quota_setting.pre_consume_multiplier'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Pre-Consume Multiplier')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0.01}
+                      step={0.1}
+                      value={field.value ?? ''}
+                      onChange={handleNumberChange(field.onChange)}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      ref={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Reserved quota = estimated input cost × multiplier, settled after the request; per-request prices are not affected'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='quota_setting.trust_quota_usd'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Trust Quota Threshold (USD)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      step={1}
+                      value={field.value ?? ''}
+                      onChange={handleNumberChange(field.onChange)}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      ref={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Skip pre-consume when both wallet balance and token quota exceed this amount; 0 disables it'
+                    )}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

@@ -30,6 +30,8 @@ const CREDIT_LIMIT_DEFAULTS = {
   'quota_setting.enable_free_model_pre_consume': true,
   'quota_setting.minimum_remaining_quota': '0',
   'quota_setting.model_quota_reserve': '',
+  'quota_setting.pre_consume_multiplier': '1',
+  'quota_setting.trust_quota_usd': '10',
 };
 
 function parseModelQuotaReserve(value) {
@@ -297,7 +299,9 @@ export default function SettingsCreditLimit(props) {
                   step={1}
                   min={0}
                   suffix={'Token'}
-                  extraText={t('请求结束后多退少补')}
+                  extraText={t(
+                    '仅用于按量计费视频模型提交时的预扣，文本请求按预扣倍率估算',
+                  )}
                   placeholder={''}
                   onChange={(value) =>
                     setInputs({
@@ -364,6 +368,46 @@ export default function SettingsCreditLimit(props) {
                     setInputs((currentInputs) => ({
                       ...currentInputs,
                       'quota_setting.minimum_remaining_quota': String(value),
+                    }));
+                  }}
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  label={t('预扣倍率')}
+                  field={'quota_setting.pre_consume_multiplier'}
+                  step={0.1}
+                  min={0.01}
+                  precision={2}
+                  extraText={t(
+                    '预扣额度 = 预计输入费用 × 倍率，请求结束后多退少补；按次计费不受影响',
+                  )}
+                  onChange={(value) => {
+                    dirtyKeysRef.current.add(
+                      'quota_setting.pre_consume_multiplier',
+                    );
+                    setInputs((currentInputs) => ({
+                      ...currentInputs,
+                      'quota_setting.pre_consume_multiplier': String(value),
+                    }));
+                  }}
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  label={t('信任额度门槛')}
+                  field={'quota_setting.trust_quota_usd'}
+                  step={1}
+                  min={0}
+                  prefix={'$'}
+                  extraText={t(
+                    '钱包余额与令牌额度都高于该值时免预扣，0 表示关闭',
+                  )}
+                  onChange={(value) => {
+                    dirtyKeysRef.current.add('quota_setting.trust_quota_usd');
+                    setInputs((currentInputs) => ({
+                      ...currentInputs,
+                      'quota_setting.trust_quota_usd': String(value),
                     }));
                   }}
                 />

@@ -3927,6 +3927,11 @@
     "默认档位：": "Default profile: ",
     "默认测试模型": "Default Test Model",
     "默认用户消息": "Default User Message",
-    "默认补全倍率": "Default completion ratio"
+    "默认补全倍率": "Default completion ratio",
+    "仅用于按量计费视频模型提交时的预扣，文本请求按预扣倍率估算": "Only used to pre-consume per-volume video models; text requests use the pre-consume multiplier",
+    "预扣倍率": "Pre-consume multiplier",
+    "预扣额度 = 预计输入费用 × 倍率，请求结束后多退少补；按次计费不受影响": "Reserved quota = estimated input cost × multiplier, settled after the request; per-request prices are not affected",
+    "信任额度门槛": "Trust quota threshold",
+    "钱包余额与令牌额度都高于该值时免预扣，0 表示关闭": "Skip pre-consume when both wallet balance and token quota exceed this amount; 0 disables it"
   }
 }

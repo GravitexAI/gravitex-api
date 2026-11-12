@@ -5282,6 +5282,11 @@
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
     "Zoom": "縮放",
-    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "停用渠道將標記為已刪除，渠道記錄和密鑰仍會保留在資料庫中。"
+    "禁用渠道将标记为已删除，渠道记录和密钥仍保留在数据库中。": "停用渠道將標記為已刪除，渠道記錄和密鑰仍會保留在資料庫中。",
+    "Only used to pre-consume per-volume video models; text requests use the pre-consume multiplier": "僅用於按量計費影片模型提交時的預扣，文字請求按預扣倍率估算",
+    "Pre-Consume Multiplier": "預扣倍率",
+    "Reserved quota = estimated input cost × multiplier, settled after the request; per-request prices are not affected": "預扣額度 = 預計輸入費用 × 倍率，請求結束後多退少補；按次計費不受影響",
+    "Trust Quota Threshold (USD)": "信任額度門檻（美元）",
+    "Skip pre-consume when both wallet balance and token quota exceed this amount; 0 disables it": "錢包餘額與令牌額度都高於該值時免預扣，0 表示關閉"
   }
 }
