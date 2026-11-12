@@ -61,6 +61,17 @@ func OpenAIChatRequestToGeminiGenerateContent(c context.Context, textRequest dto
 		}
 
 		if googleBody, ok := extraBody["google"].(map[string]interface{}); ok {
+			// Accept native REST naming and the snake_case convention used by extra_body.google.
+			for _, key := range []string{"mediaProcessing", "media_processing"} {
+				if value, exists := googleBody[key]; exists && value != nil {
+					processing, ok := value.(string)
+					if !ok {
+						return nil, fmt.Errorf("extra_body.google.%s must be a string", key)
+					}
+					geminiRequest.GenerationConfig.MediaProcessing = &processing
+				}
+			}
+
 			if _, hasErrorParam := googleBody["thinkingConfig"]; hasErrorParam {
 				return nil, errors.New("extra_body.google.thinkingConfig is not supported, use extra_body.google.thinking_config instead")
 			}
