@@ -138,6 +138,25 @@ const REGION_EXAMPLE = {
   'gemini-1.5-flash-002': 'europe-west2',
   'claude-3-5-sonnet-20240620': 'europe-west1',
 };
+// Gemini oauth_broker 模式的密钥示例：broker 配置 JSON（一行一份）
+const GEMINI_BROKER_KEY_EXAMPLE =
+  '{"broker_url":"https://broker.example.com/token","headers":{"X-Api-Key":"xxx"},"user_project":""}';
+
+// Gemini 凭证类型的说明文字
+const geminiKeyTypeHint = (keyType, t) => {
+  if (keyType === 'oauth_token') {
+    return t(
+      '密钥填写 ya29 开头的 OAuth access token，以 Authorization: Bearer 发送；token 过期需自行更新密钥',
+    );
+  }
+  if (keyType === 'oauth_broker') {
+    return t(
+      '密钥填写 broker 配置 JSON，平台自动向 broker 拉取 token，到期前 150 秒刷新，遇 401 换新 token 重放一次',
+    );
+  }
+  return t('AI Studio API Key，以 x-goog-api-key 发送');
+};
+
 const UPSTREAM_DETECTED_MODEL_PREVIEW_LIMIT = 8;
 const ADVANCED_SETTINGS_EXPANDED_KEY = 'channel-advanced-settings-expanded';
 
@@ -238,6 +257,8 @@ const EditChannelModal = (props) => {
     vertex_key_type: 'json',
     // 仅 AWS: 密钥格式和区域（存入 settings.aws_key_type 和 settings.aws_region）
     aws_key_type: 'ak_sk',
+    // 仅 Gemini: 凭证类型（存入 settings.gemini_key_type）
+    gemini_key_type: 'api_key',
     // BytePlus Asset API 配置（存入 settings）
     byteplus_asset_ak: '',
     byteplus_asset_sk: '',
@@ -1028,6 +1049,8 @@ const EditChannelModal = (props) => {
           data.vertex_key_type = parsedSettings.vertex_key_type || 'json';
           // 读取 AWS 密钥格式和区域
           data.aws_key_type = parsedSettings.aws_key_type || 'ak_sk';
+          // 读取 Gemini 凭证类型
+          data.gemini_key_type = parsedSettings.gemini_key_type || 'api_key';
           // 读取 BytePlus Asset 配置
           data.byteplus_asset_ak = parsedSettings.byteplus_asset_ak || '';
           data.byteplus_asset_sk = parsedSettings.byteplus_asset_sk || '';
@@ -1077,6 +1100,7 @@ const EditChannelModal = (props) => {
           data.region = '';
           data.vertex_key_type = 'json';
           data.aws_key_type = 'ak_sk';
+          data.gemini_key_type = 'api_key';
           data.byteplus_asset_ak = '';
           data.byteplus_asset_sk = '';
           data.byteplus_asset_region = 'ap-southeast-1';
@@ -1105,6 +1129,7 @@ const EditChannelModal = (props) => {
         data.azure_model_responses_versions = '';
         data.vertex_key_type = 'json';
         data.aws_key_type = 'ak_sk';
+        data.gemini_key_type = 'api_key';
         data.byteplus_asset_ak = '';
         data.byteplus_asset_sk = '';
         data.byteplus_asset_region = 'ap-southeast-1';
@@ -1243,6 +1268,8 @@ const EditChannelModal = (props) => {
               base_url: inputs['base_url'],
               type: inputs['type'],
               key: inputs['key'],
+              gemini_key_type:
+                inputs['type'] === 24 ? inputs.gemini_key_type : undefined,
             },
             { skipErrorHandler: true },
           );
@@ -2011,6 +2038,13 @@ const EditChannelModal = (props) => {
       if (localInputs.byteplus_asset_project_name) settings.byteplus_asset_project_name = localInputs.byteplus_asset_project_name;
     }
 
+    // type === 24 (Gemini): 保存 gemini_key_type 到 settings
+    if (localInputs.type === 24) {
+      settings.gemini_key_type = localInputs.gemini_key_type || 'api_key';
+    } else if ('gemini_key_type' in settings) {
+      delete settings.gemini_key_type;
+    }
+
     // type === 41 (Vertex): 始终保存 vertex_key_type 到 settings，避免编辑时被重置
     if (localInputs.type === 41) {
       settings.vertex_key_type = localInputs.vertex_key_type || 'json';
@@ -2110,6 +2144,8 @@ const EditChannelModal = (props) => {
     delete localInputs.vertex_key_type;
     // 顶层的 aws_key_type 不应发送给后端
     delete localInputs.aws_key_type;
+    // 顶层的 gemini_key_type 不应发送给后端
+    delete localInputs.gemini_key_type;
     // 顶层的 BytePlus Asset 配置不应发送给后端
     delete localInputs.byteplus_asset_ak;
     delete localInputs.byteplus_asset_sk;
@@ -3017,6 +3053,37 @@ const EditChannelModal = (props) => {
                       </>
                     )}
 
+                    {inputs.type === 24 && (
+                      <Form.Select
+                        field='gemini_key_type'
+                        label={t('凭证类型')}
+                        placeholder={t('请选择凭证类型')}
+                        optionList={[
+                          { label: 'API Key', value: 'api_key' },
+                          {
+                            label: t('OAuth Token（静态）'),
+                            value: 'oauth_token',
+                          },
+                          {
+                            label: t('OAuth Broker（自动刷新）'),
+                            value: 'oauth_broker',
+                          },
+                        ]}
+                        style={{ width: '100%' }}
+                        value={inputs.gemini_key_type || 'api_key'}
+                        onChange={(value) => {
+                          handleChannelOtherSettingsChange(
+                            'gemini_key_type',
+                            value,
+                          );
+                        }}
+                        extraText={geminiKeyTypeHint(
+                          inputs.gemini_key_type,
+                          t,
+                        )}
+                      />
+                    )}
+
                     {inputs.type === 41 && (
                       <Form.Select
                         field='vertex_key_type'
@@ -3146,7 +3213,10 @@ const EditChannelModal = (props) => {
                                 : t(
                                     '请输入密钥，一行一个，格式：AccessKey|SecretAccessKey|Region',
                                   )
-                              : t('请输入密钥，一行一个')
+                              : inputs.type === 24 &&
+                                  inputs.gemini_key_type === 'oauth_broker'
+                                ? GEMINI_BROKER_KEY_EXAMPLE
+                                : t('请输入密钥，一行一个')
                           }
                           rules={
                             isEdit
@@ -3425,7 +3495,10 @@ const EditChannelModal = (props) => {
                                   : t(
                                       '按照如下格式输入：AccessKey|SecretAccessKey|Region',
                                     )
-                                : t(type2secretPrompt(inputs.type))
+                                : inputs.type === 24 &&
+                                    inputs.gemini_key_type === 'oauth_broker'
+                                  ? GEMINI_BROKER_KEY_EXAMPLE
+                                  : t(type2secretPrompt(inputs.type))
                             }
                             rules={
                               isEdit

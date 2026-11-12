@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -146,7 +147,11 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {
 	channel.SetupApiRequestHeader(info, c, req)
-	req.Set("x-goog-api-key", info.ApiKey)
+	auth, err := service.ResolveGeminiAuth(info.ChannelId, info.ApiKey, info.ChannelOtherSettings.GeminiKeyType, info.ChannelSetting.Proxy)
+	if err != nil {
+		return err
+	}
+	auth.Apply(*req)
 	return nil
 }
 
@@ -222,6 +227,37 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
+	if info.ChannelOtherSettings.GeminiKeyType != dto.GeminiKeyTypeOAuthBroker {
+		return channel.DoApiRequest(a, c, info, requestBody)
+	}
+	return doGeminiOAuthBrokerRequest(a, c, info, requestBody)
+}
+
+// doGeminiOAuthBrokerRequest 在 token 过期竞态（余量内被提前吊销）返回 401 时，作废缓存、换新 token 重放一次；
+// 第二次仍 401 说明是确定性鉴权错误（scope/项目），直接返回，交给常规错误处理与自动禁用。
+func doGeminiOAuthBrokerRequest(a *Adaptor, c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*http.Response, error) {
+	seeker, seekable := requestBody.(io.Seeker)
+	if !seekable && requestBody != nil {
+		body, err := io.ReadAll(requestBody)
+		if err != nil {
+			return nil, fmt.Errorf("read request body failed: %w", err)
+		}
+		reader := bytes.NewReader(body)
+		requestBody, seeker = reader, reader
+	}
+
+	resp, err := channel.DoApiRequest(a, c, info, requestBody)
+	if err != nil || resp.StatusCode != http.StatusUnauthorized {
+		return resp, err
+	}
+	failedToken := strings.TrimPrefix(resp.Request.Header.Get("Authorization"), "Bearer ")
+	_ = resp.Body.Close()
+	service.InvalidateGeminiOAuthToken(info.ApiKey, failedToken)
+	if seeker != nil {
+		if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+			return nil, fmt.Errorf("rewind request body failed: %w", err)
+		}
+	}
 	return channel.DoApiRequest(a, c, info, requestBody)
 }
 
