@@ -24,8 +24,6 @@ var reservedBillableToolNames = map[string]struct{}{
 	"web_fetch":      {},
 	"code_execution": {},
 	"tool_search":    {},
-	// alpha：已暂扣 google_search_grounded_prompt 的内置价（见 tools.go），仍保留为宿主工具名
-	GoogleSearchGroundedPromptTool: {},
 }
 
 // MaxBillableToolCallCount bounds every tool count at settlement, whatever its

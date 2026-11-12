@@ -214,7 +214,8 @@ main-alpha 比官方早占用了 58/59/60 三个号，导致 `ChannelTypeAdvance
 - **commit**：`71977a443`。
 - **位置**：`relay/channel/gemini/relay_gemini_grounding.go`、`relay-gemini.go`、`relay-gemini-native.go`、`setting/operation_setting/tools.go`。
 - **行为**：响应 candidate 的 `groundingMetadata.webSearchQueries` 非空才标记 `gemini_google_search_call`；请求仅声明工具不代表实际执行。该标记供 `service/text_quota.go` 的附加费路径读取。
-- **配置契约**：`googleSearch` / `google_search` 工具名（包括模型覆盖键）统一到内部 `google_search`，保留模型后缀；不是按搜索词数量直接累计调用次数。
+- **2026-11-12 变更**：用户决定改用官方 #203 计费（按去重搜索词数 / grounded prompt），`markGeminiGoogleSearchCall` 与 `gemini_google_search_call` 已删除；本条仅保留价格键归一的契约
+- **配置契约**：`googleSearch` / `google_search` 工具名（包括模型覆盖键）统一到内部 `google_search`，保留模型后缀。
 - **合并时注意**：新 main 的 hosted-tool / BillingUsage 重构也涉及 Gemini 搜索计费，要核对计数与附加费出口，避免保留两条计费路径后重复收费。
 
 ## 四、classic 前端定价设置界面

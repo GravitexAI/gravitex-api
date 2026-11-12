@@ -211,12 +211,6 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 		items = collectToolSurchargeItem(items, dto.BuildInToolWebSearchPreview, 1, summary.ModelName)
 	}
 
-	// alpha：Gemini Google Search grounding 每个成功响应按 1 次计费（markGeminiGoogleSearchCall 写入 ctx）。
-	// Claude 联网搜索已改由 recordClaudeServerToolUse 写入 BuiltInTools，不再读 ctx，避免重复计费
-	if ctx.GetBool("gemini_google_search_call") {
-		items = collectToolSurchargeItem(items, dto.BuildInToolGoogleSearch, 1, summary.ModelName)
-	}
-
 	summary.ToolSurchargeItems = mergeToolSurchargeItems(items)
 	var surcharge decimal.Decimal
 	for _, item := range summary.ToolSurchargeItems {

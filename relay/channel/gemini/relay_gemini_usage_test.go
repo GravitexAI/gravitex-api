@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -17,26 +18,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestMarkGeminiGoogleSearchCallOnlyForGroundedResponse(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-
-	markGeminiGoogleSearchCall(ctx, dto.GeminiChatResponse{
-		Candidates: []dto.GeminiChatCandidate{{
-			GroundingMetadata: &dto.GeminiGroundingMetadata{
-				WebSearchQueries: []string{"latest AI news"},
-			},
-		}},
-	})
-	assert.True(t, ctx.GetBool("gemini_google_search_call"))
-
-	ctx2, _ := gin.CreateTestContext(httptest.NewRecorder())
-	markGeminiGoogleSearchCall(ctx2, dto.GeminiChatResponse{
-		Candidates: []dto.GeminiChatCandidate{{Content: dto.GeminiChatContent{}}},
-	})
-	assert.False(t, ctx2.GetBool("gemini_google_search_call"))
-}
 
 func TestGeminiChatHandlerCompletionTokensExcludeToolUsePromptTokens(t *testing.T) {
 	t.Parallel()
@@ -607,4 +588,105 @@ func TestBuildUsageFromGeminiMetadataKeepsCacheTokensDetails(t *testing.T) {
 	// 模态总量仍然是整个输入的拆分，不因缓存而缩水。
 	require.Equal(t, 1967, usage.PromptTokensDetails.TextTokens)
 	require.Equal(t, 33570, usage.PromptTokensDetails.ImageTokens)
+}
+
+// Google Search grounding records the unique trimmed non-empty queries
+// (webSearchQueries and imageSearchQueries of every candidate, across every
+// stream frame) under google_search and one grounded prompt when any query
+// exists; the tool price table decides which of the two a model pays for.
+func TestGeminiHandlersCountGroundingQueries(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 300
+	t.Cleanup(func() {
+		constant.StreamingTimeout = oldStreamingTimeout
+	})
+	const text = `"content":{"role":"model","parts":[{"text":"ok"}]}`
+	grounded := func(queries int) map[string]int {
+		return map[string]int{dto.BuildInToolGoogleSearch: queries, relaycommon.GoogleSearchGroundedPromptTool: 1}
+	}
+
+	tests := []struct {
+		name   string
+		stream bool
+		frames []string
+		want   map[string]int
+	}{
+		{
+			name:   "native non-stream",
+			frames: []string{`{"candidates":[{` + text + `,"groundingMetadata":{"webSearchQueries":["Shanghai weather today","current weather in Shanghai"],"groundingChunks":[{"web":{"uri":"https://a.example"}}]}}]}`},
+			want:   grounded(2),
+		},
+		{
+			name:   "duplicates, whitespace and empty queries",
+			frames: []string{`{"candidates":[{` + text + `,"groundingMetadata":{"webSearchQueries":["go release",""," go release ","   ","tokyo"]}}]}`},
+			want:   grounded(2),
+		},
+		{
+			name:   "union across candidates",
+			frames: []string{`{"candidates":[{"index":0,` + text + `,"groundingMetadata":{"webSearchQueries":["q1","q2"]}},{"index":1,` + text + `,"groundingMetadata":{"webSearchQueries":["q2","q3"]}}]}`},
+			want:   grounded(3),
+		},
+		{
+			name:   "image queries count like web queries",
+			frames: []string{`{"candidates":[{` + text + `,"groundingMetadata":{"webSearchQueries":["cat breeds","orange cat"],"imageSearchQueries":["orange tabby cat photo","orange cat"]}}]}`},
+			want:   grounded(3),
+		},
+		{
+			name:   "only empty queries",
+			frames: []string{`{"candidates":[{` + text + `,"groundingMetadata":{"webSearchQueries":["","  "],"imageSearchQueries":[""]}}]}`},
+			want:   map[string]int{},
+		},
+		{
+			name:   "no grounding metadata",
+			frames: []string{`{"candidates":[{` + text + `,"finishReason":"STOP"}]}`},
+			want:   map[string]int{},
+		},
+		{
+			name:   "stream union across frames",
+			stream: true,
+			frames: []string{
+				`{"candidates":[{` + text + `,"groundingMetadata":{"webSearchQueries":["q1"]}}]}`,
+				`{"candidates":[{` + text + `,"groundingMetadata":{"webSearchQueries":["q2","q1 "]}}]}`,
+				`{"candidates":[{` + text + `,"groundingMetadata":{"webSearchQueries":["q3"]}}]}`,
+			},
+			want: grounded(3),
+		},
+		{
+			name:   "stream repeats are not added up",
+			stream: true,
+			frames: []string{
+				`{"candidates":[{` + text + `,"groundingMetadata":{"webSearchQueries":["q1","q2"]}}]}`,
+				`{"candidates":[{` + text + `,"groundingMetadata":{"webSearchQueries":["q1","q2"]}}]}`,
+			},
+			want: grounded(2),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-3.7-flash:generateContent", nil)
+			info := &relaycommon.RelayInfo{
+				OriginModelName: "gemini-3.7-flash",
+				ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gemini-3.7-flash"},
+			}
+			var apiErr *types.NewAPIError
+			if tt.stream {
+				body := "data: " + strings.Join(tt.frames, "\ndata: ") + "\ndata: [DONE]\n"
+				_, apiErr = geminiStreamHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(body))}, func(string, *dto.GeminiChatResponse) bool {
+					return true
+				})
+			} else {
+				_, apiErr = GeminiTextGenerationHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(tt.frames[0]))})
+			}
+			require.Nil(t, apiErr)
+			counts := map[string]int{}
+			if info.ResponsesUsageInfo != nil {
+				for name, tool := range info.ResponsesUsageInfo.BuiltInTools {
+					counts[name] = tool.CallCount
+				}
+			}
+			assert.Equal(t, tt.want, counts)
+		})
+	}
 }

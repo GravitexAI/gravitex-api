@@ -52,8 +52,17 @@ func seedHardcodedToolPrices(prices map[string]float64) {
 	prices["web_search_preview:gpt-4o-mini*"] = defaultSearchPreviewModelPrice
 	prices["web_search_preview:gpt-4.1-mini*"] = defaultSearchPreviewModelPrice
 
-	// alpha：暂不采用官方 #203 的 Gemini 2.5/2.0/1.5 搜索内置价（查询免费、grounded prompt $35/千次）。
-	// alpha 仍按"每个响应 1 次 google_search"计费，这些内置价会让老模型的搜索变成免费，待用户决策后再启用。
+	// Google Search grounding (USD per 1K, ai.google.dev/gemini-api/docs/pricing
+	// and cloud.google.com/vertex-ai/generative-ai/pricing): Gemini 3 bills each
+	// search query at $14 (the google_search default); Gemini 2.5 and older bill
+	// $35 per grounded prompt, so their query count is free and the grounded
+	// prompt carries the price.
+	prices["google_search:gemini-2.5*"] = 0
+	prices["google_search:gemini-2.0*"] = 0
+	prices["google_search:gemini-1.5*"] = 0
+	prices["google_search_grounded_prompt:gemini-2.5*"] = 35
+	prices["google_search_grounded_prompt:gemini-2.0*"] = 35
+	prices["google_search_grounded_prompt:gemini-1.5*"] = 35
 
 	// Vendor search tiers, verbatim in the vendor's list currency per 1K
 	// calls. CNY: Zhipu search engines, 0.01/0.03/0.05 CNY per call

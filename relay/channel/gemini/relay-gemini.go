@@ -1847,6 +1847,7 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	// CHZ-PATCH(gemini-usage-fix): 记录流中是否真的产出过 image inlineData，
 	// 供下方 candidatesTokenCount 兜底归类时判断是图片输出还是文本输出
 	var hasImagePart bool
+	var grounding geminiGroundingCounter
 	responseText := strings.Builder{}
 	finishAuditCandidates := make([]dto.GeminiChatCandidate, 0, 1)
 	var latestUsageAuditResponse *dto.GeminiChatResponse
@@ -1858,7 +1859,9 @@ func geminiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			sr.Stop(fmt.Errorf("unmarshal: %w", err))
 			return
 		}
-		markGeminiGoogleSearchCall(c, geminiResponse)
+		// 官方 #203：每帧提交，客户端中断时保留已看到的搜索词
+		grounding.observe(&geminiResponse)
+		grounding.commit(info)
 		if geminiResponse.ResponseId != "" {
 			info.UpstreamResponseId = geminiResponse.ResponseId
 		}
@@ -2083,7 +2086,9 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	info.ObserveResponseModel(gjson.GetBytes(responseBody, "modelVersion").Str)
-	markGeminiGoogleSearchCall(c, geminiResponse)
+	var grounding geminiGroundingCounter
+	grounding.observe(&geminiResponse)
+	grounding.commit(info)
 	info.UpstreamResponseId = geminiResponse.ResponseId
 	if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
 		info.SetUpstreamResponsesField("usageMetadata", geminiResponse.UsageMetadata)
@@ -2463,7 +2468,9 @@ func GeminiImagineImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if jsonErr := common.Unmarshal(responseBody, &geminiResponse); jsonErr != nil {
 		return nil, types.NewOpenAIError(jsonErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
-	markGeminiGoogleSearchCall(c, geminiResponse)
+	var grounding geminiGroundingCounter
+	grounding.observe(&geminiResponse)
+	grounding.commit(info)
 	info.UpstreamResponseId = geminiResponse.ResponseId
 	if geminiResponse.UsageMetadata.TotalTokenCount != 0 {
 		info.SetUpstreamResponsesField("usageMetadata", geminiResponse.UsageMetadata)
