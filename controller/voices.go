@@ -1,10 +1,13 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
+	"github.com/bytedance/gopkg/cache/asynccache"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -158,13 +161,24 @@ func buildVoicesUpstreamRequest(channel *model.Channel) (string, http.Header, er
 	return base + "/v1beta/voices", header, nil
 }
 
-// voicesAccessToken 返回 SA 渠道的 OAuth 访问令牌。复用 vertex 包的
+// voicesTokenCache 缓存 voices 查询用的 SA 访问令牌（30 分钟过期）。官方 #388 把 vertex 包的
+// 共享缓存改成了按令牌有效期缓存且不再导出，这里保留 alpha 原来的独立缓存。
+var voicesTokenCache = asynccache.NewAsyncCache(asynccache.Options{
+	RefreshDuration: time.Minute * 35,
+	EnableExpire:    true,
+	ExpireDuration:  time.Minute * 30,
+	Fetcher: func(key string) (interface{}, error) {
+		return nil, errors.New("not found")
+	},
+})
+
+// voicesAccessToken 返回 SA 渠道的 OAuth 访问令牌。使用本文件的
 // asynccache（渠道粒度、30 分钟过期），避免每次 voices 查询都做一次
 // RSA 签名 + 令牌交换。缓存键与 relay 流程区分开，避免多 key 渠道的
 // 语义混淆。
 func voicesAccessToken(channel *model.Channel, credentials vertex.Credentials, proxy string) (string, error) {
 	cacheKey := fmt.Sprintf("access-token-voices-%d", channel.Id)
-	if val, err := vertex.Cache.Get(cacheKey); err == nil {
+	if val, err := voicesTokenCache.Get(cacheKey); err == nil {
 		if token, ok := val.(string); ok {
 			return token, nil
 		}
@@ -173,7 +187,7 @@ func voicesAccessToken(channel *model.Channel, credentials vertex.Credentials, p
 	if err != nil {
 		return "", err
 	}
-	_ = vertex.Cache.SetDefault(cacheKey, token)
+	_ = voicesTokenCache.SetDefault(cacheKey, token)
 	return token, nil
 }
 

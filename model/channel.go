@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -510,10 +511,12 @@ func BatchInsertChannels(channels []Channel) error {
 	defer func() {
 		if r := recover(); r != nil {
 			tx.Rollback()
+			panic(r)
 		}
 	}()
 
-	for _, chunk := range lo.Chunk(channels, 50) {
+	// Keep each chunk backed by channels so generated IDs reach the caller.
+	for chunk := range slices.Chunk(channels, 50) {
 		if err := tx.Create(&chunk).Error; err != nil {
 			tx.Rollback()
 			return err
@@ -870,6 +873,10 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 		if channelCache == nil {
 			return false
 		}
+		// 官方 #392：请求失败不能覆盖管理员的手动禁用，否则之后可能被自动恢复重新启用
+		if status == common.ChannelStatusAutoDisabled && channelCache.Status == common.ChannelStatusManuallyDisabled {
+			return false
+		}
 	}
 
 	shouldUpdateAbilities := false
@@ -879,6 +886,10 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 		status == common.ChannelStatusManuallyDisabled && reason != ChannelStatusReasonAllKeysDisabled &&
 		channel.GetOtherInfo()["status_reason"] == ChannelStatusReasonAllKeysDisabled
 	if channel.Status == status && !overridesKeyExhaustion {
+		return false
+	}
+	// 官方 #392：本节点缓存可能过期，再按数据库行检查一次手动禁用
+	if status == common.ChannelStatusAutoDisabled && channel.Status == common.ChannelStatusManuallyDisabled {
 		return false
 	}
 

@@ -112,8 +112,9 @@ const (
 )
 
 type ChannelOtherSettings struct {
-	VertexProjectID string     `json:"vertex_project_id,omitempty"` // 仅当 vertex_key_type=api_key 时使用；JSON 模式下从 service account 解析
-	AwsApiType      AwsApiType `json:"aws_api_type,omitempty"`
+	VertexProjectID  string     `json:"vertex_project_id,omitempty"` // 仅当 vertex_key_type=api_key 时使用；JSON 模式下从 service account 解析
+	AwsApiType       AwsApiType `json:"aws_api_type,omitempty"`
+	VertexAPIVersion string     `json:"vertex_api_version,omitempty"` // Google 模型（Gemini、Imagen）请求路径版本（官方 #380）
 	// OllamaOpenAIChat routes Ollama chat completions to the OpenAI-compatible
 	// /v1/chat/completions endpoint. When unset, chat completions keep using
 	// the native /api/chat protocol.
