@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/gin-contrib/sessions"
+	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,6 +21,8 @@ func TestSlaveNodeBlocksAdminAPIRoutes(t *testing.T) {
 	t.Cleanup(func() { common.IsMasterNode = previous })
 
 	engine := gin.New()
+	// UserTokenAuth 依赖 session 中间件（生产在 main 中注册）。
+	engine.Use(sessions.Sessions("test", cookie.NewStore([]byte("test-secret"))))
 	require.NotPanics(t, func() { SetApiRouter(engine) })
 
 	blocked := []struct{ method, path string }{
@@ -41,6 +45,13 @@ func TestSlaveNodeBlocksAdminAPIRoutes(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/usage/token/", nil))
 	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+
+	// 用户令牌管理 /api/token/* 放行：没带凭证时应由 UserTokenAuth 返回 401，而不是 404。
+	for _, path := range []string{"/api/token/", "/api/token/search", "/api/token/1"} {
+		recorder = httptest.NewRecorder()
+		engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		assert.NotEqual(t, http.StatusNotFound, recorder.Code, path)
+	}
 }
 
 // 集群节点必须继续提供 seedance 官方镜像接口：它们挂在独立路由组上，不受 /api 白名单影响。
