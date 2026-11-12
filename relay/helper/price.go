@@ -76,7 +76,10 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hostty
 }
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (hosttypes.PriceData, error) {
-	billingModelName := info.GetBillingModelName()
+	return modelPriceHelperForBillingModel(c, info, info.GetBillingModelName(), promptTokens, meta)
+}
+
+func modelPriceHelperForBillingModel(c *gin.Context, info *relaycommon.RelayInfo, billingModelName string, promptTokens int, meta *types.TokenCountMeta) (hosttypes.PriceData, error) {
 	if imagePricing, ok := ratio_setting.GetImageModelPriceConfig(billingModelName); ok {
 		groupRatioInfo := HandleGroupRatio(c, info)
 		request, _ := info.Request.(*dto.ImageRequest)
@@ -381,6 +384,49 @@ func HasModelBillingConfig(modelName string) bool {
 	}
 	expr, ok := billing_setting.GetBillingExpr(modelName)
 	return ok && strings.TrimSpace(expr) != ""
+}
+
+// ApplyUpstreamModelFallbackPricing re-prices a request at the model the
+// upstream actually served when it differs from the model we sent (second-hand
+// relays silently swapping models). It recomputes info.PriceData through the
+// standard price dispatcher (including tiered expression billing) and is a
+// no-op when no fallback was detected. When the actual model has no billing
+// configuration — or is image-priced, which text settlement cannot honor — the
+// requested model's pricing is kept and the fallback marker records
+// Priced=false so the difference can be reconciled manually. Called by the
+// relay handlers right before service.PostTextConsumeQuota.
+func ApplyUpstreamModelFallbackPricing(c *gin.Context, info *relaycommon.RelayInfo) {
+	if info == nil {
+		return
+	}
+	fb := info.UpstreamModelFallback
+	if fb == nil || fb.ActualModel == "" {
+		return
+	}
+	actual := fb.ActualModel
+	// Image-priced models route ModelPriceHelper into per-image branches that
+	// cast info.Request to *dto.ImageRequest; a text request would break them.
+	if _, hasImageConfig := ratio_setting.GetImageModelPriceConfig(actual); hasImageConfig {
+		fb.Priced = false
+		return
+	}
+	if perImage, hasPerImage := ratio_setting.GetImageModelPricePerImage(actual); hasPerImage && perImage > 0 {
+		fb.Priced = false
+		return
+	}
+	if !HasModelBillingConfig(actual) {
+		fb.Priced = false
+		return
+	}
+	// Drop any tiered snapshot computed for the requested model: if the actual
+	// model is tiered the helper rebuilds the snapshot; otherwise
+	// service.TryTieredSettle must not bill the requested model's expression.
+	info.TieredBillingSnapshot = nil
+	if _, err := modelPriceHelperForBillingModel(c, info, actual, info.GetEstimatePromptTokens(), &types.TokenCountMeta{}); err != nil {
+		fb.Priced = false
+		return
+	}
+	fb.Priced = true
 }
 
 func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billingModelName string, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo hosttypes.GroupRatioInfo) (hosttypes.PriceData, error) {

@@ -111,6 +111,34 @@ func recordClaudeRefusal(info *relaycommon.RelayInfo, data string) {
 	}
 }
 
+// noteClaudeFallbackContentBlock handles the official server-side fallback
+// content block (type == "fallback"). For mid-stream refusals message_start
+// still reports the original model, so the block's to.model is the only swap
+// signal — note it here. The trigger.category decides whether the vendor bills
+// the rejected attempt (bio / frontier_llm / reasoning_extraction do).
+func noteClaudeFallbackContentBlock(info *relaycommon.RelayInfo, block *dto.ClaudeMediaMessage) {
+	if info == nil || block == nil || block.Type != "fallback" {
+		return
+	}
+	if block.To != nil {
+		info.NoteUpstreamResponseModel(block.To.Model)
+	}
+	if block.Trigger != nil && block.Trigger.Category != "" {
+		info.ClaudeFallbackTriggerCategory = block.Trigger.Category
+	}
+}
+
+// noteClaudeUsageIterations captures the per-attempt usage receipt
+// (usage.iterations) of an official server-side fallback response. The final
+// usage event carries the complete array, so later snapshots replace earlier
+// partial ones.
+func noteClaudeUsageIterations(info *relaycommon.RelayInfo, usage *dto.ClaudeUsage) {
+	if info == nil || usage == nil || len(usage.Iterations) == 0 {
+		return
+	}
+	info.ClaudeUsageIterations = usage.Iterations
+}
+
 // captureClaudeFastSpeed 上游 usage.speed 回报 fast 时记为 fast 档位，
 // 由 service.ServiceTierRatio 按快速模式倍率加收；standard 或缺失不改动。
 func captureClaudeFastSpeed(info *relaycommon.RelayInfo, usage *dto.ClaudeUsage) {
@@ -1265,6 +1293,7 @@ func FormatClaudeResponseInfo(info *relaycommon.RelayInfo, claudeResponse *dto.C
 		if claudeResponse.Message != nil && claudeResponse.Message.Usage != nil {
 			info.SetUpstreamResponsesField("usage", claudeResponse.Message.Usage)
 			captureClaudeFastSpeed(info, claudeResponse.Message.Usage)
+			noteClaudeUsageIterations(info, claudeResponse.Message.Usage)
 			claudeInfo.Usage.PromptTokens = claudeResponse.Message.Usage.InputTokens
 			claudeInfo.Usage.UsageSemantic = "anthropic"
 			claudeInfo.Usage.PromptTokensDetails.CachedTokens = claudeResponse.Message.Usage.CacheReadInputTokens
@@ -1288,6 +1317,7 @@ func FormatClaudeResponseInfo(info *relaycommon.RelayInfo, claudeResponse *dto.C
 		if claudeResponse.Usage != nil {
 			info.SetUpstreamResponsesField("usage", claudeResponse.Usage)
 			captureClaudeFastSpeed(info, claudeResponse.Usage)
+			noteClaudeUsageIterations(info, claudeResponse.Usage)
 			claudeInfo.Usage.UsageSemantic = "anthropic"
 			if claudeResponse.Usage.InputTokens > 0 {
 				// 不叠加，只取最新的
@@ -1416,6 +1446,14 @@ func HandleStreamResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		claudeResponse.Message.Usage.ServerToolUse.WebSearchRequests > 0 {
 		c.Set("claude_web_search_requests", claudeResponse.Message.Usage.ServerToolUse.WebSearchRequests)
 	}
+	// 上游换模型检测：必须在 info.UpstreamModelName 被响应模型覆盖之前执行，
+	// 且放在格式分支之前以同时覆盖 Claude 与 OpenAI 两种客户端格式。
+	if claudeResponse.Type == "message_start" && claudeResponse.Message != nil {
+		info.NoteUpstreamResponseModel(claudeResponse.Message.Model)
+	}
+	// 输出中途拒绝的官方回退：message_start 仍是原模型，换模型信号只标记在
+	// fallback 块（from/to）里，这里补一次检测并记录拒绝类别。
+	noteClaudeFallbackContentBlock(info, claudeResponse.ContentBlock)
 	if info.RelayFormat == types.RelayFormatClaude {
 		FormatClaudeResponseInfo(info, &claudeResponse, nil, claudeInfo)
 
@@ -1537,12 +1575,19 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 	}
 	maybeMarkClaudeRefusal(c, claudeResponse.StopReason)
 	recordClaudeRefusal(info, string(data))
+	info.NoteUpstreamResponseModel(claudeResponse.Model)
+	// 官方回退响应：content 里的 fallback 块携带拒绝类别（顶层 model 换模型
+	// 已在上面检测到，这里主要是补 trigger.category 供计费判断）。
+	for i := range claudeResponse.Content {
+		noteClaudeFallbackContentBlock(info, &claudeResponse.Content[i])
+	}
 	if claudeInfo.Usage == nil {
 		claudeInfo.Usage = &dto.Usage{}
 	}
 	if claudeResponse.Usage != nil {
 		info.SetUpstreamResponsesField("usage", claudeResponse.Usage)
 		captureClaudeFastSpeed(info, claudeResponse.Usage)
+		noteClaudeUsageIterations(info, claudeResponse.Usage)
 		claudeInfo.Usage.PromptTokens = claudeResponse.Usage.InputTokens
 		claudeInfo.Usage.CompletionTokens = claudeResponse.Usage.OutputTokens
 		claudeInfo.Usage.CompletionTokenDetails.ReasoningTokens = claudeResponse.Usage.GetThinkingTokens()

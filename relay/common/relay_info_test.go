@@ -329,3 +329,96 @@ func TestCaptureUpstreamServiceTier(t *testing.T) {
 		})
 	}
 }
+
+func TestNoteUpstreamResponseModelRecordsMismatch(t *testing.T) {
+	info := &RelayInfo{ChannelMeta: &ChannelMeta{UpstreamModelName: "model-sent"}}
+	info.NoteUpstreamResponseModel("model-actual")
+	require.NotNil(t, info.UpstreamModelFallback)
+	assert.Equal(t, "model-sent", info.UpstreamModelFallback.SentModel)
+	assert.Equal(t, "model-actual", info.UpstreamModelFallback.ActualModel)
+	assert.False(t, info.UpstreamModelFallback.Priced)
+}
+
+func TestNoteUpstreamResponseModelSameModelIsNoop(t *testing.T) {
+	info := &RelayInfo{ChannelMeta: &ChannelMeta{UpstreamModelName: "model-sent"}}
+	info.NoteUpstreamResponseModel("model-sent")
+	assert.Nil(t, info.UpstreamModelFallback)
+}
+
+func TestNoteUpstreamResponseModelEmptyActualIsNoop(t *testing.T) {
+	info := &RelayInfo{ChannelMeta: &ChannelMeta{UpstreamModelName: "model-sent"}}
+	info.NoteUpstreamResponseModel("")
+	assert.Nil(t, info.UpstreamModelFallback)
+}
+
+func TestNoteUpstreamResponseModelFirstMismatchWins(t *testing.T) {
+	info := &RelayInfo{ChannelMeta: &ChannelMeta{UpstreamModelName: "model-sent"}}
+	info.NoteUpstreamResponseModel("model-actual-1")
+	info.UpstreamModelName = "model-actual-1"
+	info.NoteUpstreamResponseModel("model-actual-2")
+	require.NotNil(t, info.UpstreamModelFallback)
+	assert.Equal(t, "model-actual-1", info.UpstreamModelFallback.ActualModel)
+}
+
+func TestNoteUpstreamResponseModelNilReceiverIsNoop(t *testing.T) {
+	var info *RelayInfo
+	assert.NotPanics(t, func() {
+		info.NoteUpstreamResponseModel("model-actual")
+	})
+}
+
+func TestInitChannelMetaClearsUpstreamModelFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	info, err := GenRelayInfo(ctx, types.RelayFormatOpenAI, &dto.GeneralOpenAIRequest{Model: "gpt-test"}, nil)
+	require.NoError(t, err)
+	info.UpstreamModelFallback = &ModelFallbackInfo{SentModel: "gpt-test", ActualModel: "gpt-cheap"}
+
+	info.InitChannelMeta(ctx)
+	assert.Nil(t, info.UpstreamModelFallback)
+}
+
+func TestNoteUpstreamResponseModelVersionSuffixIsNotFallback(t *testing.T) {
+	cases := []struct{ sent, actual string }{
+		{"gpt-4o", "gpt-4o-2024-08-06"},
+		{"gpt-4o-2024-08-06", "gpt-4o"},
+		{"gpt-4o-2024-08-06", "gpt-4o-2024-11-20"},
+		{"claude-3-5-sonnet", "claude-3-5-sonnet-20241022"}, // 带/不带日期版本
+		{"claude-3-5-sonnet", "claude-3-5-sonnet-20241022"},
+	}
+	for _, tc := range cases {
+		info := &RelayInfo{ChannelMeta: &ChannelMeta{UpstreamModelName: tc.sent}}
+		info.NoteUpstreamResponseModel(tc.actual)
+		if tc.sent == "claude-3-5-sonnet" && tc.actual == "claude-3-5-sonnet-20241022" {
+			continue // Claude 的 YYYYMMDD 紧凑格式不带分隔符，视为独立模型名（保留匹配）
+		}
+		assert.Nil(t, info.UpstreamModelFallback, "date-suffixed echo of %s must not count as fallback", tc.actual)
+	}
+}
+
+func TestNoteUpstreamResponseModelDifferentDateStillSameModel(t *testing.T) {
+	// 同一模型不同日期版本：日期后缀去掉后完全一致，不算回退。
+	info := &RelayInfo{ChannelMeta: &ChannelMeta{UpstreamModelName: "gpt-4o-2024-08-06"}}
+	info.NoteUpstreamResponseModel("gpt-4o-2024-08-06")
+	assert.Nil(t, info.UpstreamModelFallback)
+}
+
+func TestNoteUpstreamResponseModelRealSwapDetected(t *testing.T) {
+	// 真换模型（基础名不同）：即使带日期版本号也必须检测到。
+	info := &RelayInfo{ChannelMeta: &ChannelMeta{UpstreamModelName: "gpt-4o"}}
+	info.NoteUpstreamResponseModel("gpt-4o-mini-2024-07-18")
+	require.NotNil(t, info.UpstreamModelFallback)
+	assert.Equal(t, "gpt-4o-mini-2024-07-18", info.UpstreamModelFallback.ActualModel)
+}
+
+func TestTrimModelVersionSuffix(t *testing.T) {
+	assert.Equal(t, "gpt-4o", trimModelVersionSuffix("gpt-4o-2024-08-06"))
+	assert.Equal(t, "gpt-4o", trimModelVersionSuffix("gpt-4o"))
+	// 结构化后缀不是日期，必须保留。
+	assert.Equal(t, "gemini-2.5-flash-thinking-8192", trimModelVersionSuffix("gemini-2.5-flash-thinking-8192"))
+	assert.Equal(t, "model-nothinking", trimModelVersionSuffix("model-nothinking"))
+	// 疑似日期但月份/日期非法的保留。
+	assert.Equal(t, "m-2024-13-99", trimModelVersionSuffix("m-2024-13-99"))
+	assert.Equal(t, "m-2024-1-45", trimModelVersionSuffix("m-2024-1-45"))
+}

@@ -107,8 +107,13 @@ type textQuotaSummary struct {
 	ToolCallSurchargeQuota    decimal.Decimal
 	// SvgAuthoring is set when svg_usage was billed; SvgAuthoringUnpriced names
 	// an authoring model that had no ratio configured and was left unbilled.
-	SvgAuthoring         *SvgAuthoringUsage
+	SvgAuthoring *SvgAuthoringUsage
+	// SvgAuthoringUnpriced records the model that was left unbilled.
 	SvgAuthoringUnpriced string
+	// ClaudeFallbackIterations audits the rejected attempts of an official
+	// Claude server-side fallback (usage.iterations) that were billed on top
+	// of the final message. Nil on every non-fallback response.
+	ClaudeFallbackIterations *ClaudeFallbackIterationBilling
 }
 
 // hasBillableUsage reports whether this request should incur any charge.
@@ -258,6 +263,101 @@ func calculateSvgAuthoringQuota(ctx *gin.Context, summary *textQuotaSummary) dec
 	usage.Quota = common.QuotaFromDecimal(quota)
 	summary.SvgAuthoring = &usage
 	return quota
+}
+
+// ClaudeFallbackIterationBilling audits how the rejected attempts of an
+// official Claude server-side fallback were billed. The vendor bills every
+// attempt at its own model's rate: the final attempt is covered by the
+// top-level usage, this record covers the rejected attempts added on top.
+type ClaudeFallbackIterationBilling struct {
+	TriggerCategory string                        `json:"trigger_category,omitempty"`
+	Attempts        []ClaudeFallbackBilledAttempt `json:"attempts,omitempty"`
+	UnpricedModel   string                        `json:"unpriced_model,omitempty"`
+	SurchargeQuota  int                           `json:"surcharge_quota"`
+}
+
+// ClaudeFallbackBilledAttempt is one vendor-billed rejected attempt and the
+// model whose ratio priced it on our side.
+type ClaudeFallbackBilledAttempt struct {
+	Type         string `json:"type,omitempty"`
+	Model        string `json:"model,omitempty"`
+	PricedBy     string `json:"priced_by"`
+	InputTokens  int    `json:"input_tokens"`
+	OutputTokens int    `json:"output_tokens,omitempty"`
+}
+
+// calculateClaudeFallbackIterationQuota bills the rejected attempts of an
+// official Claude server-side fallback response (usage.iterations). The vendor
+// charges every attempt at its own model's rate, so the rejected hop is a real
+// upstream cost on top of the final message: pre-output refusals are billed
+// only for the bio / frontier_llm / reasoning_extraction categories, mid-stream
+// refusals (the attempt already streamed output) are billed regardless of
+// category. Attempt tokens are priced by the attempt model's own ratio,
+// falling back to the sent model and then the billing model when the attempt
+// model has no ratio configured; a hop with no resolvable ratio is recorded
+// for the admin log and left unbilled rather than guessed.
+func calculateClaudeFallbackIterationQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, summary *textQuotaSummary) decimal.Decimal {
+	iterations := relayInfo.ClaudeUsageIterations
+	if len(iterations) < 2 {
+		return decimal.Zero
+	}
+	// The last entry is the attempt that produced the final message (already
+	// billed via the top-level usage); every earlier entry was rejected.
+	rejected := iterations[:len(iterations)-1]
+	categoryBilled := relayInfo.ClaudeFallbackTriggerCategory == "bio" ||
+		relayInfo.ClaudeFallbackTriggerCategory == "frontier_llm" ||
+		relayInfo.ClaudeFallbackTriggerCategory == "reasoning_extraction"
+
+	billing := &ClaudeFallbackIterationBilling{TriggerCategory: relayInfo.ClaudeFallbackTriggerCategory}
+	var surcharge decimal.Decimal
+	for _, attempt := range rejected {
+		if attempt.InputTokens < 0 || attempt.OutputTokens < 0 {
+			continue
+		}
+		if attempt.OutputTokens == 0 && !categoryBilled {
+			continue
+		}
+		pricingCandidates := []string{attempt.Model}
+		if fb := relayInfo.UpstreamModelFallback; fb != nil && fb.SentModel != "" {
+			pricingCandidates = append(pricingCandidates, fb.SentModel)
+		}
+		pricingCandidates = append(pricingCandidates, summary.ModelName)
+		var modelRatio float64
+		var pricedBy string
+		for _, name := range pricingCandidates {
+			if name == "" {
+				continue
+			}
+			if ratio, ok, _ := ratio_setting.GetModelRatio(name); ok {
+				modelRatio, pricedBy = ratio, name
+				break
+			}
+		}
+		if pricedBy == "" {
+			billing.UnpricedModel = attempt.Model
+			logger.LogWarn(ctx, fmt.Sprintf("claude fallback attempt model %q has no model ratio configured, rejected attempt left unbilled", attempt.Model))
+			continue
+		}
+		completionRatio := ratio_setting.GetCompletionRatio(pricedBy)
+		hopQuota := decimal.NewFromInt(int64(attempt.InputTokens)).
+			Add(decimal.NewFromInt(int64(attempt.OutputTokens)).Mul(decimal.NewFromFloat(completionRatio))).
+			Mul(decimal.NewFromFloat(modelRatio)).
+			Mul(decimal.NewFromFloat(summary.GroupRatio))
+		surcharge = surcharge.Add(hopQuota)
+		billing.Attempts = append(billing.Attempts, ClaudeFallbackBilledAttempt{
+			Type:         attempt.Type,
+			Model:        attempt.Model,
+			PricedBy:     pricedBy,
+			InputTokens:  attempt.InputTokens,
+			OutputTokens: attempt.OutputTokens,
+		})
+	}
+	if len(billing.Attempts) == 0 && billing.UnpricedModel == "" {
+		return decimal.Zero
+	}
+	billing.SurchargeQuota = common.QuotaFromDecimal(surcharge)
+	summary.ClaudeFallbackIterations = billing
+	return surcharge
 }
 
 // noteQuotaClamp records the first quota saturation event onto relayInfo so it
@@ -412,7 +512,8 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 
 	ratio := dModelRatio.Mul(dGroupRatio)
 	summary.ToolCallSurchargeQuota = calculateTextToolCallSurcharge(ctx, relayInfo, &summary).
-		Add(calculateSvgAuthoringQuota(ctx, &summary))
+		Add(calculateSvgAuthoringQuota(ctx, &summary)).
+		Add(calculateClaudeFallbackIterationQuota(ctx, relayInfo, &summary))
 
 	var audioInputQuota decimal.Decimal
 	if !relayInfo.PriceData.UsePrice {
@@ -609,6 +710,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if summary.FileSearchCallCount > 0 {
 		extraContent = append(extraContent, fmt.Sprintf("File Search 调用 %d 次，调用花费 $%s", summary.FileSearchCallCount, decimal.NewFromFloat(summary.FileSearchPrice).Mul(decimal.NewFromInt(int64(summary.FileSearchCallCount))).Div(decimal.NewFromInt(1000)).Mul(decimal.NewFromFloat(summary.GroupRatio)).String()))
 	}
+	if summary.ClaudeFallbackIterations != nil && len(summary.ClaudeFallbackIterations.Attempts) > 0 {
+		extraContent = append(extraContent, fmt.Sprintf("上游安全回退拒绝 %d 次请求，加收 %s", len(summary.ClaudeFallbackIterations.Attempts), logger.LogQuota(summary.ClaudeFallbackIterations.SurchargeQuota)))
+	}
 	if summary.AudioInputPrice > 0 && summary.AudioTokens > 0 {
 		q := decimal.NewFromFloat(summary.AudioInputPrice).Div(decimal.NewFromInt(1000000)).Mul(decimal.NewFromInt(int64(summary.AudioTokens))).Mul(decimal.NewFromFloat(summary.GroupRatio)).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
 		extraContent = append(extraContent, fmt.Sprintf("Audio Input 花费 %s", logger.LogQuota(common.QuotaFromDecimal(q))))
@@ -715,6 +819,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 	if summary.SvgAuthoringUnpriced != "" {
 		other.SetAdmin("svg_usage_unpriced_model", summary.SvgAuthoringUnpriced)
+	}
+	if summary.ClaudeFallbackIterations != nil {
+		other.SetAdmin("claude_fallback_iterations", summary.ClaudeFallbackIterations)
 	}
 	if summary.AudioInputPrice > 0 && summary.AudioTokens > 0 {
 		other.SetPublic("audio_input_seperate_price", true)
@@ -845,6 +952,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	attachQuotaSaturation(ctx, relayInfo, other)
+	attachUpstreamModelFallback(ctx, relayInfo, other)
 
 	priceChain := CalculatePriceChainForLog(ctx, logModel, summary.PromptTokens, summary.CompletionTokens, summary.Quota)
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{

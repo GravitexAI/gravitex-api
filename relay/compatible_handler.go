@@ -90,6 +90,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		if containAudioTokens && containsAudioRatios {
 			service.PostAudioConsumeQuota(c, info, usage, "")
 		} else {
+			helper.ApplyUpstreamModelFallbackPricing(c, info)
 			service.PostTextConsumeQuota(c, info, usage, nil)
 		}
 		return nil
@@ -236,6 +237,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 	if containAudioTokens && containsAudioRatios {
 		service.PostAudioConsumeQuota(c, info, usage.(*dto.Usage), "")
 	} else {
+		helper.ApplyUpstreamModelFallbackPricing(c, info)
 		service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
 	}
 	return nil

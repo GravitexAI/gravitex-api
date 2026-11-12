@@ -58,6 +58,32 @@ func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, o
 		clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, relayInfo.UserId, relayInfo.GetBillingModelName()))
 }
 
+// attachUpstreamModelFallback records an upstream model swap (second-hand
+// relays serving a different model than requested) onto the consume log's
+// other.admin_info and emits a request-correlated warning. Priced=false means
+// the actual model has no billing config on our side, so the requested
+// model's price was kept and the difference needs manual reconciliation.
+// Called right before RecordConsumeLog on the text paths.
+func attachUpstreamModelFallback(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
+	if relayInfo == nil {
+		return
+	}
+	fb := relayInfo.UpstreamModelFallback
+	if fb == nil {
+		return
+	}
+	if other != nil {
+		other.SetAdmin("model_fallback", map[string]any{
+			"requested_model": relayInfo.OriginModelName,
+			"sent_model":      fb.SentModel,
+			"actual_model":    fb.ActualModel,
+			"priced":          fb.Priced,
+		})
+	}
+	logger.LogWarn(ctx, fmt.Sprintf("upstream model fallback: requested=%s sent=%s actual=%s priced=%t user=%d channel=%d",
+		relayInfo.OriginModelName, fb.SentModel, fb.ActualModel, fb.Priced, relayInfo.UserId, relayInfo.GetChannelID()))
+}
+
 func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
 	if other == nil {
 		return

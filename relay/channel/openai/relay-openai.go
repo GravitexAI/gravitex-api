@@ -230,10 +230,13 @@ func captureOpenAIStreamUsage(info *relaycommon.RelayInfo, data string) {
 	}
 	var streamResponse struct {
 		Usage json.RawMessage `json:"usage"`
+		Model string          `json:"model"`
 	}
 	if err := common.Unmarshal(common.StringToByteSlice(data), &streamResponse); err != nil {
 		return
 	}
+	// OpenAI 在每个 SSE chunk 都带 model 字段，逐 chunk 检测上游换模型。
+	info.NoteUpstreamResponseModel(streamResponse.Model)
 	var usage dto.Usage
 	if err := common.Unmarshal(streamResponse.Usage, &usage); err != nil {
 		return
@@ -277,6 +280,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	info.UpstreamResponseId = simpleResponse.Id
+	info.NoteUpstreamResponseModel(simpleResponse.Model)
 	info.CaptureUpstreamServiceTier(responseBody)
 	if service.ValidUsage(&simpleResponse.Usage) {
 		info.SetUpstreamResponsesField("usage", simpleResponse.Usage)

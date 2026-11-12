@@ -181,3 +181,43 @@ func TestOaiChatToResponsesHandlerRecordsRawAndConvertedUsage(t *testing.T) {
 	require.Equal(t, 39, upstreamUsage.PromptTokens)
 	require.Equal(t, 276, upstreamUsage.CompletionTokens)
 }
+
+func TestCaptureOpenAIStreamUsageDetectsModelFallback(t *testing.T) {
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "model-requested"}}
+
+	captureOpenAIStreamUsage(info, `{"id":"chatcmpl-1","model":"model-requested","choices":[]}`)
+	require.Nil(t, info.UpstreamModelFallback)
+
+	captureOpenAIStreamUsage(info, `{"id":"chatcmpl-2","model":"model-swapped","choices":[]}`)
+	require.NotNil(t, info.UpstreamModelFallback)
+	require.Equal(t, "model-requested", info.UpstreamModelFallback.SentModel)
+	require.Equal(t, "model-swapped", info.UpstreamModelFallback.ActualModel)
+
+	// 第一个不一致之后不再覆盖（first-mismatch-wins）。
+	captureOpenAIStreamUsage(info, `{"id":"chatcmpl-3","model":"model-other","choices":[]}`)
+	require.Equal(t, "model-swapped", info.UpstreamModelFallback.ActualModel)
+}
+
+func TestOpenaiHandlerDetectsModelFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatOpenAI,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "model-requested"},
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(`{
+			"id":"chatcmpl-swap","object":"chat.completion","created":1786516441,"model":"model-swapped",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}
+		}`)),
+	}
+
+	_, apiErr := OpenaiHandler(c, info, resp)
+	require.Nil(t, apiErr)
+	require.NotNil(t, info.UpstreamModelFallback)
+	require.Equal(t, "model-requested", info.UpstreamModelFallback.SentModel)
+	require.Equal(t, "model-swapped", info.UpstreamModelFallback.ActualModel)
+}

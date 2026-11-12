@@ -168,6 +168,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 			return newApiErr
 		}
 
+		helper.ApplyUpstreamModelFallbackPricing(c, info)
 		service.PostTextConsumeQuota(c, info, usage, nil)
 		return nil
 	}
@@ -239,6 +240,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return newAPIError
 	}
 
+	helper.ApplyUpstreamModelFallbackPricing(c, info)
 	service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil)
 	return nil
 }

@@ -39,6 +39,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	info.UpstreamResponseId = responsesResponse.ID
+	info.NoteUpstreamResponseModel(responsesResponse.Model)
 	info.CaptureUpstreamServiceTier(responseBody)
 
 	// 写入新的 response body（Meta 的整数值浮点时间戳先归一化为整数再透传）
@@ -118,6 +119,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
 			sr.Error(err)
 			return
+		}
+		// 上游换模型检测：response.created/completed 等携带完整 Response 的事件里都带 model。
+		if streamResponse.Response != nil {
+			info.NoteUpstreamResponseModel(streamResponse.Response.Model)
 		}
 		if !flushed {
 			switch streamResponse.Type {

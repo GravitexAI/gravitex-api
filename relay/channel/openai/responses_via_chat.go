@@ -35,6 +35,7 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	info.CaptureUpstreamServiceTier(body)
+	info.NoteUpstreamResponseModel(chatResp.Model)
 	if service.ValidUsage(&chatResp.Usage) {
 		info.SetUpstreamResponsesField("usage", chatResp.Usage)
 	}
