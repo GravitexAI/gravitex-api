@@ -1054,14 +1054,7 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool, rawMirror bool) [
 		task.TaskID, ti.Status, ti.Progress, ti.CompletionTokens, ti.TotalTokens))
 
 	if ti.Status == model.TaskStatusSuccess || ti.Status == model.TaskStatusFailure {
-		if ti.Status == model.TaskStatusFailure && task.Status != model.TaskStatusFailure {
-			// 上游失败交给后台轮询的同一套流程收尾（CAS 切换终态 + 退还预扣 + 失败日志）。
-			// 直接在这里写 FAILURE 会让后台轮询不再拉取该任务，预扣额度永远不退。
-			// updateVideoSingleTask 会原地更新 task，下方响应按收尾后的状态输出。
-			upstreamID := task.GetUpstreamTaskID()
-			service.DispatchPlatformUpdate(context.Background(), task.Platform,
-				map[int][]string{task.ChannelId: {upstreamID}}, map[string]*model.Task{upstreamID: task})
-		} else if CompleteVideoTaskOnUpstreamSuccessFn != nil && (task.Status != model.TaskStatus(ti.Status) || task.Quota == 0) {
+		if CompleteVideoTaskOnUpstreamSuccessFn != nil && (task.Status != model.TaskStatus(ti.Status) || task.Quota == 0) {
 			if err := CompleteVideoTaskOnUpstreamSuccessFn(context.Background(), task, channelModel, ti, body); err != nil {
 				common.SysLog(fmt.Sprintf("[VideoFetch] task=%s complete handler failed: %v", task.TaskID, err))
 				return nil
