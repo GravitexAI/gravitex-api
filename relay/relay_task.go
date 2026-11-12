@@ -1023,6 +1023,16 @@ func tryRealtimeFetch(task *model.Task, isOpenAIVideoAPI bool, rawMirror bool) [
 		return nil
 	}
 
+	// 官方 #297：轮询请求同样应用渠道请求头覆盖
+	adaptor.Init(&relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
+		ChannelType:     channelModel.Type,
+		ChannelId:       channelModel.Id,
+		ChannelBaseUrl:  baseURL,
+		ApiKey:          channelModel.Key,
+		ChannelSetting:  channelModel.GetSetting(),
+		HeadersOverride: channelModel.GetHeaderOverride(),
+	}})
+
 	resp, err := fetchTaskForPolling(adaptor, baseURL, channelModel.Key, task, map[string]any{
 		"task_id": task.GetUpstreamTaskID(),
 		"action":  task.Action,

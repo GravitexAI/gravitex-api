@@ -1,7 +1,6 @@
 package service
 
 import (
-	"math"
 	"strings"
 
 	"net/http"
@@ -10,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 )
@@ -76,10 +76,15 @@ func buildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	cc1h := float64(0)
 
 	if usage.UsageSemantic == "anthropic" {
-		// cache_creation_input_tokens 是 5m+1h 总量；上游未拆分或拆分不全时，
-		// 剩余部分并入 cc 按 5m 写入价计费，与倍率计费路径的 remaining 口径一致。
-		cc1h = float64(usage.ClaudeCacheCreation1hTokens)
-		cc5m = math.Max(float64(usage.ClaudeCacheCreation5mTokens), cc5m-cc1h)
+		// Upstreams may report the cache-write total without a full 5m/1h
+		// split; the unlabelled remainder is billed as 5m writes.
+		split5m, split1h := relayconvert.NormalizeCacheCreationSplit(
+			usage.PromptTokensDetails.CacheCreationTokensTotal(),
+			usage.ClaudeCacheCreation5mTokens,
+			usage.ClaudeCacheCreation1hTokens,
+		)
+		cc5m = float64(split5m)
+		cc1h = float64(split1h)
 	}
 
 	// OpenAI 12h 缓存写入（cache_write_tokens_details.ttl_12h_tokens）按 30m

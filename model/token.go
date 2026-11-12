@@ -36,6 +36,8 @@ type Token struct {
 	// AutoGroups 官方自动分组功能：auto 分组下可指定候选分组列表（JSON 数组存 text 列）
 	AutoGroups string         `json:"-" gorm:"type:text"`
 	DeletedAt  gorm.DeletedAt `gorm:"index"`
+	// 允许用此令牌查询所属用户的额度；新建令牌默认开启，已有令牌升级后保持关闭（官方 #265）
+	AllowUserQuotaQuery bool `json:"allow_user_quota_query" gorm:"default:false"`
 }
 
 func (token *Token) GetAutoGroups() ([]string, error) {
@@ -326,7 +328,8 @@ func (token *Token) Update() (err error) {
 	}
 	return DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
 		"model_limits_enabled", "model_limits", "vendor_limits", "allow_ips", "group", "cross_group_retry",
-		"daily_spend_threshold", "auto_groups", "remake").Updates(token).Error
+		"daily_spend_threshold", "auto_groups", "remake",
+		"allow_user_quota_query").Updates(token).Error
 }
 
 func (token *Token) SelectUpdate() (err error) {

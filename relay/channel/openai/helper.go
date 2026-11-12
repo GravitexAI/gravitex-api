@@ -241,10 +241,10 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 	}
 }
 
-func sendResponsesStreamData(c *gin.Context, streamResponse dto.ResponsesStreamResponse, data string) {
+func sendResponsesStreamData(c *gin.Context, streamResponse dto.ResponsesStreamResponse, data string) error {
 	if data == "" {
-		return
+		return nil
 	}
-	// Meta 的整数值浮点时间戳归一化为整数后透传
-	_ = helper.ResponseChunkData(c, streamResponse, normalizeResponsesEventTimestamps(data))
+	// Meta 的整数值浮点时间戳归一化为整数后透传；官方 #311：写失败时返回错误以结束流
+	return helper.ResponseChunkData(c, streamResponse, normalizeResponsesEventTimestamps(data))
 }

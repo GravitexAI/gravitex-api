@@ -210,6 +210,14 @@ func SetRelayRouter(router *gin.Engine) {
 			controller.Relay(c, types.RelayFormatOpenAIAlphaSearch)
 		})
 
+		// DeepSeek Search and Fetch API routes
+		httpRouter.POST("/tools/search", func(c *gin.Context) {
+			controller.Relay(c, types.RelayFormatDeepSeekTools)
+		})
+		httpRouter.POST("/tools/fetch", func(c *gin.Context) {
+			controller.Relay(c, types.RelayFormatDeepSeekTools)
+		})
+
 		// image related routes（alpha：不注册官方 openai_image 插件协议，图片统一走 ImageHelper）
 		httpRouter.POST("/edits", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIImage)

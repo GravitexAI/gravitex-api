@@ -104,7 +104,16 @@ const (
 	AwsKeyTypeApiKey AwsKeyType = "api_key"
 )
 
+type AwsApiType string
+
+const (
+	AwsApiTypeInvokeModel AwsApiType = "invoke_model"
+	AwsApiTypeMantle      AwsApiType = "mantle"
+)
+
 type ChannelOtherSettings struct {
+	VertexProjectID string     `json:"vertex_project_id,omitempty"` // 仅当 vertex_key_type=api_key 时使用；JSON 模式下从 service account 解析
+	AwsApiType      AwsApiType `json:"aws_api_type,omitempty"`
 	// OllamaOpenAIChat routes Ollama chat completions to the OpenAI-compatible
 	// /v1/chat/completions endpoint. When unset, chat completions keep using
 	// the native /api/chat protocol.
@@ -288,6 +297,8 @@ const (
 	advancedCustomEndpointPathOpenAIResponses        = "/v1/responses"
 	advancedCustomEndpointPathOpenAIResponsesCompact = "/v1/responses/compact"
 	advancedCustomEndpointPathOpenAIAlphaSearch      = "/v1/alpha/search"
+	advancedCustomEndpointPathDeepSeekToolsSearch    = "/v1/tools/search"
+	advancedCustomEndpointPathDeepSeekToolsFetch     = "/v1/tools/fetch"
 	advancedCustomEndpointPathClaudeMessages         = "/v1/messages"
 	advancedCustomEndpointPathJinaRerank             = "/v1/rerank"
 	advancedCustomEndpointPathImageGeneration        = "/v1/images/generations"
@@ -413,6 +424,10 @@ func advancedCustomEndpointTypeFromIncomingPath(incomingPath string) (types.Endp
 		return types.EndpointTypeOpenAIResponseCompact, true
 	case advancedCustomEndpointPathOpenAIAlphaSearch:
 		return types.EndpointTypeOpenAIAlphaSearch, true
+	case advancedCustomEndpointPathDeepSeekToolsSearch:
+		return types.EndpointTypeDeepSeekToolsSearch, true
+	case advancedCustomEndpointPathDeepSeekToolsFetch:
+		return types.EndpointTypeDeepSeekToolsFetch, true
 	case advancedCustomEndpointPathClaudeMessages:
 		return types.EndpointTypeAnthropic, true
 	case advancedCustomEndpointPathJinaRerank:

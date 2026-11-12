@@ -53,6 +53,8 @@ func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIErro
 		err = relay.ResponsesHelper(c, info)
 	case relayconstant.RelayModeAlphaSearch:
 		err = relay.AlphaSearchHelper(c, info)
+	case relayconstant.RelayModeToolsSearch, relayconstant.RelayModeToolsFetch:
+		err = relay.DeepSeekToolsHelper(c, info)
 	default:
 		err = relay.TextHelper(c, info)
 	}
@@ -94,17 +96,26 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", common.LocalLogPreview(newAPIError.Error())))
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
+			upstreamURLs := common.UpstreamAddresses(c)
+			if relayFormat != types.RelayFormatOpenAIRealtime && c.Writer.Written() &&
+				strings.HasPrefix(c.Writer.Header().Get("Content-Type"), "text/event-stream") {
+				writeRelayStreamError(c, relayFormat, newAPIError)
+				return
+			}
+			if relayFormat != types.RelayFormatOpenAIRealtime {
+				c.Header("Content-Type", "application/json; charset=utf-8")
+			}
 			switch relayFormat {
 			case types.RelayFormatOpenAIRealtime:
-				helper.WssError(c, ws, newAPIError.ToOpenAIError())
+				helper.WssError(c, ws, newAPIError.ToOpenAIError(upstreamURLs...))
 			case types.RelayFormatClaude:
 				c.JSON(newAPIError.StatusCode, gin.H{
 					"type":  "error",
-					"error": newAPIError.ToClaudeError(),
+					"error": newAPIError.ToClaudeError(upstreamURLs...),
 				})
 			default:
 				c.JSON(newAPIError.StatusCode, gin.H{
-					"error": newAPIError.ToOpenAIError(),
+					"error": newAPIError.ToOpenAIError(upstreamURLs...),
 				})
 			}
 		}
@@ -1095,4 +1106,21 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskEr
 		return false
 	}
 	return true
+}
+
+func writeRelayStreamError(c *gin.Context, format types.RelayFormat, apiError *types.NewAPIError) {
+	// 心跳提交响应头后，最终错误继续通过同一个流返回。
+	status, _ := common.GetContextKeyType[*relaycommon.StreamStatus](c, constant.ContextKeyResponseStreamStatus)
+	if status == nil {
+		status = relaycommon.NewStreamStatus()
+		common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, status)
+	}
+	status.MarkFailed(string(apiError.GetErrorCode()), string(apiError.GetErrorType()), apiError.StatusCode)
+	upstreamURLs := common.UpstreamAddresses(c)
+	if format == types.RelayFormatClaude {
+		_ = helper.ClaudeData(c, dto.ClaudeResponse{Type: "error", Error: apiError.ToClaudeError(upstreamURLs...)})
+		return
+	}
+	_ = helper.ObjectData(c, gin.H{"error": apiError.ToOpenAIError(upstreamURLs...)})
+	helper.Done(c)
 }

@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -437,6 +439,8 @@ func runTokenMigrationCompatibilityTest(t *testing.T, db *gorm.DB, dialect strin
 	if migratedToken.AutoGroups != "" {
 		t.Fatalf("expected legacy token to inherit global Auto groups, got %q", migratedToken.AutoGroups)
 	}
+	require.True(t, db.Migrator().HasColumn(&model.Token{}, "allow_user_quota_query"))
+	assert.False(t, migratedToken.AllowUserQuotaQuery, "tokens created before the upgrade keep user quota queries off")
 
 	inserted := model.Token{
 		UserId:             8,
@@ -687,3 +691,7 @@ func TestGetTokenKeyRequiresOwnershipAndReturnsFullKey(t *testing.T) {
 		t.Fatalf("unauthorized key response leaked raw token key: %s", unauthorizedRecorder.Body.String())
 	}
 }
+
+
+
+

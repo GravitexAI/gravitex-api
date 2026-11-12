@@ -26,3 +26,11 @@ func TestMaskSensitiveInfo(t *testing.T) {
 		})
 	}
 }
+
+// 官方 #275 新增的凭据与 IPv6 遮挡在 alpha「全部域名遮挡」策略下同样生效。
+func TestMaskSensitiveInfoMasksCredentialsAndIPv6(t *testing.T) {
+	assert.Equal(t, `invalid api_key:***`, MaskSensitiveInfo(`invalid api_key:AIzaSyAAAaUooTUni8AdaOkSRMda30n_Q4vrV70`))
+	assert.Equal(t, `dial tcp [***]:443: i/o timeout`, MaskSensitiveInfo(`dial tcp [2a01:4f8::1]:443: i/o timeout`))
+	assert.Equal(t, `Post "https://***.com/***/***?client_secret=***&grant_type=***": timeout`,
+		MaskSensitiveInfo(`Post "https://aip.baidubce.com/oauth/token?grant_type=client_credentials&client_secret=s": timeout`, "https://custom.example"))
+}

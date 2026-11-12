@@ -25,6 +25,7 @@ var ModelList = []string{
 	"flux-dev",
 	"fun-asr-realtime-2025-11-07",
 	"text-embedding-v1",
+	"qwen3-vl-embedding",
 	"gte-rerank-v2",
 }
 

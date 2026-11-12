@@ -1,7 +1,7 @@
 module github.com/QuantumNous/new-api
 
-// +heroku goVersion go1.18
-go 1.26
+// +heroku goVersion go1.26.10
+go 1.26.10
 
 require (
 	github.com/Calcium-Ion/go-epay v0.0.5
@@ -32,7 +32,7 @@ require (
 	github.com/jfreymuth/oggvorbis v1.0.5
 	github.com/jinzhu/copier v0.4.0
 	github.com/joho/godotenv v1.5.1
-	github.com/klauspost/compress v1.18.0
+	github.com/klauspost/compress v1.18.7
 	github.com/mewkiz/flac v1.0.13
 	github.com/nicksnyder/go-i18n/v2 v2.6.1
 	github.com/pkg/errors v0.9.1
@@ -105,7 +105,7 @@ require (
 require (
 	github.com/DmitriyVTitov/size v1.5.0 // indirect
 	github.com/anknown/darts v0.0.0-20151216065714-83ff685239e6 // indirect
-	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.21 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.21 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -178,7 +178,7 @@ require (
 )
 
 require (
-	github.com/Calcium-Ion/moejs v0.1.0-alpha.6
+	github.com/Calcium-Ion/moejs v0.1.0-alpha.7
 	github.com/QuantumNous/new-api/relaykit v0.0.0
 	github.com/QuantumNous/new-api/tokenkit v0.0.0
 	github.com/openai/openai-go v1.12.0

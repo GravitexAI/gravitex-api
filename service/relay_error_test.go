@@ -106,6 +106,7 @@ func TestProcessChannelErrorMasksDisableReasonAndNotification(t *testing.T) {
 	notifyLimitStore.Delete(notifyKey)
 	t.Cleanup(func() { notifyLimitStore.Delete(notifyKey) })
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, "https://private.example.com")
 	apiErr := types.NewErrorWithStatusCode(errors.New("upstream https://private.example.com/path?token=review-token api_key:review-secret"), types.ErrorCodeChannelNoAvailableKey, http.StatusUnauthorized)
 	ProcessChannelError(c, types.ChannelError{ChannelId: channel.Id, ChannelName: channel.Name, AutoBan: true}, apiErr, nil)
 	var notification WebhookPayload
@@ -125,6 +126,7 @@ func TestProcessChannelErrorMasksDisableReasonAndNotification(t *testing.T) {
 	assert.NotContains(t, notification.Content, "review-secret")
 	assert.Equal(t, http.StatusUnauthorized, apiErr.StatusCode)
 }
+
 
 func TestDecideRelayRetryReasons(t *testing.T) {
 	upstream := func(status int) *types.NewAPIError {

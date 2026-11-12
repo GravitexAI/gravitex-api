@@ -66,7 +66,7 @@ if redis.call('EXISTS', KEYS[2]) == 1 then
   return 0
 end
 if redis.call('EXISTS', KEYS[1]) == 1 then
-  redis.call('EXPIRE', KEYS[1], ARGV[17])
+  redis.call('EXPIRE', KEYS[1], ARGV[18])
   return 2
 end
 redis.call('HSET', KEYS[1],
@@ -75,7 +75,7 @@ redis.call('HSET', KEYS[1],
   'UnlimitedQuota', ARGV[8], 'ModelLimitsEnabled', ARGV[9], 'ModelLimits', ARGV[10],
   'AllowIps', ARGV[11], 'Group', ARGV[12], 'CrossGroupRetry', ARGV[13],
   'AutoGroups', ARGV[14], 'RemainQuota', ARGV[15], 'UsedQuota', ARGV[16],
-  'VendorLimits', ARGV[17])
+  'VendorLimits', ARGV[17], 'AllowUserQuotaQuery', ARGV[19])
 redis.call('EXPIRE', KEYS[1], ARGV[18])
 return 1`
 
@@ -89,6 +89,8 @@ return 1`
 		token.AutoGroups, token.RemainQuota, token.UsedQuota,
 		token.VendorLimits,
 		tokenCacheTTLSeconds(),
+		// ARGV[19]：官方 #265 新增字段放在 TTL 之后，避免挪动 alpha 已有参数位置
+		strconv.FormatBool(token.AllowUserQuotaQuery),
 	).Int()
 }
 

@@ -44,6 +44,8 @@ func (input *tokenAutoGroupsInput) UnmarshalJSON(data []byte) error {
 type tokenRequest struct {
 	model.Token
 	AutoGroups tokenAutoGroupsInput `json:"auto_groups"`
+	// 指针区分“未传”和显式 false：新建时未传即开启，更新时未传则保留原值。
+	AllowUserQuotaQuery *bool `json:"allow_user_quota_query"`
 }
 
 // tokenResponse 把库里存 JSON 字符串的 auto_groups 以数组形式返回给前端。
@@ -268,21 +270,40 @@ func GetTokenUsage(c *gin.Context) {
 		expiredAt = 0
 	}
 
+	data := gin.H{
+		"object":               "token_usage",
+		"name":                 token.Name,
+		"total_granted":        token.RemainQuota + token.UsedQuota,
+		"total_used":           token.UsedQuota,
+		"total_available":      token.RemainQuota,
+		"unlimited_quota":      token.UnlimitedQuota,
+		"model_limits":         token.GetModelLimitsMap(),
+		"model_limits_enabled": token.ModelLimitsEnabled,
+		"vendor_limits":        token.GetVendorLimitsMap(),
+		"expires_at":           expiredAt,
+	}
+	// 官方 #265：用户额度只在令牌允许时返回
+	if token.AllowUserQuotaQuery {
+		userQuota, err := model.GetUserQuota(token.UserId, false)
+		var userUsedQuota int
+		if err == nil {
+			userUsedQuota, err = model.GetUserUsedQuota(token.UserId)
+		}
+		if err != nil {
+			common.SysError(common.LogText("failed to get user quota: %s", err.Error()))
+			common.ApiErrorI18n(c, i18n.MsgTokenGetInfoFailed)
+			return
+		}
+		data["user_quota"] = gin.H{
+			"total_available": userQuota,
+			"total_used":      userUsedQuota,
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    true,
 		"message": "ok",
-		"data": gin.H{
-			"object":               "token_usage",
-			"name":                 token.Name,
-			"total_granted":        token.RemainQuota + token.UsedQuota,
-			"total_used":           token.UsedQuota,
-			"total_available":      token.RemainQuota,
-			"unlimited_quota":      token.UnlimitedQuota,
-			"model_limits":         token.GetModelLimitsMap(),
-			"model_limits_enabled": token.ModelLimitsEnabled,
-			"vendor_limits":        token.GetVendorLimitsMap(),
-			"expires_at":           expiredAt,
-		},
+		"data":    data,
 	})
 }
 
@@ -417,6 +438,7 @@ func AddToken(c *gin.Context) {
 		DailySpendThreshold: token.DailySpendThreshold,
 		AutoGroups:          token.AutoGroups,
 	}
+	cleanToken.AllowUserQuotaQuery = request.AllowUserQuotaQuery == nil || *request.AllowUserQuotaQuery
 	err = cleanToken.Insert()
 	if err != nil {
 		common.ApiError(c, err)

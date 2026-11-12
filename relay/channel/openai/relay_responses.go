@@ -127,7 +127,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		if streamResponse.Response != nil {
 			data = string(rewriteSGLangResponsesCreatedAt(info, []byte(data), "response.created_at", streamResponse.Response.CreatedAt))
 		}
-		sendResponsesStreamData(c, streamResponse, data)
 		// alpha：完成事件上记录上游响应 ID、服务等级与原始 usage（计费审计用）
 		if (streamResponse.Type == "response.completed" || streamResponse.Type == "response.done") && streamResponse.Response != nil {
 			info.UpstreamResponseId = streamResponse.Response.ID
@@ -142,6 +141,14 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 		// 官方：用量、工具/图片计数、协议结果统一交给 accumulator
 		accumulator.Observe(&streamResponse, common.StringToByteSlice(data))
+		if err := sendResponsesStreamData(c, streamResponse, data); err != nil {
+			sr.Stop(err)
+			return
+		}
+		if (streamResponse.Type == "response.completed" || streamResponse.Type == "response.done") &&
+			streamResponse.Response != nil && info.StreamStatus.ResponseOutcome() == string(relaycommon.ResponseOutcomeCompleted) {
+			sr.Done()
+		}
 	})
 
 	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)

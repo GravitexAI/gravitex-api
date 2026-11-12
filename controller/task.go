@@ -237,10 +237,11 @@ func initTaskArtifactAdaptor(task *model.Task) (relaychannel.TaskAdaptor, error)
 	channelSetting.Proxy = channelModel.GetDialProxy()
 	adaptor.Init(&relaycommon.RelayInfo{
 		ChannelMeta: &relaycommon.ChannelMeta{
-			ChannelType:    channelModel.Type,
-			ChannelBaseUrl: baseURL,
-			ApiKey:         pluginKey,
-			ChannelSetting: channelSetting,
+			ChannelType:     channelModel.Type,
+			ChannelBaseUrl:  baseURL,
+			ApiKey:          pluginKey,
+			ChannelSetting:  channelSetting,
+			HeadersOverride: channelModel.GetHeaderOverride(),
 		},
 	})
 	return adaptor, nil

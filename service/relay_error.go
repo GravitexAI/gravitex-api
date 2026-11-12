@@ -64,9 +64,10 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 	if err == nil {
 		return
 	}
-	logger.LogError(c, common.LogText("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.MaskSensitiveErrorWithStatusCode())))
+	upstreamURLs := common.UpstreamAddresses(c)
+	logger.LogError(c, common.LogText("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.MaskSensitiveErrorWithStatusCode(upstreamURLs...))))
 	if ShouldDisableChannel(err) && channelError.AutoBan {
-		reason := err.MaskSensitiveErrorWithStatusCode()
+		reason := err.MaskSensitiveErrorWithStatusCode(upstreamURLs...)
 		gopool.Go(func() {
 			DisableChannel(channelError, reason)
 		})
