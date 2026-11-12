@@ -105,6 +105,13 @@ func (a *taskPollingFetchAdaptor) initializedChannelType() int {
 	return a.channelType
 }
 
+func TestRedactVideoResponseBodyKeepsUntouchedBytes(t *testing.T) {
+	body := []byte(`{"name":"op","response":{"videos":[{"uri":"u","bytesBase64Encoded":"x"}],"durationSeconds":8.0,"bytesBase64Encoded":"y"},"done":true}`)
+
+	// alpha：保留 bytesBase64Encoded（Vertex Veo 视频数据供后续上传 OSS），其余字节原样保留
+	assert.Equal(t, `{"name":"op","response":{"videos":[{"uri":"u","bytesBase64Encoded":"x"}],"durationSeconds":8.0,"bytesBase64Encoded":"y"},"done":true}`, string(redactVideoResponseBody(body)))
+}
+
 func seedTaskPollingChannel(t *testing.T, id int, disableSleep bool) {
 	t.Helper()
 	ch := &model.Channel{

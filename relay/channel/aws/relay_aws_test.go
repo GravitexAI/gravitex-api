@@ -246,7 +246,6 @@ func TestDoAwsClientRequest_StripsContextManagementWhenBetaDropped(t *testing.T)
 	require.Equal(t, []any{"effort-2025-11-24"}, betaValues)
 }
 
-
 func TestNewAwsInvokeContextInheritsParent(t *testing.T) {
 	originalRelayTimeout := common.RelayTimeout
 	t.Cleanup(func() {
@@ -930,4 +929,17 @@ func TestMantleCanceledRequestSkipsRetry(t *testing.T) {
 	var apiError *relaytypes.NewAPIError
 	require.ErrorAs(t, err, &apiError)
 	assert.True(t, relaytypes.IsSkipRetryError(apiError))
+}
+
+func TestBuildAwsRequestBodyPassThroughDropsRepeatedModelAndStream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"a","stream":true,"max_tokens":8,"stream":false,"model":"b"}`))
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	info.ChannelSetting.PassThroughBodyEnabled = true
+
+	body, err := buildAwsRequestBody(c, info, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, `{"max_tokens":8}`, string(body))
 }
