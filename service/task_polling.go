@@ -564,6 +564,7 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 		ChannelType:    pollingChannelType,
 		ChannelId:      cacheGetChannel.Id,
 		ChannelBaseUrl: cacheGetChannel.GetBaseURL(),
+		ChannelSetting: cacheGetChannel.GetSetting(),
 	}
 	// 仅供应商渠道携带拨号代理键，轮询辅助请求据此启用拨号防护（运行期，不落库）；官方渠道行为不变
 	if cacheGetChannel.GetOtherSettings().IsSupplierChannel() {

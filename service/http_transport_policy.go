@@ -18,7 +18,8 @@ type HTTPTransportPolicy struct {
 	Shards   int    // 1..dto.MaxHTTP2ConnectionShards
 	// SupplierDialGuard 为 true 时拨号阶段拒绝内网/保留地址（仅供应商渠道），
 	// 与普通客户端使用不同缓存键与独立连接池，避免复用官方渠道的内网连接。
-	SupplierDialGuard bool
+	SupplierDialGuard     bool
+	TLSInsecureSkipVerify bool
 }
 
 var httpTransportPolicyWarnings sync.Map
@@ -34,6 +35,7 @@ func defaultHTTPTransportPolicy() HTTPTransportPolicy {
 // Invalid stored values never panic; they clamp to defaults and warn once per bad value.
 func NormalizeHTTPTransportPolicy(settings dto.ChannelSettings) HTTPTransportPolicy {
 	policy := defaultHTTPTransportPolicy()
+	policy.TLSInsecureSkipVerify = settings.TLSInsecureSkipVerify
 
 	protocol := strings.ToLower(strings.TrimSpace(settings.HTTPProtocol))
 	switch protocol {
@@ -88,9 +90,9 @@ func warnHTTPTransportPolicyOnce(field, value string) {
 
 func (p HTTPTransportPolicy) cacheKeyPart() string {
 	if p.SupplierDialGuard {
-		return fmt.Sprintf("%s|%d|supplier-guard", p.Protocol, p.Shards)
+		return fmt.Sprintf("%s|%d|%t|supplier-guard", p.Protocol, p.Shards, p.TLSInsecureSkipVerify)
 	}
-	return fmt.Sprintf("%s|%d", p.Protocol, p.Shards)
+	return fmt.Sprintf("%s|%d|%t", p.Protocol, p.Shards, p.TLSInsecureSkipVerify)
 }
 
 func (p HTTPTransportPolicy) String() string {

@@ -321,3 +321,66 @@ func TestConvertGeminiRequestNilRequest(t *testing.T) {
 	_, err := (&Adaptor{}).ConvertGeminiRequest(nil, geminiToClaudeInfo(), nil)
 	require.Error(t, err)
 }
+
+func TestConvertClaudeRequestForwardsThinkingBlockBinding(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name         string
+		model        string
+		thinking     string
+		wantThinking string
+	}{
+		{
+			// alpha：原生 /v1/messages 透传，不处理型号后缀，官方后缀相关用例不适用
+			name:         "native request keeps every thinking field",
+			model:        "claude-opus-5-5",
+			thinking:     `{"type":"adaptive","display":"summarized","block_binding":{"prefix_mismatch_behavior":"drop_block"},"future_field":{"a":1}}`,
+			wantThinking: `{"type":"adaptive","display":"summarized","block_binding":{"prefix_mismatch_behavior":"drop_block"},"future_field":{"a":1}}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			body := `{"model":"` + tt.model + `","max_tokens":1024,"thinking":` + tt.thinking +
+				`,"messages":[{"role":"user","content":"hi"}]}`
+			var original dto.ClaudeRequest
+			require.NoError(t, common.UnmarshalJsonStr(body, &original))
+			info := &relaycommon.RelayInfo{
+				OriginModelName: tt.model,
+				Request:         &original,
+				ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: tt.model},
+			}
+			// Same steps as the Claude handler before the adaptor converts.
+			outbound, err := common.DeepCopy(&original)
+			require.NoError(t, err)
+			require.NoError(t, helper.ModelMappedHelper(c, info, outbound))
+			require.NoError(t, helper.ApplyReasoningModelSuffix(nil, info, outbound))
+
+			out, err := (&Adaptor{}).ConvertClaudeRequest(c, info, outbound)
+			require.NoError(t, err)
+			encoded, err := common.Marshal(out)
+			require.NoError(t, err)
+			var upstream struct {
+				Thinking json.RawMessage `json:"thinking"`
+			}
+			require.NoError(t, common.Unmarshal(encoded, &upstream))
+			assert.JSONEq(t, tt.wantThinking, string(upstream.Thinking))
+		})
+	}
+}
+
+func TestSetupRequestHeaderForwardsEveryAnthropicBetaValue(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Add("anthropic-beta", "fast-mode-2026-02-01")
+	c.Request.Header.Add("anthropic-beta", "thinking-binding-controls-2026-08-01")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "claude-opus-5-5",
+		ChannelMeta:     &relaycommon.ChannelMeta{ApiKey: "sk-test"},
+	}
+
+	header := http.Header{}
+	require.NoError(t, (&Adaptor{}).SetupRequestHeader(c, &header, info))
+	assert.Equal(t, []string{"fast-mode-2026-02-01,thinking-binding-controls-2026-08-01"}, header.Values("anthropic-beta"))
+}

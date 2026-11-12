@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -59,7 +60,8 @@ func formatRequest(requestBody io.Reader, requestHeader http.Header, requestID s
 
 	// 把 anthropic-beta header 从客户端请求迁移到 Bedrock 的 body 数组，
 	// 过程中按 Bedrock 白名单过滤 + 必要时重命名（详见 claude.FilterBetaFlags）。
-	anthropicBetaValues := requestHeader.Get("anthropic-beta")
+	// 官方 #246：客户端可能发多行 anthropic-beta，合并成一个逗号分隔列表
+	anthropicBetaValues := strings.Join(requestHeader.Values("anthropic-beta"), ",")
 	filtered := claude.FilterBetaFlags(anthropicBetaValues, claude.TargetBedrock, requestID)
 	if len(filtered) > 0 {
 		betaJson, err := json.Marshal(filtered)

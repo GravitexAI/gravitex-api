@@ -347,7 +347,8 @@ func getFetchModelsResponseBody(method string, requestURL string, channel *model
 			request.Host = headers.Get(name)
 		}
 	}
-	client, err := service.NewProxyHttpClient(channel.GetDialProxy())
+	setting := channel.GetSetting()
+	client, err := service.GetHttpClientWithProxySettings(channel.GetDialProxy(), setting)
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +393,10 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 			return nil, fmt.Errorf("failed to get channel key: %w", apiErr)
 		}
 		key = strings.TrimSpace(key)
-		models, err := gemini.FetchGeminiModels(baseURL, key, channel.GetDialProxy())
+		// alpha：代理地址带供应商拨号防护标记
+		geminiSetting := channel.GetSetting()
+		geminiSetting.Proxy = channel.GetDialProxy()
+		models, err := gemini.FetchGeminiModels(baseURL, key, geminiSetting)
 		if err != nil {
 			return nil, err
 		}

@@ -53,7 +53,8 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 // 上游的 anthropic-beta flag 列表。
 func resolveEffectiveBetaFlags(c *gin.Context, info *relaycommon.RelayInfo, target FilterTarget) []string {
 	header := http.Header{}
-	if anthropicBeta := c.Request.Header.Get("anthropic-beta"); anthropicBeta != "" {
+	// 官方 #246：客户端可能发多行 anthropic-beta，合并成一个逗号分隔列表
+	if anthropicBeta := strings.Join(c.Request.Header.Values("anthropic-beta"), ","); anthropicBeta != "" {
 		header.Set("anthropic-beta", anthropicBeta)
 	}
 	model_setting.GetClaudeSettings().WriteHeaders(info.OriginModelName, &header)
@@ -107,8 +108,10 @@ func shouldAppendClaudeBetaQuery(info *relaycommon.RelayInfo) bool {
 }
 
 func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) {
-	// 透传客户端 anthropic-beta 到 req，让 WriteHeaders 能合并 admin 配置。
-	anthropicBeta := c.Request.Header.Get("anthropic-beta")
+	// common headers operation
+	// A client may send several anthropic-beta lines; the API reads one
+	// comma-separated list, so forward all of them.
+	anthropicBeta := strings.Join(c.Request.Header.Values("anthropic-beta"), ",")
 	if anthropicBeta != "" {
 		req.Set("anthropic-beta", anthropicBeta)
 	}
