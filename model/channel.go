@@ -179,7 +179,14 @@ func (c ChannelInfo) Value() (driver.Value, error) {
 
 // Scan implements sql.Scanner interface
 func (c *ChannelInfo) Scan(value interface{}) error {
-	bytesValue, _ := value.([]byte)
+	// 不同驱动/协议模式下 json 列可能以 []byte 或 string 返回，静默丢弃 string 会把字段清零。
+	var bytesValue []byte
+	switch v := value.(type) {
+	case []byte:
+		bytesValue = v
+	case string:
+		bytesValue = []byte(v)
+	}
 	return common.Unmarshal(bytesValue, c)
 }
 

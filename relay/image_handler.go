@@ -142,23 +142,52 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	var requestBody io.Reader
 	var jsonData []byte
+	var outbound struct {
+		N          *uint                       `json:"n"`
+		Parameters *dto.ImageBillingParameters `json:"parameters"`
+	}
+	validateQuantity := false
 
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
-		// 透传模式下直接记录原始请求体，排查"用户传了什么"与"上游收到了什么"是否一致。
-		if bodyBytes, err := storage.Bytes(); err == nil {
-			logger.LogDebug(c, "image upstream request body(size=%d): %s", len(bodyBytes), truncateImageLogBody(bodyBytes))
-		}
-		if strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
-			requestBody = common.NewReplayableBodyReader(storage)
-		} else {
+		isMultipart := strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data")
+		if !isMultipart && info.ChannelType == constant.ChannelTypeAli {
+			// alpha：阿里渠道透传时仍需改写 parameters.n，读出完整 JSON 走下方统一的 jsonData 流程。
 			jsonData, err = storage.Bytes()
 			if err != nil {
 				return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 			}
+		} else if !isMultipart {
+			if storage.IsDisk() {
+				reader, readErr := storage.NewReader()
+				if readErr != nil {
+					return types.NewErrorWithStatusCode(readErr, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+				}
+				err = common.DecodeJsonBody(reader, &outbound)
+				_ = reader.Close()
+			} else {
+				var raw []byte
+				raw, err = storage.Bytes()
+				if err == nil {
+					err = common.Unmarshal(raw, &outbound)
+				}
+			}
+			if err != nil {
+				return types.NewErrorWithStatusCode(fmt.Errorf("invalid image billing parameters: %w", err), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
+			validateQuantity = true
+		}
+		// 透传模式下记录原始请求体，排查"用户传了什么"与"上游收到了什么"是否一致。
+		if common.DebugEnabled && jsonData == nil {
+			if raw, readErr := storage.Bytes(); readErr == nil {
+				logger.LogDebug(c, "image upstream request body(size=%d): %s", len(raw), truncateImageLogBody(raw))
+			}
+		}
+		if jsonData == nil {
+			requestBody = common.NewReplayableBodyReader(storage)
 		}
 	} else {
 		convertedRequest, err := adaptor.ConvertImageRequest(c, info, *request)
@@ -190,15 +219,13 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		}
 	}
 	if jsonData != nil {
-		// This is a different trust boundary from ingress: channel overrides
-		// and pass-through bodies can change the quantity actually submitted.
-		var outbound struct {
-			N          *uint                       `json:"n"`
-			Parameters *dto.ImageBillingParameters `json:"parameters"`
-		}
 		if err := common.Unmarshal(jsonData, &outbound); err != nil {
 			return types.NewErrorWithStatusCode(fmt.Errorf("invalid image billing parameters: %w", err), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
+		validateQuantity = true
+	}
+	if validateQuantity {
+		// Validate the count in the body sent upstream, including channel overrides.
 		quantityRequest := dto.ImageRequest{N: outbound.N, BillingParameters: outbound.Parameters}
 		if quantityRequest.N == nil {
 			quantityRequest.N = common.GetPointer(uint(imageCount))
@@ -208,7 +235,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
 		promptExtend = outbound.Parameters != nil && outbound.Parameters.PromptExtend != nil && *outbound.Parameters.PromptExtend
-		if info.ChannelType == constant.ChannelTypeAli {
+		if jsonData != nil && info.ChannelType == constant.ChannelTypeAli {
 			// Always send the same explicit quantity that is reserved, including
 			// when an empty parameters object accompanies a top-level n.
 			jsonData, err = sjson.SetBytes(jsonData, "parameters.n", imageCount)
@@ -216,6 +243,8 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
 		}
+	}
+	if jsonData != nil {
 		// JSON 形式的上游请求在应用参数覆盖后记录，确保日志反映最终发送结果（截断 base64）。
 		logger.LogDebug(c, "image upstream request body(size=%d): %s", len(jsonData), truncateImageLogBody(jsonData))
 		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
