@@ -500,6 +500,8 @@ func UpdateToken(c *gin.Context) {
 		CrossGroupRetry     bool                 `json:"cross_group_retry"`
 		DailySpendThreshold int                  `json:"daily_spend_threshold"`
 		AutoGroups          tokenAutoGroupsInput `json:"auto_groups"`
+		// 指针区分“未传”和显式 false：未传则保留原值。
+		AllowUserQuotaQuery *bool `json:"allow_user_quota_query"`
 	}
 
 	var req updateTokenRequest
@@ -592,6 +594,9 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.VendorLimits = token.VendorLimits
 		if req.AllowIps != nil {
 			cleanToken.AllowIps = req.AllowIps
+		}
+		if req.AllowUserQuotaQuery != nil {
+			cleanToken.AllowUserQuotaQuery = *req.AllowUserQuotaQuery
 		}
 		cleanToken.Group = token.Group
 		cleanToken.CrossGroupRetry = token.CrossGroupRetry
