@@ -58,3 +58,24 @@ export function getServerErrorMessageKey(value: unknown): string | null {
     ] ?? null
   )
 }
+
+/** 从接口响应或 axios 错误里取后端返回的 message。 */
+function serverMessageText(value: unknown): string {
+  const payload = serverErrorPayload(value)
+  return payload && typeof payload.message === 'string' ? payload.message : ''
+}
+
+/** 保留原始响应作为 cause，便于上层识别同一个失败。 */
+export function createServerError(value: unknown, fallback?: string): Error {
+  return new Error(serverMessageText(value) || fallback || 'Request failed', {
+    cause: value,
+  })
+}
+
+/** 查询时把 success=false 的业务响应当作失败抛出，不改变接口原始结构。 */
+export function requireServerSuccess<T>(response: T): T {
+  if (isRecord(response) && response.success === false) {
+    throw createServerError(response)
+  }
+  return response
+}
