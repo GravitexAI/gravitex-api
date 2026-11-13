@@ -1,6 +1,8 @@
 # main-alpha 合并 origin/main 流程
 
 > 每次把官方 QuantumNous/new-api 的更新吸收到 gravitex 的 main-alpha 分支时用这套流程。目标：**吸收官方新功能/修复的同时，不丢 main-alpha 的独有改动**。
+>
+> **上线前回归测试**：合并完成后、上生产前，按 [回归测试/Go升级回归测试手册.md](回归测试/Go升级回归测试手册.md) 在测试环境回归（脚本在 `回归测试/scripts/`）。
 
 ---
 
