@@ -32,6 +32,11 @@ func TestSlaveNodeBlocksAdminAPIRoutes(t *testing.T) {
 		{http.MethodGet, "/api/log/"},
 		{http.MethodGet, "/api/option/"},
 		{http.MethodPost, "/api/user/login"},
+		// 审计日志只在 master 提供
+		{http.MethodGet, "/api/audit"},
+		{http.MethodGet, "/api/audit/self"},
+		// 请求插件管理只在 master 提供
+		{http.MethodGet, "/api/request_plugin/instances"},
 	}
 	for _, tc := range blocked {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
