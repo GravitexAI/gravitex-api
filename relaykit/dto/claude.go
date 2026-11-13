@@ -14,6 +14,21 @@ type ClaudeMetadata struct {
 	UserId string `json:"user_id"`
 }
 
+// ClaudeFallbackEndpoint marks one side of an official server-side fallback
+// handoff (the "from"/"to" objects inside a "fallback" content block).
+type ClaudeFallbackEndpoint struct {
+	Model string `json:"model,omitempty"`
+}
+
+// ClaudeFallbackTrigger explains why an official server-side fallback fired:
+// a safety-classifier refusal with its policy category. bio / frontier_llm /
+// reasoning_extraction refusals are billed by the vendor even when rejected
+// before any output; other categories (e.g. cyber) are not.
+type ClaudeFallbackTrigger struct {
+	Type     string `json:"type,omitempty"`
+	Category string `json:"category,omitempty"`
+}
+
 type ClaudeMediaMessage struct {
 	Citations    json.RawMessage      `json:"citations,omitempty"`
 	Citation     json.RawMessage      `json:"citation,omitempty"`
@@ -34,6 +49,12 @@ type ClaudeMediaMessage struct {
 	Caller       json.RawMessage      `json:"caller,omitempty"`
 	IsError      *bool                `json:"is_error,omitempty"`
 	ErrorCode    string               `json:"error_code,omitempty"`
+	// Official server-side fallback block (type == "fallback"): from/to mark the
+	// model handoff, trigger carries the refusal category. Absent on all other
+	// block types, so omitempty keeps re-marshaled payloads unchanged.
+	From    *ClaudeFallbackEndpoint `json:"from,omitempty"`
+	To      *ClaudeFallbackEndpoint `json:"to,omitempty"`
+	Trigger *ClaudeFallbackTrigger  `json:"trigger,omitempty"`
 	// tool_calls
 	Id        string `json:"id,omitempty"`
 	Name      string `json:"name,omitempty"`
@@ -592,8 +613,24 @@ type ClaudeUsage struct {
 	OutputTokensDetails *ClaudeOutputTokensDetails `json:"output_tokens_details,omitempty"`
 	// Speed 上游实际使用的推理速度模式（standard / fast），fast 按快速模式倍率计费。
 	Speed string `json:"speed,omitempty"`
+	// Iterations is the per-attempt usage record of an official server-side
+	// fallback response: each entry bills at its own model's rate, and the
+	// rejected pre-output attempt is vendor-billed only for the
+	// bio / frontier_llm / reasoning_extraction refusal categories. The top-level
+	// usage fields only describe the final attempt that produced the message.
+	Iterations []ClaudeIterationUsage `json:"iterations,omitempty"`
 	// BillingUsage 只在进程内传递上游原始用量给计费链路，绝不下发给客户端。
 	BillingUsage *BillingUsage `json:"-"`
+}
+
+// ClaudeIterationUsage is one attempt recorded in usage.iterations. Type is
+// "message" for the originally-requested attempt and "fallback_message" for the
+// retry that took over after a refusal.
+type ClaudeIterationUsage struct {
+	Type         string `json:"type,omitempty"`
+	Model        string `json:"model,omitempty"`
+	InputTokens  int    `json:"input_tokens,omitempty"`
+	OutputTokens int    `json:"output_tokens,omitempty"`
 }
 
 type ClaudeOutputTokensDetails struct {

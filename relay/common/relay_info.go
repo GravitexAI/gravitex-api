@@ -81,6 +81,14 @@ type TokenCountMeta struct {
 	estimatePromptTokens int
 }
 
+// ModelFallbackInfo captures an upstream model swap: what we actually sent
+// upstream vs the model the response reports. It is only logged for
+// reconciliation; billing stays on the requested model's price.
+type ModelFallbackInfo struct {
+	SentModel   string
+	ActualModel string
+}
+
 type RelayInfo struct {
 	TokenId           int
 	TokenKey          string
@@ -159,6 +167,24 @@ type RelayInfo struct {
 	// UpstreamServiceTier 上游响应中回传的实际服务档位（如 default / priority / ultrafast），
 	// 结算时按它查 service.ServiceTierRatio 加收档位倍率。
 	UpstreamServiceTier string
+	// UpstreamModelFallback records when the upstream served a different model
+	// than the one we sent (e.g. second-hand relays silently swapping in a
+	// cheaper model). Response handlers set it via NoteUpstreamResponseModel
+	// before they overwrite UpstreamModelName with the response-reported model.
+	// Nil = no fallback observed.
+	UpstreamModelFallback *ModelFallbackInfo
+	// ClaudeFallbackTriggerCategory is the refusal category from an official
+	// Claude server-side fallback block (trigger.category). bio /
+	// frontier_llm / reasoning_extraction mean the vendor bills the rejected
+	// attempt on top of the final one; a mid-stream rejection is billed
+	// regardless of category. Reset per channel attempt.
+	ClaudeFallbackTriggerCategory string
+	// ClaudeUsageIterations is the per-attempt usage receipt (usage.iterations)
+	// of an official Claude server-side fallback response; the last entry is the
+	// attempt that produced the final message (already billed via top-level
+	// usage), earlier entries are rejected attempts. Only marked on the admin
+	// log; rejected attempts are not billed on our side. Reset per channel attempt.
+	ClaudeUsageIterations []dto.ClaudeIterationUsage
 	// UpstreamResponses stores the raw upstream usage object for log persistence.
 	// It is shaped as {"usage": {...}} or {"usageMetadata": {...}} and is only
 	// attached to log.other when the corresponding option is enabled.
@@ -226,6 +252,9 @@ type RelayInfo struct {
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	info.ClaudeRefusalAudit = nil
 	info.UpstreamServiceTier = ""
+	info.UpstreamModelFallback = nil
+	info.ClaudeFallbackTriggerCategory = ""
+	info.ClaudeUsageIterations = nil
 	info.FinalRequestRelayFormat = ""
 	info.RequestConversionChain = nil
 	info.InitRequestConversionChain()
@@ -814,6 +843,54 @@ func (info *RelayInfo) GetUpstreamModelName() string {
 		return ""
 	}
 	return info.UpstreamModelName
+}
+
+// NoteUpstreamResponseModel flags a model fallback when the upstream response
+// reports a model different from the one actually sent upstream. Callers must
+// invoke this BEFORE overwriting UpstreamModelName with the response model.
+// Empty actual models are ignored; the first observed mismatch wins.
+//
+// Version-suffix aliases are NOT a fallback: OpenAI echoes requested models
+// as "gpt-4o" while serving e.g. "gpt-4o-2024-08-06", and retry attempts may
+// report either form for the same model. A response model is only treated as
+// a swap when it differs after stripping the date suffix (-YYYY-MM-DD or
+// Anthropic's -YYYYMMDD, e.g. claude-sonnet-4-5-20250929) from either
+// side (exact match still wins first, so a deliberately versioned pricing
+// entry is never masked).
+func (info *RelayInfo) NoteUpstreamResponseModel(actual string) {
+	if info == nil || actual == "" {
+		return
+	}
+	if info.UpstreamModelFallback != nil {
+		return
+	}
+	sent := info.GetUpstreamModelName()
+	if sent == "" || actual == sent {
+		return
+	}
+	if trimModelVersionSuffix(sent) == trimModelVersionSuffix(actual) {
+		return
+	}
+	info.UpstreamModelFallback = &ModelFallbackInfo{SentModel: sent, ActualModel: actual}
+}
+
+// trimModelVersionSuffix strips a trailing date tag from a model name, in
+// either the OpenAI form "-YYYY-MM-DD" or the Anthropic form "-YYYYMMDD".
+// Only date forms are stripped: structured suffixes like "-thinking-8192" or
+// "-nothinking" are pricing-relevant and must survive.
+func trimModelVersionSuffix(name string) string {
+	for _, layout := range []string{"-2006-01-02", "-20060102"} {
+		if len(name) <= len(layout) {
+			continue
+		}
+		tail := name[len(name)-len(layout):]
+		// time.Parse rejects non-digits and impossible months/days, so
+		// structured suffixes that merely look numeric are kept.
+		if _, err := time.Parse(layout, tail); err == nil {
+			return name[:len(name)-len(layout)]
+		}
+	}
+	return name
 }
 
 func (info *RelayInfo) HasChannelMeta() bool { return info != nil && info.ChannelMeta != nil }

@@ -187,7 +187,11 @@ func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info
 		!strings.HasPrefix(strings.ToLower(info.OriginModelName), "veo-") {
 		req.Header.Set("Accept", "text/event-stream")
 	}
-	req.Header.Set("x-goog-api-key", a.apiKey)
+	auth, err := service.ResolveGeminiAuth(info.ChannelId, a.apiKey, info.ChannelOtherSettings.GeminiKeyType, info.ChannelSetting.Proxy)
+	if err != nil {
+		return err
+	}
+	auth.Apply(req.Header)
 	return nil
 }
 
@@ -544,6 +548,11 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	if !ok {
 		return nil, fmt.Errorf("invalid task_id")
 	}
+	// 轮询路径拿不到渠道设置，按 key 内容判断凭证类型（broker 配置 / ya29 token / API Key）
+	auth, err := service.ResolveGeminiAuth(0, key, service.InferGeminiKeyType(key), proxy)
+	if err != nil {
+		return nil, err
+	}
 	if strings.HasPrefix(taskID, omniTaskIDPrefix) || strings.HasPrefix(taskID, interactionTaskIDPrefix) || strings.HasPrefix(taskID, "v1_") {
 		interactionID := unmarkOmniTaskID(taskID)
 		if strings.HasPrefix(taskID, interactionTaskIDPrefix) {
@@ -555,7 +564,7 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 			return nil, err
 		}
 		req.Header.Set("Accept", "application/json")
-		req.Header.Set("x-goog-api-key", key)
+		auth.Apply(req.Header)
 		client, err := service.GetHttpClientWithProxy(proxy)
 		if err != nil {
 			return nil, fmt.Errorf("new proxy http client failed: %w", err)
@@ -578,7 +587,7 @@ func (a *TaskAdaptor) FetchTask(baseUrl, key string, body map[string]any, proxy 
 	}
 
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("x-goog-api-key", key)
+	auth.Apply(req.Header)
 
 	client, err := service.GetHttpClientWithProxy(proxy)
 	if err != nil {

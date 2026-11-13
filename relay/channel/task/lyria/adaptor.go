@@ -463,7 +463,12 @@ func (a *TaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, info
 		req.Header.Set("x-goog-user-project", credentials.ProjectID)
 		return nil
 	}
-	req.Header.Set("x-goog-api-key", a.apiKey)
+	// Gemini Developer API：按渠道凭证类型发 API Key 或 OAuth Bearer
+	auth, err := service.ResolveGeminiAuth(info.ChannelId, a.apiKey, info.ChannelOtherSettings.GeminiKeyType, info.ChannelSetting.Proxy)
+	if err != nil {
+		return err
+	}
+	auth.Apply(req.Header)
 	return nil
 }
 
@@ -1742,7 +1747,12 @@ func (a *TaskAdaptor) FetchTask(baseURL, key string, body map[string]any, proxy 
 			req.Header.Set("x-goog-user-project", credentials.ProjectID)
 		}
 	} else {
-		req.Header.Set("x-goog-api-key", key)
+		// 轮询路径拿不到渠道设置，按 key 内容判断凭证类型
+		auth, err := service.ResolveGeminiAuth(0, key, service.InferGeminiKeyType(key), proxy)
+		if err != nil {
+			return nil, err
+		}
+		auth.Apply(req.Header)
 	}
 	client, err := service.GetHttpClientWithProxy(proxy)
 	if err != nil {

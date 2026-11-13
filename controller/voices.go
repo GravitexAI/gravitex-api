@@ -153,8 +153,13 @@ func buildVoicesUpstreamRequest(channel *model.Channel) (string, http.Header, er
 	if base == "" || strings.Contains(strings.ToLower(base), "aiplatform.googleapis.com") {
 		base = "https://generativelanguage.googleapis.com"
 	}
+	// Gemini 渠道按凭证类型发 API Key 或 OAuth Bearer（Vertex API Key 渠道无此设置，仍走 x-goog-api-key）
+	auth, err := service.ResolveGeminiAuth(channel.Id, key, channel.GetOtherSettings().GeminiKeyType, channel.GetDialProxy())
+	if err != nil {
+		return "", nil, err
+	}
 	header := http.Header{}
-	header.Set("x-goog-api-key", key)
+	auth.Apply(header)
 	return base + "/v1beta/voices", header, nil
 }
 
