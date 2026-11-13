@@ -177,6 +177,25 @@ select task_id,status,progress,quota,channel_id from tasks where task_id in (...
 select type,model_name,quota,completion_tokens,content from logs where user_id=666888 and created_at>=<开始时间戳>;
 ```
 
+### 3.5a 生图（`scripts/t_image.py`，轻量测，生图上游有时很慢）
+
+```bash
+python3 t_image.py <sk-令牌> r_image.json in.jpg      # in.jpg 为任意风景图，供编辑用；测试机直连 Wikimedia 会被限流，本地下载后上传
+python3 recon.py r_image.json 666888 $T0 $Q0
+```
+
+默认只跑 4 个用例，脚本里 `FULL = True` 时跑全系。**不要一次测太多，单张可能要几分钟。**
+
+| 编号 | 档 | 测试项 | 预期与计费公式 |
+|---|---|---|---|
+| I01 | A | `gpt-image-2` `/v1/images/generations`（low，1024） | 返回 1 张；quota = 文本输入×2.5 + 图片输出×2.5×6（$5/M、$30/M）。例：p=21 c=196 → 52.5+2940 = 2993 |
+| I02 | A | `gpt-image-2` `/v1/images/edits`（multipart） | 返回 1 张；图片输入另按 ×2.5×1.6（$8/M）。例：p=735（其中图片 720）c=196 → 5858 |
+| I03 | B | `gpt-image-2.6-flare` 生成 | 返回 1 张；单价同 2.5，但 low 档输出 token 约是 2.5 的 4 倍（824 对 196） |
+| I04 | A | `gemini-3.1-flash-image` `/v1beta` generateContent（`responseModalities` 含 IMAGE） | 返回 1 张；图片输出按 image_completion_ratio 计。例：c=1120 → 1120×0.25×120 = 33600 |
+| I05 | B | 全系：gpt-image-2.5 / 2.6 两个型号、n=2、`gemini-3-pro-image` 1K、`gemini-nano-banana-2.1`、图生图、chat 端点 | 每张都返回；n=2 时扣费约为 2 倍 |
+
+> `gemini-2.5-flash-image` 2026-11-13 实测上游 6 分钟后只返回文字没出图，按文字计费（18），属于上游问题，不必每次测。
+
 ### 3.6 素材库（`scripts/t_video.py` 里一起跑）
 
 | 编号 | 档 | 测试项 | 预期 |
@@ -239,7 +258,7 @@ curl -s -H "$H1" -H "$H2" -H "Accept-Language: zh-CN" "http://localhost:3000/api
 | 视频实时查询漏退款修复（`5369f5e86`） | 涉及用户资金 | 按 `20261111/合并后待开发清单.md` 1.4 节手动验证 |
 | 按秒计费视频（Veo、kling、jimeng 等） | 计费逻辑和 Seedance 不同 | 各提交一个最短任务，核对扣费 |
 | 阿里生图 `parameters.n`、`prompt_extend` 加价 | 合并时手工改过（透传模式） | 透传渠道和非透传渠道各生 2 张，核对张数和扣费 |
-| gpt-image / Gemini 生图 / Seedream | 按张、按 token 计费路径多 | 各调一次，核对日志 |
+| Seedream / 阿里 / Grok 生图 | 按张计费路径，2026-11-13 只测了 gpt-image 和 Gemini | 各调一次，核对日志 |
 | 企业子账号令牌（模型 / 厂商限额上限） | 令牌接口有企业子账号的额度上限逻辑 | 用子账号创建和修改令牌 |
 | Java 侧联动：导出账单、日账单、告警 | Java 直接读 logs / tokens / channels 表 | 在 system 导出账单，检查新增字段不影响导出 |
 | 多节点 / 集群节点 | 生产是 k8s 多副本加集群节点 | 集群节点只放行转发接口，令牌管理接口可用 |
@@ -258,6 +277,7 @@ curl -s -H "$H1" -H "$H2" -H "Accept-Language: zh-CN" "http://localhost:3000/api
 | `relay/channel/gemini/`、`relay/channel/vertex/` | T14–T19、B06 |
 | `relay/channel/openai/`、`relay/*responses*` | T01–T05、B02 |
 | `relay/channel/task/`、`controller/task*`、`service/task_*`、`relay/relay_task.go` | 3.5 全部 |
+| `relay/image_handler.go`、`relay/channel/openai/*image*`、`relay/channel/gemini/`、`service/*image*` | 3.5a 生图 |
 | `controller/*asset*`、`controller/seedance*`、`router/video-router.go` | 3.6 全部 |
 | `controller/token.go`、`model/token*.go`、`middleware/auth.go` | 3.4 全部 |
 | `middleware/ruoyi_auth.go`、`router/`、`controller/channel*.go`、`controller/option.go` | 3.7 全部 |
@@ -277,6 +297,7 @@ curl -s -H "$H1" -H "$H2" -H "Accept-Language: zh-CN" "http://localhost:3000/api
 | 3.3 计费对账 | ✅ 逐条按公式手算一致；余额变化 39551 = 日志合计 |
 | 3.4 令牌接口 | ✅ 全部通过 |
 | 3.5 视频 | ✅ 3 个任务都成功；扣费 3 × 71039 = 余额变化 |
+| 3.5a 生图 | ✅ gpt-image-2 / 2.5 / 2.6 生成和编辑、n=2、Gemini 3.1-flash / 3-pro / nano-banana-2.1 共 12 条，逐条按公式核对一致，合计 181230 = 余额变化 |
 | 3.6 素材库 | ✅ 镜像 10 个 Action + 平台简化接口全部通过 |
 | 3.7 前端接口 | ✅ 接口层全部正常；F11 真机点页面未做 |
 | 3.8 日志与 IP | ✅ 和合并前行为一致 |
