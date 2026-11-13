@@ -389,7 +389,8 @@ func RecordLoginLog(userId int, username string, content string, ip string, acti
 // action+params 写入 Other.op，供前端本地化渲染（普通用户可见，不含敏感信息）。
 // adminInfo 存放操作者身份（写入 Other.admin_info，普通用户查询时剥离）；
 // auditInfo 存放路由/方法/结果等中间件兜底信息（写入 Other.audit_info，普通用户查询时剥离）。
-func RecordOperationAuditLog(logUserId int, content string, ip string, action string, params map[string]interface{}, adminInfo map[string]interface{}, auditInfo map[string]interface{}) {
+// request 为请求期间抓取的审计快照（model.NewAuditLogFromRequest），非 nil 时额外写一条 audit_logs。
+func RecordOperationAuditLog(logUserId int, content string, ip string, action string, params map[string]interface{}, adminInfo map[string]interface{}, auditInfo map[string]interface{}, request *AuditLog) {
 	username, _ := GetUsernameById(logUserId, false)
 	other := map[string]interface{}{
 		"op": buildOpField(action, params),
@@ -412,6 +413,38 @@ func RecordOperationAuditLog(logUserId int, content string, ip string, action st
 	if err := CreateLog(log); err != nil {
 		common.SysLog("failed to record operation audit log: " + err.Error())
 	}
+	if request == nil {
+		return
+	}
+	// 双写 audit_logs：logs 表的写法保持不变，这里补一条结构化记录。
+	entry := *request
+	entry.UserId = logUserId
+	entry.Username = username
+	entry.Action = action
+	entry.Content = content
+	entry.Ip = ip
+	entry.Category = AuditCategorySecurity
+	if len(adminInfo) > 0 {
+		entry.Category = AuditCategoryOperation
+	}
+	entry.Other.Op = &AuditOperation{Action: action, Params: AuditFields(params)}
+	// admin_info / audit_info 字段名与审计结构体 json tag 一致，经 JSON 转成结构体。
+	if len(adminInfo) > 0 {
+		entry.Other.AdminInfo = &AuditAdminInfo{}
+		if data, err := common.Marshal(adminInfo); err == nil {
+			_ = common.Unmarshal(data, entry.Other.AdminInfo)
+		}
+	}
+	entry.Success = true
+	if len(auditInfo) > 0 {
+		entry.Other.AuditInfo = &AuditRequestInfo{}
+		if data, err := common.Marshal(auditInfo); err == nil {
+			_ = common.Unmarshal(data, entry.Other.AuditInfo)
+		}
+		entry.Status = entry.Other.AuditInfo.Status
+		entry.Success = entry.Other.AuditInfo.Success
+	}
+	RecordAuditLog(entry)
 }
 
 func RecordTopupLog(userId int, content *common.Message, callerIp string, paymentMethod string, callbackPaymentMethod string) {

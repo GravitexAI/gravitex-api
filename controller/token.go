@@ -445,6 +445,7 @@ func AddToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	common.SetContextKey(c, constant.ContextKeyTokenAuditParams, map[string]any{"id": cleanToken.Id, "name": cleanToken.Name})
 	// 企业子账号敏感操作告警：新增 API 密钥。best-effort，绝不影响本次响应。
 	userId := c.GetInt("id")
 	// 企业子账号风险预警：新增的 API 密钥未设置出口 IP 白名单。best-effort，绝不影响本次响应。
@@ -613,6 +614,7 @@ func UpdateToken(c *gin.Context) {
 			}
 		}
 	}
+	common.SetContextKey(c, constant.ContextKeyTokenAuditParams, map[string]any{"id": cleanToken.Id, "name": cleanToken.Name, "status": cleanToken.Status})
 	err = cleanToken.Update()
 	if err != nil {
 		common.ApiError(c, err)
@@ -649,6 +651,7 @@ func DeleteTokenBatch(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
+	common.SetContextKey(c, constant.ContextKeyTokenAuditParams, map[string]any{"ids": tokenBatch.Ids[:min(len(tokenBatch.Ids), 100)], "count": len(tokenBatch.Ids)})
 	userId := c.GetInt("id")
 	count, err := model.BatchDeleteTokens(tokenBatch.Ids, userId)
 	if err != nil {
@@ -672,6 +675,7 @@ func GetTokenKeysBatch(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgBatchTooMany, map[string]any{"Max": 100})
 		return
 	}
+	common.SetContextKey(c, constant.ContextKeyTokenAuditParams, map[string]any{"ids": tokenBatch.Ids, "count": len(tokenBatch.Ids)})
 	userId := c.GetInt("id")
 	tokens, err := model.GetTokenKeysByIds(tokenBatch.Ids, userId)
 	if err != nil {

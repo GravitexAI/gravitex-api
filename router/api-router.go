@@ -316,7 +316,7 @@ func SetApiRouter(router *gin.Engine) {
 			assetAdminRoute.DELETE("/byteplus/assets/:asset_id", controller.AdminByteplusDeleteAsset)
 		}
 		tokenRoute := apiRouter.Group("/token")
-		tokenRoute.Use(middleware.UserTokenAuth())
+		tokenRoute.Use(middleware.UserTokenAuth(), middleware.TokenOperationAudit())
 		{
 			tokenRoute.GET("/", controller.GetAllTokens)
 			tokenRoute.GET("/search", middleware.SearchRateLimit(), controller.SearchTokens)
@@ -329,6 +329,10 @@ func SetApiRouter(router *gin.Engine) {
 			tokenRoute.POST("/batch", controller.DeleteTokenBatch)
 			tokenRoute.POST("/batch/keys", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.GetTokenKeysBatch)
 		}
+
+		// 审计日志：管理员查看全部，用户查看自己的（主要是自己的 API key 操作）
+		apiRouter.GET("/audit", middleware.DisableCache(), middleware.AdminAuth(), controller.GetAuditLogs)
+		apiRouter.GET("/audit/self", middleware.DisableCache(), middleware.UserAuth(), controller.GetAuditLogs)
 
 		usageRoute := apiRouter.Group("/usage")
 		usageRoute.Use(middleware.CORS(), middleware.CriticalRateLimit())

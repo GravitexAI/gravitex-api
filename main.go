@@ -152,6 +152,9 @@ func main() {
 	// Clear expired task result payloads stored in fail_reason.
 	service.StartTaskClearTask()
 
+	// 审计日志按保留天数每日清理（AUDIT_LOG_RETENTION_DAYS，默认 180）
+	service.StartAuditLogCleanupTask()
+
 	// Report this process as a system instance so the System Info page can show
 	// all currently alive nodes in multi-instance deployments.
 	service.StartSystemInstanceReporter()

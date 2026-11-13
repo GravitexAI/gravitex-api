@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"bytes"
+	"maps"
+	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -176,8 +178,11 @@ func finishAdminAudit(c *gin.Context, writer *auditResponseWriter) {
 		auditInfo["params"] = routeParams
 	}
 
+	// 审计快照必须在请求结束前同步抓取，gin.Context 不能带进 goroutine。
+	request := model.NewAuditLogFromRequest(c)
+	request.Status = status
 	gopool.Go(func() {
-		model.RecordOperationAuditLog(operatorId, content, ip, action, opParams, adminInfo, auditInfo)
+		model.RecordOperationAuditLog(operatorId, content, ip, action, opParams, adminInfo, auditInfo, &request)
 	})
 }
 
@@ -204,4 +209,58 @@ func auditResponseSuccess(status int, body []byte) bool {
 		}
 	}
 	return status < 400
+}
+
+// TokenOperationAudit 记录用户对自己 API key 的操作（创建/修改/禁用/删除/查看完整 key），
+// 只写 audit_logs（category=security），不写 logs 表。挂在 UserTokenAuth 之后。
+// 只记录 handler 通过 ContextKeyTokenAuditParams 提供的安全参数，绝不记录请求体和 key。
+func TokenOperationAudit() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var action, content string
+		switch c.Request.Method + " " + c.FullPath() {
+		case "POST /api/token/":
+			action, content = "token.create", "API token creation"
+		case "PUT /api/token/":
+			action, content = "token.update", "API token configuration update"
+			if c.Query("status_only") != "" {
+				action, content = "token.status_update", "API token status update"
+			}
+		case "DELETE /api/token/:id":
+			action, content = "token.delete", "API token deletion"
+		case "POST /api/token/batch":
+			action, content = "token.delete_batch", "API token batch deletion"
+		case "POST /api/token/:id/key":
+			action, content = "token.key_view", "API token key access"
+		case "POST /api/token/batch/keys":
+			action, content = "token.key_view_batch", "API token batch key access"
+		default:
+			c.Next()
+			return
+		}
+		writer := &auditResponseWriter{ResponseWriter: c.Writer, body: bytes.NewBuffer(nil), maxSize: 64 * 1024}
+		c.Writer = writer
+		c.Next()
+
+		entry := model.NewAuditLogFromRequest(c)
+		entry.Category = model.AuditCategorySecurity
+		entry.Action = action
+		entry.Content = content
+		entry.Status = writer.Status()
+		entry.Success = auditResponseSuccess(entry.Status, writer.body.Bytes())
+		params := model.AuditFields{}
+		if value, ok := common.GetContextKey(c, constant.ContextKeyTokenAuditParams); ok {
+			if handlerParams, ok := value.(map[string]any); ok {
+				maps.Copy(params, handlerParams)
+			}
+		}
+		if _, ok := params["id"]; !ok {
+			if id, err := strconv.Atoi(c.Param("id")); err == nil && id > 0 {
+				params["id"] = id
+			}
+		}
+		entry.Other.Op = &model.AuditOperation{Action: action, Params: params}
+		gopool.Go(func() {
+			model.RecordAuditLog(entry)
+		})
+	}
 }

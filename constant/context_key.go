@@ -88,6 +88,9 @@ const (
 	// fallback in authHelper (finishAdminAudit) skips its record to avoid
 	// duplicate entries.
 	ContextKeyAuditLogged ContextKey = "audit_logged"
+	// ContextKeyTokenAuditParams 由令牌 handler 写入本次操作的安全参数（令牌 id、名称），
+	// 供 TokenOperationAudit 写入审计日志；不得放入令牌 key。
+	ContextKeyTokenAuditParams ContextKey = "token_audit_params"
 
 	// ContextKeyChannelTesting marks a request issued by the channel test or the
 	// scheduled health check. Adaptors that simulate latency (mock_ai) must skip

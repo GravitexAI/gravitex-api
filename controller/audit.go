@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -106,12 +107,78 @@ func recordManageAuditFor(c *gin.Context, targetUserId int, action string, param
 	if _, ok := params["target_user_id"]; !ok && targetUserId > 0 && targetUserId != operatorUserId {
 		params["target_user_id"] = targetUserId
 	}
-	model.RecordOperationAuditLog(operatorUserId, auditContentEN(action, params), c.ClientIP(), action, params, auditOperatorInfo(c), nil)
+	request := model.NewAuditLogFromRequest(c)
+	model.RecordOperationAuditLog(operatorUserId, auditContentEN(action, params), c.ClientIP(), action, params, auditOperatorInfo(c), nil, &request)
 	markAuditLogged(c)
 }
 
 // recordUserSecurityAudit 记录普通用户自己的安全敏感操作（如 passkey 绑定/解绑）。
 // 这类日志没有管理员操作者，不写 admin_info；同时不依赖 AdminAuth/RootAuth 的兜底。
 func recordUserSecurityAudit(c *gin.Context, userId int, action string, params map[string]interface{}) {
-	model.RecordOperationAuditLog(userId, auditContentEN(action, params), c.ClientIP(), action, params, nil, nil)
+	request := model.NewAuditLogFromRequest(c)
+	model.RecordOperationAuditLog(userId, auditContentEN(action, params), c.ClientIP(), action, params, nil, nil, &request)
+}
+
+// GetAuditLogs 查询审计日志。/api/audit 给管理员看全部（root 的记录只有 root 可见），
+// /api/audit/self 只返回当前用户自己的记录，并裁剪掉管理员明细。
+func GetAuditLogs(c *gin.Context) {
+	page := common.GetPageQuery(c)
+	if page.Page < 1 || page.PageSize < 1 || page.Page > 100000000 {
+		common.ApiErrorMsg(c, "Invalid audit pagination")
+		return
+	}
+	filter := model.AuditLogFilter{
+		Username:  c.Query("username"),
+		Category:  c.Query("category"),
+		Action:    c.Query("action"),
+		TokenRef:  c.Query("token_ref"),
+		RequestId: c.Query("request_id"),
+	}
+	if raw := c.Query("user_id"); raw != "" {
+		userId, err := strconv.Atoi(raw)
+		if err != nil || userId < 0 {
+			common.ApiErrorMsg(c, "Invalid audit filters")
+			return
+		}
+		filter.UserId = userId
+	}
+	if c.FullPath() == "/api/audit/self" {
+		filter.UserId = c.GetInt("id")
+		filter.Username = ""
+		filter.SelfView = true
+	}
+	if !model.ValidAuditCategory(filter.Category) {
+		common.ApiErrorMsg(c, "Invalid audit filters")
+		return
+	}
+	for name, target := range map[string]*int64{"start_timestamp": &filter.StartTimestamp, "end_timestamp": &filter.EndTimestamp} {
+		if raw := c.Query(name); raw != "" {
+			parsed, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil || parsed < 0 {
+				common.ApiErrorMsg(c, "Invalid audit time range")
+				return
+			}
+			*target = parsed
+		}
+	}
+	if filter.EndTimestamp > 0 && filter.EndTimestamp < filter.StartTimestamp {
+		common.ApiErrorMsg(c, "Invalid audit time range")
+		return
+	}
+	if raw := c.Query("success"); raw != "" {
+		if raw != "true" && raw != "false" {
+			common.ApiErrorMsg(c, "Invalid audit result")
+			return
+		}
+		success := raw == "true"
+		filter.Success = &success
+	}
+	logs, total, err := model.GetAuditLogs(filter, page.GetStartIdx(), page.GetPageSize(), c.GetInt("role"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	page.SetItems(logs)
+	page.SetTotal(int(total))
+	common.ApiSuccess(c, page)
 }
