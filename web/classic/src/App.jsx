@@ -41,6 +41,7 @@ import Chat2Link from './pages/Chat2Link';
 import MjProxy from './pages/Midjourney';
 import Pricing from './pages/Pricing';
 import Task from './pages/Task';
+import AuditLog from './pages/AuditLog';
 import ModelPage from './pages/Model';
 import ModelDeploymentPage from './pages/ModelDeployment';
 import Playground from './pages/Playground';
@@ -301,6 +302,16 @@ function App() {
             <PrivateRoute>
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
                 <MjProxy />
+              </Suspense>
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path='/console/audit'
+          element={
+            <PrivateRoute>
+              <Suspense fallback={<Loading></Loading>} key={location.pathname}>
+                <AuditLog />
               </Suspense>
             </PrivateRoute>
           }
