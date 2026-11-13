@@ -462,3 +462,4 @@ func TestDispatchPlatformUpdateFallsBackWhenNoVideoUpdaterInjected(t *testing.T)
 
 	assert.Empty(t, adaptor.fetchedTaskIDs())
 }
+

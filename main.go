@@ -120,6 +120,34 @@ func main() {
 	// endpoint inference can read cached route settings on first request.
 	model.GetPricing()
 
+	// The first plugin sync finishes before the server accepts requests, so no
+	// request runs without the uploaded plugins.
+	controller.SyncTaskPluginsOnce()
+
+	// Every node reloads a topic within seconds of a write to it on any node.
+	// The periodic reloads below stay for writes that do not bump a topic.
+	service.RegisterSyncTopic(model.SyncTopicOptions, func(context.Context) error { return model.LoadOptionsFromDatabase() })
+	if common.MemoryCacheEnabled || common.IsMasterNode {
+		service.RegisterSyncTopic(model.SyncTopicChannels, func(ctx context.Context) error {
+			if common.MemoryCacheEnabled {
+				model.InitChannelCache()
+			}
+			return service.ScanScheduledPlugins(ctx)
+		})
+	}
+	service.RegisterSyncTopic(model.SyncTopicAuthz, func(context.Context) error { return authz.ReloadPolicy() })
+	service.RegisterSyncTopic(model.SyncTopicPlugins, controller.SyncTaskPluginsOnceContext)
+	service.RegisterSyncTopic(model.SyncTopicOAuthProviders, func(context.Context) error { return oauth.LoadCustomProviders() })
+	service.RegisterSyncTopic(model.SyncTopicModels, func(context.Context) error {
+		model.RefreshPricing()
+		return nil
+	})
+	if !common.RedisEnabled {
+		// With Redis every node shares the plan cache.
+		service.RegisterSyncTopic(model.SyncTopicSubscriptionPlans, func(context.Context) error { return model.PurgeSubscriptionPlanCache() })
+	}
+	service.StartNodeSync()
+
 	// 热更新配置
 	go model.SyncOptions(common.SyncFrequency)
 	go controller.SyncTaskPlugins()
@@ -135,16 +163,19 @@ func main() {
 		go model.UpdateQuotaData()
 	}
 
+	// CHANNEL_UPDATE_FREQUENCY schedules the update of all balances, a system
+	// task registered below.
 	if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" {
-		frequency, err := strconv.Atoi(os.Getenv("CHANNEL_UPDATE_FREQUENCY"))
-		if err != nil {
+		if _, err := strconv.Atoi(os.Getenv("CHANNEL_UPDATE_FREQUENCY")); err != nil {
 			common.FatalLog(common.LogText("failed to parse CHANNEL_UPDATE_FREQUENCY: %s", err.Error()))
 		}
-		go controller.AutomaticallyUpdateChannels(frequency)
 	}
 
 	// Codex credential auto-refresh check every 10 minutes, refresh when expires within 1 day
 	service.StartCodexCredentialAutoRefreshTask()
+
+	// Plugin credential refresh before expiry, on the master node every minute
+	service.StartPluginCredentialRefreshTask()
 
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
@@ -165,6 +196,7 @@ func main() {
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
 		return relay.GetTaskPollingAdaptor(platform)
 	}
+	// alpha 保留自己的任务轮询（service/task_polling.go），任务终态不推送给请求插件的 report 钩子。
 
 	// 视频任务轮询使用 controller 层的完整计费引擎（按秒/按量/分辨率分档/音频分档/CostDiscount/原子锁防重复扣费）。
 	// 缺失这行会让轮询只把任务置为 SUCCESS 而不扣费、不写消费日志，未主动查询结果的客户端等于白嫖。
@@ -176,8 +208,8 @@ func main() {
 	relay.MergeVideoTaskDataWithUpstreamResponseFn = controller.MergeVideoTaskDataWithUpstreamResponse
 	relay.DispatchLyriaAsyncFn = controller.DispatchLyriaAsync
 
-	// Register the periodic channel test, upstream model update, and async task
-	// polling (Midjourney / Suno / video) jobs as scheduled system tasks
+	// Register the periodic channel test, balance update, upstream model update,
+	// and async task polling (Midjourney / Suno / video) jobs as scheduled system tasks
 	// (DB-lease dedup across masters + run history), then start the runner that
 	// schedules and executes them. Master-only execution and the UpdateTask
 	// switch are enforced inside the runner and each handler's Enabled().
@@ -368,9 +400,15 @@ func InitResources() error {
 		common.FatalLog(common.LogText("failed to initialize database: %s", err.Error()))
 		return err
 	}
+	// Before the loads below: a write made while they run is reloaded later.
+	service.ReadStartupSyncRevisions()
 	if err = authz.Init(model.DB); err != nil {
 		common.FatalLog(common.LogText("failed to initialize authorization: %s", err.Error()))
 		return err
+	}
+	if common.IsMasterNode {
+		// The master rewrote the built-in role policies.
+		model.BumpSyncTopic(model.SyncTopicAuthz)
 	}
 	if common.PasswordLoginEncryptionEnabled {
 		if err = model.InitPasswordEncryption(); err != nil {
@@ -420,6 +458,8 @@ func InitResources() error {
 	if err != nil {
 		common.SysError(common.LogText("failed to load custom OAuth providers: %s", err.Error()))
 		// Don't return error, custom OAuth is not critical
+		// The node sync loads them again on its first tick.
+		service.SyncTopicLoadFailed(model.SyncTopicOAuthProviders, err)
 	}
 
 	return nil

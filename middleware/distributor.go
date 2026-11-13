@@ -1064,7 +1064,19 @@ func setupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	// 供应商渠道的 Proxy 带上拨号防护标记，relay 出站客户端据此拒绝连接内网地址（仅运行期，不落库）
 	channelSetting.Proxy = channel.GetDialProxy()
 	common.SetContextKey(c, constant.ContextKeyChannelSetting, channelSetting)
-	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, channel.GetOtherSettings())
+	otherSettings := channel.GetOtherSettings()
+	// An ordinary request on a task plugin channel runs on the relay routes of
+	// its plugin, pinned for the request like a task relay pins its plugin.
+	var providerPlugin any
+	if channel.Type == constant.ChannelTypeTaskPlugin && c.GetString("expected_task_plugin_key") == "" {
+		generation := jsplugin.DefaultRegistry.Generation()
+		if plugin, ok := generation.Get(channel.GetSetting().TaskPluginKey); ok && plugin.Meta.HasProviderPart() {
+			providerPlugin = jsplugin.PinnedPlugin{Generation: generation, Plugin: plugin}
+			otherSettings.AdvancedCustom = plugin.Meta.ChannelRelayConfig(plugin.ChannelConfigFor(otherSettings.PluginConfig))
+		}
+	}
+	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, otherSettings)
+	common.SetContextKey(c, constant.ContextKeyProviderPlugin, providerPlugin)
 	switch channel.Type {
 	case constant.ChannelTypeTaskPlugin:
 		c.Set("task_plugin_key", channel.GetSetting().TaskPluginKey)

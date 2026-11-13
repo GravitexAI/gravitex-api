@@ -231,6 +231,7 @@ func UpdateModelMeta(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
+		model.BumpSyncTopic(model.SyncTopicModels)
 	} else {
 		var current model.Model
 		if err := model.DB.First(&current, m.Id).Error; err != nil {

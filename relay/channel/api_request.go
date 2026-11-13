@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -362,14 +363,49 @@ func ResolveHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 	return processHeaderOverride(info, c)
 }
 
-// ApplyHeaderOverride applies channel overrides after the adaptor's headers.
-// Without a client request, only static values and {api_key} are resolved.
+// ApplyHeaderOverride applies the request plugins' header changes, then the
+// channel overrides, after the adaptor's headers. Without a client request,
+// only static values and {api_key} are resolved.
 func ApplyHeaderOverride(info *common.RelayInfo, c *gin.Context, req *http.Request) error {
 	headers, err := processHeaderOverride(info, c)
 	if err != nil {
 		return err
 	}
+	if info == nil || req == nil || len(info.RequestPluginHeaders) == 0 {
+		applyHeaderOverrideToRequest(req, headers)
+		return nil
+	}
+	// The outbound stage refused protected and credential header names; a
+	// header that carries the channel key is a credential too and stays as
+	// the adaptor set it.
+	pluginValues := map[string][]string{}
+	for _, effect := range info.RequestPluginHeaders {
+		for _, name := range effect.Remove {
+			name = strings.TrimSpace(name)
+			if info.ApiKey == "" || !strings.Contains(req.Header.Get(name), info.ApiKey) {
+				req.Header.Del(name)
+			}
+			pluginValues[strings.ToLower(name)] = nil
+		}
+		for name, value := range effect.Set {
+			name = strings.TrimSpace(name)
+			if info.ApiKey == "" || !strings.Contains(req.Header.Get(name), info.ApiKey) {
+				req.Header.Set(name, value)
+			}
+			pluginValues[strings.ToLower(name)] = nil
+		}
+	}
+	for name := range pluginValues {
+		pluginValues[name] = req.Header.Values(name)
+	}
 	applyHeaderOverrideToRequest(req, headers)
+	var replaced []string
+	for name, values := range pluginValues {
+		if !slices.Equal(values, req.Header.Values(name)) {
+			replaced = append(replaced, name)
+		}
+	}
+	info.MarkRequestPluginHeaderOverrides(replaced)
 	return nil
 }
 
@@ -397,6 +433,24 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 	}
 }
 
+// RequestSigner is an adaptor that signs every upstream request it sends.
+// The request senders call it last, after the header overrides; it may
+// change only the headers and the URL query.
+type RequestSigner interface {
+	SignUpstreamRequest(c *gin.Context, info *common.RelayInfo, method string, target *url.URL, header http.Header) error
+}
+
+func signUpstreamRequest(adaptor any, c *gin.Context, info *common.RelayInfo, method string, target *url.URL, header http.Header) error {
+	signer, ok := adaptor.(RequestSigner)
+	if !ok {
+		return nil
+	}
+	if err := signer.SignUpstreamRequest(c, info, method, target, header); err != nil {
+		return fmt.Errorf("sign request failed: %w", err)
+	}
+	return nil
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
@@ -416,6 +470,9 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	// 在 SetupRequestHeader 之后应用 Header Override，确保用户设置优先级最高
 	// 这样可以覆盖默认的 Authorization header 设置
 	if err = ApplyHeaderOverride(info, c, req); err != nil {
+		return nil, err
+	}
+	if err = signUpstreamRequest(a, c, info, req.Method, req.URL, req.Header); err != nil {
 		return nil, err
 	}
 	resp, err := doRequest(c, req, info)
@@ -448,6 +505,9 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	if err = ApplyHeaderOverride(info, c, req); err != nil {
 		return nil, err
 	}
+	if err = signUpstreamRequest(a, c, info, req.Method, req.URL, req.Header); err != nil {
+		return nil, err
+	}
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
@@ -455,11 +515,22 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	return resp, nil
 }
 
+// WebSocketPreparer is an adaptor that prepares the request before its
+// WebSocket handshake is built, such as binding the key it sends.
+type WebSocketPreparer interface {
+	PrepareWebSocket(c *gin.Context, info *common.RelayInfo) error
+}
+
 // DoWssRequest dials the adaptor's upstream over WebSocket for the realtime
 // and Responses WebSocket relays. It honors the channel proxy, is bound to the
 // request context, and reports a rejected handshake as a *types.NewAPIError
 // carrying the upstream status code (types.NewError preserves it).
 func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*websocket.Conn, error) {
+	if preparer, ok := a.(WebSocketPreparer); ok {
+		if err := preparer.PrepareWebSocket(c, info); err != nil {
+			return nil, err
+		}
+	}
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)
@@ -483,6 +554,16 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		targetHeader.Set(key, value)
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
+	if _, signs := a.(RequestSigner); signs {
+		targetURL, parseErr := url.Parse(fullRequestURL)
+		if parseErr != nil {
+			return nil, fmt.Errorf("get request url failed: %w", parseErr)
+		}
+		if err = signUpstreamRequest(a, c, info, http.MethodGet, targetURL, targetHeader); err != nil {
+			return nil, err
+		}
+		fullRequestURL = targetURL.String()
+	}
 	// alpha：供应商渠道用拒绝内网地址的拨号器；官方：支持渠道代理、绑定请求上下文、握手失败带上游状态码
 	dialer := *WebsocketDialerForChannel(info)
 	// 供应商渠道的代理值带拨号防护前缀，取出真实代理地址后再设置
@@ -659,6 +740,9 @@ func DoTaskApiRequest(a TaskRequestBuilder, c *gin.Context, info *common.RelayIn
 		return nil, fmt.Errorf("setup request header failed: %w", err)
 	}
 	if err = ApplyHeaderOverride(info, c, req); err != nil {
+		return nil, err
+	}
+	if err = signUpstreamRequest(a, c, info, req.Method, req.URL, req.Header); err != nil {
 		return nil, err
 	}
 	resp, err := doRequest(c, req, info)

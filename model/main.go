@@ -327,6 +327,8 @@ func migrateDB() error {
 		&AuthzRole{},
 		&LoginSession{},
 		&AuditLog{},
+		// 官方供应商插件登录流程复用 auth_flows 存一次性登录状态（alpha 不启用官方用户鉴权流程）
+		&AuthFlow{},
 	)
 	if err != nil {
 		return err

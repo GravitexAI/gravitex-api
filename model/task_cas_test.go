@@ -42,6 +42,7 @@ func TestMain(m *testing.M) {
 		&TaskBillingLogOutbox{},
 		&User{},
 		&Token{},
+		&AuthFlow{},
 		&PasskeyCredential{},
 		&TwoFA{},
 		&TwoFABackupCode{},
