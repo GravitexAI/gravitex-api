@@ -118,8 +118,12 @@ func ClaudeResponsesStreamHandler(c *gin.Context, resp *http.Response, info *rel
 		recordClaudeRefusal(info, data)
 		if claudeResponse.Type == "message_start" && claudeResponse.Message != nil {
 			info.ObserveResponseModel(claudeResponse.Message.Model)
+			// 上游换模型检测必须在 UpstreamModelName 被响应模型覆盖之前执行。
+			info.NoteUpstreamResponseModel(claudeResponse.Message.Model)
 			info.UpstreamModelName = claudeResponse.Message.Model
 		}
+		// 输出中途拒绝的官方回退：换模型信号在 fallback 块（from/to）里，补检测。
+		noteClaudeFallbackContentBlock(info, claudeResponse.ContentBlock)
 		FormatClaudeResponseInfo(info, &claudeResponse, nil, claudeInfo)
 		countClaudeStreamBillableTools(info, &claudeResponse)
 		hostedEvents, consumed, err := hostedBridge.Convert(&claudeResponse, state)

@@ -128,7 +128,11 @@ func VideoProxy(c *gin.Context) {
 				return
 			}
 			contentURL, err = getGeminiVideoURL(channel, task, key)
-			headers["x-goog-api-key"] = key
+			if err == nil {
+				var auth service.GeminiAuth
+				auth, err = service.ResolveGeminiTaskAuth(channel, key)
+				headers = auth.Headers()
+			}
 		case constant.ChannelTypeVertexAi:
 			contentURL, err = getVertexVideoURL(channel, task)
 		case constant.ChannelTypeOpenAI, constant.ChannelTypeSora:

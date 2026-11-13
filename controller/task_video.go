@@ -772,15 +772,13 @@ func uploadVideoToOSS(ctx context.Context, ch *model.Channel, task *model.Task, 
 		if remoteURL == "" {
 			return ""
 		}
-		// Gemini GCS URL requires api-key header; Go backend injects it during download
-		apiKey := task.PrivateData.Key
-		if apiKey == "" {
-			apiKey = ch.Key
+		// Gemini GCS URL requires the channel credential; Go backend injects it during download
+		auth, err := service.ResolveGeminiTaskAuth(ch, task.PrivateData.Key)
+		if err != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("Resolve gemini credential failed for task %s: %s", task.TaskID, err.Error()))
+			return ""
 		}
-		headers := map[string]string{}
-		if apiKey != "" {
-			headers["x-goog-api-key"] = apiKey
-		}
+		headers := auth.Headers()
 		ossURL, err := service.UploadVideoFromURL(ctx, remoteURL, headers, "mp4")
 		if err != nil {
 			logger.LogWarn(ctx, fmt.Sprintf("OSS upload failed for task %s (gemini gcs url): %s", task.TaskID, err.Error()))

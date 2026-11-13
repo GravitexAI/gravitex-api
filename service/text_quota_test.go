@@ -1897,3 +1897,29 @@ func TestCalculateTextQuotaSummaryBillsSvgAuthoringUsage(t *testing.T) {
 		})
 	}
 }
+
+// Official Claude server-side fallback responses (usage.iterations) are only
+// marked on the admin log: the rejected attempt must not add any charge on
+// top of the final message's usage.
+func TestCalculateTextQuotaSummaryDoesNotBillClaudeFallbackIterations(t *testing.T) {
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	info := &relaycommon.RelayInfo{
+		OriginModelName:               "fb-final-test",
+		ClaudeFallbackTriggerCategory: "bio",
+		ClaudeUsageIterations: []dto.ClaudeIterationUsage{
+			{Type: "message", Model: "fb-rejected-test", InputTokens: 535, OutputTokens: 80},
+			{Type: "fallback_message", Model: "fb-final-test", InputTokens: 412, OutputTokens: 264},
+		},
+		StartTime: time.Now(),
+		PriceData: hosttypes.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo:  hosttypes.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	usage := &dto.Usage{PromptTokens: 412, CompletionTokens: 264, TotalTokens: 676}
+
+	summary := calculateTextQuotaSummary(ctx, info, usage)
+
+	assert.Equal(t, 676, summary.Quota)
+}

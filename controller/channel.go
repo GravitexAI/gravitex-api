@@ -715,6 +715,24 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		}
 	}
 
+	// Gemini OAuth 凭证校验：broker 模式下每行 key 都必须是合法的 broker 配置（多 key 时每行一份）
+	if channel.Type == constant.ChannelTypeGemini {
+		switch keyType := channel.GetOtherSettings().GeminiKeyType; keyType {
+		case "", dto.GeminiKeyTypeAPIKey, dto.GeminiKeyTypeOAuthToken:
+		case dto.GeminiKeyTypeOAuthBroker:
+			for _, line := range strings.Split(channel.Key, "\n") {
+				if strings.TrimSpace(line) == "" {
+					continue
+				}
+				if _, err := service.ParseGeminiOAuthBrokerConfig(line); err != nil {
+					return err
+				}
+			}
+		default:
+			return fmt.Errorf("unsupported gemini_key_type %q", keyType)
+		}
+	}
+
 	// VertexAI 特殊校验
 	if channel.Type == constant.ChannelTypeVertexAi {
 		if channel.Other == "" {
@@ -1582,6 +1600,8 @@ type fetchModelsRequest struct {
 	AdvancedCustom *string `json:"advanced_custom"`
 	HeaderOverride *string `json:"header_override"`
 	Proxy          *string `json:"proxy"`
+	// GeminiKeyType 未保存的 Gemini 渠道拉取模型时，由编辑表单带上当前选择的凭证类型
+	GeminiKeyType dto.GeminiKeyType `json:"gemini_key_type"`
 }
 
 func buildAdvancedCustomModelPreviewChannel(req fetchModelsRequest) (*model.Channel, error) {
@@ -1691,6 +1711,9 @@ func FetchModels(c *gin.Context) {
 			Type:    req.Type,
 			Key:     key,
 			BaseURL: &baseURL,
+		}
+		if req.Type == constant.ChannelTypeGemini && req.GeminiKeyType != "" {
+			channel.SetOtherSettings(dto.ChannelOtherSettings{GeminiKeyType: req.GeminiKeyType})
 		}
 	}
 

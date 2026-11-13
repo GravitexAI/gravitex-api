@@ -1,6 +1,9 @@
 package router
 
 import (
+	"strings"
+
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/service/authz"
@@ -15,6 +18,20 @@ import (
 func SetApiRouter(router *gin.Engine) {
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"))
+	if !common.IsMasterNode {
+		// 集群（NODE_TYPE=slave）只负责转发：管理类 /api/* 一律 404，仅放行状态、令牌用量查询与用户令牌管理（/api/token/*）。
+		// 放在所有鉴权中间件之前，这样即使 session/JWT 密钥泄露，也无法经由集群调用管理接口。
+		apiRouter.Use(func(c *gin.Context) {
+			path := c.Request.URL.Path
+			if path == "/api/status" || path == "/api/usage/token" || path == "/api/usage/token/" ||
+				path == "/api/token" || strings.HasPrefix(path, "/api/token/") {
+				c.Next()
+				return
+			}
+			controller.RelayNotFound(c)
+			c.Abort()
+		})
+	}
 	apiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
 	// 跨域支持，供独立域名/端口的前端（如 web-antd）直接调用 /api/*
 	apiRouter.Use(middleware.CORS())

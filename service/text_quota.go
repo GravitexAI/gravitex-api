@@ -106,7 +106,8 @@ type textQuotaSummary struct {
 	ToolCallSurchargeQuota    decimal.Decimal
 	// SvgAuthoring is set when svg_usage was billed; SvgAuthoringUnpriced names
 	// an authoring model that had no ratio configured and was left unbilled.
-	SvgAuthoring         *SvgAuthoringUsage
+	SvgAuthoring *SvgAuthoringUsage
+	// SvgAuthoringUnpriced records the model that was left unbilled.
 	SvgAuthoringUnpriced string
 	FixedPriceBilling    bool
 }
@@ -850,6 +851,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	attachQuotaSaturation(ctx, relayInfo, other)
+	attachUpstreamModelFallback(relayInfo, other)
 
 	priceChain := CalculatePriceChainForLog(ctx, logModel, summary.PromptTokens, summary.CompletionTokens, summary.Quota)
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{

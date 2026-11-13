@@ -393,10 +393,14 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 			return nil, fmt.Errorf("failed to get channel key: %w", apiErr)
 		}
 		key = strings.TrimSpace(key)
+		auth, err := service.ResolveGeminiAuth(channel.Id, key, channel.GetOtherSettings().GeminiKeyType, channel.GetDialProxy())
+		if err != nil {
+			return nil, err
+		}
 		// alpha：代理地址带供应商拨号防护标记
 		geminiSetting := channel.GetSetting()
 		geminiSetting.Proxy = channel.GetDialProxy()
-		models, err := gemini.FetchGeminiModels(baseURL, key, geminiSetting)
+		models, err := gemini.FetchGeminiModels(baseURL, auth, geminiSetting)
 		if err != nil {
 			return nil, err
 		}

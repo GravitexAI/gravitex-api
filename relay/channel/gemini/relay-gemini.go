@@ -2622,7 +2622,7 @@ type GeminiModelsResponse struct {
 	NextPageToken string            `json:"nextPageToken"`
 }
 
-func FetchGeminiModels(baseURL, apiKey string, setting dto.ChannelSettings) ([]string, error) {
+func FetchGeminiModels(baseURL string, auth service.GeminiAuth, setting dto.ChannelSettings) ([]string, error) {
 	client, err := service.GetHttpClientWithProxySettings(setting.Proxy, setting)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP client: %v", err)
@@ -2645,7 +2645,7 @@ func FetchGeminiModels(baseURL, apiKey string, setting dto.ChannelSettings) ([]s
 			return nil, fmt.Errorf("failed to create request: %v", err)
 		}
 
-		request.Header.Set("x-goog-api-key", apiKey)
+		auth.Apply(request.Header)
 
 		response, err := client.Do(request)
 		if err != nil {

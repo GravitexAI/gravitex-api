@@ -41,6 +41,7 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	info.CaptureUpstreamServiceTier(body)
+	info.NoteUpstreamResponseModel(responsesResp.Model)
 	if responsesResp.Usage != nil && service.ValidUsage(responsesResp.Usage) {
 		info.SetUpstreamResponsesField("usage", responsesResp.Usage)
 	}
@@ -119,6 +120,8 @@ func OaiResponsesToChatBufferedStreamHandler(c *gin.Context, info *relaycommon.R
 		}
 		if streamResp.Response != nil {
 			info.ObserveResponseModel(streamResp.Response.Model)
+			// 上游换模型检测：携带完整 Response 的事件里都带 model。
+			info.NoteUpstreamResponseModel(streamResp.Response.Model)
 		}
 		service.ObserveResponsesOutcome(info, &streamResp)
 		accumulator.ProcessEvent(&streamResp)
@@ -316,6 +319,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		if streamResp.Response != nil {
 			info.CaptureUpstreamServiceTier(common.StringToByteSlice(data))
+			info.NoteUpstreamResponseModel(streamResp.Response.Model)
 		}
 		if streamResp.Response != nil && streamResp.Response.Usage != nil && service.ValidUsage(streamResp.Response.Usage) {
 			info.SetUpstreamResponsesField("usage", streamResp.Response.Usage)

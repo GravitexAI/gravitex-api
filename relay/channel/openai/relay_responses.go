@@ -40,6 +40,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 	info.UpstreamResponseId = responsesResponse.ID
+	info.NoteUpstreamResponseModel(responsesResponse.Model)
 	info.CaptureUpstreamServiceTier(responseBody)
 
 	info.ObserveResponseModel(responsesResponse.Model)
@@ -106,6 +107,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			logger.LogError(c, common.LogText("failed to unmarshal stream response: %s", err.Error()))
 			sr.Error(err)
 			return
+		}
+		// 上游换模型检测：response.created/completed 等携带完整 Response 的事件里都带 model。
+		if streamResponse.Response != nil {
+			info.NoteUpstreamResponseModel(streamResponse.Response.Model)
 		}
 		if !flushed {
 			switch streamResponse.Type {

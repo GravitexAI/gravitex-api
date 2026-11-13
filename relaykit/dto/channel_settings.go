@@ -97,6 +97,15 @@ const (
 	VertexKeyTypeAPIKey VertexKeyType = "api_key"
 )
 
+// GeminiKeyType selects how a Gemini (AI Studio endpoint) channel key authenticates upstream.
+type GeminiKeyType string
+
+const (
+	GeminiKeyTypeAPIKey      GeminiKeyType = "api_key"      // 默认：key 为 AI Studio API Key，走 x-goog-api-key
+	GeminiKeyTypeOAuthToken  GeminiKeyType = "oauth_token"  // key 为 ya29 access token，走 Authorization: Bearer，刷新由外部负责
+	GeminiKeyTypeOAuthBroker GeminiKeyType = "oauth_broker" // key 为 broker 配置 JSON，平台定时从 broker 拉取 token
+)
+
 type AwsKeyType string
 
 const (
@@ -127,6 +136,7 @@ type ChannelOtherSettings struct {
 	AzureModelApiVersions       map[string]string  `json:"azure_model_api_versions,omitempty"`       // 模型特定的普通 API 版本映射
 	AzureModelResponsesVersions map[string]string  `json:"azure_model_responses_versions,omitempty"` // 模型特定的 Responses API 版本映射（独立于普通 API 版本）
 	VertexKeyType               VertexKeyType      `json:"vertex_key_type,omitempty"`                // "json" or "api_key"
+	GeminiKeyType               GeminiKeyType      `json:"gemini_key_type,omitempty"`                // "api_key"(默认) / "oauth_token" / "oauth_broker"
 	OpenRouterEnterprise        *bool              `json:"openrouter_enterprise,omitempty"`
 	ClaudeBetaQuery             bool               `json:"claude_beta_query,omitempty"` // Claude 渠道是否强制追加 ?beta=true
 	// AnthropicBetaTarget 显式指定 anthropic-beta 白名单过滤目标，覆盖按 ChannelType 的默认判断。
