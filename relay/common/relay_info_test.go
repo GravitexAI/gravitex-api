@@ -505,6 +505,30 @@ func TestInitChannelMetaClearsUpstreamModelFallback(t *testing.T) {
 	assert.Nil(t, info.UpstreamModelFallback)
 }
 
+// 重试换渠道时，上一个渠道参数覆盖生成的运行期请求头不能带到新渠道：新渠道的请求头覆盖
+// （如 "Authorization: Bearer {api_key}"）必须生效，否则请求会不带密钥发出。
+func TestInitChannelMetaResetsRuntimeHeaderOverrideOnRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+	common.SetContextKey(ctx, constant.ContextKeyChannelHeaderOverride, map[string]any{"X-End-User": "{user_id}"})
+	info, err := GenRelayInfo(ctx, types.RelayFormatOpenAI, &dto.GeneralOpenAIRequest{Model: "gpt-test"}, nil)
+	require.NoError(t, err)
+	// 第一个渠道的参数覆盖把它的请求头同步成运行期覆盖
+	info.RuntimeHeadersOverride = map[string]any{"x-end-user": "u_1"}
+	info.UseRuntimeHeadersOverride = true
+
+	// 重试切到第二个渠道
+	common.SetContextKey(ctx, constant.ContextKeyChannelHeaderOverride, map[string]any{"Authorization": "Bearer {api_key}"})
+	info.InitChannelMeta(ctx)
+
+	assert.False(t, info.UseRuntimeHeadersOverride)
+	assert.Nil(t, info.RuntimeHeadersOverride)
+	effective := GetEffectiveHeaderOverride(info)
+	assert.Contains(t, effective, "authorization")
+	assert.NotContains(t, effective, "x-end-user")
+}
+
 func TestNoteUpstreamResponseModelVersionSuffixIsNotFallback(t *testing.T) {
 	cases := []struct{ sent, actual string }{
 		{"gpt-4o", "gpt-4o-2024-08-06"},

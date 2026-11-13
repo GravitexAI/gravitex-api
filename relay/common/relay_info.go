@@ -330,6 +330,10 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	info.UpstreamModelFallback = nil
 	info.ClaudeFallbackTriggerCategory = ""
 	info.ClaudeUsageIterations = nil
+	// 运行期请求头覆盖由本次尝试的参数覆盖生成，带着上一个渠道的请求头；重试换渠道后必须清掉，
+	// 否则新渠道会沿用旧渠道的请求头（例如新渠道用 "Authorization: Bearer {api_key}" 覆盖时，请求会不带密钥发出）。
+	info.RuntimeHeadersOverride = nil
+	info.UseRuntimeHeadersOverride = false
 	info.FinalRequestRelayFormat = ""
 	info.RequestConversionChain = nil
 	info.InitRequestConversionChain()
