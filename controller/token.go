@@ -44,7 +44,7 @@ func (input *tokenAutoGroupsInput) UnmarshalJSON(data []byte) error {
 type tokenRequest struct {
 	model.Token
 	AutoGroups tokenAutoGroupsInput `json:"auto_groups"`
-	// 指针区分“未传”和显式 false：新建时未传即开启，更新时未传则保留原值。
+	// 指针区分“未传”和显式 false：新建时未传即关闭，更新时未传则保留原值。
 	AllowUserQuotaQuery *bool `json:"allow_user_quota_query"`
 }
 
@@ -438,7 +438,8 @@ func AddToken(c *gin.Context) {
 		DailySpendThreshold: token.DailySpendThreshold,
 		AutoGroups:          token.AutoGroups,
 	}
-	cleanToken.AllowUserQuotaQuery = request.AllowUserQuotaQuery == nil || *request.AllowUserQuotaQuery
+	// alpha：未传时默认关闭，避免 maas 等直接建令牌时把账户余额暴露给 key 持有人。
+	cleanToken.AllowUserQuotaQuery = request.AllowUserQuotaQuery != nil && *request.AllowUserQuotaQuery
 	err = cleanToken.Insert()
 	if err != nil {
 		common.ApiError(c, err)
