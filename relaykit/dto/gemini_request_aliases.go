@@ -128,8 +128,9 @@ func (v *GeminiFileData) UnmarshalJSON(data []byte) error {
 	type Alias GeminiFileData
 	var aux struct {
 		Alias
-		MimeTypeSnake string `json:"mime_type,omitempty"`
-		FileUriSnake  string `json:"file_uri,omitempty"`
+		MimeTypeSnake    string `json:"mime_type,omitempty"`
+		FileUriSnake     string `json:"file_uri,omitempty"`
+		DisplayNameSnake string `json:"display_name,omitempty"`
 	}
 	if err := kitutil.Unmarshal(data, &aux); err != nil {
 		return err
@@ -140,6 +141,9 @@ func (v *GeminiFileData) UnmarshalJSON(data []byte) error {
 	}
 	if aux.FileUriSnake != "" {
 		v.FileUri = aux.FileUriSnake
+	}
+	if aux.DisplayNameSnake != "" {
+		v.DisplayName = aux.DisplayNameSnake
 	}
 	return nil
 }

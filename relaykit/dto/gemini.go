@@ -21,6 +21,8 @@ type GeminiChatRequest struct {
 	SystemInstructions *GeminiChatContent         `json:"systemInstruction,omitempty"`
 	CachedContent      string                     `json:"cachedContent,omitempty"`
 	ContinuationToken  json.RawMessage            `json:"continuationToken,omitempty"`
+	Labels             json.RawMessage            `json:"labels,omitempty"`
+	Store              *bool                      `json:"store,omitempty"`
 }
 
 // UnmarshalJSON allows GeminiChatRequest to accept both snake_case and camelCase fields.
@@ -304,8 +306,9 @@ func (c *GeminiThinkingConfig) SetThinkingBudget(budget int) {
 }
 
 type GeminiInlineData struct {
-	MimeType string `json:"mimeType"`
-	Data     string `json:"data"`
+	MimeType    string `json:"mimeType"`
+	Data        string `json:"data"`
+	DisplayName string `json:"displayName,omitempty"`
 }
 
 func (d *GeminiInlineData) ToFileSource() types.FileSource {
@@ -320,7 +323,8 @@ func (g *GeminiInlineData) UnmarshalJSON(data []byte) error {
 	type Alias GeminiInlineData // Use type alias to avoid recursion
 	var aux struct {
 		Alias
-		MimeTypeSnake string `json:"mime_type"`
+		MimeTypeSnake    string `json:"mime_type"`
+		DisplayNameSnake string `json:"display_name,omitempty"`
 	}
 
 	if err := kitutil.Unmarshal(data, &aux); err != nil {
@@ -334,6 +338,9 @@ func (g *GeminiInlineData) UnmarshalJSON(data []byte) error {
 		g.MimeType = aux.MimeTypeSnake
 	} else if aux.MimeType != "" { // Fallback to camelCase from Alias
 		g.MimeType = aux.MimeType
+	}
+	if aux.DisplayNameSnake != "" {
+		g.DisplayName = aux.DisplayNameSnake
 	}
 	// g.Data would be populated by aux.Alias.Data
 	return nil
@@ -369,16 +376,19 @@ type GeminiFunctionResponse struct {
 type GeminiPartExecutableCode struct {
 	Language string `json:"language,omitempty"`
 	Code     string `json:"code,omitempty"`
+	ID       string `json:"id,omitempty"`
 }
 
 type GeminiPartCodeExecutionResult struct {
 	Outcome string `json:"outcome,omitempty"`
 	Output  string `json:"output,omitempty"`
+	ID      string `json:"id,omitempty"`
 }
 
 type GeminiFileData struct {
-	MimeType string `json:"mimeType,omitempty"`
-	FileUri  string `json:"fileUri,omitempty"`
+	MimeType    string `json:"mimeType,omitempty"`
+	FileUri     string `json:"fileUri,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
 }
 
 type GeminiPart struct {
@@ -396,6 +406,12 @@ type GeminiPart struct {
 	FileData            *GeminiFileData                `json:"fileData,omitempty"`
 	ExecutableCode      *GeminiPartExecutableCode      `json:"executableCode,omitempty"`
 	CodeExecutionResult *GeminiPartCodeExecutionResult `json:"codeExecutionResult,omitempty"`
+	// Server-side tool call/response; clients must echo them back unchanged in later turns.
+	ToolCall           json.RawMessage `json:"toolCall,omitempty"`
+	ToolResponse       json.RawMessage `json:"toolResponse,omitempty"`
+	PartMetadata       json.RawMessage `json:"partMetadata,omitempty"`
+	AudioTranscription json.RawMessage `json:"audioTranscription,omitempty"`
+	SpeechMetadata     json.RawMessage `json:"speechMetadata,omitempty"`
 }
 
 // UnmarshalJSON accepts snake_case aliases for typed Gemini part fields.
@@ -414,6 +430,11 @@ func (p *GeminiPart) UnmarshalJSON(data []byte) error {
 		ExecutableCodeSnake      *GeminiPartExecutableCode      `json:"executable_code,omitempty"`
 		CodeExecutionResultSnake *GeminiPartCodeExecutionResult `json:"code_execution_result,omitempty"`
 		InlineDataSnake          *GeminiInlineData              `json:"inline_data,omitempty"` // snake_case variant
+		ToolCallSnake            json.RawMessage                `json:"tool_call,omitempty"`
+		ToolResponseSnake        json.RawMessage                `json:"tool_response,omitempty"`
+		PartMetadataSnake        json.RawMessage                `json:"part_metadata,omitempty"`
+		AudioTranscriptionSnake  json.RawMessage                `json:"audio_transcription,omitempty"`
+		SpeechMetadataSnake      json.RawMessage                `json:"speech_metadata,omitempty"`
 	}
 
 	if err := kitutil.Unmarshal(data, &aux); err != nil {
@@ -457,6 +478,21 @@ func (p *GeminiPart) UnmarshalJSON(data []byte) error {
 	if aux.CodeExecutionResultSnake != nil {
 		p.CodeExecutionResult = aux.CodeExecutionResultSnake
 	}
+	if len(aux.ToolCallSnake) > 0 {
+		p.ToolCall = aux.ToolCallSnake
+	}
+	if len(aux.ToolResponseSnake) > 0 {
+		p.ToolResponse = aux.ToolResponseSnake
+	}
+	if len(aux.PartMetadataSnake) > 0 {
+		p.PartMetadata = aux.PartMetadataSnake
+	}
+	if len(aux.AudioTranscriptionSnake) > 0 {
+		p.AudioTranscription = aux.AudioTranscriptionSnake
+	}
+	if len(aux.SpeechMetadataSnake) > 0 {
+		p.SpeechMetadata = aux.SpeechMetadataSnake
+	}
 
 	return nil
 }
@@ -469,6 +505,7 @@ type GeminiChatContent struct {
 type GeminiChatSafetySettings struct {
 	Category  string `json:"category"`
 	Threshold string `json:"threshold"`
+	Method    string `json:"method,omitempty"`
 }
 
 type GeminiChatTool struct {
@@ -504,8 +541,15 @@ type GeminiChatGenerationConfig struct {
 	Seed                       *int64                `json:"seed,omitempty"`
 	ResponseModalities         []string              `json:"responseModalities,omitempty"`
 	ThinkingConfig             *GeminiThinkingConfig `json:"thinkingConfig,omitempty"`
-	SpeechConfig               json.RawMessage       `json:"speechConfig,omitempty"` // RawMessage to allow flexible speech config
-	ImageConfig                json.RawMessage       `json:"imageConfig,omitempty"`  // RawMessage to allow flexible image config
+	SpeechConfig               json.RawMessage       `json:"speechConfig,omitempty"`   // RawMessage to allow flexible speech config
+	ImageConfig                json.RawMessage       `json:"imageConfig,omitempty"`    // RawMessage to allow flexible image config
+	ResponseFormat             json.RawMessage       `json:"responseFormat,omitempty"` // RawMessage so per-modality output formats pass through unchanged
+	// AI Studio alias of responseJsonSchema; kept under its own key so upstream sees what the client sent.
+	ResponseJsonSchemaAlt    json.RawMessage `json:"_responseJsonSchema,omitempty"`
+	EnableAffectiveDialog    *bool           `json:"enableAffectiveDialog,omitempty"`
+	AudioTimestamp           *bool           `json:"audioTimestamp,omitempty"`
+	TranslationConfig        json.RawMessage `json:"translationConfig,omitempty"`
+	AudioTranscriptionConfig json.RawMessage `json:"audioTranscriptionConfig,omitempty"`
 }
 
 // UnmarshalJSON allows GeminiChatGenerationConfig to accept both snake_case and camelCase fields.
@@ -531,6 +575,11 @@ func (c *GeminiChatGenerationConfig) UnmarshalJSON(data []byte) error {
 		ThinkingConfigSnake             *GeminiThinkingConfig `json:"thinking_config,omitempty"`
 		SpeechConfigSnake               json.RawMessage       `json:"speech_config,omitempty"`
 		ImageConfigSnake                json.RawMessage       `json:"image_config,omitempty"`
+		ResponseFormatSnake             json.RawMessage       `json:"response_format,omitempty"`
+		EnableAffectiveDialogSnake      *bool                 `json:"enable_affective_dialog,omitempty"`
+		AudioTimestampSnake             *bool                 `json:"audio_timestamp,omitempty"`
+		TranslationConfigSnake          json.RawMessage       `json:"translation_config,omitempty"`
+		AudioTranscriptionConfigSnake   json.RawMessage       `json:"audio_transcription_config,omitempty"`
 	}
 
 	if err := kitutil.Unmarshal(data, &aux); err != nil {
@@ -594,6 +643,21 @@ func (c *GeminiChatGenerationConfig) UnmarshalJSON(data []byte) error {
 	}
 	if len(aux.ImageConfigSnake) > 0 {
 		c.ImageConfig = aux.ImageConfigSnake
+	}
+	if len(aux.ResponseFormatSnake) > 0 {
+		c.ResponseFormat = aux.ResponseFormatSnake
+	}
+	if aux.EnableAffectiveDialogSnake != nil {
+		c.EnableAffectiveDialog = aux.EnableAffectiveDialogSnake
+	}
+	if aux.AudioTimestampSnake != nil {
+		c.AudioTimestamp = aux.AudioTimestampSnake
+	}
+	if len(aux.TranslationConfigSnake) > 0 {
+		c.TranslationConfig = aux.TranslationConfigSnake
+	}
+	if len(aux.AudioTranscriptionConfigSnake) > 0 {
+		c.AudioTranscriptionConfig = aux.AudioTranscriptionConfigSnake
 	}
 
 	return nil
